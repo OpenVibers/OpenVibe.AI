@@ -1,0 +1,30 @@
+{
+  "id": "ai.run.create",
+  "version": "1.0",
+  "owner": "ai",
+  "status": "active",
+  "visibility": "first-party",
+  "description": "Create workflow runs (POST /api/v1/runs and the direct chat/generate/summarize/classify/extract/enrich/embed operations), cancel or retry the caller's own runs and attach citations to them. A token's `ns` claim limits which workflow namespaces it may run (live.*, wiki.*, ...). Quotas are checked before any provider call.",
+  "permissions": [
+    "ai:run"
+  ],
+  "resourceConstraints": [
+    "namespace",
+    "owner"
+  ],
+  "quotaClass": "ai-run",
+  "events": [],
+  "implementedBy": [
+    "POST /api/v1/runs",
+    "POST /api/v1/runs/:id/cancel",
+    "POST /api/v1/runs/:id/retry",
+    "POST /api/v1/runs/:id/citations",
+    "POST /api/v1/chat",
+    "POST /api/v1/generate",
+    "POST /api/v1/summarize",
+    "POST /api/v1/classify",
+    "POST /api/v1/extract",
+    "POST /api/v1/enrich",
+    "POST /api/v1/embed"
+  ]
+}

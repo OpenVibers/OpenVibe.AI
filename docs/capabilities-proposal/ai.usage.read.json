@@ -1,0 +1,26 @@
+{
+  "id": "ai.usage.read",
+  "version": "1.0",
+  "owner": "ai",
+  "status": "active",
+  "visibility": "internal",
+  "description": "Read usage, quota windows, request logs, the audit log, cache statistics, the admin summary and any caller's runs.",
+  "permissions": [
+    "ai:read"
+  ],
+  "resourceConstraints": [
+    "none"
+  ],
+  "quotaClass": "ai-read",
+  "events": [],
+  "implementedBy": [
+    "GET /api/v1/status",
+    "GET /api/v1/usage",
+    "GET /api/v1/quotas",
+    "GET /api/v1/requests",
+    "GET /api/v1/audit",
+    "GET /api/v1/cache",
+    "GET /api/v1/providers",
+    "GET /api/v1/models"
+  ]
+}

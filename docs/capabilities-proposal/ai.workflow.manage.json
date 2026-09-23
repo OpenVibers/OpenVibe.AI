@@ -1,0 +1,24 @@
+{
+  "id": "ai.workflow.manage",
+  "version": "1.0",
+  "owner": "ai",
+  "status": "active",
+  "visibility": "internal",
+  "description": "Create new versions of prompt templates, workflow definitions and routing profiles, and change their lifecycle status (draft, active, deprecated, archived; routes active/disabled). Every change is audited; edits never overwrite a version.",
+  "permissions": [
+    "ai:admin"
+  ],
+  "resourceConstraints": [
+    "none"
+  ],
+  "quotaClass": "ai-admin",
+  "events": [],
+  "implementedBy": [
+    "POST /api/v1/templates/:key/versions",
+    "POST /api/v1/templates/:key/versions/:version/status",
+    "POST /api/v1/workflows/:key/versions",
+    "POST /api/v1/workflows/:key/versions/:version/status",
+    "POST /api/v1/routes/:key/versions",
+    "POST /api/v1/routes/:key/versions/:version/status"
+  ]
+}

@@ -1,0 +1,34 @@
+[Unit]
+Description=OpenVibe.AI — providers, routing, versioned templates and workflows, runs, citations, cache, quotas and audit
+# Network (openvibe-network) signs the service tokens callers present. The AI service starts without
+# it and keeps retrying the JWKS fetch; /api/ready stays 503 until the key has loaded.
+After=network.target
+Wants=openvibe-network.service
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/openvibe.ai
+EnvironmentFile=/etc/openvibe/ai.env
+Environment=NODE_ENV=production
+Environment=PORT=4700
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/env node /opt/openvibe.ai/server/index.js
+Restart=always
+RestartSec=5
+# SIGTERM: stop accepting; runs still in flight end as failed/run.interrupted (callers can retry).
+KillSignal=SIGTERM
+TimeoutStopSec=15
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+# whisper.cpp (live.media.transcribe) runs as a child process; it reads its binary and models from
+# WHISPER_BIN / WHISPER_MODEL* (defaults under ~/whisper.cpp, readable with ProtectHome=read-only).
+# The code tree stays read-only; the database lives in /var/lib/openvibe-ai.
+StateDirectory=openvibe-ai
+Environment=AI_DB_PATH=/var/lib/openvibe-ai/ai.db
+
+[Install]
+WantedBy=multi-user.target

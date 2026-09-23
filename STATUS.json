@@ -1,7 +1,17 @@
 {
   "repository": "OpenVibers/OpenVibe.AI",
-  "stage": "placeholder",
-  "code": false,
+  "stage": "alpha",
+  "code": true,
+  "wave": "W13",
   "plan": "OpenVibe End-to-End Realignment & Implementation Plan, revision 3 (20 Sep 2026)",
-  "updated": "2026-09-21"
+  "runtime": "node 22, express, better-sqlite3",
+  "port": 4700,
+  "domain": "ai.openvibe.network",
+  "contracts": "openvibe-contracts v0.6.0",
+  "capabilities": ["ai.run.create", "ai.run.read", "ai.workflow.manage", "ai.provider.manage", "ai.usage.read"],
+  "capabilitiesRegistered": false,
+  "providers": ["stub", "openai-compatible", "anthropic", "http-seam", "whisper.cpp"],
+  "livePatch": "docs/live-patch.diff (AI_SERVICE=remote, not applied)",
+  "deployed": false,
+  "updated": "2026-09-23"
 }

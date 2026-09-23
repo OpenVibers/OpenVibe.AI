@@ -1,0 +1,27 @@
+{
+  "version": "0.1.0",
+  "contractRanges": {
+    "openvibe-contracts": ">=0.6.0 <1.0.0"
+  },
+  "id": "ai",
+  "name": "OpenVibe.AI",
+  "status": "alpha",
+  "repository": "OpenVibers/OpenVibe.AI",
+  "domains": [
+    "ai.openvibe.network"
+  ],
+  "publicOrigin": "https://ai.openvibe.network",
+  "health": "/api/health",
+  "ready": "/api/ready",
+  "capabilities": [
+    "ai.run.create",
+    "ai.run.read",
+    "ai.workflow.manage",
+    "ai.provider.manage",
+    "ai.usage.read"
+  ],
+  "eventsProduced": [],
+  "eventsConsumed": [],
+  "namespacesOwned": [],
+  "notes": "Providers, models, routing profiles, versioned prompt templates and workflows, runs, request logs, citations, scoped cache, quotas and audit. Workflow output is a draft/evidence package attributed to workflow + model + run. ai.run.queued|succeeded|failed|cached events follow once the Events client is wired in."
+}

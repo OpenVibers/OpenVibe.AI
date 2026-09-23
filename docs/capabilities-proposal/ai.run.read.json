@@ -1,0 +1,21 @@
+{
+  "id": "ai.run.read",
+  "version": "1.0",
+  "owner": "ai",
+  "status": "active",
+  "visibility": "first-party",
+  "description": "Read the caller's own runs, their citations and request-log metadata (hashes, tokens, latency; never raw prompts).",
+  "permissions": [
+    "ai:read"
+  ],
+  "resourceConstraints": [
+    "owner"
+  ],
+  "quotaClass": "ai-read",
+  "events": [],
+  "implementedBy": [
+    "GET /api/v1/runs",
+    "GET /api/v1/runs/:id",
+    "GET /api/v1/runs/:id/citations"
+  ]
+}

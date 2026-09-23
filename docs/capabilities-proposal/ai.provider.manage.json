@@ -1,0 +1,27 @@
+{
+  "id": "ai.provider.manage",
+  "version": "1.0",
+  "owner": "ai",
+  "status": "active",
+  "visibility": "internal",
+  "description": "Register, update, enable and disable providers and models (secrets only as env references, never values), reset circuit breakers, set quotas and purge the cache.",
+  "permissions": [
+    "ai:admin"
+  ],
+  "resourceConstraints": [
+    "none"
+  ],
+  "quotaClass": "ai-admin",
+  "events": [],
+  "implementedBy": [
+    "POST /api/v1/providers",
+    "PATCH /api/v1/providers/:key",
+    "POST /api/v1/providers/:key/disable",
+    "POST /api/v1/providers/:key/enable",
+    "POST /api/v1/providers/:key/reset",
+    "POST /api/v1/models",
+    "PATCH /api/v1/models/:provider/:model",
+    "POST /api/v1/quotas",
+    "DELETE /api/v1/cache"
+  ]
+}

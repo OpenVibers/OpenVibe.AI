@@ -1,0 +1,22 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.1   # production runs Node 22
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm test
+      # openvibe-contracts still carries the charter-only `ai` manifest (range ^0.1.0, no
+      # capabilities); the replacement is proposed in docs/capabilities-proposal/. Until a contracts
+      # release ships it this check reports that range, so it may not fail the build yet.
+      - name: contract check (openvibe-contracts)
+        continue-on-error: true
+        run: npx openvibe-contracts-check --service ai --src server
