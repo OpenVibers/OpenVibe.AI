@@ -9,7 +9,9 @@
  *   - the address actually connected to must be public unicast: the DNS answer is checked inside
  *     the connection's own lookup (no second resolution, so no DNS rebinding), and IPv4-mapped
  *     IPv6 spellings of internal addresses are caught too
- *   - redirects are followed by hand (max 3) and every hop is judged by the same rules
+ *   - redirects are followed by hand (max 3) and every hop is judged by the same rules; the internal
+ *     Media origin is reachable by redirect only from the internal origin itself, never from a
+ *     public hop (an allow-listed host that redirects must not reach the loopback Media service)
  *   - a byte cap, a timeout and cancellation on every transfer
  * data: URLs (images a caller sends inline) are decoded locally with a size cap — never fetched.
  * A MediaRef resolves to the public Media URL for the legacy kinds; med_ ids are an explicit
@@ -71,7 +73,8 @@ function hostAllowed(hostname, allowHosts) {
     });
 }
 
-function createFetcher(config) {
+/** `transport` replaces the single-hop HTTP request (tests script redirect chains with it). */
+function createFetcher(config, { transport = null } = {}) {
     const m = config.media;
     const internalOrigin = m.internalUrl ? new URL(m.internalUrl).origin : null;
 
@@ -85,6 +88,13 @@ function createFetcher(config) {
         if (net.isIP(u.hostname.replace(/^\[|\]$/g, ''))) throw new AiError(422, 'fetch.refused', 'IP-literal hosts are not fetched');
         if (!hostAllowed(u.hostname, m.allowHosts)) throw new AiError(422, 'fetch.refused', `host ${u.hostname} is not on the allow-list`);
         return { url: u, internal: false };
+    }
+
+    /** Judge a redirect from `from`: the same rules, and a public hop may not lead to the internal origin. */
+    function follow(from, location) {
+        const next = judge(location);
+        if (next.internal && !from.internal) throw new AiError(422, 'fetch.refused', 'a redirect from a public host may not reach the internal Media origin');
+        return next;
     }
 
     function once(target, { signal, maxBytes, timeoutMs, toFile }) {
@@ -139,10 +149,10 @@ function createFetcher(config) {
     async function fetchUrl(raw, { signal, maxBytes = m.maxBytes, timeoutMs = m.timeoutMs, toFile = null } = {}) {
         let target = judge(raw);
         for (let hop = 0; hop < 4; hop++) {
-            const r = await once(target, { signal, maxBytes, timeoutMs, toFile });
+            const r = await (transport || once)(target, { signal, maxBytes, timeoutMs, toFile });
             if (!r.redirect) return { ...r, url: target.url.toString() };
             if (hop === 3) throw new AiError(502, 'source.unavailable', 'too many redirects');
-            target = judge(r.redirect);
+            target = follow(target, r.redirect);
         }
         throw new AiError(502, 'source.unavailable', 'too many redirects');
     }
@@ -200,7 +210,7 @@ function createFetcher(config) {
         return { file, url };
     }
 
-    return { judge, fetchUrl, mediaRefUrl, loadImage, loadMediaToFile, hostAllowed: (h) => hostAllowed(h, m.allowHosts) };
+    return { judge, follow, fetchUrl, mediaRefUrl, loadImage, loadMediaToFile, hostAllowed: (h) => hostAllowed(h, m.allowHosts) };
 }
 
 /** Any image -> downscaled JPEG (sharp, optional). Falls back to the original bytes. */

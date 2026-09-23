@@ -67,6 +67,39 @@ t.test('the internal Media origin is fetched; its redirect elsewhere is refused;
     assert.strictEqual(await refused(f, other), 'fetch.refused', 'another port on loopback is not the internal origin');
 });
 
+t.test('every redirect hop is judged: an allow-listed host cannot redirect into the internal Media origin', async () => {
+    const internal = 'http://127.0.0.1:4100';
+    // A scripted transport: each URL answers with the redirect listed for it, or 200.
+    const script = (hops) => {
+        const seen = [];
+        const transport = async (target) => {
+            const u = target.url.toString();
+            seen.push(u);
+            return hops[u] ? { redirect: new URL(hops[u], u).toString() } : { contentType: 'image/png', bytes: 1, buffer: Buffer.from('x'), file: null };
+        };
+        return { seen, fetcher: createFetcher(load({ NODE_ENV: 'test', OV_MEDIA_INTERNAL_URL: internal }), { transport }) };
+    };
+    for (const to of [`${internal}/v/1`, `${internal}/f/secret`, 'http://127.0.0.1:4100/', 'http://169.254.169.254/latest/meta-data', 'https://127.0.0.1/x', 'https://evil.example/x', 'http://openvibe.media/x']) {
+        const { seen, fetcher } = script({ 'https://openvibe.live/r': to });
+        assert.strictEqual(await refused(fetcher, 'https://openvibe.live/r'), 'fetch.refused', to);
+        assert.deepStrictEqual(seen, ['https://openvibe.live/r'], `nothing fetched after the refused hop (${to})`);
+    }
+    // Two public hops, then the internal origin: still refused.
+    let s = script({ 'https://openvibe.live/a': 'https://openvibe.media/b', 'https://openvibe.media/b': `${internal}/img` });
+    assert.strictEqual(await refused(s.fetcher, 'https://openvibe.live/a'), 'fetch.refused');
+    assert.strictEqual(s.seen.length, 2);
+    // Allowed chains: public -> public, internal -> internal, internal -> public.
+    s = script({ 'https://openvibe.live/a': 'https://openvibe.media/b' });
+    assert.strictEqual((await s.fetcher.fetchUrl('https://openvibe.live/a')).url, 'https://openvibe.media/b');
+    s = script({ [`${internal}/a`]: '/b' });
+    assert.strictEqual((await s.fetcher.fetchUrl(`${internal}/a`)).url, `${internal}/b`);
+    s = script({ [`${internal}/a`]: 'https://openvibe.media/b' });
+    assert.strictEqual((await s.fetcher.fetchUrl(`${internal}/a`)).url, 'https://openvibe.media/b');
+    // Too many hops.
+    s = script({ 'https://openvibe.live/1': '/2', 'https://openvibe.live/2': '/3', 'https://openvibe.live/3': '/4', 'https://openvibe.live/4': '/5' });
+    assert.strictEqual(await refused(s.fetcher, 'https://openvibe.live/1'), 'source.unavailable');
+});
+
 t.test('a run whose image URL is not allowed fails with fetch.refused and no provider call', async () => {
     h = await boot({ env: { OV_MEDIA_INTERNAL_URL: mediaBase } });
     const before = h.pool.stats.stub ? h.pool.stats.stub.calls : 0;
