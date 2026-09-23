@@ -23,6 +23,12 @@ const { createAnthropicProvider } = require('./anthropic');
 const { createHttpSeamProvider } = require('./http');
 const { createWhisperProvider } = require('./whisper');
 
+/** 4xx that the request itself caused (bad image, schema, max_tokens...), as opposed to auth, rate or availability. */
+function callerFault(err) {
+    const st = err && err.status;
+    return Number.isInteger(st) && st >= 400 && st < 500 && ![401, 403, 404, 408, 429].includes(st);
+}
+
 function createProviderPool({ db, registry, config, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console }) {
     const cache = new Map();          // key -> { stamp, adapter }
     const stats = {};                 // key -> { calls, failures, ... } (in memory; tests + /api/ready)
@@ -186,7 +192,9 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                     break;
                 }
             }
-            recordFailure(c.provider, lastErr);
+            // A request the provider rejected as malformed is the caller's fault, not a sign the
+            // provider is unhealthy: it must not open the circuit other callers depend on.
+            if (!callerFault(lastErr)) recordFailure(c.provider, lastErr);
             tried.push({ provider: c.provider, error: String(lastErr && lastErr.message || lastErr).slice(0, 200) });
             log.warn(`[ai] ${operation} via ${c.provider}/${model || '-'} failed: ${lastErr && lastErr.message}`);
         }
