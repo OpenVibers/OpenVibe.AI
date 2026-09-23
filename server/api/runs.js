@@ -14,7 +14,7 @@
  *
  * Responses: 201 when a new run finished (or was served from cache) within the wait, 202 while it
  * is still queued/running (poll GET /runs/:id), 200 for an idempotent replay. Errors are
- * problem+json; a quota refusal is 429 with Retry-After.
+ * problem+json; a quota refusal or a full run queue (queue.full) is 429 with Retry-After.
  */
 const express = require('express');
 const { http } = require('openvibe-contracts');

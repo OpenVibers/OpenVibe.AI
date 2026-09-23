@@ -62,7 +62,8 @@ idempotent replay):
 
 Errors are `application/problem+json` (openvibe-contracts `http.problem`): `input.invalid` (with the
 schema errors), `workflow.not_found`, `idempotency.conflict`, `quota.exceeded` (429 +
-`Retry-After`), `capability.denied`, `capability.namespace_denied`, `token.*`. A run that cannot
+`Retry-After`), `queue.full` (429 + `Retry-After`: the run would wait behind `AI_MAX_QUEUED_RUNS`
+runs, or `AI_MAX_QUEUED_RUNS_PER_CALLER` of this caller's), `capability.denied`, `capability.namespace_denied`, `token.*`. A run that cannot
 produce a real answer ends `failed` with an explicit code — `provider.unavailable`,
 `route.unavailable`, `fetch.refused`, `source.unavailable`, `input.insufficient`, `output.empty`,
 `output.invalid`, `run.interrupted` — and never with filler content.
@@ -140,6 +141,7 @@ stub joins every route as a last resort outside production only (`AI_STUB_FALLBA
 | A degraded primary falls back and records it; breaker; skips; timeouts; explicit `provider.unavailable` | `test/fallback.test.js` |
 | Quotas refuse with 429 + Retry-After **before** any provider call; per-service, attribution, cost caps | `test/quota.test.js` |
 | The cache never crosses requester, actor, target or attribution scope | `test/cache.test.js` |
+| Queue caps: one caller cannot fill the run queue (per-caller and global 429 `queue.full` + Retry-After) | `test/queue.test.js` |
 | Idempotency, cancel (running and queued), retry, async polling, audit rows, restart recovery, no raw prompts or inline images kept | `test/runs.test.js` |
 | Media fetched only from allow-listed https OpenVibe hosts; DNS answers and every redirect hop re-checked (a public hop never reaches internal Media); size caps | `test/ssrf.test.js` |
 | The shared compiled-schema cache (caller-supplied schemas) is an LRU bounded by count and bytes, in Ajv too | `test/schemas.test.js` |

@@ -9,7 +9,10 @@
  *   3. cache: a hit in THIS request's scope becomes a run with status 'cached' (no provider call)
  *   4. quota: every applicable quota is checked and counted — a refusal is a 429 before any
  *      provider is touched
- *   5. the run is stored 'queued' and executed (inline up to ?wait=ms, else by the worker)
+ *   5. queue caps: a run that would have to wait is refused (429 queue.full + Retry-After) when the
+ *      queue already holds AI_MAX_QUEUED_RUNS runs, or AI_MAX_QUEUED_RUNS_PER_CALLER of this
+ *      requester's, so one caller cannot fill the queue for everyone — also before any provider call
+ *   6. the run is stored 'queued' and executed (inline up to ?wait=ms, else by the worker)
  * Every create, cancel and retry writes an audit row. Output is attributable to workflow + version
  * + template version + route version + provider/model + run id — never to a person.
  */
@@ -18,6 +21,7 @@ const { AiError, sha256, stableStringify, parseJson, iso } = require('./util');
 const schemas = require('./schemas');
 
 const TERMINAL = new Set(['succeeded', 'failed', 'cancelled', 'cached']);
+const QUEUE_RETRY_AFTER_S = 5;
 const newRunId = () => `run_${ids.ulid()}`;
 
 function entityKey(ref) { return ref ? `${ref.service}:${ref.type}:${ref.id}` : null; }
@@ -53,7 +57,7 @@ function retainedInput(input, wf, debugRaw) {
 }
 
 function createRuns({ db, registry, engine, cache, quotas, config, clock = { now: () => Date.now() }, log = console }) {
-    const inflight = new Map();     // run id -> { controller, promise }
+    const inflight = new Map();     // run id -> { controller, promise, release, caller }
     const queue = [];               // run ids waiting for the worker
     let active = 0;
     let shuttingDown = false;
@@ -200,7 +204,9 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             }
         }
 
-        // Quota, before any provider call.
+        // Queue caps, then quota: both before any provider call (a refused run is not counted).
+        const caller = `${requester.type}:${requester.id}`;
+        admit(caller);
         const reserved = quotas.reserve(ctx);
 
         db.prepare(`INSERT INTO runs (id, workflow_key, workflow_version, template_key, template_version, route_key, route_version, status, requester_type, requester_id, on_behalf_of, attribution,
@@ -214,10 +220,20 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         let release;
         const gate = new Promise((r) => { release = r; });
         const promise = gate.then(() => execute(id, { controller, reserved, scope, ctx, input })).catch((err) => { log.error(`[runs] ${id}: ${err.stack || err}`); });
-        inflight.set(id, { controller, promise, release });
+        inflight.set(id, { controller, promise, release, caller });
         queue.push(id);
         pump();
         return { run: get(id), created: true, promise };
+    }
+
+    /** Refuse a run that would wait in a full queue, globally or for this caller. */
+    function admit(caller) {
+        if (active < config.runs.maxConcurrent && !queue.length) return;      // starts at once
+        const full = (detail, scope) => new AiError(429, 'queue.full', detail, { retry_after_seconds: QUEUE_RETRY_AFTER_S, queue: { scope, queued: queue.length } });
+        if (queue.length >= config.runs.maxQueued) throw full(`the run queue is full (${config.runs.maxQueued} waiting); retry shortly`, 'global');
+        let mine = 0;
+        for (const qid of queue) { const h = inflight.get(qid); if (h && h.caller === caller) mine++; }
+        if (mine >= config.runs.maxQueuedPerCaller) throw full(`${caller} already has ${mine} runs waiting (the per-caller limit); retry shortly`, 'caller');
     }
 
     function pump() {

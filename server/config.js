@@ -136,6 +136,9 @@ function load(env = process.env) {
         runs: {
             maxWaitMs: int(env.AI_MAX_WAIT_MS, 60000),
             maxConcurrent: Math.max(1, int(env.AI_MAX_CONCURRENT_RUNS, 4)),
+            // Runs waiting for a slot: past either cap a new run is refused 429 queue.full + Retry-After.
+            maxQueued: Math.max(1, int(env.AI_MAX_QUEUED_RUNS, 200)),
+            maxQueuedPerCaller: Math.max(1, int(env.AI_MAX_QUEUED_RUNS_PER_CALLER, 50)),
             defaultCacheTtlSec: int(env.AI_CACHE_TTL_SEC, 7 * 24 * 3600),
             maxInputBytes: int(env.AI_MAX_INPUT_BYTES, 6 * 1024 * 1024),
             retentionDays: int(env.AI_RUN_RETENTION_DAYS, 30),
