@@ -1,0 +1,30 @@
+{
+  "name": "openvibe-ai",
+  "version": "0.1.0",
+  "private": true,
+  "description": "OpenVibe.AI: providers, models, routing profiles, versioned prompt templates and workflows, runs, request logs, citations, scoped cache, quotas and audit for every OpenVibe product. Extracted from OpenVibe.Live's AI subsystem.",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "NODE_ENV=development node server/index.js",
+    "test": "node test/run.js",
+    "import-from-live": "node scripts/import-from-live.js"
+  },
+  "keywords": ["openvibe", "ai", "llm", "workflows", "whisper"],
+  "author": "OpenVibers",
+  "license": "AGPL-3.0-only",
+  "repository": "github:OpenVibers/OpenVibe.AI",
+  "dependencies": {
+    "ajv": "^8.17.1",
+    "better-sqlite3": "^11.10.0",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "openvibe-contracts": "https://codeload.github.com/OpenVibers/OpenVibe.Contracts/tar.gz/refs/tags/v0.6.0"
+  },
+  "optionalDependencies": {
+    "sharp": "^0.33.5"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
