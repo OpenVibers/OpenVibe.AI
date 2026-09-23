@@ -382,7 +382,10 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         await Promise.allSettled([...inflight.values()].map(h => h.promise));
     }
 
-    return { create, wait, get, list, cancel, retry, citations, addCitations, requestsFor, recoverInterrupted, prune, drain, inflight, TERMINAL, decode };
+    /** Queue depth for /metrics and /api/ready: runs waiting for a slot, and runs holding one. */
+    function stats() { return { queued: queue.length, running: active, inflight: inflight.size, max_concurrent: config.runs.maxConcurrent, max_queued: config.runs.maxQueued }; }
+
+    return { create, wait, get, list, cancel, retry, citations, addCitations, requestsFor, recoverInterrupted, prune, drain, stats, inflight, TERMINAL, decode };
 }
 
 module.exports = { createRuns, entityKey, subjectKey };

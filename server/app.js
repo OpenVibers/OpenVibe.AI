@@ -1,7 +1,11 @@
 'use strict';
-/** Express app: request context, health/readiness, the v1 run API and the admin/registry API. */
+/** Express app: request context, health/readiness, metrics, the v1 run API and the admin/registry API. */
+const path = require('path');
 const express = require('express');
 const { http } = require('openvibe-contracts');
+const { instrument } = require('openvibe-shared/metrics');
+const { createRelease } = require('openvibe-shared/release');
+const { createAiReadiness, registerAiGauges } = require('./observability');
 const { runsRouter } = require('./api/runs');
 const { adminRouter } = require('./api/admin');
 const pkg = require('../package.json');
@@ -10,6 +14,11 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
     const app = express();
     app.disable('x-powered-by');
     app.set('trust proxy', 'loopback');
+    const release = createRelease({ service: 'ai', root: path.join(__dirname, '..') });
+    // HTTP golden signals by route template, process metrics, release_info and the AI gauges;
+    // GET /metrics answers direct loopback callers only (Track O).
+    const metrics = instrument(app, { service: 'ai', release: release.release });
+    registerAiGauges(metrics.registry, { runs, registry, pool });
     app.use(http.middleware());
     app.use((req, res, next) => {
         res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -23,14 +32,11 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
         res.json({ status: 'ok', service: 'openvibe-ai', version: pkg.version });
     });
 
-    app.get('/api/ready', (_req, res) => {
-        let dbOk = false;
-        try { dbOk = db.prepare('SELECT 1 AS x').get().x === 1; } catch { dbOk = false; }
-        const checks = { db: dbOk, key: keys.loaded(), workflows: dbOk && registry.listWorkflows().length > 0 };
-        const ready = Object.values(checks).every(Boolean);
-        const providers = dbOk ? registry.listProviders().map(p => ({ key: p.key, kind: p.kind, status: p.status, health: pool.health(p.key).state })) : [];
-        res.status(ready ? 200 : 503).json({ status: ready ? 'ready' : 'not_ready', checks, providers, inflight: runs.inflight.size });
-    });
+    // Readiness (openvibe-shared/ready): 503 when the database, the workflows or the Network key
+    // fail; provider configuration is optional and degrades it (see observability.js).
+    const readiness = createAiReadiness({ db, registry, pool, keys, runs, release: release.release });
+    app.get('/api/ready', readiness.handler);
+    app.get('/release.json', release.handler);
 
     app.use(runsRouter({ runs, registry, auth, config, log }));
     app.use(adminRouter({ db, registry, pool, quotas, cache, runs, auth, log }));
@@ -43,7 +49,7 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
             'GET  /api/v1/runs/:id    POST /api/v1/runs/:id/cancel|retry',
             'POST /api/v1/{chat,generate,summarize,classify,extract,enrich,embed}',
             'GET  /api/v1/workflows | templates | routes | providers | models | quotas | usage | audit',
-            'GET  /api/health, /api/ready',
+            'GET  /api/health, /api/ready, /release.json',
             '',
             'Callers authenticate with OpenVibe.Network service tokens (audience openvibe.ai).',
             'AI output is a draft/evidence package attributed to a workflow, model and run, never to a person.',
@@ -64,6 +70,7 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
         return http.sendProblem(res, 500, 'ai.internal', { detail: 'internal error', ctx: req.ov });
     });
 
+    app.locals.metrics = metrics;
     return app;
 }
 

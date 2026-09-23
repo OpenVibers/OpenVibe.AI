@@ -60,7 +60,13 @@ idempotent replay):
 | `POST /api/v1/{templates,workflows,routes}/:key/versions`, `…/versions/:v/status` | `ai.workflow.manage` |
 | `POST/PATCH /api/v1/providers…`, `…/disable\|enable\|reset`, `POST/PATCH /api/v1/models…`, `POST /api/v1/quotas`, `DELETE /api/v1/cache` | `ai.provider.manage` |
 | `GET /api/v1/status\|usage\|quotas\|requests\|audit\|cache\|providers\|models` | `ai.usage.read` |
-| `GET /api/health`, `GET /api/ready` | public |
+| `GET /api/health`, `GET /api/ready`, `GET /release.json` | public |
+| `GET /metrics` | direct loopback callers only (a request carrying X-Forwarded-For gets 404) |
+
+`/api/ready` (openvibe-shared/ready) is 503 when the database, the active workflows or the Network
+key fail; provider configuration (an active provider without its credentials, or with an open
+circuit) degrades it. `/metrics` (openvibe-shared/metrics) carries golden signals by route template,
+`ai_runs{state="queued"|"running"}` and `ai_provider_circuit{provider,state}`.
 
 Errors are `application/problem+json` (openvibe-contracts `http.problem`): `input.invalid` (with the
 schema errors), `workflow.not_found`, `idempotency.conflict`, `quota.exceeded` (429 +
@@ -180,7 +186,8 @@ installed: `ai.openvibe.network` still serves the Sites placeholder.
   translations cannot become cache entries (they have no source text) and stay in Live.
 - No fallback is declared on any production route, so an outage of the one real provider fails every
   Live AI feature; `live.*` and `network.site_copy` outputs carry no citations or gaps (0 citation rows).
-- `/metrics` (404); the host has a backup of `ai.db` but no restore drill has run for it.
+- The host has a backup of `ai.db` but no restore drill has run for it; `/metrics` is built but not
+  deployed yet.
 
 ## Launch rule
 
