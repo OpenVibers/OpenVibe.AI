@@ -36,7 +36,8 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
     // fail; provider configuration is optional and degrades it (see observability.js).
     const readiness = createAiReadiness({ db, registry, pool, keys, runs, release: release.release });
     app.get('/api/ready', readiness.handler);
-    app.get('/release.json', release.handler);
+    // GET /release.json (ADR-016) and POST /release-metrics (open tabs' update reports into /metrics).
+    release.mount(app, { registry: metrics.registry });
 
     app.use(runsRouter({ runs, registry, auth, config, log }));
     app.use(adminRouter({ db, registry, pool, quotas, cache, runs, auth, log }));

@@ -45,6 +45,14 @@ t.test('/api/ready: every check reports; providers is the only optional one', as
     assert.ok(!r.text.includes('sk-test-not-real'));
 });
 
+t.test('/release.json: a registry.release-manifest@1 that names where tabs report updates', async () => {
+    const r = await request(h.base, 'GET', '/release.json');
+    assert.strictEqual(r.status, 200, r.text);
+    assert.strictEqual(r.body.service, 'ai');
+    assert.deepStrictEqual(require('openvibe-contracts').validate('registry.release-manifest@1', r.body).errors, []);
+    assert.strictEqual(r.body.metrics_url, '/release-metrics');
+});
+
 t.test('/metrics: 404 through a proxy; queued and running runs, route templates, circuit state direct', async () => {
     const ids = [];
     for (let i = 0; i < 3; i++) {
