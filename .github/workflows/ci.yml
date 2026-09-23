@@ -18,5 +18,4 @@ jobs:
       # capabilities); the replacement is proposed in docs/capabilities-proposal/. Until a contracts
       # release ships it this check reports that range, so it may not fail the build yet.
       - name: contract check (openvibe-contracts)
-        continue-on-error: true
         run: npx openvibe-contracts-check --service ai --src server
