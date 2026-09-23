@@ -7,7 +7,7 @@
   "runtime": "node 22, express, better-sqlite3",
   "port": 4700,
   "domain": "ai.openvibe.network still serves the OpenVibe.Sites placeholder; the service runs on openvibe-ovh (/opt/openvibe.ai, release bdca064, unit openvibe-ai) on 127.0.0.1:4700, loopback only, used by OpenVibe.Live and OpenVibe.Network",
-  "contracts": "openvibe-contracts v0.32.0",
+  "contracts": "openvibe-contracts v0.33.0",
   "capabilities": ["ai.run.create", "ai.run.read", "ai.workflow.manage", "ai.provider.manage", "ai.usage.read"],
   "capabilitiesRegistered": true,
   "providers": ["stub", "openai-compatible", "anthropic", "http-seam", "whisper.cpp"],
