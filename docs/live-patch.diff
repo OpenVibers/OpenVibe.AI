@@ -1,0 +1,596 @@
+diff --git a/.env.example b/.env.example
+index 31f53b7..6911d85 100644
+--- a/.env.example
++++ b/.env.example
+@@ -16,6 +16,15 @@ ADMIN_PASSWORD=changeme123
+ # channels keep using the English model and live captions stay hidden.
+ # WHISPER_MODEL_MULTI=/home/openvibe/whisper.cpp/models/ggml-small.bin
+ 
++# OpenVibe.AI (roadmap Wave 13). AI_SERVICE=remote sends Live's shared-key AI calls (chat AI, moments,
++# paste/frame analysis, overviews, translation, recaps, slogans, arena, footer copy) to the AI service as
++# workflow runs, with a service token for audience openvibe.ai (grant ai.run.create for client `live`).
++# The admin ai_enabled switch and the local daily cap still apply; the provider key lives in the AI
++# service. Streamer BYO keys and local whisper.cpp transcription stay here. Unset = Live calls
++# providers itself, exactly as before.
++#AI_SERVICE=remote
++#OV_AI_INTERNAL_URL=http://127.0.0.1:4700
++
+ # Server
+ PORT=3000
+ HOST=0.0.0.0
+diff --git a/server/ai/ai-analysis.js b/server/ai/ai-analysis.js
+index 559a58a..70297da 100644
+--- a/server/ai/ai-analysis.js
++++ b/server/ai/ai-analysis.js
+@@ -16,7 +16,10 @@ function b(k) { const v = db.getSetting(k); return v === true || v === 'true' ||
+ function num(k, d) { const v = parseFloat(db.getSetting(k)); return Number.isFinite(v) ? v : d; }
+ 
+ const llm = require('./llm');
++const aiService = require('./ai-service');
+ function isEnabled() { return llm.isEnabled(); }
++// AI_SERVICE=remote: the analyses below whose prompt moved to OpenVibe.AI run as its workflows.
++const remote = () => aiService.enabled() && isEnabled() && withinBudget();
+ function pasteAnalysisEnabled() { return isEnabled() && b('ai_paste_analysis_enabled'); }
+ function streamMemoryEnabled() { return isEnabled() && b('ai_stream_memory_enabled'); }
+ // Local whisper.cpp transcription (default on when installed). Independent of the
+@@ -121,6 +124,12 @@ async function _toVisionJpeg(image, opts = {}) {
+ 
+ /** Describe an image paste → { description, tags }. */
+ async function analyzeImagePaste(image, title, kind = 'paste_image') {
++    if (aiService.enabled()) {
++        if (!remote()) return null;
++        const img = await aiService.imageInput(image, { toVisionJpeg: llm.toVisionJpeg, maxWidth: 1280 });
++        const o = img ? await aiService.structured('live.paste.describe_image', { title: String(title || '').slice(0, 500), image: img }, { meter: { kind, role: 'vision' } }) : null;
++        return o && o.description ? { description: o.description, tags: o.tags || [] } : null;
++    }
+     const prompt = `You are describing an uploaded image/screenshot for a paste titled "${(title || '').slice(0, 120)}".
+ Reply ONLY with compact JSON: {"description":"1-2 sentence description of what the image shows","tags":["3-6","short","lowercase","tags"]}.`;
+     const text = await _complete({ prompt, image, maxTokens: 300, kind, role: 'vision', imageMaxWidth: 1280 });
+@@ -131,6 +140,11 @@ Reply ONLY with compact JSON: {"description":"1-2 sentence description of what t
+ 
+ /** Summarize a text paste → { description }. */
+ async function analyzeTextPaste(content, title) {
++    if (aiService.enabled()) {
++        if (!remote() || !String(content || '').trim()) return null;
++        const o = await aiService.structured('live.paste.summarize_text', { title: String(title || '').slice(0, 500), content: String(content || '').slice(0, 200000) }, { meter: { kind: 'paste_text', role: 'legacy' } });
++        return o && o.description ? { description: o.description, tags: [] } : null;
++    }
+     const snippet = String(content || '').slice(0, 6000);
+     const prompt = `Summarize what this pasted text is about in one short sentence (max 200 chars), plainly. Title: "${(title || '').slice(0, 120)}".\n\n---\n${snippet}`;
+     const text = await _complete({ prompt, maxTokens: 120, kind: 'paste_text' });
+@@ -139,6 +153,12 @@ async function analyzeTextPaste(content, title) {
+ 
+ /** Analyze a live-stream frame → { description, tags }. */
+ async function analyzeStreamFrame(image) {
++    if (aiService.enabled()) {
++        if (!remote()) return null;
++        const img = await aiService.imageInput(image, { toVisionJpeg: llm.toVisionJpeg, maxWidth: 768 });
++        const o = img ? await aiService.structured('live.stream.describe_frame', { image: img }, { meter: { kind: 'stream_memory', role: 'vision' } }) : null;
++        return o && o.description ? { description: o.description, tags: o.tags || [], worthy: o.worthy === true, title: o.worthy === true ? String(o.title || '').slice(0, 80) : '' } : null;
++    }
+     // One vision call does three jobs: the memory description, the tags, and a screenshot-worthiness
+     // verdict + caption (so live pastes need no extra call).
+     const prompt = `This is a frame from a live stream. Reply ONLY with compact JSON: {"description":"one concise sentence describing what is happening on screen right now","tags":["2-5","short","tags"],"worthy":<true only if this exact frame is genuinely screenshot-worthy on its own: a face/reaction, a visual gag, something unusual or funny on screen — false for ordinary gameplay/desktop/chat/talking-head frames>,"title":"<if worthy: a punchy, funny 3-7 word caption for it, else empty>"}.`;
+@@ -160,6 +180,18 @@ async function summarizeStreamMemories(memories, streamId = null) {
+     // overview reflects the entire stream since it started, not just the latest frame.
+     const lines = (memories || []).slice(-80).map(m => `- ${m.description}`).join('\n');
+     if (!lines) return null;
++    if (aiService.enabled()) {
++        if (!remote()) return null;
++        const input = { observations: (memories || []).slice(-80).map(m => String(m.description || '').slice(0, 1000)).filter(Boolean) };
++        if (streamId) {
++            try {
++                input.speech = (db.getTimeline(streamId, { kind: 'speech', limit: 400 }) || []).slice(-200).map(r => ({ start_sec: Number(r.start_sec) || 0, text: String(r.text || '').slice(0, 2000) }));
++                input.sounds = (db.getTimeline(streamId, { kind: 'sound', limit: 120 }) || []).slice(-60).map(r => ({ start_sec: Number(r.start_sec) || 0, label: String(r.label || '').slice(0, 120), confidence: Number(r.confidence || 0) }));
++            } catch { /* timeline optional */ }
++        }
++        const o = await aiService.structured('live.stream.summarize', input, { target: streamId ? { service: 'live', type: 'stream', id: String(streamId) } : undefined, meter: { kind: 'stream_memory', role: 'legacy' } });
++        return o && o.overview ? { overview: o.overview, category: normalizeCategory(o.category), tags: Array.isArray(o.tags) ? o.tags.map(String).slice(0, 6) : [] } : null;
++    }
+ 
+     // Fold in the audio timeline when one exists. Previously the transcript reached this
+     // prompt only as a 500-char slice embedded inside a memory's description string, with
+@@ -230,7 +262,14 @@ async function generateStreamerOverview(userId) {
+ 
+     const prompt = `You are building an internal profile of a livestreamer for site staff, using aggregated signals across their streams, VODs, and pastes. Write a concise overview (4-8 sentences) covering: what they stream / their content niche, recurring themes or activities, tone/vibe, and anything notable for moderation. Be factual and neutral; do NOT invent specifics that aren't supported by the signals below.\n\n${ctx}`;
+ 
+-    const text = await _complete({ prompt, maxTokens: 550, kind: 'streamer_overview' });
++    const text = aiService.enabled()
++        ? ((await aiService.structured('live.streamer.overview', {
++            streamer: { username: String(user.username), display_name: String(user.display_name || user.username), bio: String(channel?.bio || user.bio || '').slice(0, 2000), category: (channel?.ai_category || channel?.category) ? String(channel.ai_category || channel.category) : undefined, category_inferred: Boolean(channel?.ai_category) },
++            memories: memories.slice(0, 40).map(m => String(m.description || '').slice(0, 1000)).filter(Boolean),
++            vods: vods.map(v => ({ title: String(v.title || 'Untitled VOD').slice(0, 300), category: (v.ai_category || v.category) ? String(v.ai_category || v.category) : undefined })),
++            pastes: pastes.filter(p => p.ai_summary).map(p => ({ title: String(p.title || 'paste').slice(0, 300), summary: String(p.ai_summary).slice(0, 600) })),
++        }, { target: { service: 'live', type: 'user', id: String(userId) }, meter: { kind: 'streamer_overview', role: 'legacy' } })) || {}).overview || null
++        : await _complete({ prompt, maxTokens: 550, kind: 'streamer_overview' });
+     if (!text) return null;
+     const overview = text.slice(0, 4000);
+     try {
+diff --git a/server/ai/ai-service.js b/server/ai/ai-service.js
+new file mode 100644
+index 0000000..9b0ef43
+--- /dev/null
++++ b/server/ai/ai-service.js
+@@ -0,0 +1,181 @@
++/**
++ * ai-service.js — Live as a CONSUMER of OpenVibe.AI (roadmap Wave 13).
++ *
++ * With AI_SERVICE=remote, Live stops calling model providers itself: every shared-key AI call
++ * becomes a workflow run on OpenVibe.AI (ai.openvibe.network, internal OV_AI_INTERNAL_URL),
++ * authenticated with Live's Network service token for audience openvibe.ai (network-principal).
++ * Unset (the default), nothing here is used and Live behaves exactly as before.
++ *
++ *   structured(workflow, input, opts) -> the run's output object, or null
++ *        for workflows whose prompt now lives in OpenVibe.AI (live.translate, live.paste.*,
++ *        live.stream.*, live.streamer.overview, live.media.overview, live.stream.recap,
++ *        network.site_copy)
++ *   complete(o, { toVisionJpeg }) -> the llm.complete() result shape, or null
++ *        for every other llm.complete() call: the prompt Live rendered is sent as a passthrough run of
++ *        the workflow that owns that feature (KIND_TO_WORKFLOW), so each run is still attributable
++ *        to one workflow + model + run
++ *
++ * null means "no AI answer" exactly like llm.complete() returning null today (AI off, over
++ * budget, provider down): quota refusals (429), failed runs, unreachable service, and SYNTHETIC
++ * answers (the AI service's stub provider) all come back as null — synthetic text never reaches
++ * a Live page. Streamer BYO providers are not routed here (llm.js keeps calling them directly).
++ */
++'use strict';
++const principal = require('../net/network-principal');
++
++const AUDIENCE = 'openvibe.ai';
++const TERMINAL = new Set(['succeeded', 'cached', 'failed', 'cancelled']);
++
++/** llm.complete() kind -> the OpenVibe.AI workflow that owns that feature (same table as the service). */
++const KIND_TO_WORKFLOW = {
++    ai_viewers_director: 'live.viewers.plan', ai_viewers_reply: 'live.viewers.reply', ai_viewers: 'live.viewers.line', ai_viewers_fold: 'live.viewers.fold',
++    chat_global: 'live.chat.insight', chat_user: 'live.chat.insight', chat_relay: 'live.chat.insight', chat_anon: 'live.chat.insight', combined_overview: 'live.chat.insight', session_titles: 'live.chat.insight',
++    moment_vod_rank: 'live.moments.rank', moment_pick: 'live.moments.pick', auto_clip_confirm: 'live.clips.confirm', hero_slogans: 'live.hero.slogans', easter_egg: 'live.easter_egg', home_star: 'live.home.star',
++    arena_persona: 'live.arena.persona', arena_quotes: 'live.arena.quotes', arena_scene: 'live.arena.scene', arena_beef_judge: 'live.arena.judge', arena_mic_judge: 'live.arena.judge', arena_headline: 'live.arena.headline',
++    status_check: 'live.status_check',
++};
++const ROLES = ['chat', 'vision', 'director', 'summary', 'legacy'];
++
++function enabled() { return String(process.env.AI_SERVICE || '').trim().toLowerCase() === 'remote'; }
++function baseUrl() { return String(process.env.OV_AI_INTERNAL_URL || 'http://127.0.0.1:4700').replace(/\/+$/, ''); }
++function workflowFor(kind) { return KIND_TO_WORKFLOW[kind] || 'live.complete'; }
++
++let _lastWarn = 0;
++function warn(msg) {
++    if (Date.now() - _lastWarn < 60_000) return;
++    _lastWarn = Date.now();
++    console.warn(`[AI service] ${msg}`);
++}
++
++async function _fetchJson(method, path, body, timeoutMs, retried = false) {
++    let headers;
++    try { headers = await principal.serviceHeaders(AUDIENCE); } catch (e) { warn(`no service token for ${AUDIENCE}: ${e.message}`); return null; }
++    let res;
++    try {
++        res = await fetch(`${baseUrl()}${path}`, {
++            method,
++            headers: { ...headers, Accept: 'application/json', ...(body ? { 'Content-Type': 'application/json' } : {}) },
++            body: body ? JSON.stringify(body) : undefined,
++            signal: AbortSignal.timeout(timeoutMs),
++        });
++    } catch (e) { warn(`${method} ${path} failed: ${e.message}`); return null; }
++    const json = await res.json().catch(() => null);
++    if (res.status === 401 && !retried) {                     // stale/rotated token: fetch a new one once
++        principal.invalidate(AUDIENCE);
++        return _fetchJson(method, path, body, timeoutMs, true);
++    }
++    if (res.status === 429) { warn(`quota: ${(json && json.detail) || 'refused'} (retry after ${res.headers.get('retry-after') || '?'}s)`); return null; }
++    if (!res.ok && res.status !== 202) { warn(`${method} ${path} -> ${res.status} ${(json && (json.code || json.detail)) || ''}`); return null; }
++    return json;
++}
++
++/**
++ * Run a workflow and wait for it. Returns the run object (any terminal status) or null.
++ * opts: { target, attribution, idempotencyKey, waitMs (default 60s), timeoutMs }
++ */
++async function run(workflow, input, { target, attribution, idempotencyKey, waitMs = 60000 } = {}) {
++    if (!enabled()) return null;
++    const wait = Math.max(0, Math.min(60000, waitMs));
++    const created = await _fetchJson('POST', `/api/v1/runs?wait=${wait}`, {
++        workflow, input, target: target || undefined, attribution: attribution || undefined, idempotency_key: idempotencyKey || undefined,
++    }, wait + 15000);
++    let r = created && created.run;
++    if (!r) return null;
++    // Still queued/running after the wait: poll briefly (the service caps a wait at 60 s).
++    const deadline = Date.now() + wait;
++    while (!TERMINAL.has(r.status) && Date.now() < deadline) {
++        await new Promise(res => setTimeout(res, 1000));
++        const again = await _fetchJson('GET', `/api/v1/runs/${encodeURIComponent(r.id)}`, null, 15000);
++        if (!again || !again.run) return null;
++        r = again.run;
++    }
++    return r;
++}
++
++/** A usable (real, finished) output or null. */
++function usable(r) {
++    if (!r || !['succeeded', 'cached'].includes(r.status)) return null;
++    if (r.synthetic) { warn(`${r.workflow && r.workflow.key} answered from the stub provider; treating it as no answer`); return null; }
++    return r.output || null;
++}
++
++// Live's ai_usage table keeps metering remote runs too (per-streamer budgets, admin cost views);
++// llm.js installs the recorder so this module stays free of the database.
++let _recorder = null;
++function setRecorder(fn) { _recorder = typeof fn === 'function' ? fn : null; }
++function meter(r, m) {
++    if (!_recorder || !m || !r || r.status !== 'succeeded' || r.synthetic) return;
++    try { _recorder(r, m); } catch { /* metering is best-effort */ }
++}
++
++/** opts: run() options plus meter: { kind, role, ownerUserId, source } for Live's ai_usage row. */
++async function structured(workflow, input, opts = {}) {
++    const r = await run(workflow, input, { ...opts, attribution: opts.attribution || ownerRef(opts.meter && opts.meter.ownerUserId) });
++    meter(r, opts.meter);
++    return usable(r);
++}
++
++/** EntityRef for the Live user a spend is attributed to (Live's per-streamer budgets). */
++function ownerRef(ownerUserId) {
++    const id = parseInt(ownerUserId, 10);
++    return id > 0 ? { service: 'live', type: 'user', id: String(id) } : undefined;
++}
++
++/**
++ * An image for a workflow input. OpenVibe.Media URLs stay URLs (the service fetches only
++ * allow-listed OpenVibe hosts); files, buffers and any other URL are downscaled here, as before,
++ * and sent inline.
++ */
++async function imageInput(image, { toVisionJpeg, maxWidth = 1024 } = {}) {
++    if (!image) return null;
++    if (typeof image === 'string' && /^https:\/\/openvibe\.media\//i.test(image)) return { url: image, max_width: maxWidth };
++    const dataUrl = toVisionJpeg ? await toVisionJpeg(image, { maxWidth, quality: 78 }) : (typeof image === 'string' && image.startsWith('data:') ? image : null);
++    return dataUrl ? { data_url: dataUrl, max_width: maxWidth } : null;
++}
++
++/**
++ * llm.complete() over the service. Same argument object; same result shape
++ * ({ text, json, usage, model, provider, shared, latencyMs, cost }) or null.
++ */
++async function complete(o = {}, { toVisionJpeg } = {}) {
++    const role = ROLES.includes(o.role) ? o.role : 'legacy';
++    let image = null;
++    if (o.image) {
++        image = await imageInput(o.image, { toVisionJpeg, maxWidth: o.imageMaxWidth || 1024 });
++        if (!image) return null;
++    }
++    const system = typeof o.system === 'string' ? o.system
++        : Array.isArray(o.system) ? o.system.filter(x => x && String(x.text || '').trim()).map(x => ({ text: String(x.text), cache: Boolean(x.cache) })) : undefined;
++    const input = {
++        role, kind: o.kind ? String(o.kind).slice(0, 64) : undefined, source: o.source ? String(o.source).slice(0, 64) : undefined,
++        system: system && system.length ? system : undefined,
++        messages: Array.isArray(o.messages) && o.messages.length ? o.messages.filter(m => m && m.role).map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content })) : undefined,
++        user: o.user != null ? String(o.user) : undefined,
++        image: image || undefined,
++        json: o.json ? { name: o.json.name, schema: o.json.schema, strict: o.json.strict, description: o.json.description } : undefined,
++        max_tokens: Math.max(1, Math.round(o.maxTokens || 400)),
++        temperature: o.temperature == null ? undefined : o.temperature,
++        timeout_ms: o.timeoutMs ? Math.max(1000, Math.min(120000, o.timeoutMs)) : undefined,
++        cache_key: o.cacheKey ? String(o.cacheKey).slice(0, 128) : undefined,
++    };
++    if (!input.user && !input.messages) input.user = '';
++    const started = Date.now();
++    const r = await run(workflowFor(o.kind), input, { attribution: ownerRef(o.ownerUserId), waitMs: Math.max(30000, (o.timeoutMs || 30000) * 2) });
++    const out = usable(r);
++    if (!out) return null;
++    const usage = { input: (r.usage && r.usage.tokens_in) || 0, output: (r.usage && r.usage.tokens_out) || 0, cached: 0 };
++    return {
++        text: typeof out.text === 'string' ? out.text : '',
++        json: out.json || null,
++        usage,
++        model: (r.provenance && r.provenance.model) || null,
++        provider: 'openvibe-ai',
++        shared: true,
++        latencyMs: Date.now() - started,
++        cost: (r.usage && r.usage.cost_usd) || 0,
++        runId: r.id,
++        workflow: r.workflow && r.workflow.key,
++    };
++}
++
++module.exports = { enabled, run, structured, complete, usable, imageInput, ownerRef, workflowFor, setRecorder, KIND_TO_WORKFLOW, AUDIENCE };
+diff --git a/server/ai/llm.js b/server/ai/llm.js
+index 6824fed..67dc39c 100644
+--- a/server/ai/llm.js
++++ b/server/ai/llm.js
+@@ -21,6 +21,7 @@
+ 'use strict';
+ const fs = require('fs');
+ const db = require('../db/database');
++const aiService = require('./ai-service');
+ 
+ const ROLES = ['chat', 'vision', 'director', 'summary', 'legacy'];
+ const DEFAULT_TIMEOUT_MS = { chat: 20000, vision: 30000, director: 25000, summary: 30000, legacy: 30000 };
+@@ -30,7 +31,8 @@ function b(k) { const v = db.getSetting(k); return v === true || v === 'true' ||
+ function num(k, d) { const v = parseFloat(db.getSetting(k)); return Number.isFinite(v) ? v : d; }
+ 
+ // ── Gates ────────────────────────────────────────────────────
+-function isEnabled() { return b('ai_enabled') && !!s('ai_api_key'); }
++// AI_SERVICE=remote: the provider key lives in OpenVibe.AI, so the admin master switch alone decides.
++function isEnabled() { return b('ai_enabled') && (aiService.enabled() || !!s('ai_api_key')); }
+ function withinBudget() {
+     const cap = num('ai_max_cost_usd_per_day', 0);
+     if (!cap || cap <= 0) return true;
+@@ -294,6 +296,22 @@ function parseJsonLoose(text) {
+  */
+ async function complete(o = {}) {
+     const role = ROLES.includes(o.role) ? o.role : 'legacy';
++    // AI_SERVICE=remote: shared-key calls become workflow runs on OpenVibe.AI (a streamer's BYO
++    // provider override still goes straight to that provider, below). Usage is still recorded here
++    // so per-streamer budgets and the admin cost views keep working unchanged.
++    if (aiService.enabled() && !(o.provider && (o.provider.apiKey || o.provider.baseUrl))) {
++        if (!isEnabled() || !withinBudget()) return null;
++        const r = await aiService.complete({ ...o, role }, { toVisionJpeg });
++        if (!r) { console.warn(`[AI] ${role}/${o.kind || role} via OpenVibe.AI returned no answer`); return null; }
++        if (o.json && !r.json) r.json = parseJsonLoose(r.text);
++        try {
++            db.recordAiUsage({
++                kind: o.kind || role, model: r.model, input_tokens: r.usage.input, output_tokens: r.usage.output, cached_tokens: r.usage.cached || 0,
++                cost_usd: r.cost || 0, owner_user_id: o.ownerUserId || null, source: o.source || null, role, provider: 'openvibe-ai', latency_ms: r.latencyMs,
++            });
++        } catch { /* metering is best-effort */ }
++        return r;
++    }
+     const p = resolveProvider(role, o.provider || null);
+     if (p.shared) { if (!isEnabled() || !withinBudget()) return null; }
+     else if (!p.apiKey && !/localhost|127\.0\.0\.1|:\d+$/.test(p.baseUrl) && /api\.openai\.com|anthropic\.com/i.test(p.baseUrl)) return null;
+@@ -357,4 +375,11 @@ async function testProvider(override = null) {
+     } catch (e) { return { ok: false, error: e.message }; }
+ }
+ 
++// Remote structured workflows (translate, paste/frame analysis, overviews, recap) meter here too.
++aiService.setRecorder((r, m) => db.recordAiUsage({
++    kind: m.kind || (r.workflow && r.workflow.key) || 'remote', model: (r.provenance && r.provenance.model) || null,
++    input_tokens: (r.usage && r.usage.tokens_in) || 0, output_tokens: (r.usage && r.usage.tokens_out) || 0, cached_tokens: 0,
++    cost_usd: (r.usage && r.usage.cost_usd) || 0, owner_user_id: m.ownerUserId || null, source: m.source || null, role: m.role || null, provider: 'openvibe-ai', latency_ms: null,
++}));
++
+ module.exports = { complete, testProvider, resolveProvider, modelForRole, priceFor, estimateCost, toVisionJpeg, parseJsonLoose, isEnabled, withinBudget, defaultModel, ROLES };
+diff --git a/server/ai/media-analysis.js b/server/ai/media-analysis.js
+index 3b4421c..a1da565 100644
+--- a/server/ai/media-analysis.js
++++ b/server/ai/media-analysis.js
+@@ -297,7 +297,14 @@ async function analyzeMedia(src, { streamId = null, userId = null, numFrames = n
+         if (frames.length) parts.push('Visual observations across the video (in order):\n' + frames.map(f => `- ${f.description}`).join('\n'));
+         if (transcript) parts.push('Audio transcript (sampled from the recording):\n"' + transcript.slice(0, 4000) + '"');
+         const prompt = `You are writing an AI overview of a recorded video. Using ONLY the signals below (be concrete, don't invent), summarize what the video is about in 2-5 sentences — the main activities, topics, and vibe.\n\n${parts.join('\n\n')}`;
+-        overview = await ai.summarizeText(prompt, 400, 'media_overview');
++        const aiService = require('./ai-service');
++        if (aiService.enabled()) {
++            // AI_SERVICE=remote: the prompt lives in OpenVibe.AI (workflow live.media.overview).
++            const o = ai.isEnabled() && ai.withinBudget()
++                ? await aiService.structured('live.media.overview', { frames: frames.map(f => String(f.description || '').slice(0, 1000)).filter(Boolean).slice(0, 60), transcript: String(transcript || '').slice(0, 200000) }, { meter: { kind: 'media_overview', role: 'legacy', ownerUserId: userId } })
++                : null;
++            overview = o && o.overview ? o.overview : null;
++        } else overview = await ai.summarizeText(prompt, 400, 'media_overview');
+         if (overview) overview = overview.slice(0, 2000);
+     }
+     return { overview: overview || null, transcript: transcript || '', segments: segments || [], frames, duration };
+diff --git a/server/i18n/translate.js b/server/i18n/translate.js
+index 64209fd..86514ef 100644
+--- a/server/i18n/translate.js
++++ b/server/i18n/translate.js
+@@ -23,6 +23,8 @@ const crypto = require('crypto');
+ const db = require('../db/database');
+ let llm = null;
+ try { llm = require('../ai/llm'); } catch { llm = null; }
++let aiService = null;
++try { aiService = require('../ai/ai-service'); } catch { aiService = null; }
+ 
+ const LANG_NAMES = {
+     en: 'English', ja: 'Japanese', ko: 'Korean', zh: 'Chinese', ru: 'Russian', uk: 'Ukrainian', ar: 'Arabic',
+@@ -191,6 +193,16 @@ async function translate(text, { from = 'auto', to = 'en', context = 'chat', max
+     const ok = await _slot();
+     if (!ok) return null;
+     try {
++        if (aiService && aiService.enabled()) {
++            // AI_SERVICE=remote: the prompt lives in OpenVibe.AI (workflow live.translate).
++            const o = await aiService.structured('live.translate', { text: String(text).trim(), from, to, context, max_tokens: maxTokens || undefined });
++            if (o && o.unchanged) { _memSet(key, ''); return null; }
++            const remote = o && typeof o.text === 'string' ? o.text.trim() : '';
++            if (!remote) return null;
++            _memSet(key, remote);
++            try { db.run('INSERT OR REPLACE INTO translations (key, src, dst, text) VALUES (?, ?, ?, ?)', [key, from, to, remote]); } catch { /* */ }
++            return remote;
++        }
+         const src = from === 'auto' ? 'the source language' : langName(from);
+         const kind = context === 'bio' ? 'a streamer\'s profile bio'
+             : context === 'speech' ? 'lines of live-stream speech (a casual gamer talking to his chat)'
+diff --git a/server/internal/routes.js b/server/internal/routes.js
+index 540fcb2..f5b4007 100644
+--- a/server/internal/routes.js
++++ b/server/internal/routes.js
+@@ -32,6 +32,15 @@ router.post('/ai/site-copy', async (req, res) => {
+     const linkList = links.map(l => ({ id: clean(l.id, 60), name: clean(l.name, 60), about: clean(l.about, 120) }));
+     _siteCopyBusy = true;
+     try {
++        const aiService = require('../ai/ai-service');
++        if (aiService.enabled()) {
++            // AI_SERVICE=remote: OpenVibe.AI owns this workflow (network.site_copy). Network should call it
++            // directly; until it does, this endpoint answers from there instead of from Live's own key.
++            const run = await aiService.run('network.site_copy', { sites: facts, links: linkList });
++            const out = aiService.usable(run);
++            if (!out || !Array.isArray(out.sites)) return res.status(503).json({ ok: false, error: 'AI unavailable or over budget' });
++            return res.json({ ok: true, model: (run.provenance && run.provenance.model) || null, run_id: run.id, sites: out.sites });
++        }
+         const llm = require('../ai/llm');
+         const out = await llm.complete({
+             role: 'summary', kind: 'site_copy', source: 'network-footer', maxTokens: 2200, temperature: 0.7, timeoutMs: 60000,
+diff --git a/server/recap/recap.js b/server/recap/recap.js
+index 9bafab8..bb131e6 100644
+--- a/server/recap/recap.js
++++ b/server/recap/recap.js
+@@ -148,8 +148,15 @@ async function aiWriteup(g) {
+     };
+     const system = `You write the "after-show report" for a live stream on OpenVibe.Live (a scrappy, open-source, community-run streaming site). Voice: sports-page energy, warm, specific, a little funny, never mocking the streamer or the viewers. Use the REAL numbers and names given. Small streams are fine — a 4-viewer night can still be an A if it was fun. Output only JSON.`;
+     let r = null;
+-    try { r = await llm.complete({ role: 'summary', kind: 'stream_recap', source: 'recap', ownerUserId: g.streamer.id, system, user: JSON.stringify(facts), json: SCHEMA, maxTokens: 500, temperature: 0.8, timeoutMs: 40000 }); } catch (e) { console.warn('[Recap] model call failed:', e.message); return null; }
+-    const out = r && (r.json || (r.text ? llm.parseJsonLoose(r.text) : null));
++    let out = null;
++    const aiService = require('../ai/ai-service');
++    if (aiService.enabled()) {
++        // AI_SERVICE=remote: the prompt lives in OpenVibe.AI (workflow live.stream.recap).
++        out = await aiService.structured('live.stream.recap', { facts }, { target: { service: 'live', type: 'stream', id: String(g.stream.id) }, meter: { kind: 'stream_recap', role: 'summary', source: 'recap', ownerUserId: g.streamer.id } });
++    } else {
++        try { r = await llm.complete({ role: 'summary', kind: 'stream_recap', source: 'recap', ownerUserId: g.streamer.id, system, user: JSON.stringify(facts), json: SCHEMA, maxTokens: 500, temperature: 0.8, timeoutMs: 40000 }); } catch (e) { console.warn('[Recap] model call failed:', e.message); return null; }
++        out = r && (r.json || (r.text ? llm.parseJsonLoose(r.text) : null));
++    }
+     if (!out || !out.headline || !out.summary) return null;
+     return { headline: String(out.headline).trim().slice(0, 90), summary: String(out.summary).trim().slice(0, 500), moment: String(out.moment || '').trim().slice(0, 200), tags: (Array.isArray(out.tags) ? out.tags : []).map(t => String(t).trim().toLowerCase()).filter(Boolean).slice(0, 4), grade: ['S', 'A', 'B', 'C'].includes(out.grade) ? out.grade : 'B' };
+ }
+diff --git a/test/ai-service-client.test.js b/test/ai-service-client.test.js
+new file mode 100644
+index 0000000..024f740
+--- /dev/null
++++ b/test/ai-service-client.test.js
+@@ -0,0 +1,146 @@
++'use strict';
++
++// AI_SERVICE=remote (roadmap Wave 13): Live's AI goes to OpenVibe.AI as workflow runs with a service
++// token for audience openvibe.ai. Against a stub Network (token endpoint) and a stub AI service:
++// off by default; structured workflows return their output; llm.complete()-shaped calls become
++// passthrough runs of the workflow that owns the feature, attributed to the streamer; synthetic
++// (stub-provider) answers, failed runs, quota refusals and an unreachable service are all "no
++// answer" (null); a still-running run is polled; a rejected token is refreshed once.
++
++const assert = require('assert');
++const http = require('http');
++const crypto = require('crypto');
++const { serviceAuth } = require('openvibe-contracts');
++
++process.env.OV_OAUTH_CLIENT_ID = 'live';
++process.env.OV_OAUTH_CLIENT_SECRET = 'live-secret';
++delete process.env.AI_SERVICE;
++
++const keys = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
++let tokenCalls = 0;
++const calls = [];
++const script = { next: [] };   // queued responses for the AI stub: { status, body } | function
++
++const network = http.createServer((req, res) => {
++    let raw = '';
++    req.on('data', (c) => { raw += c; });
++    req.on('end', () => {
++        tokenCalls++;
++        const f = new URLSearchParams(raw);
++        const now = Math.floor(Date.now() / 1000);
++        res.setHeader('Content-Type', 'application/json');
++        res.end(JSON.stringify({ access_token: serviceAuth.signServiceToken({ iss: 'https://openvibe.network', sub: 'svc:live', actor_type: 'service', aud: [f.get('audience')], cap: ['ai.run.create', 'ai.run.read'], iat: now, exp: now + 300, jti: `tok_${tokenCalls}abcdefgh` }, keys.privateKey), expires_in: 300 }));
++    });
++});
++
++const ai = http.createServer((req, res) => {
++    let raw = '';
++    req.on('data', (c) => { raw += c; });
++    req.on('end', () => {
++        const auth = String(req.headers.authorization || '');
++        const v = serviceAuth.verifyServiceToken(auth.slice(7), { publicKey: keys.publicKey, audience: 'openvibe.ai' });
++        const body = raw ? JSON.parse(raw) : null;
++        calls.push({ method: req.method, url: req.url, body, tokenOk: v.ok, jti: v.ok ? v.claims.jti : null });
++        let out = script.next.shift() || { status: 500, body: { code: 'unscripted' } };
++        if (typeof out === 'function') out = out(body, req);
++        res.statusCode = out.status;
++        res.setHeader('Content-Type', 'application/json');
++        if (out.headers) for (const [k, val] of Object.entries(out.headers)) res.setHeader(k, val);
++        res.end(JSON.stringify(out.body));
++    });
++});
++
++const run = (over = {}) => ({ id: 'run_01JAB2C3D4E5F6G7H8J9K0MNPA', status: 'succeeded', synthetic: false, workflow: { key: 'live.translate', version: 1 }, output: { text: 'hello everyone', unchanged: false }, provenance: { model: 'gpt-5-nano', provider: 'shared' }, usage: { tokens_in: 30, tokens_out: 5, cost_usd: 0.0001 }, ...over });
++
++(async () => {
++    await new Promise((r) => network.listen(0, '127.0.0.1', r));
++    await new Promise((r) => ai.listen(0, '127.0.0.1', r));
++    process.env.OV_NETWORK_INTERNAL_URL = `http://127.0.0.1:${network.address().port}`;
++    process.env.OV_AI_INTERNAL_URL = `http://127.0.0.1:${ai.address().port}`;
++    const svc = require('../server/ai/ai-service');
++    const metered = [];
++    svc.setRecorder((r, m) => metered.push({ run: r.id, ...m }));
++
++    // 0. Off by default: nothing is sent.
++    assert.strictEqual(svc.enabled(), false);
++    assert.strictEqual(await svc.structured('live.translate', { text: 'x', to: 'en' }), null);
++    assert.strictEqual(calls.length, 0, 'default behaviour unchanged: no calls to OpenVibe.AI');
++
++    process.env.AI_SERVICE = 'remote';
++    assert.strictEqual(svc.enabled(), true);
++
++    // 1. A structured workflow: token for openvibe.ai, the run's output back, usage metered for the streamer.
++    script.next.push({ status: 201, body: { run: run() } });
++    const out = await svc.structured('live.translate', { text: 'みなさん', from: 'ja', to: 'en' }, { meter: { kind: 'translate', ownerUserId: 42 } });
++    assert.deepStrictEqual(out, { text: 'hello everyone', unchanged: false });
++    const c1 = calls.pop();
++    assert.ok(c1.tokenOk, 'Live calls with a service token for audience openvibe.ai');
++    assert.strictEqual(c1.method, 'POST');
++    assert.match(c1.url, /^\/api\/v1\/runs\?wait=\d+$/);
++    assert.strictEqual(c1.body.workflow, 'live.translate');
++    assert.deepStrictEqual(c1.body.attribution, { service: 'live', type: 'user', id: '42' });
++    assert.deepStrictEqual(metered.pop(), { run: run().id, kind: 'translate', ownerUserId: 42 });
++
++    // 2. Synthetic (stub provider), failed runs, quota refusals and an unreachable service are "no answer".
++    script.next.push({ status: 201, body: { run: run({ synthetic: true }) } });
++    assert.strictEqual(await svc.structured('live.translate', { text: 'a b', to: 'en' }, { meter: { kind: 'translate' } }), null);
++    assert.strictEqual(metered.length, 0, 'synthetic output is not metered');
++    script.next.push({ status: 201, body: { run: run({ status: 'failed', output: null, error: { code: 'provider.unavailable' } }) } });
++    assert.strictEqual(await svc.structured('live.translate', { text: 'a b', to: 'en' }), null);
++    script.next.push({ status: 429, headers: { 'Retry-After': '30' }, body: { code: 'quota.exceeded', detail: 'quota exceeded' } });
++    assert.strictEqual(await svc.structured('live.translate', { text: 'a b', to: 'en' }), null);
++    const saved = process.env.OV_AI_INTERNAL_URL;
++    process.env.OV_AI_INTERNAL_URL = 'http://127.0.0.1:1';
++    assert.strictEqual(await svc.structured('live.translate', { text: 'a b', to: 'en' }), null);
++    process.env.OV_AI_INTERNAL_URL = saved;
++
++    // 3. Still running after the wait: poll the run until it finishes.
++    script.next.push({ status: 202, body: { run: run({ status: 'running', output: null }) } });
++    script.next.push({ status: 200, body: { run: run({ status: 'running', output: null }) } });
++    script.next.push({ status: 200, body: { run: run() } });
++    calls.length = 0;
++    assert.deepStrictEqual(await svc.structured('live.translate', { text: 'a b', to: 'en' }, { waitMs: 5000 }), run().output);
++    assert.deepStrictEqual(calls.map((c) => c.method), ['POST', 'GET', 'GET']);
++    assert.strictEqual(calls[1].url, `/api/v1/runs/${run().id}`);
++
++    // 4. A rejected token is refreshed once and the call retried.
++    const before = tokenCalls;
++    script.next.push({ status: 401, body: { code: 'token.expired' } });
++    script.next.push({ status: 201, body: { run: run() } });
++    calls.length = 0;
++    assert.ok(await svc.structured('live.translate', { text: 'a b', to: 'en' }));
++    assert.strictEqual(tokenCalls, before + 1, 'a new token was fetched');
++    assert.notStrictEqual(calls[0].jti, calls[1].jti);
++
++    // 5. llm.complete()-shaped calls: passthrough run of the owning workflow, llm.complete result shape back.
++    script.next.push((body) => ({ status: 201, body: { run: run({ workflow: { key: body.workflow, version: 1 }, output: { text: '{"skip":true,"lines":[]}', json: { skip: true, lines: [] } }, provenance: { model: 'gpt-5' } }) } }));
++    calls.length = 0;
++    const r = await svc.complete({
++        role: 'director', kind: 'ai_viewers_director', source: 'ai_viewers', ownerUserId: 7,
++        system: [{ text: 'RULES', cache: true }, { text: '' }], user: 'plan now', json: { name: 'plan', schema: { type: 'object' }, strict: true }, maxTokens: 330, temperature: 0.9, cacheKey: 'chan:7',
++    });
++    const sent = calls[0].body;
++    assert.strictEqual(sent.workflow, 'live.viewers.plan');
++    assert.deepStrictEqual(sent.input.system, [{ text: 'RULES', cache: true }]);
++    assert.strictEqual(sent.input.role, 'director');
++    assert.strictEqual(sent.input.user, 'plan now');
++    assert.strictEqual(sent.input.max_tokens, 330);
++    assert.deepStrictEqual(sent.input.json.schema, { type: 'object' });
++    assert.deepStrictEqual(sent.attribution, { service: 'live', type: 'user', id: '7' });
++    assert.deepStrictEqual(r.json, { skip: true, lines: [] });
++    assert.strictEqual(r.model, 'gpt-5');
++    assert.deepStrictEqual(r.usage, { input: 30, output: 5, cached: 0 });
++    assert.strictEqual(r.provider, 'openvibe-ai');
++    assert.strictEqual(svc.workflowFor('something_new'), 'live.complete', 'unknown kinds still have a workflow');
++
++    // 6. Images: OpenVibe.Media URLs are passed as URLs; anything else is downscaled here and sent inline.
++    assert.deepStrictEqual(await svc.imageInput('https://openvibe.media/t/9', {}), { url: 'https://openvibe.media/t/9', max_width: 1024 });
++    const inline = await svc.imageInput('/tmp/frame.jpg', { toVisionJpeg: async () => 'data:image/jpeg;base64,AAAA', maxWidth: 768 });
++    assert.deepStrictEqual(inline, { data_url: 'data:image/jpeg;base64,AAAA', max_width: 768 });
++    assert.strictEqual(await svc.imageInput('https://evil.example/x.png', { toVisionJpeg: async () => null }), null, 'other URLs are not forwarded');
++
++    network.close();
++    ai.close();
++    console.log('ai service client: all checks passed');
++    process.exit(0);
++})().catch((err) => { console.error(err); process.exit(1); });
