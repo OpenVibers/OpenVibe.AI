@@ -142,6 +142,7 @@ stub joins every route as a last resort outside production only (`AI_STUB_FALLBA
 | The cache never crosses requester, actor, target or attribution scope | `test/cache.test.js` |
 | Idempotency, cancel (running and queued), retry, async polling, audit rows, restart recovery, no raw prompts or inline images kept | `test/runs.test.js` |
 | Media fetched only from allow-listed https OpenVibe hosts; DNS answers and every redirect hop re-checked (a public hop never reaches internal Media); size caps | `test/ssrf.test.js` |
+| The shared compiled-schema cache (caller-supplied schemas) is an LRU bounded by count and bytes, in Ajv too | `test/schemas.test.js` |
 | Token and capability denial, namespaces, no secret values in any response, runs private to the requester | `test/auth.test.js` |
 | Ported adapters against fake OpenAI/Anthropic servers, stub determinism, whisper filter, templates | `test/providers.test.js` |
 | Import from a Live snapshot: dry run, holds, idempotent re-run | `test/import.test.js` |

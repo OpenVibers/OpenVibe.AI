@@ -18,10 +18,12 @@ const { createQuotas } = require('./quota');
 const { createRuns } = require('./runs');
 const { seed } = require('./workflows/seed');
 const { createKeyStore, createAuth } = require('./auth');
+const schemas = require('./schemas');
 const { createApp } = require('./app');
 
 async function start({ config, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, listen = true } = {}) {
     config = config || load(env);
+    schemas.configure(config.schemaCache);
     const db = openDb(config.dbPath);
     const registry = createRegistry(db, { clock, env });
     const quotas = createQuotas(db, { clock, registry });

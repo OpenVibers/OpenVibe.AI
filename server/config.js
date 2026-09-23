@@ -140,6 +140,12 @@ function load(env = process.env) {
             maxInputBytes: int(env.AI_MAX_INPUT_BYTES, 6 * 1024 * 1024),
             retentionDays: int(env.AI_RUN_RETENTION_DAYS, 30),
         },
+        // Compiled JSON Schema validators (server/schemas.js): an LRU shared by every caller, some of
+        // whose schemas are caller-supplied, so it is bounded by count and by total schema size.
+        schemaCache: {
+            maxEntries: Math.max(1, int(env.AI_SCHEMA_CACHE_MAX, 500)),
+            maxBytes: Math.max(1024, int(env.AI_SCHEMA_CACHE_MAX_BYTES, 8 * 1024 * 1024)),
+        },
         // Raw prompt/response logging is opt-in debugging only, and only for callers that ask.
         debugRawLog: bool(env.AI_DEBUG_RAW_LOG, false),
 
