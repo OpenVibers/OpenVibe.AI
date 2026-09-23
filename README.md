@@ -2,8 +2,10 @@
 
 > Providers, models, routing, prompt templates, workflows, runs, citations, cache and quotas for every product.
 
-**Status:** alpha (roadmap Wave 13). The service runs and is tested; it is **not deployed**, and the
-domain keeps its placeholder page until the launch rule below is met.
+**Status:** alpha (roadmap Wave 13). Deployed on the host since 2026-09-23 on `127.0.0.1:4700`
+(loopback only) and in production use: OpenVibe.Live runs with `AI_SERVICE=remote` and Network's
+footer copy runs `network.site_copy` here. It is not a public product: the domain keeps its placeholder
+page until the launch rule below is met.
 **Domain:** `ai.openvibe.network` · **Port:** 4700 · **Unit:** `openvibe-ai.service`
 **Plan:** OpenVibe End-to-End Realignment & Implementation Plan, revision 3 (20 Sep 2026), §12.1, §12.13, §15.14, §33, §34.
 **License:** AGPL-3.0 (same as every OpenVibe service).
@@ -68,9 +70,9 @@ produce a real answer ends `failed` with an explicit code — `provider.unavaila
 `route.unavailable`, `fetch.refused`, `source.unavailable`, `input.insufficient`, `output.empty`,
 `output.invalid`, `run.interrupted` — and never with filler content.
 
-The capability ids are proposed for openvibe-contracts in `docs/capabilities-proposal/` (with the
-replacement `ai` service manifest). Until a contracts release defines them, `server/auth.js` checks
-them with the contracts grant rule (exact id or `family.*`). A token's `ns` claim limits which
+The capability ids and the `ai` service manifest are released in openvibe-contracts v0.29.0 (the
+drafts stay in `docs/capabilities-proposal/`); `server/auth.js` checks them with the contracts grant
+rule (exact id or `family.*`). A token's `ns` claim limits which
 workflow namespaces it may run (`live.*`, `wiki.*`, …), and namespaces fail closed: a token with
 no `ns` runs nothing outside a documented fallback. A first-party service token (`svc:<id>`) without
 `ns` gets its `AI_NS_FALLBACK` entry (default `live=live.*|network.site_copy`, because Network grants
@@ -152,26 +154,33 @@ stub joins every route as a last resort outside production only (`AI_STUB_FALLBA
 
 ## Live and Network
 
-`docs/live-patch.diff` (applies to Live's `main` with `git apply`) adds `AI_SERVICE=remote`: Live's
-shared-key AI calls become runs here, authenticated with `serviceHeaders('openvibe.ai')` from Live's
-`server/net/network-principal.js`. Default behaviour is unchanged. `scripts/import-from-live.js`
-moves the AI records that belong here (`--dry-run` first). Network's footer copy becomes the
-`network.site_copy` workflow — the dependency on Live's internal endpoint is reversed. The full
-plan, holds and rollback are in `docs/migration.md`.
+`docs/live-patch.diff` added `AI_SERVICE=remote` to Live (deployed as Live `fa22de5`; production runs
+with `AI_SERVICE=remote` since 2026-09-23): Live's shared-key AI calls become runs here, authenticated
+with `serviceHeaders('openvibe.ai')` from Live's `server/net/network-principal.js`. Without the flag
+Live's behaviour is unchanged. `scripts/import-from-live.js`
+moves the AI records that belong here (`--dry-run` first); it ran on production on 2026-09-23 at
+18:29 UTC (79,657 ledger rows, 11 holds recorded with their reasons).
+Network's footer copy calls the `network.site_copy` workflow (Network `422f8e9`), but the deployed Network still
+falls back to Live's `/internal/ai/site-copy`, and Live still serves that route. The full plan, holds
+and rollback are in `docs/migration.md`.
 
-## Deploy (when launched)
+## Deploy
 
-`/opt/openvibe.ai`, env `/etc/openvibe/ai.env` (0600), unit `deploy/systemd/openvibe-ai.service`
-(`StateDirectory=openvibe-ai`, database `/var/lib/openvibe-ai/ai.db`), nginx
-`deploy/nginx/ai.openvibe.network.conf` (only health/ready public; the API is host-local).
+Deployed: `/opt/openvibe.ai`, env `/etc/openvibe/ai.env` (0600), unit `deploy/systemd/openvibe-ai.service`
+(`StateDirectory=openvibe-ai`, database `/var/lib/openvibe-ai/ai.db`), principal `ai`. The nginx vhost
+`deploy/nginx/ai.openvibe.network.conf` (only health/ready public; the API is host-local) is not
+installed: `ai.openvibe.network` still serves the Sites placeholder.
 
 ## Not done yet
 
-- Contracts: the capability ids and service manifest are proposals; the CI contract check reports
-  the old charter manifest until a contracts release ships them.
-- `ai.run.*` events to OpenVibe.Events; per-actor (BYO) provider secrets; moving Live's local
-  transcription and the passthrough prompts; Network's direct call to `network.site_copy`; a
-  server-rendered status page.
+- `ai.run.*` events to OpenVibe.Events (and their schemas in Contracts); per-actor (BYO) provider
+  secrets; moving Live's local transcription (whisper) and the passthrough prompts into AI templates;
+  removing Network's fallback to Live's `/internal/ai/site-copy`; a server-rendered status page.
+- Import holds from the 2026-09-23 run: a streamer's own provider key stays in Live, and 3,021 Live
+  translations cannot become cache entries (they have no source text) and stay in Live.
+- No fallback is declared on any production route, so an outage of the one real provider fails every
+  Live AI feature; `live.*` and `network.site_copy` outputs carry no citations or gaps (0 citation rows).
+- `/metrics` (404); the host has a backup of `ai.db` but no restore drill has run for it.
 
 ## Launch rule
 
