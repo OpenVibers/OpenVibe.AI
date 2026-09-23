@@ -80,8 +80,9 @@ structured workflow, point Live's call at it, and the passthrough key stays for 
 3. **Import**: the same command without `--dry-run`. Re-running is safe: the ledger skips what is
    already imported and applies changed settings once. Review `import_holds`.
 4. **Grant Live a token**: Network client `live` needs `ai.run.create` (and `ai.run.read`) for
-   audience `openvibe.ai`, namespaces `live.*` and `network.*` (the latter only while Live still
-   answers `/internal/ai/site-copy`).
+   audience `openvibe.ai`, namespaces `live.*` and `network.site_copy` (the latter only while Live still
+   answers `/internal/ai/site-copy`). Namespaces fail closed; a grant without namespaces is covered
+   by the default `AI_NS_FALLBACK` (`live=live.*|network.site_copy`).
 5. **Apply `docs/live-patch.diff`** to Live (`git apply`), deploy, then set in `/etc/openvibe/live.env`:
    ```
    AI_SERVICE=remote

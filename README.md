@@ -70,7 +70,12 @@ produce a real answer ends `failed` with an explicit code — `provider.unavaila
 The capability ids are proposed for openvibe-contracts in `docs/capabilities-proposal/` (with the
 replacement `ai` service manifest). Until a contracts release defines them, `server/auth.js` checks
 them with the contracts grant rule (exact id or `family.*`). A token's `ns` claim limits which
-workflow namespaces it may run (`live.*`, `wiki.*`, …).
+workflow namespaces it may run (`live.*`, `wiki.*`, …), and namespaces fail closed: a token with
+no `ns` runs nothing outside a documented fallback. A first-party service token (`svc:<id>`) without
+`ns` gets its `AI_NS_FALLBACK` entry (default `live=live.*|network.site_copy`, because Network grants
+Live's `ai.run.create` with no namespaces), else `<id>.*`; app and module tokens without `ns` get
+nothing. `AI_NS_FALLBACK=none` removes the fallback; `AI_NS_REQUIRED=false` is a rollback lever to
+the old rule (no `ns` = every namespace).
 
 ## The eleven record groups
 

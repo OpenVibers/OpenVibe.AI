@@ -40,7 +40,7 @@ function runsRouter({ runs, registry, auth, config, log = console }) {
     const has = (req) => (id) => auth.principalHas(req, id);
 
     function checkNamespace(req, workflowKey) {
-        if (!namespaceAllowed(req.principal, workflowKey)) throw new AiError(403, 'capability.namespace_denied', `this token may not run ${workflowKey}`);
+        if (!namespaceAllowed(req.principal, workflowKey, config.namespaces)) throw new AiError(403, 'capability.namespace_denied', `this token may not run ${workflowKey}`);
     }
 
     async function createAndRespond(req, res, body, waitMs) {

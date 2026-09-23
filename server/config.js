@@ -24,6 +24,25 @@ const bool = (v, d) => (v == null || v === '' ? d : /^(1|true|yes|on)$/i.test(St
 const list = (v, d) => (v == null || v === '' ? d : String(v).split(',').map(s => s.trim()).filter(Boolean));
 const trimUrl = (v) => String(v || '').trim().replace(/\/+$/, '');
 
+/**
+ * AI_NS_FALLBACK: namespaces for a service token that carries no `ns` claim, as
+ * `service=ns|ns,service=ns`. A service not listed gets `<service>.*`; `none` turns the fallback off
+ * (an ns-less token then runs nothing). The default covers Live, whose Network grant has no
+ * namespaces: its own workflows, plus network.site_copy for its /internal/ai/site-copy fallback.
+ */
+const DEFAULT_NS_FALLBACK = 'live=live.*|network.site_copy';
+function nsFallback(v) {
+    const raw = v == null || v === '' ? DEFAULT_NS_FALLBACK : String(v).trim();
+    if (/^(none|off|0|false)$/i.test(raw)) return { derive: false, fallback: {} };
+    const fallback = {};
+    for (const entry of raw.split(',').map(s => s.trim()).filter(Boolean)) {
+        const m = /^([a-z][a-z0-9-]{1,39})\s*=\s*(.+)$/.exec(entry);
+        if (!m) throw new Error(`AI_NS_FALLBACK: "${entry}" is not service=ns|ns`);
+        fallback[m[1]] = m[2].split('|').map(s => s.trim()).filter(Boolean);
+    }
+    return { derive: true, fallback };
+}
+
 /** Roles Live's llm.js routes by (one route per role; see server/workflows/seed.js). */
 const LIVE_ROLES = ['chat', 'vision', 'director', 'summary', 'legacy'];
 
@@ -55,6 +74,9 @@ function load(env = process.env) {
         issuer: trimUrl(env.OV_NETWORK_ISSUER || env.OV_NETWORK_URL || 'https://openvibe.network'),
         networkPublicKey: env.OV_NETWORK_PUBLIC_KEY ? env.OV_NETWORK_PUBLIC_KEY.replace(/\\n/g, '\n') : null,
         audience: 'openvibe.ai',
+        // Namespaces fail closed (server/auth.js): no `ns` claim, no namespaced run, except the
+        // documented service fallback. AI_NS_REQUIRED=false is a rollback lever to the old open rule.
+        namespaces: { required: bool(env.AI_NS_REQUIRED, true), ...nsFallback(env.AI_NS_FALLBACK) },
 
         dbPath: env.AI_DB_PATH || './data/ai.db',
 

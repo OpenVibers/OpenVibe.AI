@@ -21,10 +21,14 @@ const { privateKey, publicKey } = crypto.generateKeyPairSync('rsa', {
 });
 const silent = { log() {}, warn() {}, error(...a) { if (process.env.DEBUG) console.error(...a); } };
 
-function token(slug, cap, { aud = 'openvibe.ai', ns = [], exp = Math.floor(Date.now() / 1000) + 300, key = privateKey, sub } = {}) {
+/**
+ * Namespaces fail closed, so test tokens hold every namespace ('*') unless a test says otherwise;
+ * `ns: null` leaves the claim out (what Network issues for a grant without namespaces).
+ */
+function token(slug, cap, { aud = 'openvibe.ai', ns = ['*'], exp = Math.floor(Date.now() / 1000) + 300, key = privateKey, sub, actorType = 'service', extra = {} } = {}) {
     const now = Math.floor(Date.now() / 1000);
     return serviceAuth.signServiceToken({
-        iss: ISSUER, sub: sub || `svc:${slug}`, actor_type: 'service', aud: [aud], cap, ns, iat: now, exp,
+        iss: ISSUER, sub: sub || `svc:${slug}`, actor_type: actorType, aud: [aud], cap, ...(ns === null ? {} : { ns }), iat: now, exp, ...extra,
         jti: `tok_${crypto.randomBytes(8).toString('hex')}`,
     }, key);
 }

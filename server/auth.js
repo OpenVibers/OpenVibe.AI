@@ -8,8 +8,12 @@
  * ship, allows() decides with the contracts' own grant rule (the exact id, or a `family.*` grant);
  * once contracts knows an id, contracts decides.
  *
- * Namespaces: a token whose `ns` claim is non-empty may only run workflows inside those namespaces
- * (the same matching as contracts' namespaceAllowed: 'live.*' allows 'live.translate').
+ * Namespaces fail closed: a token may only run workflows inside the namespaces it holds (the same
+ * matching as contracts' namespaceAllowed: 'live.*' allows 'live.translate'). The `ns` claim decides
+ * when it is non-empty. A first-party service token WITHOUT one (Network grants Live's ai.run.create
+ * with no namespaces) falls back to its entry in AI_NS_FALLBACK, else to its own `<service>.*`
+ * (svc:news -> news.*). App and module tokens without `ns` run nothing. AI_NS_REQUIRED=false restores
+ * the old rule (no `ns` = every namespace) and exists only as a rollback lever.
  */
 const crypto = require('crypto');
 const { serviceAuth, capabilities, http } = require('openvibe-contracts');
@@ -86,10 +90,22 @@ function allows(claims, id) {
     return c;
 }
 
-function namespaceAllowed(principal, workflowKey) {
+const DEFAULT_NAMESPACES = Object.freeze({ required: true, fallback: Object.freeze({}), derive: true });
+
+/** The namespaces a principal may run: its `ns` claim, or (service tokens only) the documented fallback. */
+function effectiveNamespaces(principal, nsConfig = DEFAULT_NAMESPACES) {
+    const ns = principal && Array.isArray(principal.ns) ? principal.ns.filter(n => typeof n === 'string' && n) : [];
+    if (ns.length) return ns;
+    const m = /^svc:([a-z][a-z0-9-]{1,39})$/.exec(String((principal && principal.sub) || ''));
+    if (!m || !nsConfig.derive) return [];
+    const listed = nsConfig.fallback && Object.prototype.hasOwnProperty.call(nsConfig.fallback, m[1]) ? nsConfig.fallback[m[1]] : null;
+    return listed && listed.length ? [...listed] : [`${m[1]}.*`];
+}
+
+function namespaceAllowed(principal, workflowKey, nsConfig = DEFAULT_NAMESPACES) {
     const ns = principal && Array.isArray(principal.ns) ? principal.ns : [];
-    if (!ns.length) return true;
-    return capabilities.namespaceAllowed(ns, workflowKey);
+    if (!ns.length && nsConfig.required === false) return true;    // AI_NS_REQUIRED=false: the old, open rule
+    return capabilities.namespaceAllowed(effectiveNamespaces(principal, nsConfig), workflowKey);
 }
 
 function bearer(req) {
@@ -140,4 +156,4 @@ function createAuth({ config, keys }) {
     return { verify, requireCap, principalHas };
 }
 
-module.exports = { CAPS, createKeyStore, createAuth, hasCap, allows, namespaceAllowed, principalSubject, bearer };
+module.exports = { CAPS, createKeyStore, createAuth, hasCap, allows, namespaceAllowed, effectiveNamespaces, principalSubject, bearer };
