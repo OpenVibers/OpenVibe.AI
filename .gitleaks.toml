@@ -1,0 +1,11 @@
+# gitleaks configuration, used by the shared security workflow
+# (OpenVibers/OpenVibe.Shared/.github/workflows/security.yml). The default rules stay on; every
+# allowlist below is one proven false positive, matched on path AND value so nothing else is hidden.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Sentinel provider key in the auth test that asserts secrets are never returned"
+condition = "AND"
+paths = ['''^test/auth\.test\.js$''']
+regexes = ['''^sk-test-THIS-MUST-NEVER-BE-RETURNED-0123456789$''']
