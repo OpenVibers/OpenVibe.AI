@@ -31,6 +31,8 @@ async function start({ config, clock = { now: () => Date.now() }, fetchImpl = gl
     const pool = createProviderPool({ db, registry, config, clock, fetchImpl, env, log });
     const fetcher = createFetcher(config);
     const engine = createEngine({ registry, pool, fetcher });
+    // ai.run.* to OpenVibe.Events through the outbox (server/events.js); before recovery, so its failures are announced.
+    require('./events').init(db, { log });
     const runs = createRuns({ db, registry, engine, cache, quotas, config, clock, log });
     seed({ registry, quotas, config, env, db });
     const interrupted = runs.recoverInterrupted();

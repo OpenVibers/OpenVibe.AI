@@ -19,6 +19,7 @@
 const { ids } = require('openvibe-contracts');
 const { AiError, sha256, stableStringify, parseJson, iso } = require('./util');
 const schemas = require('./schemas');
+const events = require('./events');
 
 const TERMINAL = new Set(['succeeded', 'failed', 'cancelled', 'cached']);
 const QUEUE_RETRY_AFTER_S = 5;
@@ -192,13 +193,16 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             cacheKey = cache.keyFor({ scope, workflowKey: wf.key, workflowVersion: wf.version, templateVersion: base.template_version, routeKey: base.route_key, routeVersion: base.route_version, inputHash });
             const hit = cache.get(cacheKey, scope);
             if (hit) {
-                db.prepare(`INSERT INTO runs (id, workflow_key, workflow_version, template_key, template_version, route_key, route_version, status, requester_type, requester_id, on_behalf_of, attribution,
-                    source_service, target, target_key, input, input_hash, output, model_key, cache_key, cached_from, retry_of, idempotency_key, trace_id, request_id, options, created_at, started_at, finished_at, citations_count)
-                    VALUES (@id, @workflow_key, @workflow_version, @template_key, @template_version, @route_key, @route_version, 'cached', @requester_type, @requester_id, @on_behalf_of, @attribution,
-                    @source_service, @target, @target_key, @input, @input_hash, @output, @model_key, @cache_key, @cached_from, @retry_of, @idempotency_key, @trace_id, @request_id, @options, @created_at, @created_at, @created_at, 0)`)
-                    .run({ ...base, output: JSON.stringify(hit.output), model_key: hit.model_key, cache_key: cacheKey, cached_from: hit.run_id });
-                const src = citations(hit.run_id);
-                if (src.length) addCitations(id, src.map(c => ({ ...c, provenance: { ...c.provenance, via_cache: hit.run_id } })), 'cache');
+                db.transaction(() => {
+                    db.prepare(`INSERT INTO runs (id, workflow_key, workflow_version, template_key, template_version, route_key, route_version, status, requester_type, requester_id, on_behalf_of, attribution,
+                        source_service, target, target_key, input, input_hash, output, model_key, cache_key, cached_from, retry_of, idempotency_key, trace_id, request_id, options, created_at, started_at, finished_at, citations_count)
+                        VALUES (@id, @workflow_key, @workflow_version, @template_key, @template_version, @route_key, @route_version, 'cached', @requester_type, @requester_id, @on_behalf_of, @attribution,
+                        @source_service, @target, @target_key, @input, @input_hash, @output, @model_key, @cache_key, @cached_from, @retry_of, @idempotency_key, @trace_id, @request_id, @options, @created_at, @created_at, @created_at, 0)`)
+                        .run({ ...base, output: JSON.stringify(hit.output), model_key: hit.model_key, cache_key: cacheKey, cached_from: hit.run_id });
+                    const src = citations(hit.run_id);
+                    if (src.length) addCitations(id, src.map(c => ({ ...c, provenance: { ...c.provenance, via_cache: hit.run_id } })), 'cache');
+                    events.runChanged(getRow(id));
+                })();
                 registry.audit(principal.sub, 'run.create', 'run', id, { trace, metadata: { workflow: wf.key, version: wf.version, status: 'cached', cached_from: hit.run_id } });
                 return { run: get(id), created: true, promise: null };
             }
@@ -209,11 +213,14 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         admit(caller);
         const reserved = quotas.reserve(ctx);
 
-        db.prepare(`INSERT INTO runs (id, workflow_key, workflow_version, template_key, template_version, route_key, route_version, status, requester_type, requester_id, on_behalf_of, attribution,
-            source_service, target, target_key, input, input_hash, cache_key, retry_of, idempotency_key, trace_id, request_id, options, created_at)
-            VALUES (@id, @workflow_key, @workflow_version, @template_key, @template_version, @route_key, @route_version, 'queued', @requester_type, @requester_id, @on_behalf_of, @attribution,
-            @source_service, @target, @target_key, @input, @input_hash, @cache_key, @retry_of, @idempotency_key, @trace_id, @request_id, @options, @created_at)`)
-            .run({ ...base, cache_key: cacheKey });
+        db.transaction(() => {
+            db.prepare(`INSERT INTO runs (id, workflow_key, workflow_version, template_key, template_version, route_key, route_version, status, requester_type, requester_id, on_behalf_of, attribution,
+                source_service, target, target_key, input, input_hash, cache_key, retry_of, idempotency_key, trace_id, request_id, options, created_at)
+                VALUES (@id, @workflow_key, @workflow_version, @template_key, @template_version, @route_key, @route_version, 'queued', @requester_type, @requester_id, @on_behalf_of, @attribution,
+                @source_service, @target, @target_key, @input, @input_hash, @cache_key, @retry_of, @idempotency_key, @trace_id, @request_id, @options, @created_at)`)
+                .run({ ...base, cache_key: cacheKey });
+            events.runChanged(getRow(id));
+        })();
         registry.audit(principal.sub, retryOf ? 'run.retry' : 'run.create', 'run', id, { trace, metadata: { workflow: wf.key, version: wf.version, target: ctx.targetKey, retry_of: retryOf } });
 
         const controller = new AbortController();
@@ -269,12 +276,18 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         try {
             const r = await engine.execute(wf, row, input, { signal: controller.signal, logRequest, debugRaw: Boolean(config.debugRawLog && opts.debug), inputHash: row.input_hash });
             if (controller.signal.aborted) throw new AiError(409, 'run.cancelled', 'cancelled');
-            const done = db.prepare(`UPDATE runs SET status = 'succeeded', output = ?, synthetic = ?, provider_key = ?, model_key = ?, fallback_used = ?, attempts = ?, tokens_in = ?, tokens_out = ?, cost_usd = ?,
-                route_key = COALESCE(?, route_key), route_version = COALESCE(?, route_version), finished_at = ? WHERE id = ? AND status = 'running'`)
-                .run(JSON.stringify(r.output), r.synthetic ? 1 : 0, r.provider, r.model, r.fallbackUsed ? 1 : 0, attempts, r.usage.input, r.usage.output, r.cost,
-                    r.route ? r.route.key : null, r.route ? r.route.version : null, iso(clock.now()), id);
+            // The status, its citations and the ai.run.succeeded event commit together.
+            const done = db.transaction(() => {
+                const d = db.prepare(`UPDATE runs SET status = 'succeeded', output = ?, synthetic = ?, provider_key = ?, model_key = ?, fallback_used = ?, attempts = ?, tokens_in = ?, tokens_out = ?, cost_usd = ?,
+                    route_key = COALESCE(?, route_key), route_version = COALESCE(?, route_version), finished_at = ? WHERE id = ? AND status = 'running'`)
+                    .run(JSON.stringify(r.output), r.synthetic ? 1 : 0, r.provider, r.model, r.fallbackUsed ? 1 : 0, attempts, r.usage.input, r.usage.output, r.cost,
+                        r.route ? r.route.key : null, r.route ? r.route.version : null, iso(clock.now()), id);
+                if (!d.changes) return d;
+                if (r.citations.length) addCitations(id, r.citations, 'workflow');
+                events.runChanged(getRow(id));
+                return d;
+            })();
             if (!done.changes) return;       // cancelled while finishing
-            if (r.citations.length) addCitations(id, r.citations, 'workflow');
             if (r.provider) quotas.account(ctx, reserved, { provider: r.provider, model: r.model, tokensIn: r.usage.input, tokensOut: r.usage.output, tokensCached: r.usage.cached, cost: r.cost });
             if (r.fallbackUsed) registry.audit('system', 'run.fallback', 'run', id, { trace: row.trace_id, metadata: { workflow: row.workflow_key, provider: r.provider, route: r.route && r.route.key } });
             if (scope && row.cache_key && !r.synthetic && wf.cache_mode !== 'none') {
@@ -287,8 +300,11 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             const detail = interrupted ? 'the service shut down while this run was in progress' : cancelled ? 'cancelled' : (err instanceof AiError ? err.detail : 'internal error');
             if (!(err instanceof AiError) && !cancelled) log.error(`[runs] ${id} crashed: ${err && err.stack || err}`);
             const extra = err instanceof AiError && err.extra ? JSON.stringify(err.extra).slice(0, 2000) : null;
-            db.prepare(`UPDATE runs SET status = ?, error_code = ?, error_detail = ?, attempts = ?, finished_at = ? WHERE id = ? AND status IN ('queued', 'running')`)
-                .run(cancelled ? 'cancelled' : 'failed', code, extra ? `${detail} ${extra}` : detail, attempts, iso(clock.now()), id);
+            db.transaction(() => {
+                const f = db.prepare(`UPDATE runs SET status = ?, error_code = ?, error_detail = ?, attempts = ?, finished_at = ? WHERE id = ? AND status IN ('queued', 'running')`)
+                    .run(cancelled ? 'cancelled' : 'failed', code, extra ? `${detail} ${extra}` : detail, attempts, iso(clock.now()), id);
+                if (f.changes) events.runChanged(getRow(id));
+            })();
             const spent = db.prepare("SELECT COALESCE(SUM(tokens_in),0) ti, COALESCE(SUM(tokens_out),0) tout, COALESCE(SUM(cost_usd),0) c FROM requests WHERE run_id = ? AND status = 'ok'").get(id);
             if (spent && (spent.ti || spent.tout)) quotas.account(ctx, reserved, { provider: 'mixed', model: '', tokensIn: spent.ti, tokensOut: spent.tout, cost: spent.c });
         } finally {
@@ -358,8 +374,12 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
 
     /** Boot: runs interrupted by a restart are failed explicitly (retry is one call away). */
     function recoverInterrupted() {
-        const r = db.prepare("UPDATE runs SET status = 'failed', error_code = 'run.interrupted', error_detail = 'the service restarted while this run was in progress', finished_at = ? WHERE status IN ('queued', 'running')").run(iso(clock.now()));
-        return r.changes;
+        return db.transaction(() => {
+            const open = db.prepare("SELECT id FROM runs WHERE status IN ('queued', 'running')").all();
+            const r = db.prepare("UPDATE runs SET status = 'failed', error_code = 'run.interrupted', error_detail = 'the service restarted while this run was in progress', finished_at = ? WHERE status IN ('queued', 'running')").run(iso(clock.now()));
+            for (const { id } of open) events.runChanged(getRow(id));
+            return r.changes;
+        })();
     }
 
     function prune(days = config.runs.retentionDays) {
