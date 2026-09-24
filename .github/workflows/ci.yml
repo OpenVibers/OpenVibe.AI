@@ -4,21 +4,11 @@ on:
     branches: [main]
   pull_request:
 jobs:
+  # install, node --check, npm test and openvibe-contracts-check: the shared test job (Track Q).
   test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22.22.1   # production runs Node 22
-          cache: npm
-      - run: npm ci --no-audit --no-fund
-      - run: npm test
-      # openvibe-contracts still carries the charter-only `ai` manifest (range ^0.1.0, no
-      # capabilities); the replacement is proposed in docs/capabilities-proposal/. Until a contracts
-      # release ships it this check reports that range, so it may not fail the build yet.
-      - name: contract check (openvibe-contracts)
-        run: npx openvibe-contracts-check --service ai --src server
+    uses: OpenVibers/OpenVibe.Shared/.github/workflows/test.yml@e8b0caf086ad1f8fceaac80e2dca6cfe64f63602
+    with:
+      contracts-service: ai
   # Secret scan (gitleaks) and dependency audit, shared by every OpenVibers repo (Track Q).
   security:
     uses: OpenVibers/OpenVibe.Shared/.github/workflows/security.yml@83c998b65424fb97e6f6de55ad9cc5981767e89c
