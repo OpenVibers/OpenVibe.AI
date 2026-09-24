@@ -20,7 +20,7 @@
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "openvibe-contracts": "https://codeload.github.com/OpenVibers/OpenVibe.Contracts/tar.gz/refs/tags/v0.33.0",
-    "openvibe-shared": "https://codeload.github.com/OpenVibers/OpenVibe.Shared/tar.gz/refs/tags/v1.5.1"
+    "openvibe-shared": "https://codeload.github.com/OpenVibers/OpenVibe.Shared/tar.gz/refs/tags/v1.7.0"
   },
   "optionalDependencies": {
     "sharp": "^0.33.5"

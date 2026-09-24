@@ -20,6 +20,8 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
     const metrics = instrument(app, { service: 'ai', release: release.release });
     registerAiGauges(metrics.registry, { runs, registry, pool });
     app.use(http.middleware());
+    // One W3C trace across services (openvibe-shared/trace): calls made while serving a request carry its traceparent.
+    require('openvibe-shared/trace').install(app);
     app.use((req, res, next) => {
         res.setHeader('X-Content-Type-Options', 'nosniff');
         res.setHeader('Cache-Control', 'no-store');
