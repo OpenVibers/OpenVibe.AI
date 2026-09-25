@@ -33,7 +33,10 @@ async function start({ config, clock = { now: () => Date.now() }, fetchImpl = gl
     const engine = createEngine({ registry, pool, fetcher });
     // ai.run.* to OpenVibe.Events through the outbox (server/events.js); before recovery, so its failures are announced.
     require('./events').init(db, { log });
-    const runs = createRuns({ db, registry, engine, cache, quotas, config, clock, log });
+    // ai.preferences (read) and ai.usage_summary (written): Network user modules (server/user-modules.js).
+    const userModules = require('./user-modules').createUserModules({ db, config, env, fetchImpl, clock, log });
+    userModules.ensureSchema();
+    const runs = createRuns({ db, registry, engine, cache, quotas, config, clock, log, userModules });
     seed({ registry, quotas, config, env, db });
     const interrupted = runs.recoverInterrupted();
     if (interrupted) log.warn(`[ai] marked ${interrupted} interrupted run(s) failed (run.interrupted); callers can retry them`);
@@ -53,6 +56,7 @@ async function start({ config, clock = { now: () => Date.now() }, fetchImpl = gl
     housekeeping.unref?.();
 
     let server = null;
+    if (listen) userModules.start();
     if (listen) {
         server = await new Promise((resolve, reject) => {
             const s = app.listen(config.port, config.host, () => resolve(s));
@@ -68,6 +72,7 @@ async function start({ config, clock = { now: () => Date.now() }, fetchImpl = gl
 
     async function close() {
         clearInterval(housekeeping);
+        userModules.stop();
         keys.stop();
         if (server) {
             server.closeAllConnections?.();

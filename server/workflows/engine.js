@@ -18,6 +18,7 @@
 const fs = require('fs');
 const { AiError, sha256, parseJsonLoose } = require('../util');
 const { render } = require('../templates');
+const { preferenceLines } = require('../user-modules');
 const schemas = require('../schemas');
 const { PREPARE, POSTPROCESS } = require('./hooks');
 
@@ -86,7 +87,9 @@ function createEngine({ registry, pool, fetcher }) {
             return { output: prep.output, noProvider: true, template };
         }
         const vars = prep.vars || {};
-        const system = render(template.system_prompt, vars).trim();
+        // The person's ai.preferences (runs on their behalf; server/user-modules.js), after the template's own rules.
+        const asked = preferenceLines(ctx && ctx.preferences);
+        const system = [render(template.system_prompt, vars).trim(), asked].filter(Boolean).join('\n\n');
         const user = render(template.user_prompt, vars);
         const routeKey = step.route || template.default_route || wf.default_route || 'default.chat';
         const route = routeFor(routeKey);

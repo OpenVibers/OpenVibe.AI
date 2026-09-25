@@ -18,6 +18,7 @@
  */
 const { ids } = require('openvibe-contracts');
 const { AiError, sha256, stableStringify, parseJson, iso } = require('./util');
+const { preferenceLines } = require('./user-modules');
 const schemas = require('./schemas');
 const events = require('./events');
 
@@ -57,7 +58,7 @@ function retainedInput(input, wf, debugRaw) {
     return { value, full: !redacted };
 }
 
-function createRuns({ db, registry, engine, cache, quotas, config, clock = { now: () => Date.now() }, log = console }) {
+function createRuns({ db, registry, engine, cache, quotas, config, clock = { now: () => Date.now() }, log = console, userModules = null }) {
     const inflight = new Map();     // run id -> { controller, promise, release, caller }
     const queue = [];               // run ids waiting for the worker
     let active = 0;
@@ -274,7 +275,13 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             });
         };
         try {
-            const r = await engine.execute(wf, row, input, { signal: controller.signal, logRequest, debugRaw: Boolean(config.debugRawLog && opts.debug), inputHash: row.input_hash });
+            // A run on a person's behalf follows their ai.preferences (Network user module): style, length and
+            // perspective shape the prompt; history: false keeps neither their input nor a cache entry.
+            const preferences = userModules && row.on_behalf_of ? await userModules.preferencesFor(row.on_behalf_of) : {};
+            if (preferences.history === false) {
+                db.prepare("UPDATE runs SET input = 'null', cache_key = NULL, options = json_set(options, '$.input_retained', json('false'), '$.history', json('false')) WHERE id = ?").run(id);
+            }
+            const r = await engine.execute(wf, row, input, { signal: controller.signal, logRequest, debugRaw: Boolean(config.debugRawLog && opts.debug), inputHash: row.input_hash, preferences });
             if (controller.signal.aborted) throw new AiError(409, 'run.cancelled', 'cancelled');
             // The status, its citations and the ai.run.succeeded event commit together.
             const done = db.transaction(() => {
@@ -290,7 +297,8 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             if (!done.changes) return;       // cancelled while finishing
             if (r.provider) quotas.account(ctx, reserved, { provider: r.provider, model: r.model, tokensIn: r.usage.input, tokensOut: r.usage.output, tokensCached: r.usage.cached, cost: r.cost });
             if (r.fallbackUsed) registry.audit('system', 'run.fallback', 'run', id, { trace: row.trace_id, metadata: { workflow: row.workflow_key, provider: r.provider, route: r.route && r.route.key } });
-            if (scope && row.cache_key && !r.synthetic && wf.cache_mode !== 'none') {
+            // Output shaped by someone's preferences, or kept for nobody (history off), is never cached for reuse.
+            if (scope && row.cache_key && !r.synthetic && wf.cache_mode !== 'none' && preferences.history !== false && !preferenceLines(preferences)) {
                 cache.put({ key: row.cache_key, scope, privacy: wf.cache_mode, workflowKey: wf.key, workflowVersion: wf.version, templateVersion: row.template_version, routeKey: row.route_key, routeVersion: row.route_version, model: r.model, inputHash: row.input_hash, output: r.output, runId: id, ttlSec: wf.cache_ttl_sec || config.runs.defaultCacheTtlSec });
             }
         } catch (err) {
