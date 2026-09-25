@@ -6,9 +6,9 @@ on:
 jobs:
   # install, node --check, npm test and openvibe-contracts-check: the shared test job (Track Q).
   test:
-    uses: OpenVibers/OpenVibe.Shared/.github/workflows/test.yml@e8b0caf086ad1f8fceaac80e2dca6cfe64f63602
+    uses: OpenVibers/OpenVibe.Shared/.github/workflows/test.yml@423fe519b5fe9594cc81b670e5ba5cb9f21f6176
     with:
       contracts-service: ai
   # Secret scan (gitleaks) and dependency audit, shared by every OpenVibers repo (Track Q).
   security:
-    uses: OpenVibers/OpenVibe.Shared/.github/workflows/security.yml@83c998b65424fb97e6f6de55ad9cc5981767e89c
+    uses: OpenVibers/OpenVibe.Shared/.github/workflows/security.yml@423fe519b5fe9594cc81b670e5ba5cb9f21f6176
