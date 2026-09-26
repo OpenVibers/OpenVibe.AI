@@ -62,6 +62,8 @@ idempotent replay):
 | `GET /api/v1/status\|usage\|quotas\|requests\|audit\|cache\|providers\|models` | `ai.usage.read` |
 | `GET /api/health`, `GET /api/ready`, `GET /release.json` | public |
 | `GET /metrics` | direct loopback callers only (a request carrying X-Forwarded-For gets 404) |
+| `GET /console…`, `/auth/login\|callback`, `POST /auth/logout` | Network staff, signed in (see [Operator console](#operator-console)) |
+| `GET /robots.txt` | public: disallows `/console`, `/auth/`, `/api/` |
 
 `/api/ready` (openvibe-shared/ready) is 503 when the database, the active workflows or the Network
 key fail; provider configuration (an active provider without its credentials, or with an open
@@ -85,6 +87,47 @@ no `ns` runs nothing outside a documented fallback. A first-party service token 
 Live's `ai.run.create` with no namespaces), else `<id>.*`; app and module tokens without `ns` get
 nothing. `AI_NS_FALLBACK=none` removes the fallback; `AI_NS_REQUIRED=false` is a rollback lever to
 the old rule (no `ns` = every namespace).
+
+## Operator console
+
+`/console` on ai.openvibe.network (roadmap WS-O task 4) is a server-rendered staff console: no
+JavaScript, one inline stylesheet allowed by its CSP hash, `noindex` (meta and `X-Robots-Tag`),
+`no-store`, disallowed in `robots.txt`, in no sitemap. It does not load the OpenVibe Frame (the Frame
+needs scripts and inline styles), like Billing's staff console. Code: `server/console/`.
+
+| Page | What it shows |
+|---|---|
+| `/console` | providers needing attention, runs and failures of the last 24 h by error code, today's spend, the queue, the busiest quota windows |
+| `/console/providers` | every provider (kind, status, **secret reference name and whether it resolves, never a value**, circuit, base URL without query/user info, default model, priority/timeout) and the models |
+| `/console/routes`, `/templates`, `/workflows` (`/:key[?version=]`) | every key's newest version and the version in use; per key every version with its status and content (primary and fallbacks in order, prompts, steps, schemas) |
+| `/console/runs` | runs newest first, filtered by status (tabs), workflow, requester (`live` = `service:live`), error code and a UTC time range; failed runs grouped by error code |
+| `/console/runs/:id` | versions used, provider/model, fallback, attempts, tokens, cost, error code and detail, requester/attribution/target, grounding, citations, the request log (hashes only), and the stored input/output **bounded**: strings cut at 240 characters, lists at 20 items, 6 KB in all, credential-named keys blanked; raw debug fields never |
+| `/console/quotas`, `/console/usage` | active quotas with their current windows and counters, every quota; usage by day, requester, workflow and provider/model over a day range (`quotas.usage`) |
+| `/console/cache` | live entries and hits by workflow |
+| `/console/audit` | the `audit_log`, filtered by kind (configuration changes by default, runs, console, everything), action, actor, target |
+
+**Who may use what.** Sign-in is OpenVibe.Network SSO (authorization code + PKCE S256 as OAuth client
+`ai`; the refresh token is revoked at once). The staff claims of the Network token (contracts staff
+map, `policy.staff-role-map@1`) are mapped to AI's own capability ids, and each page and action needs
+the same one the admin API does:
+
+| Network staff capability | Held by | Console capability | Allows |
+|---|---|---|---|
+| `staff.site.view` | admin, owner | `ai.usage.read` | open the console, read every page |
+| `staff.ai.manage` | admin, owner | `ai.workflow.manage` | set a route/template/workflow version's status; cancel a queued or running run |
+| `staff.secrets.manage` | owner | `ai.provider.manage` | enable/disable a provider, reset its circuit, add/change a quota, purge the cache (one workflow, or all with a confirmation) |
+
+A `global_mod` (only `staff.console.access`), a user or a token without a `usr_` subject is refused
+(403, no session, audited as `console.sign_in.refused`). The session (`__Host-ovai_staff`, host-only,
+HttpOnly, Secure, SameSite=Strict, `AI_CONSOLE_SESSION_TTL_MIN` = 60 min absolute; only its hash is
+stored in `console_sessions`) keeps the sign-in token's staff claims and the mapping is applied again
+on every request. Every POST needs the session's CSRF token and a same-origin request. Writes go
+through the same functions as the admin API (`server/ops.js`, `registry.setStatus`, `quotas.upsert`,
+`runs.cancel`), so each writes the same `audit_log` row with the person's `usr_…` subject as actor
+(API changes show `svc:…`); sign-ins, sign-outs and refused requests are audited as `console.*`. New
+versions of routes, templates and workflows, models and provider records are still created through
+the admin API only. There is no drill mode in AI; the console starts nothing (no timer, no outbound
+call) until someone signs in.
 
 ## The eleven record groups
 
@@ -154,6 +197,7 @@ stub joins every route as a last resort outside production only (`AI_STUB_FALLBA
 | Media fetched only from allow-listed https OpenVibe hosts; DNS answers and every redirect hop re-checked (a public hop never reaches internal Media); size caps | `test/ssrf.test.js` |
 | The shared compiled-schema cache (caller-supplied schemas) is an LRU bounded by count and bytes, in Ajv too | `test/schemas.test.js` |
 | Token and capability denial, namespaces, no secret values in any response, runs private to the requester | `test/auth.test.js` |
+| Operator console: SSO + PKCE, staff-only (anonymous → sign-in, non-staff 403), the staff → AI capability map, CSRF on every write, no script/secret on any page, noindex/robots, failed-run filters, audit rows from API and console changes | `test/console.test.js` |
 | Ported adapters against fake OpenAI/Anthropic servers, stub determinism, whisper filter, templates | `test/providers.test.js` |
 | Import from a Live snapshot: dry run, holds, idempotent re-run | `test/import.test.js` |
 | Capability proposals are valid contracts documents matching what is enforced | `test/proposals.test.js` |
@@ -174,14 +218,21 @@ and rollback are in `docs/migration.md`.
 
 Deployed: `/opt/openvibe.ai`, env `/etc/openvibe/ai.env` (0600), unit `deploy/systemd/openvibe-ai.service`
 (`StateDirectory=openvibe-ai`, database `/var/lib/openvibe-ai/ai.db`), principal `ai`. The nginx vhost
-`deploy/nginx/ai.openvibe.network.conf` (only health/ready public; the API is host-local) is not
-installed: `ai.openvibe.network` still serves the Sites placeholder.
+`deploy/nginx/ai.openvibe.network.conf` (health/ready, `/`, `/robots.txt`, the operator console
+`/console` and its sign-in `/auth/` public; the API is host-local) is not installed:
+`ai.openvibe.network` still serves the Sites placeholder. The console also needs
+`AI_CONSOLE_SESSION_SECRET` (32+ random characters) and `OV_OAUTH_CLIENT_SECRET` in the env file
+(without them it answers 503 in production), and the Network must list
+`https://ai.openvibe.network/auth/callback` among client `ai`'s redirect URIs.
 
 ## Not done yet
 
 - `ai.run.*` events to OpenVibe.Events (and their schemas in Contracts); per-actor (BYO) provider
   secrets; moving Live's local transcription (whisper) and the passthrough prompts into AI templates;
-  removing Network's fallback to Live's `/internal/ai/site-copy`; a server-rendered status page.
+  removing Network's fallback to Live's `/internal/ai/site-copy`; a public server-rendered status page.
+- The operator console is built but not reachable yet: it needs the vhost below installed (which
+  replaces the Sites placeholder), `https://ai.openvibe.network/auth/callback` listed as a redirect URI
+  of Network OAuth client `ai`, and `AI_CONSOLE_SESSION_SECRET` in `/etc/openvibe/ai.env`.
 - Import holds from the 2026-09-23 run: a streamer's own provider key stays in Live, and 3,021 Live
   translations cannot become cache entries (they have no source text) and stay in Live.
 - No fallback is declared on any production route, so an outage of the one real provider fails every

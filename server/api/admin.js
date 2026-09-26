@@ -16,13 +16,17 @@
  *   GET   /api/v1/quotas            POST /api/v1/quotas (ai.provider.manage)
  *   GET   /api/v1/usage, /api/v1/requests, /api/v1/audit, /api/v1/cache (ai.usage.read)
  *   DELETE /api/v1/cache[?workflow=]                        purge (ai.provider.manage)
+ *
+ * Provider status, circuit reset, cache purge and the status summary are server/ops.js, shared with
+ * the operator console (server/console) so both make the same change and write the same audit row.
  */
 const express = require('express');
 const { CAPS } = require('../auth');
 const { AiError } = require('../util');
 const { sendError } = require('./runs');
+const { createOps } = require('../ops');
 
-function adminRouter({ db, registry, pool, quotas, cache, runs, auth, log = console }) {
+function adminRouter({ db, registry, pool, quotas, cache, runs, auth, ops = createOps({ db, registry, pool, quotas, cache, runs }), log = console }) {
     const r = express.Router();
     const provRead = auth.requireCap(CAPS.providerManage, CAPS.usageRead);
     const provWrite = auth.requireCap(CAPS.providerManage);
@@ -31,20 +35,10 @@ function adminRouter({ db, registry, pool, quotas, cache, runs, auth, log = cons
     const usageRead = auth.requireCap(CAPS.usageRead);
     const wrap = (fn) => (req, res) => { try { const out = fn(req, res); if (out !== undefined) res.json(out); } catch (err) { sendError(res, err, req.ov, log); } };
     const actor = (req) => ({ actor: req.principal.sub, trace: req.ov.traceId });
-    const view = (p) => registry.publicProvider(p, pool.health(p.key));
+    const view = ops.providerView;
     const body = (req) => (req.body && typeof req.body === 'object' ? req.body : {});
 
-    r.get('/api/v1/status', usageRead, wrap(() => {
-        const counts = Object.fromEntries(db.prepare('SELECT status, COUNT(*) n FROM runs GROUP BY status').all().map(x => [x.status, x.n]));
-        const today = new Date().toISOString().slice(0, 10);
-        const spend = db.prepare('SELECT COALESCE(SUM(cost_usd),0) cost, COALESCE(SUM(requests),0) requests FROM usage_daily WHERE day = ?').get(today);
-        return {
-            providers: registry.listProviders().map(p => ({ key: p.key, kind: p.kind, status: p.status, credentials: view(p).credentials, health: pool.health(p.key).state })),
-            runs: counts, today: { day: today, requests: spend.requests, cost_usd: spend.cost },
-            workflows: registry.listWorkflows().length, templates: registry.listTemplates().length, routes: registry.listRoutes().length,
-            inflight: runs.inflight.size, quotas: quotas.counters(),
-        };
-    }));
+    r.get('/api/v1/status', usageRead, wrap(() => ops.status()));
 
     // Providers
     r.get('/api/v1/providers', provRead, wrap(() => ({ providers: registry.listProviders().map(view) })));
@@ -66,16 +60,9 @@ function adminRouter({ db, registry, pool, quotas, cache, runs, auth, log = cons
         return { provider: view(registry.upsertProvider({ ...b, key: req.params.key }, { ...actor(req), origin: 'admin' })) };
     }));
     for (const [action, status] of [['disable', 'disabled'], ['enable', 'active']]) {
-        r.post(`/api/v1/providers/:key/${action}`, provWrite, wrap((req) => {
-            if (!registry.getProvider(req.params.key)) throw new AiError(404, 'ai.not_found', 'no such provider');
-            return { provider: view(registry.upsertProvider({ key: req.params.key, status }, { ...actor(req), origin: 'admin' })) };
-        }));
+        r.post(`/api/v1/providers/:key/${action}`, provWrite, wrap((req) => ({ provider: view(ops.setProviderStatus(req.params.key, status, actor(req))) })));
     }
-    r.post('/api/v1/providers/:key/reset', provWrite, wrap((req) => {
-        pool.resetHealth(req.params.key);
-        registry.audit(req.principal.sub, 'provider.circuit_reset', 'provider', req.params.key, { trace: req.ov.traceId });
-        return { health: pool.health(req.params.key) };
-    }));
+    r.post('/api/v1/providers/:key/reset', provWrite, wrap((req) => ({ health: ops.resetCircuit(req.params.key, actor(req)) })));
 
     // Models
     r.get('/api/v1/models', provRead, wrap((req) => ({ models: registry.listModels({ provider: req.query.provider }) })));
@@ -133,11 +120,7 @@ function adminRouter({ db, registry, pool, quotas, cache, runs, auth, log = cons
     }));
     r.get('/api/v1/audit', usageRead, wrap((req) => ({ audit: registry.listAudit({ action: req.query.action, targetType: req.query.target_type, targetId: req.query.target_id, limit: Number(req.query.limit) || 100, before: req.query.before }) })));
     r.get('/api/v1/cache', usageRead, wrap(() => ({ cache: cache.stats() })));
-    r.delete('/api/v1/cache', provWrite, wrap((req) => {
-        const n = cache.purge({ workflow: req.query.workflow });
-        registry.audit(req.principal.sub, 'cache.purge', 'cache', req.query.workflow || '*', { trace: req.ov.traceId, metadata: { removed: n } });
-        return { removed: n };
-    }));
+    r.delete('/api/v1/cache', provWrite, wrap((req) => ({ removed: ops.purgeCache(req.query.workflow, actor(req)) })));
 
     return r;
 }

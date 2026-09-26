@@ -12,7 +12,8 @@
  *
  * Templates, workflows and routes are append-only per key: an edit inserts version n+1 and the
  * previous version stays readable, so every run can say exactly which versions produced it.
- * import_ledger / import_holds belong to scripts/import-from-live.js.
+ * import_ledger / import_holds belong to scripts/import-from-live.js; console_sessions to the
+ * operator console (server/console/session.js).
  */
 const fs = require('fs');
 const path = require('path');
@@ -281,6 +282,17 @@ CREATE TABLE IF NOT EXISTS audit_log (
 );
 CREATE INDEX IF NOT EXISTS idx_audit_target ON audit_log(target_type, target_id, id);
 CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_log(action, id);
+CREATE TABLE IF NOT EXISTS console_sessions (
+    id_hash TEXT PRIMARY KEY,                  -- sha256 of the session cookie; the cookie value is never stored
+    subject TEXT NOT NULL,                     -- the Network person (usr_…)
+    username TEXT,
+    staff TEXT NOT NULL DEFAULT '{}',          -- the sign-in token's staff claims (role, is_owner, staff_caps, staff_map)
+    csrf TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    revoked_at TEXT,
+    ip_hash TEXT                               -- keyed hash of the client address
+);
 CREATE TABLE IF NOT EXISTS import_ledger (
     source TEXT NOT NULL,                      -- live.ai_usage, live.translations, ...
     source_key TEXT NOT NULL,

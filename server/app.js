@@ -8,9 +8,11 @@ const { createRelease } = require('openvibe-shared/release');
 const { createAiReadiness, registerAiGauges } = require('./observability');
 const { runsRouter } = require('./api/runs');
 const { adminRouter } = require('./api/admin');
+const { createOps } = require('./ops');
+const { consoleRouter } = require('./console');
 const pkg = require('../package.json');
 
-function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, log = console }) {
+function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console }) {
     const app = express();
     app.disable('x-powered-by');
     app.set('trust proxy', 'loopback');
@@ -41,8 +43,17 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
     // GET /release.json (ADR-016) and POST /release-metrics (open tabs' update reports into /metrics).
     release.mount(app, { registry: metrics.registry });
 
+    // Operator actions shared by the admin API and the operator console (one implementation, one audit row).
+    const ops = createOps({ db, registry, pool, quotas, cache, runs });
     app.use(runsRouter({ runs, registry, auth, config, log }));
-    app.use(adminRouter({ db, registry, pool, quotas, cache, runs, auth, log }));
+    app.use(adminRouter({ db, registry, pool, quotas, cache, runs, auth, ops, log }));
+    // The operator console (/console, /auth/*): Network staff, server-rendered, no scripts (server/console).
+    app.use(consoleRouter({ config, db, registry, pool, quotas, cache, runs, keys, ops, env, clock, fetchImpl, log }));
+
+    // Crawlers: nothing here is for search engines, the console and sign-in least of all (no sitemap either).
+    app.get('/robots.txt', (_req, res) => {
+        res.type('text/plain').send('User-agent: *\nDisallow: /console\nDisallow: /auth/\nDisallow: /api/\n');
+    });
 
     app.get('/', (_req, res) => {
         res.type('text/plain').send([
@@ -53,6 +64,7 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
             'POST /api/v1/{chat,generate,summarize,classify,extract,enrich,embed}',
             'GET  /api/v1/workflows | templates | routes | providers | models | quotas | usage | audit',
             'GET  /api/health, /api/ready, /release.json',
+            'GET  /console    the operator console (OpenVibe.Network staff sign-in)',
             '',
             'Callers authenticate with OpenVibe.Network service tokens (audience openvibe.ai).',
             'AI output is a draft/evidence package attributed to a workflow, model and run, never to a person.',

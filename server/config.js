@@ -61,12 +61,13 @@ function load(env = process.env) {
     if (env.AI_PRICING_JSON) {
         try { pricing = JSON.parse(env.AI_PRICING_JSON) || {}; } catch { throw new Error('AI_PRICING_JSON is not valid JSON'); }
     }
+    const baseUrl = trimUrl(env.BASE_URL || (isProduction ? 'https://ai.openvibe.network' : `http://localhost:${port}`));
     return {
         port,
         host: env.HOST || '127.0.0.1',
         nodeEnv,
         isProduction,
-        baseUrl: trimUrl(env.BASE_URL || (isProduction ? 'https://ai.openvibe.network' : `http://localhost:${port}`)),
+        baseUrl,
 
         // Identity: OpenVibe.Network signs the service tokens callers present (audience openvibe.ai).
         networkUrl: trimUrl(env.OV_NETWORK_URL || 'https://openvibe.network'),
@@ -79,6 +80,22 @@ function load(env = process.env) {
         namespaces: { required: bool(env.AI_NS_REQUIRED, true), ...nsFallback(env.AI_NS_FALLBACK) },
 
         dbPath: env.AI_DB_PATH || './data/ai.db',
+
+        // ── Operator console (server/console): OpenVibe.Network SSO (authorization code + PKCE S256
+        // as OAuth client `ai`), for Network staff only (README "Operator console"). Both secrets are
+        // references, resolved when used; the console answers 503 in production without them.
+        console: {
+            clientId: String(env.OV_OAUTH_CLIENT_ID || 'ai').trim(),
+            clientSecretRef: 'env:OV_OAUTH_CLIENT_SECRET',
+            // Signs the sign-in flow cookie and keys the client-address hashes: 32+ random characters.
+            sessionSecretRef: 'env:AI_CONSOLE_SESSION_SECRET',
+            sessionTtlMin: Math.max(5, Math.min(12 * 60, int(env.AI_CONSOLE_SESSION_TTL_MIN, 60))),
+            redirectUri: `${baseUrl}/auth/callback`,
+            // Secure (and __Host-) cookies whenever the console is served over https (always in production).
+            cookieSecure: baseUrl.startsWith('https://'),
+            // Audience a Network user token must carry (the Network's own is always present).
+            ssoAudience: String(env.AI_SSO_AUDIENCE || 'openvibe.network').trim(),
+        },
 
         // ── The shared provider (Live's "shared key") ──
         // AI_ENABLED is Live's ai_enabled master switch. Unset means "on when a key or a

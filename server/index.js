@@ -43,7 +43,7 @@ async function start({ config, clock = { now: () => Date.now() }, fetchImpl = gl
 
     const keys = createKeyStore({ urls: [config.networkInternalUrl, config.networkUrl], pem: config.networkPublicKey, fetchImpl, log });
     const auth = createAuth({ config, keys });
-    const app = createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, log });
+    const app = createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log });
     const keyLoaded = keys.start().catch(() => null);
 
     const housekeeping = setInterval(() => {
