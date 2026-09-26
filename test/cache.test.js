@@ -34,6 +34,8 @@ t.test("actor A's repeat is served from A's cache without a provider call", asyn
     assert.strictEqual(again.body.run.provenance.cached_from, first.body.run.id);
     assert.deepStrictEqual(again.body.run.output, first.body.run.output);
     assert.strictEqual(seam.calls, calls);
+    assert.ok(first.body.run.grounding && first.body.run.grounding.gaps.length, 'the first run says what backs it (WS-O task 3)');
+    assert.deepStrictEqual(again.body.run.grounding, first.body.run.grounding, 'a cached run carries the grounding of the run it reuses');
 });
 
 t.test("actor B never receives actor A's private cache entry", async () => {

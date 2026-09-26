@@ -306,6 +306,9 @@ function openDb(dbPath) {
     db.pragma('foreign_keys = ON');
     db.pragma('busy_timeout = 5000');
     db.exec(SCHEMA);
+    // Added after the first release: ADD COLUMN only, so an older build ignores it.
+    const cols = new Set(db.prepare("SELECT name FROM pragma_table_info('runs')").all().map((c) => c.name));
+    if (!cols.has('grounding')) db.exec('ALTER TABLE runs ADD COLUMN grounding TEXT'); // { cited, gaps } (WS-O task 3)
     return db;
 }
 

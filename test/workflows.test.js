@@ -90,6 +90,9 @@ t.test('every workflow runs end to end on the stub and returns schema-valid outp
         assert.strictEqual(run.provenance.workflow, w.key);
         assert.ok(run.provenance.model, `${w.key} has a model`);
         assert.ok(schemas.validate(w.output_schema, run.output).valid, `${w.key} output invalid`);
+        // WS-O task 3: every output says what backs it: cited sources, or explicit gaps.
+        assert.ok(run.grounding && Array.isArray(run.grounding.cited) && Array.isArray(run.grounding.gaps), `${w.key} has grounding`);
+        assert.ok(run.grounding.cited.length || run.grounding.gaps.length, `${w.key}: citations or explicit gaps`);
         if (EXAMPLES[w.key].sources) {
             assert.strictEqual(run.citations_count, EXAMPLES[w.key].sources.length, `${w.key} citations`);
             const d = await request(h.base, 'GET', `/api/v1/runs/${run.id}`, { tok });
@@ -97,6 +100,16 @@ t.test('every workflow runs end to end on the stub and returns schema-valid outp
             assert.ok(d.body.citations.every(c => c.source_type && c.content_hash), 'citations carry type and content hash');
         }
     }
+});
+
+t.test('grounding: cited sources, the output\'s own gaps, or a gap written for it (WS-O task 3)', async () => {
+    const { groundingOf } = require('../server/workflows/engine');
+    assert.deepStrictEqual(groundingOf({ summary: 'x', citations: [1, 0, 1, 7] }, 2, true), { cited: [0, 1], gaps: [] }, 'cited ordinals in range, sorted, once');
+    assert.deepStrictEqual(groundingOf({ items: [{ gaps: ['no price given'] }], gaps: ['no price given', 'date unclear'] }, 1, true).gaps, ['no price given', 'date unclear'], 'the output\'s gaps, once each');
+    assert.match(groundingOf({ text: 'hola' }, 0, false).gaps[0], /No sources were given/);
+    assert.match(groundingOf({ summary: 'x', citations: [] }, 3, true).gaps[0], /None of the given sources is cited/);
+    assert.match(groundingOf({ summary: 'x' }, 2, false).gaps[0], /does not cite them/);
+    // (A cached run carrying its source run's grounding: test/cache.test.js; stub output is never cached.)
 });
 
 t.test('citations index only the provided sources', async () => {

@@ -14,6 +14,11 @@
  * The final output is validated against the workflow's output schema. An empty or invalid answer
  * fails the run (output.empty / output.invalid); nothing is ever filled in. input.sources become
  * citation rows, marked cited when the output's `citations` arrays point at them.
+ *
+ * Every run also gets `grounding` { cited, gaps } (roadmap WS-O task 3): the source ordinals the
+ * output cites, and what it cannot back up. Gaps come from the output's own `gaps` arrays; an output
+ * that cites nothing and names no gap gets one written for it (no sources, or sources not cited), so
+ * no output ever reads as verified when it is not.
  */
 const fs = require('fs');
 const { AiError, sha256, parseJsonLoose } = require('../util');
@@ -23,6 +28,29 @@ const schemas = require('../schemas');
 const { PREPARE, POSTPROCESS } = require('./hooks');
 
 const ROLE_TIMEOUT = { chat: 20000, vision: 30000, director: 25000, summary: 30000, legacy: 30000 };
+
+/** Every string in every `gaps` array of an output, in order, without repeats. */
+function collectGaps(v, out = []) {
+    if (Array.isArray(v)) { v.forEach((x) => collectGaps(x, out)); return out; }
+    if (!v || typeof v !== 'object') return out;
+    for (const [k, x] of Object.entries(v)) {
+        if (k === 'gaps' && Array.isArray(x)) x.forEach((g) => { const s = typeof g === 'string' ? g.trim() : ''; if (s && !out.includes(s)) out.push(s.slice(0, 300)); });
+        else collectGaps(x, out);
+    }
+    return out;
+}
+
+/** { cited, gaps } for one output: never empty-handed, so nothing reads as verified by default. */
+function groundingOf(output, sourceCount, citeStep) {
+    const cited = citeStep ? [...collectCited(output)].filter((i) => i < sourceCount).sort((a, b) => a - b) : [];
+    const gaps = collectGaps(output).slice(0, 20);
+    if (!cited.length && !gaps.length) {
+        gaps.push(sourceCount === 0
+            ? 'No sources were given: this is based on the input alone, and nothing in it is independently verified.'
+            : citeStep ? 'None of the given sources is cited: nothing in this is backed by them.' : 'Sources were given but this workflow does not cite them: nothing in this is backed by them.');
+    }
+    return { cited, gaps };
+}
 
 /** Deep copy of a schema with every `citations` array narrowed to valid source indices. */
 function narrowCitations(schema, count) {
@@ -212,6 +240,7 @@ function createEngine({ registry, pool, fetcher }) {
         }));
         return {
             output: last.output, citations, jsonSchema,
+            grounding: groundingOf(last.output, sources.length, citeStep),
             synthetic: Boolean(exec && exec.synthetic),
             provider: exec ? exec.provider : null, model: exec ? exec.model : null, fallbackUsed: Boolean(exec && exec.fallbackUsed),
             usage, cost,
@@ -222,4 +251,4 @@ function createEngine({ registry, pool, fetcher }) {
     return { execute, narrowCitations };
 }
 
-module.exports = { createEngine, narrowCitations, collectCited };
+module.exports = { createEngine, narrowCitations, collectCited, collectGaps, groundingOf };

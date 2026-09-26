@@ -86,6 +86,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             },
             usage: { tokens_in: r.tokens_in, tokens_out: r.tokens_out, cost_usd: r.cost_usd, attempts: r.attempts },
             citations_count: r.citations_count,
+            grounding: parseJson(r.grounding, null),
             retry_of: r.retry_of,
             idempotency_key: r.idempotency_key,
             trace_id: r.trace_id,
@@ -202,6 +203,8 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                         .run({ ...base, output: JSON.stringify(hit.output), model_key: hit.model_key, cache_key: cacheKey, cached_from: hit.run_id });
                     const src = citations(hit.run_id);
                     if (src.length) addCitations(id, src.map(c => ({ ...c, provenance: { ...c.provenance, via_cache: hit.run_id } })), 'cache');
+                    // The reused output carries the grounding it was produced with.
+                    db.prepare('UPDATE runs SET grounding = (SELECT grounding FROM runs WHERE id = ?) WHERE id = ?').run(hit.run_id, id);
                     events.runChanged(getRow(id));
                 })();
                 registry.audit(principal.sub, 'run.create', 'run', id, { trace, metadata: { workflow: wf.key, version: wf.version, status: 'cached', cached_from: hit.run_id } });
@@ -285,9 +288,9 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             if (controller.signal.aborted) throw new AiError(409, 'run.cancelled', 'cancelled');
             // The status, its citations and the ai.run.succeeded event commit together.
             const done = db.transaction(() => {
-                const d = db.prepare(`UPDATE runs SET status = 'succeeded', output = ?, synthetic = ?, provider_key = ?, model_key = ?, fallback_used = ?, attempts = ?, tokens_in = ?, tokens_out = ?, cost_usd = ?,
+                const d = db.prepare(`UPDATE runs SET status = 'succeeded', output = ?, grounding = ?, synthetic = ?, provider_key = ?, model_key = ?, fallback_used = ?, attempts = ?, tokens_in = ?, tokens_out = ?, cost_usd = ?,
                     route_key = COALESCE(?, route_key), route_version = COALESCE(?, route_version), finished_at = ? WHERE id = ? AND status = 'running'`)
-                    .run(JSON.stringify(r.output), r.synthetic ? 1 : 0, r.provider, r.model, r.fallbackUsed ? 1 : 0, attempts, r.usage.input, r.usage.output, r.cost,
+                    .run(JSON.stringify(r.output), JSON.stringify(r.grounding || null), r.synthetic ? 1 : 0, r.provider, r.model, r.fallbackUsed ? 1 : 0, attempts, r.usage.input, r.usage.output, r.cost,
                         r.route ? r.route.key : null, r.route ? r.route.version : null, iso(clock.now()), id);
                 if (!d.changes) return d;
                 if (r.citations.length) addCitations(id, r.citations, 'workflow');
