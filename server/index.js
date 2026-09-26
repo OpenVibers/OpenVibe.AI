@@ -79,6 +79,7 @@ async function start({ config, clock = { now: () => Date.now() }, fetchImpl = gl
             await new Promise(resolve => server.close(() => resolve()));
         }
         await runs.drain();
+        await require('./events').stop();   // after the runs: their last ai.run.* rows are queued first
         const w = pool.adapter('whisper');
         if (w && w.adapter.killActive) w.adapter.killActive();
         db.close();

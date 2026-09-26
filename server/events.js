@@ -16,6 +16,7 @@ const { createServiceTokenClient } = require('openvibe-sdk/auth');
 const { createEventsClient, createOutbox } = require('openvibe-sdk/events');
 
 let outbox = null;
+let pruneTimer = null;
 const stats = { queued: 0, lastError: null };
 const PRUNE_EVERY_MS = 6 * 60 * 60 * 1000;
 
@@ -32,8 +33,8 @@ function init(db, { eventsUrl = process.env.EVENTS_URL, clientSecret = process.e
     });
     outbox.ensureSchema();
     outbox.start();
-    const prune = setInterval(() => { try { outbox.prune(); } catch { /* next time */ } }, PRUNE_EVERY_MS);
-    if (prune.unref) prune.unref();
+    pruneTimer = setInterval(() => { try { outbox.prune(); } catch { /* next time */ } }, PRUNE_EVERY_MS);
+    if (pruneTimer.unref) pruneTimer.unref();
     log.log(`[Events] ai → ${eventsUrl} (${outbox.pending()} pending)`);
     return outbox;
 }
@@ -92,6 +93,17 @@ function status() {
     if (!outbox) return { enabled: false };
     return { enabled: true, pending: outbox.pending(), rejected: outbox.rejected(), queued_since_boot: stats.queued, last_error: stats.lastError };
 }
+/**
+ * Graceful stop (start().close(), after runs.drain()): the relay stops and nothing more is queued; resolves
+ * when the send in progress has finished. Unsent rows stay in the outbox for the next start.
+ */
+async function stop() {
+    if (pruneTimer) clearInterval(pruneTimer);
+    pruneTimer = null;
+    const o = outbox;
+    outbox = null;
+    if (o) await o.stop();
+}
 function _reset() { if (outbox) outbox.stop(); outbox = null; stats.queued = 0; stats.lastError = null; }
 
-module.exports = { init, runChanged, payloadOf, status, _reset };
+module.exports = { init, runChanged, payloadOf, status, stop, _reset };

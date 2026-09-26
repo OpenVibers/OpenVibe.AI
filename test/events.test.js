@@ -60,5 +60,16 @@ t.test('a failed run queues ai.run.failed with its error code; a restart announc
     valid(ev);
 });
 
-t.test('stop', async () => { require('../server/events')._reset(); await h.stop(); });
+t.test('close() stops the ai.run.* relay (unsent rows stay in the outbox)', async () => {
+    const events = require('../server/events');
+    const pending = events.status().pending;
+    assert.ok(pending > 0, 'rows are waiting (Events is unreachable)');
+    await h.stop();
+    assert.strictEqual(events.status().enabled, false, 'the relay is stopped');
+    const Database = require('better-sqlite3');
+    const db = new Database(require('path').join(h.dir, 'ai.db'), { readonly: true });
+    assert.strictEqual(db.prepare('SELECT COUNT(*) AS n FROM event_outbox WHERE sent_at IS NULL AND rejected_at IS NULL').get().n, pending, 'and its rows wait for the next start');
+    db.close();
+    events._reset();
+});
 t.run();
