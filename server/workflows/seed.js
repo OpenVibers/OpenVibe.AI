@@ -19,7 +19,7 @@ const products = require('./products');
 const { resolveSecret } = require('../util');
 
 const ROLE_TIMEOUT = { chat: 20000, vision: 30000, director: 25000, summary: 30000, legacy: 30000 };
-const HISTORICAL_ROUTES = ['wiki.generate', 'blog.draft', 'news.summarize', 'reviews.summarize', 'deals.enrich', 'coupons.extract', 'trade.summarize', 'codes.generate_docs', 'games.generate_lore', 'moderation.classify'];
+const HISTORICAL_ROUTES = ['wiki.generate', 'blog.draft', 'news.summarize', 'reviews.summarize', 'deals.enrich', 'coupons.extract', 'trade.summarize', 'codes.generate_docs', 'games.generate_lore', 'moderation.classify', 'tools.describe'];
 
 function sharedProviderRecord(config, env) {
     const s = config.shared;

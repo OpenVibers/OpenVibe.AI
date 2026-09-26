@@ -3,7 +3,7 @@
  * Seed workflows the publication products consume (plan §15.13). Every one returns a DRAFT /
  * EVIDENCE package — never publication truth — with citations that index into the numbered
  * input.sources, plus `gaps` for what the sources do not support. The owning product (Wiki,
- * Blog, News, Reviews, Deals, Coupons, Trade, Codes, Games) decides what to publish.
+ * Blog, News, Reviews, Deals, Coupons, Trade, Codes, Games, Tools) decides what to publish.
  *
  * Hard rules carried into the prompts and the schemas:
  *   - no invented facts, prices, ratings, dates, quotes (Reviews has no rating field at all;
@@ -53,6 +53,8 @@ const templates = [
         'Project: {{project}}{{#audience}}\nAudience: {{audience}}{{/audience}}\n\n'),
     productTemplate('games.generate_lore', 'Games: generate lore', 'Write lore for the world that stays consistent with the canon sources (cite them where you rely on them), and list any contradiction with canon you had to resolve. Invented fiction is expected here; invented canon citations are not.', 'games.generate_lore',
         'World: {{world}}\nRequest: {{prompt}}\n\n'),
+    productTemplate('tools.describe', 'Tools: describe a tool', 'Describe one OpenVibe tool for the people who use it, from its descriptor (the numbered sources: its registry entry, inputs, outputs and limits): a one-line summary, what it does, how to use it step by step, what each input and output means, its limits, and a short FAQ. Cite the descriptor fields each statement rests on. Do not claim formats, sizes or features the descriptor does not list; say what is unknown in gaps.', 'tools.describe',
+        'Tool: {{tool}}{{#audience}}\nAudience: {{audience}}{{/audience}}\n\n'),
     productTemplate('moderation.classify', 'Moderation: classify content', 'Classify the content under OpenVibe policy. Profanity, insults, crude jokes and trash talk are ALLOWED and are not violations. Flag only: credible threats of violence, any sexual content involving minors, doxxing (sharing private personal information), targeted harassment campaigns, spam/scams, sexual content where not allowed, and self-harm encouragement. Quote the exact spans you flag. When unsure, choose review, not block.', 'moderation.classify',
         '{{#context}}Context: {{context}}\n\n{{/context}}Content to classify:\n"""\n{{text}}\n"""\n\n'),
 ];
@@ -141,6 +143,18 @@ const workflows = [
         input_schema: OBJ({ world: STR(200), prompt: STR(4000), sources: SOURCES(0) }, ['world', 'prompt']),
         output_schema: OBJ({ title: STR(200), lore_markdown: STR(20000), entities: ARR(OBJ({ name: STR(120), kind: STR(60), description: STR(1000) }), 30), contradictions: ARR(STR(500), 10), citations: CITES, gaps: GAPS }),
         default_route: 'games.generate_lore',
+    },
+    {
+        key: 'tools.describe', name: 'Describe a tool', namespace: 'tools',
+        input_schema: OBJ({ tool: STR(120), audience: STR(200), sources: SOURCES(1) }, ['tool', 'sources']),
+        output_schema: OBJ({
+            summary: STR(300), description_markdown: STR(6000),
+            how_to: ARR(OBJ({ step: STR(600), citations: CITES }), 15),
+            fields: ARR(OBJ({ name: STR(120), direction: { enum: ['input', 'output'] }, meaning: STR(600), citations: CITES }), 40),
+            limits: ARR(CLAIM, 15), faq: ARR(OBJ({ question: STR(300), answer: STR(1200), citations: CITES }), 12),
+            citations: CITES, gaps: GAPS,
+        }),
+        default_route: 'tools.describe',
     },
     {
         key: 'moderation.classify', name: 'Classify content for moderation', namespace: 'moderation',
