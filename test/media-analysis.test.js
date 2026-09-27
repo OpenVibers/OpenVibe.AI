@@ -84,6 +84,8 @@ t.test('whisper reports the language it detected, not "auto"', async () => {
         const r = await w.transcribe({ filePath: clip, language: 'auto', seconds: 3, timeoutMs: 30000 });
         assert.deepStrictEqual([r.language, r.text], ['ja', 'こんにちは、みなさん']);
         assert.strictEqual((await w.transcribe({ filePath: clip, language: 'en', seconds: 3, timeoutMs: 30000 })).language, 'en');
+        const later = await w.transcribe({ filePath: clip, language: 'auto', seconds: 5, startSec: 20, offsetSec: 20, timeoutMs: 30000 });
+        assert.strictEqual(later.segments[0].start, 20, 'a window from 20 s: its timestamps are the recording\'s');
     } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -93,13 +95,15 @@ t.test('a real run: signals, scenes, highlights with evidence, and the local mod
     await new Promise((r) => media.listen(0, '127.0.0.1', r));
     mediaBase = `http://127.0.0.1:${media.address().port}`;
     const local = await seamServer(() => completion('A short test recording: a quiet tone, a pause, then a loud burst at 0:16.'));
-    const h = await boot({ env: { OV_MEDIA_INTERNAL_URL: mediaBase, AI_LOCAL_LLM_URL: `${local.url}/v1`, AI_LOCAL_LLM_MODEL: 'qwen-test' } });
+    const h = await boot({ env: { OV_MEDIA_INTERNAL_URL: mediaBase, AI_LOCAL_LLM_URL: `${local.url}/v1`, AI_LOCAL_LLM_MODEL: 'qwen-test', AI_MEDIA_STT_WINDOW_SEC: '10' } });
     try {
         const r = await run(h, {});
         assert.strictEqual(r.status, 201, r.text.slice(0, 300));
         const out = r.body.run.output;
         assert.strictEqual(r.body.run.status, 'succeeded', JSON.stringify(r.body.run.error));
         assert.ok(Math.abs(out.duration_seconds - 28) < 0.2);
+        // Speech-to-text in 10 s windows: 0, 10 and 20 s, each placed at its own time.
+        assert.ok([0, 10, 20].every((t) => out.transcript.segments.some((g) => g.start === t)), JSON.stringify(out.transcript.segments));
         assert.deepStrictEqual(out.streams, { video: true, audio: true });
         assert.deepStrictEqual(out.signals.scene_changes.map((c) => c.t), [8, 16, 20]);
         assert.deepStrictEqual(out.signals.black, [{ start: 16, end: 20 }]);

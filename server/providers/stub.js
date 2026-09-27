@@ -125,7 +125,8 @@ function createStubProvider(record = { key: 'stub', metadata: {} }, { stats = nu
         }
         if (op === 'transcribe') {
             const n = 2 + Math.floor(rnd() * 3);
-            const segments = Array.from({ length: n }, (_, i) => ({ start: i * 4, end: i * 4 + 3.5, text: `(synthetic) ${phrase(rnd, 5)}` }));
+            const at = Number(req.offsetSec) || 0;   // a window of a longer recording keeps the recording's times
+            const segments = Array.from({ length: n }, (_, i) => ({ start: at + i * 4, end: at + i * 4 + 3.5, text: `(synthetic) ${phrase(rnd, 5)}` }));
             return { text: segments.map(s => s.text).join(' '), segments, model, synthetic: true, usage: { input: 0, output: 0, cached: 0, estimated: true } };
         }
         let json = null;

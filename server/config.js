@@ -131,6 +131,8 @@ function load(env = process.env) {
             reserveBytes: int(env.AI_MEDIA_ANALYSIS_DISK_RESERVE_BYTES, 3 * 1024 * 1024 * 1024),
             fetchTimeoutMs: int(env.AI_MEDIA_ANALYSIS_FETCH_TIMEOUT_MS, 20 * 60000),
             sceneThreshold: float(env.AI_MEDIA_SCENE_THRESHOLD, 10),
+            // Speech-to-text in windows: each call stays well inside the whisper provider's timeout (10 min).
+            sttWindowSec: Math.max(10, int(env.AI_MEDIA_STT_WINDOW_SEC, 600)),
             ffmpeg: env.FFMPEG_BIN || 'ffmpeg',
             ffprobe: env.FFPROBE_BIN || 'ffprobe',
         },

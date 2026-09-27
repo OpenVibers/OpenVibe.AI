@@ -81,10 +81,11 @@ function createWhisperProvider(record, { config }) {
         return ch;
     }
 
-    function toWav(src, seconds, signal, timeoutMs) {
+    function toWav(src, seconds, signal, timeoutMs, startSec = 0) {
         return new Promise((resolve, reject) => {
             const wav = path.join(os.tmpdir(), `openvibe-ai-tx-${Date.now()}-${Math.floor(Math.random() * 1e6)}.wav`);
-            const args = ['-y', '-nostdin', '-i', src];
+            // startSec: one window of a long recording (media.analyze), decoded from there only.
+            const args = ['-y', '-nostdin', ...(startSec > 0 ? ['-ss', String(startSec)] : []), '-i', src];
             if (seconds > 0) args.push('-t', String(seconds));
             args.push('-vn', '-ac', '1', '-ar', '16000', '-f', 'wav', wav);
             let ff;
@@ -142,7 +143,7 @@ function createWhisperProvider(record, { config }) {
         if (!available()) throw new ProviderError('whisper.cpp is not installed on this host', { code: 'provider.unavailable' });
         const lane = req.live ? 'live' : 'batch';
         const timeoutMs = req.timeoutMs || 300000;
-        const wav = await toWav(req.filePath, req.seconds || 0, req.signal, timeoutMs);
+        const wav = await toWav(req.filePath, req.seconds || 0, req.signal, timeoutMs, req.startSec || 0);
         try {
             await acquire(lane);
             try {

@@ -339,15 +339,29 @@ function createMediaAnalysis({ registry, pool, fetcher, quotas, config = {}, spa
                 const route = registry.resolveRoute(stepDef.stt_route || 'live.stt');
                 if (!route || route.disabled) gaps.push('No speech-to-text route (live.stt): no transcript.');
                 else {
-                    try {
-                        sttExec = await pool.execute(route, 'transcribe', { filePath: file, language: input.language || 'en', seconds: seconds || 0, offsetSec: 0, timeoutMs: 3600000 }, { ...ctx, routeKey: route.key, routeVersion: route.version, promptHash: null });
-                        const r = sttExec.result;
-                        const segments = (r.segments || []).slice(0, LIMIT.segments).map((g) => ({ start: r2(g.start), end: r2(g.end), text: String(g.text || '').slice(0, 2000) }));
-                        transcript = { available: true, language: r.language || input.language || 'en', text: String(r.text || '').slice(0, LIMIT.text), segments };
-                    } catch (e) {
-                        if (ctx.signal && ctx.signal.aborted) throw e;
-                        gaps.push(`Speech-to-text did not run (${e.code || e.message}): no transcript.`);
+                    // In windows (sttWindowSec, 10 min): each call stays inside the provider's timeout, and one
+                    // failed window costs that window only.
+                    const win = ma.sttWindowSec || 600;
+                    const segs = []; const langs = {}; const failed = []; let lastErr = null;
+                    for (let start = 0; start < duration; start += win) {
+                        const len = Math.min(win, duration - start);
+                        try {
+                            const ex = await pool.execute(route, 'transcribe', { filePath: file, language: input.language || 'en', seconds: len, startSec: start, offsetSec: start, timeoutMs: 600000 }, { ...ctx, routeKey: route.key, routeVersion: route.version, promptHash: null });
+                            sttExec = ex;
+                            const r = ex.result;
+                            if (r.language) langs[r.language] = (langs[r.language] || 0) + (r.segments || []).length + 1;
+                            for (const g of r.segments || []) segs.push({ start: r2(g.start), end: r2(g.end), text: String(g.text || '').slice(0, 2000) });
+                        } catch (e) {
+                            if (ctx.signal && ctx.signal.aborted) throw e;
+                            failed.push(`${clock(start)}–${clock(start + len)}`); lastErr = e;
+                        }
                     }
+                    if (sttExec) {
+                        const segments = segs.sort((a, b) => a.start - b.start).slice(0, LIMIT.segments);
+                        const language = Object.keys(langs).sort((a, b) => langs[b] - langs[a])[0] || input.language || 'en';
+                        transcript = { available: true, language, text: segments.map((g) => g.text).join(' ').replace(/\s+/g, ' ').trim().slice(0, LIMIT.text), segments };
+                        if (failed.length) gaps.push(`Speech-to-text failed for ${failed.slice(0, 5).join(', ')}${failed.length > 5 ? ` and ${failed.length - 5} more` : ''} (${lastErr.code || lastErr.message}).`);
+                    } else gaps.push(`Speech-to-text did not run (${(lastErr && (lastErr.code || lastErr.message)) || 'no window'}): no transcript.`);
                 }
             }
             const ratio = transcript.available ? speechRatio(transcript.segments, duration) : null;
