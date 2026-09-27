@@ -63,6 +63,8 @@ t.test('the parser reads every filter\'s lines; loud means well above the typica
     const segs = Array.from({ length: 12 }, (_, i) => ({ start: i * 5, end: i * 5 + 5, text: 'and then we go over there and look at this one more time okay' }));
     const hl = ma.highlightsOf({ duration: 90, signals: talk, perSecond: new Map(), segments: segs });
     assert.ok(hl.length && hl.every((x) => x.reasons.includes('speech') && x.start < 60), JSON.stringify(hl));
+    const ja = ma.highlightsOf({ duration: 60, signals: { ...talk, black: [], silence: [] }, perSecond: new Map(), segments: [{ start: 0, end: 25, text: 'これしか使えないのかな' }] });
+    assert.ok(ja.some((x) => x.reasons.includes('speech')), 'speech is measured in time, so a language without spaces counts');
 });
 
 t.test('whisper reports the language it detected, not "auto"', async () => {

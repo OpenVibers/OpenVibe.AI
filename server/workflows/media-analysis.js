@@ -130,8 +130,9 @@ function highlightsOf({ duration, signals, perSecond, segments }) {
         }
         const cuts = signals.scene_changes.filter((c) => c.t >= s && c.t < e).length;
         if (cuts >= 2) { score += Math.min(2, cuts * 0.5); reasons.push('scene changes'); }
-        const words = segments.reduce((n, g) => n + (overlap(s, e, g.start, g.end) > 0 ? g.text.split(/\s+/).filter(Boolean).length : 0), 0);
-        const talking = words / len >= 1.5;
+        // Speech: at least half the window inside transcript segments (time, not words: Japanese has no spaces).
+        const spoken = union(segments.filter((g) => g.text && g.text.trim())).reduce((n, g) => n + overlap(s, e, g.start, g.end), 0);
+        const talking = spoken / len >= 0.5;
         if (talking) { score += 1; reasons.push('speech'); }
         const still = dead.reduce((n, d) => n + overlap(s, e, d.start, d.end), 0);
         if ((still / len > 0.5 && !talking) || !score) continue;
