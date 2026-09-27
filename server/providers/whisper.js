@@ -130,7 +130,9 @@ function createWhisperProvider(record, { config }) {
                     end: offsetSec + ((it.offsets && it.offsets.to) || 0) / 1000,
                     text: it.text || '',
                 })), Boolean(vm));
-                done(() => resolve({ text: segments.map(s => s.text).join(' ').replace(/\s+/g, ' ').trim(), segments, language: lang, model: path.basename(model) }));
+                // With -l auto, whisper.cpp names the language it detected in result.language.
+                const detected = parsed && parsed.result && /^[a-z]{2,3}$/.test(String(parsed.result.language || '')) ? parsed.result.language : null;
+                done(() => resolve({ text: segments.map(s => s.text).join(' ').replace(/\s+/g, ' ').trim(), segments, language: lang === 'auto' && detected ? detected : lang, model: path.basename(model) }));
             });
             ch.on('error', (e) => done(() => reject(new ProviderError(e.message, { code: 'provider.unavailable' }))));
         });

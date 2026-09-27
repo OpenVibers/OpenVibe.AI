@@ -114,7 +114,8 @@ function union(spans) {
 /** Windows (30 s, or a quarter of a short clip; every half window) scored by loudness, scene changes and speech; the best that do not overlap. */
 function highlightsOf({ duration, signals, perSecond, segments }) {
     const I = signals.loudness.typical_lufs;
-    const dead = union([...signals.black, ...signals.frozen, ...signals.silence]);
+    // Black picture and silence make a window dead air; a still picture (a talking head, a menu) does not.
+    const dead = union([...signals.black, ...signals.silence]);
     const W = Math.max(5, Math.min(WINDOW, duration / 4));
     const cands = [];
     for (let s = 0; s < Math.max(duration - W / 2, 0.001); s += W / 2) {
@@ -130,9 +131,10 @@ function highlightsOf({ duration, signals, perSecond, segments }) {
         const cuts = signals.scene_changes.filter((c) => c.t >= s && c.t < e).length;
         if (cuts >= 2) { score += Math.min(2, cuts * 0.5); reasons.push('scene changes'); }
         const words = segments.reduce((n, g) => n + (overlap(s, e, g.start, g.end) > 0 ? g.text.split(/\s+/).filter(Boolean).length : 0), 0);
-        if (words / len >= 1.5) { score += 1; reasons.push('speech'); }
+        const talking = words / len >= 1.5;
+        if (talking) { score += 1; reasons.push('speech'); }
         const still = dead.reduce((n, d) => n + overlap(s, e, d.start, d.end), 0);
-        if (still / len > 0.5 || !score) continue;
+        if ((still / len > 0.5 && !talking) || !score) continue;
         const excerpt = segments.filter((g) => overlap(s, e, g.start, g.end) > 0).map((g) => g.text).join(' ').replace(/\s+/g, ' ').trim().slice(0, 300);
         cands.push({ start: r2(s), end: r2(e), score: r2(score), reasons, excerpt });
     }
@@ -228,7 +230,8 @@ function createMediaAnalysis({ registry, pool, fetcher, quotas, config = {}, spa
     async function signalsOf(file, { duration, streams, seconds, signal }) {
         const graph = [];
         if (streams.video) graph.push(`[0:v:0]scale=160:-2,scdet=threshold=${ma.sceneThreshold || 10},blackdetect=d=1:pix_th=0.10,freezedetect=n=-60dB:d=4[vo]`);
-        if (streams.audio) graph.push('[0:a:0]silencedetect=n=-35dB:d=2,ebur128[ao]');
+        // -50 dB: real silence. A quiet stream talks at -40 LUFS, which -35 dB would call silent.
+        if (streams.audio) graph.push('[0:a:0]silencedetect=n=-50dB:d=2,ebur128[ao]');
         if (!graph.length) return null;
         const args = ['-hide_banner', '-nostats', '-nostdin'];
         if (seconds) args.push('-t', String(seconds));

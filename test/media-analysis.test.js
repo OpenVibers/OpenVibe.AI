@@ -7,7 +7,8 @@
 //     and the overview from the local model (media.local), which sees only the measured facts and the transcript;
 //   - the local model down: an extractive overview that says so; paid only with allow_paid AND a media.paid budget,
 //     never past it; the paid call is the run's provider;
-//   - too little free disk refuses before downloading.
+//   - too little free disk refuses before downloading;
+//   - a quiet stream's talking is not dead air; whisper names the language it detected.
 // The runs need ffprobe/ffmpeg on PATH; without them those parts are skipped (the parser part always runs).
 const assert = require('assert');
 const fs = require('fs');
@@ -57,6 +58,28 @@ t.test('the parser reads every filter\'s lines; loud means well above the typica
     assert.strictEqual(ma.scenesOf(many, 4010).length, 300, 'at most 300 scenes; the strongest changes are the boundaries');
     assert.strictEqual(ma.speechRatio([{ start: 0, end: 10, text: 'a' }, { start: 5, end: 12, text: 'b' }], 24), 0.5, 'overlapping speech counts once');
     assert.strictEqual(ma.clock(3725), '1:02:05');
+    // A quiet stream: someone talking over a still picture is a highlight, not dead air; a silent black stretch is.
+    const talk = { scene_changes: [], black: [{ start: 60, end: 90 }], frozen: [{ start: 0, end: 60 }], silence: [{ start: 60, end: 90 }], loudness: { typical_lufs: -41, integrated_lufs: -39, peaks: [] } };
+    const segs = Array.from({ length: 12 }, (_, i) => ({ start: i * 5, end: i * 5 + 5, text: 'and then we go over there and look at this one more time okay' }));
+    const hl = ma.highlightsOf({ duration: 90, signals: talk, perSecond: new Map(), segments: segs });
+    assert.ok(hl.length && hl.every((x) => x.reasons.includes('speech') && x.start < 60), JSON.stringify(hl));
+});
+
+t.test('whisper reports the language it detected, not "auto"', async () => {
+    if (!HAS_FFMPEG) return console.log('    (skipped: no ffmpeg/ffprobe)');
+    const dir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'ov-ai-whisper-'));
+    try {
+        const bin = path.join(dir, 'whisper-cli');
+        fs.writeFileSync(bin, `#!/bin/sh\nwhile [ $# -gt 0 ]; do case "$1" in -of) OUT="$2"; shift;; -l) L="$2"; shift;; esac; shift; done\n[ "$L" = auto ] && LANG_OUT=ja || LANG_OUT="$L"\nprintf '{"result":{"language":"%s"},"transcription":[{"offsets":{"from":0,"to":1500},"text":"こんにちは、みなさん"}]}' "$LANG_OUT" > "$OUT.json"\n`, { mode: 0o755 });
+        for (const f of ['base.bin', 'multi.bin']) fs.writeFileSync(path.join(dir, f), 'x');
+        const { createWhisperProvider } = require('../server/providers/whisper');
+        const w = createWhisperProvider({ key: 'whisper' }, { config: { whisper: { bin, model: path.join(dir, 'base.bin'), modelMulti: path.join(dir, 'multi.bin'), vad: false, threads: 1, beam: 1, maxConcurrent: 1 } } });
+        const clip = path.join(dir, 'clip.mp4');
+        fs.writeFileSync(clip, FIXTURE);
+        const r = await w.transcribe({ filePath: clip, language: 'auto', seconds: 3, timeoutMs: 30000 });
+        assert.deepStrictEqual([r.language, r.text], ['ja', 'こんにちは、みなさん']);
+        assert.strictEqual((await w.transcribe({ filePath: clip, language: 'en', seconds: 3, timeoutMs: 30000 })).language, 'en');
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
 t.test('a real run: signals, scenes, highlights with evidence, and the local model\'s overview', async () => {
