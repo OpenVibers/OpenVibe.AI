@@ -155,7 +155,21 @@ function createQuotas(db, { clock = { now: () => Date.now() }, registry } = {}) 
         });
     }
 
-    return { reserve, account, list, upsert, usage, counters, WINDOWS };
+    /**
+     * A cost budget that gates one kind of paid call rather than whole runs (media.analyze's paid overview, WS-O task 5):
+     * the active quotas whose workflow_prefix is `prefix` (a name no workflow key starts with, so reserve() never
+     * applies them) and whose max_cost_usd is above 0. The tightest cap counts, against today's (UTC) spend of the
+     * workflows starting with `spendPrefix`. null when there is none: no budget, no paid call.
+     */
+    function paidBudget(prefix, spendPrefix) {
+        const rows = db.prepare("SELECT max_cost_usd FROM quotas WHERE status = 'active' AND workflow_prefix = ? AND max_cost_usd > 0").all(prefix);
+        if (!rows.length) return null;
+        const day = new Date(clock.now()).toISOString().slice(0, 10);
+        const spent = db.prepare("SELECT COALESCE(SUM(cost_usd), 0) AS c FROM usage_daily WHERE day = ? AND substr(workflow_key, 1, ?) = ?").get(day, spendPrefix.length, spendPrefix).c;
+        return { max_cost_usd: Math.min(...rows.map((r) => r.max_cost_usd)), spent, window: 'day' };
+    }
+
+    return { reserve, account, list, upsert, usage, counters, paidBudget, WINDOWS };
 }
 
 module.exports = { createQuotas, WINDOWS };

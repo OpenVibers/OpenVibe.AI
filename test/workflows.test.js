@@ -23,6 +23,7 @@ const EXAMPLES = {
     'live.media.overview': { frames: ['a desk', 'a keyboard'], transcript: 'hello chat' },
     'live.stream.recap': { facts: { streamer: 'Ann', title: 'Rust night', duration: '2h 1m', viewers: { peak: 4, avg: 2 } } },
     'live.media.transcribe': { media_url: '__MEDIA__/v/1', language: 'en' },
+    'media.analyze': { media_url: '__MEDIA__/fixture.mp4', language: 'en' },
     'network.site_copy': { sites: [{ id: 'live', name: 'OpenVibe.Live', what: 'live streaming' }], links: [{ id: 'tools', name: 'Tools', about: 'online tools' }] },
     'ai.chat': { messages: [{ role: 'user', content: 'hello' }] },
     'ai.generate': { prompt: 'Write a haiku about SQLite.' },
@@ -48,15 +49,18 @@ const EXAMPLES = {
 for (const k of new Set(Object.values(KIND_TO_WORKFLOW).concat('live.complete'))) EXAMPLES[k] = PASS;
 
 const t = suite('workflows');
+const HAS_FFMPEG = require('child_process').spawnSync('ffprobe', ['-version']).status === 0;
 let h;
 let media;
 const tok = token('live', ALL);
 
 t.test('boot seeds every required workflow key', async () => {
-    media = nodeHttp.createServer((req, res) => { res.writeHead(200, { 'Content-Type': 'video/mp4' }); res.end(Buffer.alloc(2048, 1)); });
+    const fixture = require('fs').readFileSync(require('path').join(__dirname, 'fixtures', 'media-analysis.mp4'));
+    media = nodeHttp.createServer((req, res) => { res.writeHead(200, { 'Content-Type': 'video/mp4' }); res.end(req.url === '/fixture.mp4' ? fixture : Buffer.alloc(2048, 1)); });
     await new Promise(r => media.listen(0, '127.0.0.1', r));
     const mediaBase = `http://127.0.0.1:${media.address().port}`;
     EXAMPLES['live.media.transcribe'].media_url = `${mediaBase}/v/1`;
+    EXAMPLES['media.analyze'].media_url = `${mediaBase}/fixture.mp4`;
     h = await boot({ env: { OV_MEDIA_INTERNAL_URL: mediaBase } });
     const keys = h.registry.listWorkflows().map(w => w.key);
     for (const k of ['wiki.generate_space', 'wiki.generate_page', 'blog.draft_post', 'news.summarize_story', 'news.compare_perspectives', 'reviews.summarize_entity', 'deals.enrich_deal',
@@ -82,6 +86,7 @@ t.test('every workflow has compiling, versioned input and output schemas and an 
 
 t.test('every workflow runs end to end on the stub and returns schema-valid output', async () => {
     for (const w of h.registry.listWorkflows()) {
+        if (w.key === 'media.analyze' && !HAS_FFMPEG) continue;   // test/media-analysis.test.js says so
         const r = await request(h.base, 'POST', '/api/v1/runs?wait=10000', { tok, body: { workflow: w.key, input: EXAMPLES[w.key] } });
         assert.strictEqual(r.status, 201, `${w.key}: ${r.status} ${r.text.slice(0, 300)}`);
         const run = r.body.run;

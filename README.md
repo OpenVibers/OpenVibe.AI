@@ -158,6 +158,7 @@ definition, but never over an admin's version.
 | `anthropic` | Messages API with cached system blocks and forced-tool JSON. Ported from Live's `llm.js`. | same, with `AI_PROVIDER=anthropic` |
 | `http` | The local HTTP seam: `POST {operation, …}` → `{text, json, usage}` | `AI_HTTP_SEAM_URL` or the admin API |
 | `whisper` | whisper.cpp on this host, with Live's VAD, hallucination filter, multilingual model and live/batch lanes | `WHISPER_*` — Live's names |
+| `openai`, key `local` | A model server on this host speaking the OpenAI API (llama.cpp's `llama-server`, Ollama's `/v1`): no key, never paid; route `media.local` | `AI_LOCAL_LLM_URL`, `AI_LOCAL_LLM_MODEL`, `AI_LOCAL_LLM_TIMEOUT_MS` |
 
 Routing tries the route's primary, then each fallback; a provider that is disabled, missing
 credentials, circuit-open or unable to do the operation is **skipped and logged**; every call has a
@@ -181,6 +182,25 @@ stub joins every route as a last resort outside production only (`AI_STUB_FALLBA
   (prompts moved verbatim), plus passthrough workflows for the features whose prompts Live still
   renders (`live.viewers.*`, `live.chat.insight`, `live.moments.*`, `live.hero.slogans`,
   `live.arena.*`, …). See `docs/migration.md`.
+- **Media** — `media.analyze` (roadmap WS-O task 5), local-first analysis of a VOD, clip or audio file by `media_url`
+  or MediaRef, fetched like any media input (allow-listed hosts) into `media-tmp` beside the database
+  (`AI_MEDIA_ANALYSIS_DIR`; never `/tmp`, which is memory on the production host). The file cap is
+  `AI_MEDIA_ANALYSIS_MAX_BYTES` (4 GB), also bounded by that disk's free space minus
+  `AI_MEDIA_ANALYSIS_DISK_RESERVE_BYTES` (3 GB). Otherwise the run is refused with `media.no_space` before downloading. Everything runs on this host, one analysis at a time, at nice 15:
+  1. **Signals**, one FFmpeg pass with video decoded at keyframes only: scene changes (`scdet`, threshold
+     `AI_MEDIA_SCENE_THRESHOLD`), black and frozen picture, silence, and loudness. Loudness has the integrated level
+     and range, the typical level (the median audible second) and loud moments at least 6 LU above it.
+  2. **Scenes** from the scene changes (at most 300).
+  3. **Speech**: whisper.cpp through `live.stt`.
+  4. **Highlights**: windows scored by loud, scene changes and speech, each with its reasons and transcript excerpt.
+  5. **An overview** from the local model (`media.local`), else extractive from the measured facts. A paid provider
+     (`media.paid`, the shared provider) writes it only with `allow_paid: true` **and** an active quota with
+     `workflow_prefix` `media.paid` and `max_cost_usd` > 0, while today's `media.*` spend is under it. That quota
+     gates only this call, never whole runs.
+
+  `overview.source` says which (`local_model`, `paid`, `extractive`), and `gaps` lists what is missing (no local
+  model, no speech-to-text, no budget). The output is not cached: callers keep it. Live may run it by the default
+  `AI_NS_FALLBACK`.
 - **Direct operations** — `ai.chat|generate|summarize|classify|extract|enrich|embed`.
 
 ## Guarantees and where they are tested
@@ -199,6 +219,7 @@ stub joins every route as a last resort outside production only (`AI_STUB_FALLBA
 | Token and capability denial, namespaces, no secret values in any response, runs private to the requester | `test/auth.test.js` |
 | Operator console: SSO + PKCE, staff-only (anonymous → sign-in, non-staff 403), the staff → AI capability map, CSRF on every write, no script/secret on any page, noindex/robots, failed-run filters, audit rows from API and console changes | `test/console.test.js` |
 | Ported adapters against fake OpenAI/Anthropic servers, stub determinism, whisper filter, templates | `test/providers.test.js` |
+| `media.analyze` on a real 28 s fixture: signals, scenes and loud moments measured, highlights with evidence, the local model's overview from the facts only; the local model down → extractive and said; paid only with `allow_paid` and a `media.paid` budget, never past it; too little disk refused before downloading | `test/media-analysis.test.js` |
 | Import from a Live snapshot: dry run, holds, idempotent re-run | `test/import.test.js` |
 | Capability proposals are valid contracts documents matching what is enforced | `test/proposals.test.js` |
 
@@ -228,7 +249,8 @@ Deployed: `/opt/openvibe.ai`, env `/etc/openvibe/ai.env` (0600), unit `deploy/sy
 ## Not done yet
 
 - `ai.run.*` events to OpenVibe.Events (and their schemas in Contracts); per-actor (BYO) provider
-  secrets; moving Live's local transcription (whisper) and the passthrough prompts into AI templates;
+  secrets; Live's VOD and clip overviews calling `media.analyze` instead of extracting frames and transcribing
+  themselves; moving the passthrough prompts into AI templates;
   removing Network's fallback to Live's `/internal/ai/site-copy`; a public server-rendered status page.
 - The operator console is built but not reachable yet: it needs the vhost below installed (which
   replaces the Sites placeholder), `https://ai.openvibe.network/auth/callback` listed as a redirect URI

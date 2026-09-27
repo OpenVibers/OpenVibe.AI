@@ -197,12 +197,12 @@ function createFetcher(config, { transport = null } = {}) {
     }
 
     /** Media input -> a temp file path (caller deletes it). */
-    async function loadMediaToFile(input, { signal } = {}) {
+    async function loadMediaToFile(input, { signal, maxBytes, timeoutMs, dir } = {}) {
         const url = input.media_url || (input.media ? mediaRefUrl(input.media) : null);
         if (!url) throw new AiError(422, 'input.invalid', 'media needs media_url or media (MediaRef)');
-        const file = path.join(os.tmpdir(), `openvibe-ai-media-${Date.now()}-${Math.floor(Math.random() * 1e6)}`);
+        const file = path.join(dir || os.tmpdir(), `openvibe-ai-media-${Date.now()}-${Math.floor(Math.random() * 1e6)}`);
         try {
-            await fetchUrl(url, { signal, toFile: file });
+            await fetchUrl(url, { signal, toFile: file, ...(maxBytes ? { maxBytes } : {}), ...(timeoutMs ? { timeoutMs } : {}) });
         } catch (e) {
             try { fs.unlinkSync(file); } catch { /* */ }
             throw e;

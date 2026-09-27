@@ -30,7 +30,7 @@ async function start({ config, clock = { now: () => Date.now() }, fetchImpl = gl
     const cache = createCache(db, { clock });
     const pool = createProviderPool({ db, registry, config, clock, fetchImpl, env, log });
     const fetcher = createFetcher(config);
-    const engine = createEngine({ registry, pool, fetcher });
+    const engine = createEngine({ registry, pool, fetcher, quotas, config, log });
     // ai.run.* to OpenVibe.Events through the outbox (server/events.js); before recovery, so its failures are announced.
     require('./events').init(db, { log });
     // ai.preferences (read) and ai.usage_summary (written): Network user modules (server/user-modules.js).

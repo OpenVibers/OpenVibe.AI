@@ -292,8 +292,8 @@ function createRegistry(db, { clock = { now: () => Date.now() }, env = process.e
         schemas.assertSchema(w.output_schema, 'output_schema');
         if (!Array.isArray(w.steps) || !w.steps.length) throw new AiError(422, 'ai.invalid', 'workflow needs at least one step');
         for (const s of w.steps) {
-            if (!s || !['llm', 'passthrough', 'transcribe', 'embed'].includes(s.kind)) throw new AiError(422, 'ai.invalid', 'step kind must be llm, passthrough, transcribe or embed');
-            if (s.kind === 'llm' && !(s.template && latestAny('templates', s.template))) throw new AiError(422, 'ai.invalid', `step references unknown template ${s.template}`);
+            if (!s || !['llm', 'passthrough', 'transcribe', 'embed', 'media_analysis'].includes(s.kind)) throw new AiError(422, 'ai.invalid', 'step kind must be llm, passthrough, transcribe, embed or media_analysis');
+            if ((s.kind === 'llm' || (s.kind === 'media_analysis' && s.template)) && !(s.template && latestAny('templates', s.template))) throw new AiError(422, 'ai.invalid', `step references unknown template ${s.template}`);
         }
         if (!['none', 'private', 'service'].includes(w.cache_mode)) throw new AiError(422, 'ai.invalid', 'cache_mode must be none, private or service');
         if (!LIFECYCLE.includes(w.status)) throw new AiError(422, 'ai.invalid', `workflow status must be one of ${LIFECYCLE.join(', ')}`);

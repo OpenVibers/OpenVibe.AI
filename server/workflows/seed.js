@@ -14,6 +14,7 @@
  *              request rate for every service
  */
 const live = require('./live');
+const media = require('./media');
 const core = require('./core');
 const products = require('./products');
 const { resolveSecret } = require('../util');
@@ -53,6 +54,10 @@ function providerRecords(config, env) {
         const kind = config.fallback.kind === 'anthropic' ? 'anthropic' : 'openai';
         out.push({ key: 'fallback', display_name: 'Fallback provider', kind, status: 'active', base_url: config.fallback.baseUrl, auth_mode: resolveSecret(config.fallback.apiKeyRef, env) ? (kind === 'anthropic' ? 'x-api-key' : 'bearer') : 'none', secret_ref: config.fallback.apiKeyRef, default_model: config.fallback.model || null, capabilities: [], timeout_ms: 30000, priority: 50, metadata: { configured_by: 'AI_FALLBACK_*' } });
     }
+    if (config.localLlm && config.localLlm.url) {
+        // A local model server (llama.cpp, Ollama) speaking the OpenAI API: no key, never paid (WS-O task 5).
+        out.push({ key: 'local', display_name: 'Local model (OpenAI-compatible server on this host)', kind: 'openai', status: 'active', base_url: config.localLlm.url, auth_mode: 'none', secret_ref: null, default_model: config.localLlm.model || 'local', capabilities: ['chat', 'generate', 'summarize', 'classify', 'extract'], timeout_ms: config.localLlm.timeoutMs, priority: 5, metadata: { configured_by: 'AI_LOCAL_LLM_URL', local: true, paid: false } });
+    }
     if (config.httpSeamUrl) {
         out.push({ key: 'http-seam', display_name: 'Local HTTP seam', kind: 'http', status: 'active', base_url: config.httpSeamUrl, auth_mode: 'none', default_model: null, capabilities: [], timeout_ms: 30000, priority: 60, metadata: { configured_by: 'AI_HTTP_SEAM_URL' } });
     }
@@ -89,14 +94,17 @@ function seed({ registry, quotas, config, env = process.env, db }) {
     registry.seedVersioned('route', 'default.chat', { primary: { provider: 'shared', model: null }, fallbacks, options: {}, max_output_tokens: 800, response_format: 'text', timeout_ms: 30000, alias_of: null });
     registry.seedVersioned('route', 'default.json', { primary: { provider: 'shared', model: null }, fallbacks, options: { temperature: 0.3 }, max_output_tokens: 2400, response_format: 'json', timeout_ms: 60000, alias_of: null });
     registry.seedVersioned('route', 'default.embedding', { primary: { provider: 'shared', model: env.AI_EMBEDDING_MODEL || 'text-embedding-3-small' }, fallbacks: [], options: {}, max_output_tokens: null, response_format: 'text', timeout_ms: 30000, alias_of: null });
+    // media.analyze (WS-O task 5): the local model when there is one; the paid route is used only under a media.paid budget.
+    if (config.localLlm && config.localLlm.url) registry.seedVersioned('route', 'media.local', { primary: { provider: 'local', model: config.localLlm.model || null }, fallbacks: [], options: { temperature: 0.3 }, max_output_tokens: 350, response_format: 'text', timeout_ms: config.localLlm.timeoutMs, alias_of: null });
+    registry.seedVersioned('route', 'media.paid', { primary: { provider: 'shared', model: config.shared.roleModels.summary || null }, fallbacks, options: { temperature: 0.3 }, max_output_tokens: 350, response_format: 'text', timeout_ms: 60000, alias_of: null });
     for (const key of HISTORICAL_ROUTES) registry.seedVersioned('route', key, { primary: { provider: 'shared', model: null }, fallbacks: [], options: {}, max_output_tokens: null, response_format: 'json', timeout_ms: null, alias_of: 'default.json' });
 
     // Templates, then workflows (workflows reference templates)
-    for (const t of [...live.templates, ...core.templates, ...products.templates]) {
+    for (const t of [...live.templates, ...core.templates, ...products.templates, ...media.templates]) {
         const { key, ...def } = t;
         registry.seedVersioned('template', key, { description: null, default_route: null, owner: 'ai', visibility: 'internal', metadata: {}, ...def });
     }
-    for (const w of [...live.workflows, ...core.workflows, ...products.workflows]) {
+    for (const w of [...live.workflows, ...core.workflows, ...products.workflows, ...media.workflows]) {
         const { key, ...def } = w;
         registry.seedVersioned('workflow', key, { description: null, default_route: null, cache_ttl_sec: null, metadata: {}, ...def });
     }

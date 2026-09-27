@@ -10,6 +10,8 @@
  *                routed by role (route_prefix.role) or a fixed route
  *   transcribe   fetch the media (allow-listed hosts only) and run speech-to-text
  *   embed        embeddings
+ *   media_analysis  local-first media analysis: FFmpeg signals, scenes, local speech-to-text, highlights and
+ *                an overview from a local model (or extractive; paid only with a budget). See media-analysis.js.
  *
  * The final output is validated against the workflow's output schema. An empty or invalid answer
  * fails the run (output.empty / output.invalid); nothing is ever filled in. input.sources become
@@ -94,7 +96,8 @@ function normMessages(messages, user) {
     return out;
 }
 
-function createEngine({ registry, pool, fetcher }) {
+function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spawnImpl, log = console }) {
+    const mediaAnalysis = require('./media-analysis').createMediaAnalysis({ registry, pool, fetcher, quotas, config, spawnImpl, log });
     function routeFor(key) {
         const r = registry.resolveRoute(key);
         if (!r) throw new AiError(503, 'route.unavailable', `no route ${key}`);
@@ -202,7 +205,7 @@ function createEngine({ registry, pool, fetcher }) {
         return { output: { vectors, dimensions: vectors[0] ? vectors[0].length : 0 }, exec, route };
     }
 
-    const STEP = { llm: llmStep, passthrough: passthroughStep, transcribe: transcribeStep, embed: embedStep };
+    const STEP = { llm: llmStep, passthrough: passthroughStep, transcribe: transcribeStep, embed: embedStep, media_analysis: mediaAnalysis.step };
 
     /**
      * Run a workflow. ctx: { signal, logRequest, debugRaw, inputHash }

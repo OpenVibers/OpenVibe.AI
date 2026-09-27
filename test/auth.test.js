@@ -70,7 +70,7 @@ t.test('namespaces fail closed: a token without ns runs nothing outside its own 
     denied(await run(token('games', ['ai.run.create'], { ns: null }), 'ai.generate', { prompt: 'hi' }), 'svc:games without ns -> ai.generate');
     denied(await run(token('games', ['ai.run.create'], { ns: [] }), 'wiki.generate_page', { title: 'x', sources: [{ source_type: 'web.page' }] }), 'svc:games with ns [] -> wiki.*');
     assert.notStrictEqual((await run(token('games', ['ai.run.create'], { ns: null }), 'games.generate_lore', {})).status, 403, 'svc:games -> games.*');
-    // Live (Network grants it no namespaces): live.* and network.site_copy by the default AI_NS_FALLBACK, nothing else.
+    // Live (Network grants it no namespaces): live.*, network.site_copy and media.analyze by the default AI_NS_FALLBACK, nothing else.
     const live = token('live', ['ai.run.create'], { ns: null });
     assert.strictEqual((await request(h.base, 'POST', '/api/v1/runs?wait=3000', { tok: live, body: { workflow: 'live.translate', input: { text: 'bonjour tout le monde', from: 'fr', to: 'en' } } })).status, 201);
     assert.notStrictEqual((await run(live, 'network.site_copy', { sites: [], links: [] })).status, 403, 'svc:live -> network.site_copy');
@@ -90,9 +90,11 @@ t.test('AI_NS_FALLBACK and AI_NS_REQUIRED', () => {
     const { namespaceAllowed } = require('../server/auth');
     const svc = (id, ns) => ({ sub: `svc:${id}`, ns });
     const d = load({}).namespaces;
-    assert.deepStrictEqual(d, { required: true, derive: true, fallback: { live: ['live.*', 'network.site_copy'] } });
+    assert.deepStrictEqual(d, { required: true, derive: true, fallback: { live: ['live.*', 'network.site_copy', 'media.analyze'] } });
     assert.strictEqual(namespaceAllowed(svc('live', []), 'live.translate', d), true);
     assert.strictEqual(namespaceAllowed(svc('live', []), 'network.site_copy', d), true);
+    assert.strictEqual(namespaceAllowed(svc('live', []), 'media.analyze', d), true, 'Live\'s VOD and clip overviews (WS-O task 5)');
+    assert.strictEqual(namespaceAllowed(svc('live', []), 'media.other', d), false, 'that one workflow, not media.*');
     assert.strictEqual(namespaceAllowed(svc('live', []), 'ai.generate', d), false);
     assert.strictEqual(namespaceAllowed(svc('news', undefined), 'news.summarize_story', d), true);
     assert.strictEqual(namespaceAllowed({ sub: 'svc:live' }, 'wiki.generate_page', d), false);

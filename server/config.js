@@ -28,9 +28,10 @@ const trimUrl = (v) => String(v || '').trim().replace(/\/+$/, '');
  * AI_NS_FALLBACK: namespaces for a service token that carries no `ns` claim, as
  * `service=ns|ns,service=ns`. A service not listed gets `<service>.*`; `none` turns the fallback off
  * (an ns-less token then runs nothing). The default covers Live, whose Network grant has no
- * namespaces: its own workflows, plus network.site_copy for its /internal/ai/site-copy fallback.
+ * namespaces: its own workflows, plus network.site_copy for its /internal/ai/site-copy fallback and
+ * media.analyze for its VOD and clip overviews.
  */
-const DEFAULT_NS_FALLBACK = 'live=live.*|network.site_copy';
+const DEFAULT_NS_FALLBACK = 'live=live.*|network.site_copy|media.analyze';
 function nsFallback(v) {
     const raw = v == null || v === '' ? DEFAULT_NS_FALLBACK : String(v).trim();
     if (/^(none|off|0|false)$/i.test(raw)) return { derive: false, fallback: {} };
@@ -118,6 +119,21 @@ function load(env = process.env) {
         },
         // Configurable local HTTP seam: POST {operation, request} JSON to this URL.
         httpSeamUrl: trimUrl(env.AI_HTTP_SEAM_URL),
+        // A local model server speaking the OpenAI API (llama.cpp's llama-server, Ollama's /v1): the provider `local`,
+        // route media.local (roadmap WS-O task 5). No key; never a paid provider.
+        localLlm: { url: trimUrl(env.AI_LOCAL_LLM_URL), model: String(env.AI_LOCAL_LLM_MODEL || '').trim(), timeoutMs: int(env.AI_LOCAL_LLM_TIMEOUT_MS, 180000) },
+        // media.analyze (server/workflows/media-analysis.js): the file cap (also bounded by free disk minus a reserve),
+        // the download timeout, the scene-change threshold (scdet, 0-100) and the tools.
+        mediaAnalysis: {
+            // On disk beside the database, not os.tmpdir(): a tmpfs /tmp is memory, and a VOD is gigabytes.
+            workDir: env.AI_MEDIA_ANALYSIS_DIR || require('path').join(require('path').dirname(env.AI_DB_PATH || './data/ai.db'), 'media-tmp'),
+            maxBytes: int(env.AI_MEDIA_ANALYSIS_MAX_BYTES, 4 * 1024 * 1024 * 1024),
+            reserveBytes: int(env.AI_MEDIA_ANALYSIS_DISK_RESERVE_BYTES, 3 * 1024 * 1024 * 1024),
+            fetchTimeoutMs: int(env.AI_MEDIA_ANALYSIS_FETCH_TIMEOUT_MS, 20 * 60000),
+            sceneThreshold: float(env.AI_MEDIA_SCENE_THRESHOLD, 10),
+            ffmpeg: env.FFMPEG_BIN || 'ffmpeg',
+            ffprobe: env.FFPROBE_BIN || 'ffprobe',
+        },
         // Let routes fall back to the deterministic stub when every real provider fails.
         // Off in production: synthetic output must never stand in for a real answer there.
         stubFallback: bool(env.AI_STUB_FALLBACK, !isProduction),
