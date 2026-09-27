@@ -167,6 +167,14 @@ function factsOf({ duration, streams, signals, scenes, highlights, ratio, transc
     return lines;
 }
 
+/** At most `max` characters, cut after the last whole sentence that fits (a small model may ramble past the prompt's limit). */
+function sentences(text, max) {
+    if (text.length <= max) return text;
+    const head = text.slice(0, max);
+    const end = Math.max(...['. ', '! ', '? ', '。', '！', '？'].map((p) => head.lastIndexOf(p)));
+    return end > max / 3 ? head.slice(0, end + 1).trim() : `${head.slice(0, max - 1).trim()}…`;
+}
+
 function extractive(facts, highlights) {
     const parts = [facts.join(' ')];
     const quoted = highlights.filter((h) => h.excerpt).slice(0, 3);
@@ -272,11 +280,11 @@ function createMediaAnalysis({ registry, pool, fetcher, quotas, config = {}, spa
             const route = registry.resolveRoute(routeKey);
             if (!route || route.disabled) return { missing: true };
             const system = render(template.system_prompt, vars).trim();
-            const req = { system: [{ text: system, cache: true }], messages: [{ role: 'user', content: render(template.user_prompt, vars) }], image: null, json: null, maxTokens: 350, temperature: 0.3, timeoutMs: route.timeout_ms || 120000, cacheKey: `${wf.key}:${wf.version}` };
+            const req = { system: [{ text: system, cache: true }], messages: [{ role: 'user', content: render(template.user_prompt, vars) }], image: null, json: null, maxTokens: 250, temperature: 0.3, timeoutMs: route.timeout_ms || 120000, cacheKey: `${wf.key}:${wf.version}` };
             const exec = await pool.execute(route, 'summarize', req, { ...ctx, routeKey: route.key, routeVersion: route.version, promptHash: null });
-            const text = String(exec.result.text || '').trim();
+            const text = sentences(String(exec.result.text || '').trim(), 600);
             if (!text) throw new AiError(502, 'output.empty', 'the model answered with nothing');
-            return { text: text.slice(0, 1500), exec, route };
+            return { text, exec, route };
         };
         if (template) {
             try {
@@ -360,4 +368,4 @@ function createMediaAnalysis({ registry, pool, fetcher, quotas, config = {}, spa
     return { step };
 }
 
-module.exports = { createMediaAnalysis, createSignalParser, parseSignals, scenesOf, highlightsOf, speechRatio, extractive, clock };
+module.exports = { createMediaAnalysis, createSignalParser, parseSignals, scenesOf, highlightsOf, speechRatio, extractive, sentences, clock };

@@ -58,6 +58,9 @@ t.test('the parser reads every filter\'s lines; loud means well above the typica
     assert.strictEqual(ma.scenesOf(many, 4010).length, 300, 'at most 300 scenes; the strongest changes are the boundaries');
     assert.strictEqual(ma.speechRatio([{ start: 0, end: 10, text: 'a' }, { start: 5, end: 12, text: 'b' }], 24), 0.5, 'overlapping speech counts once');
     assert.strictEqual(ma.clock(3725), '1:02:05');
+    const long = 'First point here. '.repeat(50);
+    assert.ok(ma.sentences(long, 600).length <= 600 && ma.sentences(long, 600).endsWith('here.'), 'a rambling answer is cut after a whole sentence');
+    assert.strictEqual(ma.sentences('短い。', 600), '短い。');
     // A quiet stream: someone talking over a still picture is a highlight, not dead air; a silent black stretch is.
     const talk = { scene_changes: [], black: [{ start: 60, end: 90 }], frozen: [{ start: 0, end: 60 }], silence: [{ start: 60, end: 90 }], loudness: { typical_lufs: -41, integrated_lufs: -39, peaks: [] } };
     const segs = Array.from({ length: 12 }, (_, i) => ({ start: i * 5, end: i * 5 + 5, text: 'and then we go over there and look at this one more time okay' }));

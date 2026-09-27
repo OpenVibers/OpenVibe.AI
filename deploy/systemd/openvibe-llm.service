@@ -1,0 +1,33 @@
+[Unit]
+Description=OpenVibe local model server — llama.cpp llama-server, OpenAI API on 127.0.0.1:8090, for OpenVibe.AI's media.local route (roadmap WS-O task 5)
+# OpenVibe.AI reaches it as the provider `local` (AI_LOCAL_LLM_URL=http://127.0.0.1:8090/v1). Loopback only,
+# no key. It shares the host with live streams, so it is held back: 2 threads, at most 1.5 CPUs, nice 19 and
+# 3 GB of memory. A stream's RTMP ingest and the web services always win.
+# Install (README "Local model"): llama.cpp's CPU build under /opt/llama.cpp/<build> with /opt/llama.cpp/current,
+# the model in /var/lib/openvibe-llm/models, both checked against their published sha256.
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+ExecStart=/opt/llama.cpp/current/llama-server \
+    --model /var/lib/openvibe-llm/models/qwen2.5-1.5b-instruct-q4_k_m.gguf \
+    --alias qwen2.5-1.5b-instruct \
+    --host 127.0.0.1 --port 8090 \
+    --threads 2 --ctx-size 8192 --parallel 1 \
+    --no-webui
+Nice=19
+CPUQuota=150%
+MemoryMax=3G
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=15
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/var/lib/openvibe-llm /opt/llama.cpp
+
+[Install]
+WantedBy=multi-user.target

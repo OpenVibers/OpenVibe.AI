@@ -203,6 +203,17 @@ stub joins every route as a last resort outside production only (`AI_STUB_FALLBA
   `AI_NS_FALLBACK`.
 - **Direct operations** — `ai.chat|generate|summarize|classify|extract|enrich|embed`.
 
+## Local model
+
+`deploy/systemd/openvibe-llm.service` runs llama.cpp's `llama-server` on `127.0.0.1:8090` (OpenAI API, no key),
+which AI reaches as the provider `local` and the route `media.local` (`AI_LOCAL_LLM_URL=http://127.0.0.1:8090/v1`,
+`AI_LOCAL_LLM_MODEL`). On the production host since 2026-09-27: llama.cpp b11222 (the CPU build, checked against
+the release's sha256) in `/opt/llama.cpp/b11222` with `/opt/llama.cpp/current`, and Qwen2.5-1.5B-Instruct Q4_K_M
+(Apache-2.0, checked against Hugging Face's sha256) in `/var/lib/openvibe-llm/models`. It is held back so live
+streams always win: 2 threads, at most 1.5 CPUs, nice 19, 3 GB. It uses about 0.9 GB and generates about
+28 tokens/s. Without it, `media.analyze` writes an extractive overview and says so. To swap the model, put the
+file beside it, change `--model`/`--alias` and `AI_LOCAL_LLM_MODEL`, and restart both units.
+
 ## Guarantees and where they are tested
 
 | Guarantee | Test |

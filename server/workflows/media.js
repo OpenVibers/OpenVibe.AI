@@ -19,7 +19,7 @@ const templates = [
         key: 'media.analyze.overview', name: 'Media: overview from signals and a transcript',
         description: 'The overview step of media.analyze, for a local model (media.local) or, with a budget, a paid one (media.paid).',
         input_schema: { type: 'object' }, output_schema: { type: 'object' },
-        system_prompt: 'You describe a video or audio recording for its creator, from facts a machine measured and from a speech transcript. Use only what is given. Do not guess what is on screen beyond what the transcript says, and never invent names, numbers or events. Write 2 to 4 plain sentences (at most 600 characters): what the recording is about and what happens in it, mentioning the highlight times that matter. No markup, no emoji, no preamble.',
+        system_prompt: 'You describe a video or audio recording for its creator, from facts a machine measured and from a speech transcript. Use only what is given. Do not guess what is on screen beyond what the transcript says, and never invent names, numbers or events. Write 2 to 4 plain sentences in English (at most 500 characters): what the recording is about and what happens in it, with the times of the highlights that matter. Do not retell or translate the transcript; quote at most one short phrase (under 60 characters). No markup, no emoji, no preamble.',
         user_prompt: 'Measured facts:\n{{facts}}\n\nHighlights (time, why, what was said):\n{{highlights}}\n\nTranscript:\n{{transcript}}',
         default_route: 'media.local', owner: 'media', metadata: {},
     },
