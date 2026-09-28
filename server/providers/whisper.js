@@ -81,13 +81,16 @@ function createWhisperProvider(record, { config }) {
         return ch;
     }
 
-    function toWav(src, seconds, signal, timeoutMs, startSec = 0) {
+    function toWav(src, seconds, signal, timeoutMs, startSec = 0, normalize = false) {
         return new Promise((resolve, reject) => {
             const wav = path.join(os.tmpdir(), `openvibe-ai-tx-${Date.now()}-${Math.floor(Math.random() * 1e6)}.wav`);
             // startSec: one window of a long recording (media.analyze), decoded from there only.
             const args = ['-y', '-nostdin', ...(startSec > 0 ? ['-ss', String(startSec)] : []), '-i', src];
             if (seconds > 0) args.push('-t', String(seconds));
-            args.push('-vn', '-ac', '1', '-ar', '16000', '-f', 'wav', wav);
+            args.push('-vn', '-ac', '1', '-ar', '16000');
+            // Recordings are loudness-normalised first, as Live's VOD transcripts were: a quiet streamer is still heard.
+            if (normalize) args.push('-af', 'loudnorm=I=-16:TP=-1.5:LRA=11');
+            args.push('-f', 'wav', wav);
             let ff;
             try { ff = spawnTracked('ffmpeg', args); } catch (e) { return reject(new ProviderError(`ffmpeg: ${e.message}`, { code: 'provider.unavailable' })); }
             const kill = () => { try { ff.kill('SIGKILL'); } catch { /* */ } };
@@ -144,7 +147,7 @@ function createWhisperProvider(record, { config }) {
         if (!available()) throw new ProviderError('whisper.cpp is not installed on this host', { code: 'provider.unavailable' });
         const lane = req.live ? 'live' : 'batch';
         const timeoutMs = req.timeoutMs || 300000;
-        const wav = await toWav(req.filePath, req.seconds || 0, req.signal, timeoutMs, req.startSec || 0);
+        const wav = await toWav(req.filePath, req.seconds || 0, req.signal, timeoutMs, req.startSec || 0, !req.live);
         try {
             await acquire(lane);
             try {
