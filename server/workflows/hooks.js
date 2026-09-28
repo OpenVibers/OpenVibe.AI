@@ -75,7 +75,48 @@ const MOMENT_FLAVOR = {
 };
 const oneLine = (t, max) => String(t || '').replace(/\s+/g, ' ').trim().slice(0, max);
 
+/** Chat messages as Live formatted them: "[Xm ago] [#channel] author: (kind) text", the freshest 9000 characters. */
+function chatLines(messages, withWhere) {
+    const out = (messages || []).map((m) => {
+        const when = Number.isInteger(m.mins_ago) ? `[${m.mins_ago}m ago] ` : '';
+        const where = withWhere && m.where ? `[${m.where}] ` : '';
+        const kind = m.kind && m.kind !== 'chat' ? `(${m.kind}) ` : '';
+        return `${when}${where}${m.author}: ${kind}${String(m.text || '').trim().slice(0, 220)}`;
+    }).join('\n');
+    return out.length > 9000 ? out.slice(out.length - 9000) : out;
+}
+
 const PREPARE = {
+    // Chat analysis (chat-ai.js): messages formatted as Live formatted them, freshest 9000 characters kept.
+    'live.chat.global'(input) {
+        return { vars: {
+            window_label: input.window_label || 'past hour', prior_memory: String(input.prior_memory || '').slice(0, 1600),
+            recent_labels: (input.recent_labels || []).slice(-8).map((l) => `- ${l}`).join('\n') || '(none yet)',
+            count: (input.messages || []).length, messages: chatLines(input.messages, true),
+        } };
+    },
+    'live.chat.profile'(input) {
+        const name = String(input.name || '').slice(0, 120);
+        const subject = input.subject_kind === 'relay' ? `an external chatter ("${name}", bridged in from ${input.platform || 'another platform'})`
+            : input.subject_kind === 'anon' ? `an ANONYMOUS chatter ("${name}", not logged in)` : `an individual chatter ("${name}")`;
+        const noun = input.subject_kind === 'anon' ? 'this anon' : 'this user';
+        const header = input.recent_24h ? `MESSAGES FROM ${noun.toUpperCase()} IN THE LAST 24H` : `${noun.toUpperCase()}'S MOST RECENT MESSAGES`;
+        return { vars: {
+            subject, noun, recent: input.recent_24h === true, seen: input.subject_kind === 'user' && input.seen ? input.seen : 0,
+            prior_memory: String(input.prior_memory || '').slice(0, 1200), messages_header: header, messages: chatLines(input.messages, false),
+        } };
+    },
+    'live.person.overview'(input) {
+        return { vars: { as_streamer: String(input.as_streamer), as_chatter: String(input.as_chatter) } };
+    },
+    'live.stream.titles'(input) {
+        return { vars: { list: input.summaries.map((t, i) => `${i}. ${String(t).replace(/\s+/g, ' ').slice(0, 200)}`).join('\n') } };
+    },
+    'live.moments.rank'(input) {
+        const vods = input.vods || [];
+        const list = vods.map((v, i) => `${i}. [${v.views || 0} views · ${v.clips || 0} clips · peak ${v.peak_viewers || 0}] "${String(v.title || '').replace(/\s+/g, ' ').trim().slice(0, 70)}" — ${String(v.overview || '').replace(/\s+/g, ' ').trim().slice(0, 260) || '(no summary)'}`).join('\n');
+        return { vars: { list, top: Math.min(vods.length, Math.max(input.want || 6, 6)) } };
+    },
     'live.hero.slogans'(input) {
         const block = (list, head, total) => (list || []).map((x) => `- ${String(x.name || '').slice(0, head)}: ${String(x.text || '').replace(/\s+/g, ' ').slice(0, 180)}`).join('\n').slice(0, total);
         return { vars: {
@@ -215,6 +256,39 @@ const PREPARE = {
 };
 
 const POSTPROCESS = {
+    // Global picture or one chatter's profile (the profile's input names its subject_kind); every key the schema asks for.
+    'live.chat.insight'(r, input) {
+        const j = r.json || parseJsonLoose(r.text);
+        if (!j || typeof j !== 'object' || Array.isArray(j)) return null;
+        const keys = input.subject_kind ? ['overview_24h', 'overview_alltime', 'memory'] : ['recent_overview', 'memory'];
+        if (!keys.some((k) => typeof j[k] === 'string' && j[k].trim())) return null;
+        const out = {};
+        for (const k of keys) out[k] = typeof j[k] === 'string' ? j[k].slice(0, 4000) : '';
+        out.timeline = (Array.isArray(j.timeline) ? j.timeline : []).filter((t) => t && t.label).slice(0, 5)
+            .map((t) => ({ label: String(t.label).slice(0, 120), detail: String(t.detail || '').slice(0, 400), mins_ago: Math.max(0, Math.round(Number(t.mins_ago) || 0)) }));
+        return out;
+    },
+    'live.person.overview'(r) {
+        const t = (r.json && typeof r.json.overview === 'string' ? r.json.overview : r.text || '').replace(/^\s*(combined\s+overview|overview)\s*[:\-–]\s*/i, '').trim();
+        return t ? { overview: t.slice(0, 2000) } : null;
+    },
+    'live.stream.titles'(r, input) {
+        const j = r.json || parseJsonLoose(r.text);
+        const arr = Array.isArray(j) ? j : j && Array.isArray(j.titles) ? j.titles : null;
+        if (!arr) return null;
+        const titles = arr.filter((x) => x && Number.isInteger(Number(x.index)) && Number(x.index) >= 0 && Number(x.index) < input.summaries.length && x.title)
+            .map((x) => ({ index: Number(x.index), title: String(x.title).replace(/^["'\s]+|["'\s]+$/g, '').slice(0, 80) }));
+        return { titles };
+    },
+    'live.moments.rank'(r, input) {
+        const j = r.json || parseJsonLoose(r.text);
+        const arr = Array.isArray(j) ? j : j && Array.isArray(j.ranked) ? j.ranked : null;
+        if (!arr) return null;
+        const seen = new Set();
+        const ranked = arr.filter((x) => x && Number.isInteger(Number(x.index)) && input.vods[Number(x.index)] != null && !seen.has(Number(x.index)) && seen.add(Number(x.index)))
+            .map((x) => ({ index: Number(x.index), score: Math.max(0, Math.min(100, Math.round(Number(x.score) || 0))), why: String(x.why || '').replace(/\s+/g, ' ').trim().slice(0, 60) }));
+        return { ranked };
+    },
     'live.hero.slogans'(r) {
         const j = r.json || parseJsonLoose(r.text);
         const list = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string').map((x) => x.slice(0, 200)).slice(0, 60) : []);

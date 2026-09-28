@@ -48,6 +48,11 @@ const EXAMPLES = {
 };
 for (const k of new Set(Object.values(KIND_TO_WORKFLOW).concat('live.complete'))) EXAMPLES[k] = PASS;
 // Moved from passthrough to a versioned template (WS-O task 2): structured input.
+EXAMPLES['live.chat.global'] = { window_label: 'past 3 hours', prior_memory: 'croutons are a running joke', recent_labels: ['the crouton war'], messages: [{ mins_ago: 12, where: 'global', author: 'goosely', kind: null, text: 'croutons are soup confetti' }, { mins_ago: 3, where: '#ann', author: 'bob', kind: 'emote', text: 'waves' }] };
+EXAMPLES['live.chat.profile'] = { subject_kind: 'relay', name: 'KickFan', platform: 'kick', recent_24h: false, seen: 0, prior_memory: '', messages: [{ mins_ago: 2000, author: 'KickFan', text: 'hello from kick' }] };
+EXAMPLES['live.person.overview'] = { as_streamer: 'Codes rust late at night.', as_chatter: 'Jokes about croutons.' };
+EXAMPLES['live.stream.titles'] = { summaries: ['Fixed a borrow checker bug live', 'Built a robot arm and it waved'] };
+EXAMPLES['live.moments.rank'] = { vods: [{ title: 'Rust night', overview: 'the build finally compiles', views: 30, clips: 2, peak_viewers: 5 }, { title: 'Chill', overview: 'sitting at a desk', views: 3, clips: 0, peak_viewers: 1 }], want: 2 };
 EXAMPLES['live.hero.slogans'] = { global: 'Chat argued about croutons all day.', users: [{ name: 'goosely', text: 'always defends croutons' }], streamers: [{ name: 'ann', text: 'codes rust at night' }], vods: [{ name: 'Rust night', text: 'the build finally compiles' }], usernames: ['goosely', 'ann'], count: 20 };
 EXAMPLES['live.easter_egg'] = { vibe: 'croutons' };
 EXAMPLES['live.home.star'] = { recent_stars: ['bob'], previous_star: 'bob', candidates: [{ username: 'ann', name: 'Ann', language: 'en', last_14d: { sessions: 5, hours: 12 } }] };

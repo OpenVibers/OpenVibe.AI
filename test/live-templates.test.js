@@ -71,4 +71,35 @@ t.test('slogans, the daily secret and the star render as Live rendered them', ()
     assert.strictEqual(POSTPROCESS['live.home.star']({ json: { headline: 'x' } }), null);
 });
 
+t.test('chat analysis, person overviews, session titles and VOD ranking render as Live rendered them', () => {
+    const tp = (k) => live.templates.find((x) => x.key === k).user_prompt;
+    const g = render(tp('live.chat.global'), PREPARE['live.chat.global']({ window_label: 'past 3 hours', prior_memory: 'notes', recent_labels: ['a', 'b'], messages: [{ mins_ago: 12, where: 'global', author: 'goosely', text: ' hi ' }, { mins_ago: 3, where: '#ann', author: 'bob', kind: 'emote', text: 'waves' }] }).vars);
+    assert.match(g, /covers roughly the past 3 hours, across/);
+    assert.match(g, /"""notes"""/);
+    assert.match(g, /avoid duplicating these\):\n- a\n- b\n/);
+    assert.match(g, /RECENT CHAT \(2 messages, oldest first\):\n\[12m ago\] \[global\] goosely: hi\n\[3m ago\] \[#ann\] bob: \(emote\) waves$/);
+    const p = (x) => render(tp('live.chat.profile'), PREPARE['live.chat.profile'](x).vars);
+    const user = p({ subject_kind: 'user', name: 'goosely', recent_24h: true, seen: 42, messages: [{ mins_ago: 1, where: 'global', author: 'goosely', text: 'x' }] });
+    assert.match(user, /^You profile an individual chatter \("goosely"\)/);
+    assert.match(user, /"overview_24h": "2-3 sentences on what this user has been chatting about/);
+    assert.match(user, /all-time gist so far; ~42 messages seen previously\)/);
+    assert.match(user, /MESSAGES FROM THIS USER IN THE LAST 24H \(oldest first\):\n\[1m ago\] goosely: x$/, 'no channel tag in a profile');
+    const anon = p({ subject_kind: 'anon', name: 'anon_7', recent_24h: false, seen: 9, messages: [{ author: 'anon_7', text: 'y' }] });
+    assert.match(anon, /an ANONYMOUS chatter \("anon_7", not logged in\)/);
+    assert.match(anon, /They have not chatted in the last 24h; write 1 sentence/);
+    assert.match(anon, /THIS ANON'S MOST RECENT MESSAGES \(oldest first\):\nanon_7: y$/);
+    assert.ok(!/messages seen previously/.test(anon));
+    assert.match(p({ subject_kind: 'relay', name: 'KickFan', platform: 'kick', messages: [{ author: 'KickFan', text: 'z' }] }), /an external chatter \("KickFan", bridged in from kick\)/);
+    const long = PREPARE['live.chat.global']({ messages: Array.from({ length: 300 }, (_, i) => ({ mins_ago: 300 - i, author: 'u', text: 'x'.repeat(200) + i })) }).vars.messages;
+    assert.ok(long.length === 9000 && long.endsWith('x299'), 'the freshest 9000 characters');
+    assert.match(render(tp('live.person.overview'), { as_streamer: 'S', as_chatter: 'C' }), /AS A STREAMER:\nS\n\nAS A CHATTER:\nC$/);
+    assert.match(render(tp('live.stream.titles'), PREPARE['live.stream.titles']({ summaries: ['one  two', 'three'] }).vars), /\n\n0\. one two\n1\. three\n\n/);
+    const rank = render(tp('live.moments.rank'), PREPARE['live.moments.rank']({ vods: [{ title: 'Rust', overview: '', views: 3, clips: 1, peak_viewers: 2 }], want: 8 }).vars);
+    assert.match(rank, /\n\n0\. \[3 views · 1 clips · peak 2\] "Rust" — \(no summary\)\n\n/);
+    assert.match(rank, /for the top 1, best first\.$/);
+    assert.deepStrictEqual(POSTPROCESS['live.moments.rank']({ text: '[{"index": 0, "score": 140, "why": "x"}, {"index": 0, "score": 3}, {"index": 9}]' }, { vods: [{}] }).ranked, [{ index: 0, score: 100, why: 'x' }]);
+    assert.deepStrictEqual(POSTPROCESS['live.chat.insight']({ json: { overview_24h: 'a', timeline: [{ label: 'L', mins_ago: '5' }] } }, { subject_kind: 'user' }), { overview_24h: 'a', overview_alltime: '', memory: '', timeline: [{ label: 'L', detail: '', mins_ago: 5 }] });
+    assert.strictEqual(POSTPROCESS['live.person.overview']({ text: 'Overview: A coder.' }).overview, 'A coder.');
+});
+
 t.run();
