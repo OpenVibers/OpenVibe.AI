@@ -23,7 +23,7 @@ const silent = { log() {}, warn() {}, error(...a) { if (process.env.DEBUG) conso
 
 /**
  * Namespaces fail closed, so test tokens hold every namespace ('*') unless a test says otherwise;
- * `ns: null` leaves the claim out (what Network issues for a grant without namespaces).
+ * `ns: null` leaves the claim out (such a token runs nothing: namespaces fail closed).
  */
 function token(slug, cap, { aud = 'openvibe.ai', ns = ['*'], exp = Math.floor(Date.now() / 1000) + 300, key = privateKey, sub, actorType = 'service', extra = {} } = {}) {
     const now = Math.floor(Date.now() / 1000);

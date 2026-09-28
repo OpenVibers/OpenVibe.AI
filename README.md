@@ -82,11 +82,9 @@ The capability ids and the `ai` service manifest are released in openvibe-contra
 drafts stay in `docs/capabilities-proposal/`); `server/auth.js` checks them with the contracts grant
 rule (exact id or `family.*`). A token's `ns` claim limits which
 workflow namespaces it may run (`live.*`, `wiki.*`, …), and namespaces fail closed: a token with
-no `ns` runs nothing outside a documented fallback. A first-party service token (`svc:<id>`) without
-`ns` gets its `AI_NS_FALLBACK` entry (default `live=live.*|network.site_copy`, because Network grants
-Live's `ai.run.create` with no namespaces), else `<id>.*`; app and module tokens without `ns` get
-nothing. `AI_NS_FALLBACK=none` removes the fallback; `AI_NS_REQUIRED=false` is a rollback lever to
-the old rule (no `ns` = every namespace).
+no `ns` runs nothing. Every caller's Network grant names its namespaces (Live: `live.*`,
+`network.site_copy`, `media.analyze`). The fallback for service tokens without `ns` (`AI_NS_FALLBACK`)
+and its rollback lever (`AI_NS_REQUIRED`) were retired on 2026-09-28 (shims C-22 and C-23).
 
 ## Operator console
 
@@ -199,8 +197,8 @@ stub joins every route as a last resort outside production only (`AI_STUB_FALLBA
      gates only this call, never whole runs.
 
   `overview.source` says which (`local_model`, `paid`, `extractive`), and `gaps` lists what is missing (no local
-  model, no speech-to-text, no budget). The output is not cached: callers keep it. Live may run it by the default
-  `AI_NS_FALLBACK`.
+  model, no speech-to-text, no budget). The output is not cached: callers keep it. Live's grant names
+  `media.analyze`.
 - **Direct operations** — `ai.chat|generate|summarize|classify|extract|enrich|embed`.
 
 ## Local model

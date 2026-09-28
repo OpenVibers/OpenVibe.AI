@@ -5,7 +5,7 @@
  *   media.analyze  local-first analysis of a VOD, clip or audio file (server/workflows/media-analysis.js): FFmpeg
  *                  signals, scenes, local speech-to-text, highlights with their evidence, and an overview from a local
  *                  model, or extractive; a paid provider only when the caller allows it and a budget covers it.
- *                  Media owns media; Live calls it for its VOD and clip overviews (AI_NS_FALLBACK default).
+ *                  Media owns media; Live calls it for its VOD and clip overviews (its grant names media.analyze).
  */
 const { MEDIA_REF } = require('./common-schemas');
 
