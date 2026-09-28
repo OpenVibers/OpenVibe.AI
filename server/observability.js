@@ -32,7 +32,15 @@ function createAiReadiness({ db, registry, pool, keys, runs, release = null }) {
         service: 'ai',
         release,
         checks: [
-            { name: 'db', required: true, check: async () => ((await db.prepare('SELECT COUNT(*) AS n FROM providers').get()).n > 0 ? true : 'the provider registry is empty') },
+            {
+                name: 'db', required: true,
+                // A real round trip that names the store (postgresql / pglite), and the provider registry present.
+                check: async () => {
+                    const r = await db.ready();
+                    if (!r.ok) return r.error;
+                    return (await db.prepare('SELECT COUNT(*) AS n FROM providers').get()).n > 0 ? { ok: true, detail: r.detail } : 'the provider registry is empty';
+                },
+            },
             {
                 name: 'workflows', required: true,
                 check: async () => {
