@@ -120,9 +120,9 @@ t.test('a real run: signals, scenes, highlights with evidence, and the local mod
         assert.match(prompt, /Loudest moments: 0:1[6-8]/);
         assert.strictEqual(local.last.model, 'qwen-test');
         assert.ok(!r.body.run.output.gaps.some((g) => /local model/.test(g)));
+        // Streamed through the loopback reader (the default): nothing was written to disk.
         const work = path.join(h.dir, 'media-tmp');
-        assert.ok(fs.existsSync(work), 'the work directory is beside the database (not a tmpfs /tmp)');
-        assert.deepStrictEqual(fs.readdirSync(work).filter((f) => f.startsWith('openvibe-ai-media-')), [], 'the downloaded file is removed');
+        assert.deepStrictEqual(fs.existsSync(work) ? fs.readdirSync(work).filter((f) => f.startsWith('openvibe-ai-media-')) : [], [], 'nothing downloaded');
     } finally { await h.stop(); await local.close(); }
 });
 
@@ -179,7 +179,7 @@ t.test('too little free disk refuses before downloading', async () => {
     const counting = nodeHttp.createServer((req, res) => { fetched++; res.writeHead(200, { 'Content-Type': 'video/mp4' }); res.end(FIXTURE); });
     await new Promise((r) => counting.listen(0, '127.0.0.1', r));
     const base = `http://127.0.0.1:${counting.address().port}`;
-    const h = await boot({ env: { OV_MEDIA_INTERNAL_URL: base, AI_MEDIA_ANALYSIS_DISK_RESERVE_BYTES: String(1024 ** 5) } });
+    const h = await boot({ env: { OV_MEDIA_INTERNAL_URL: base, AI_MEDIA_ANALYSIS_DISK_RESERVE_BYTES: String(1024 ** 5), AI_MEDIA_STREAM: '0' } });
     try {
         const r = await request(h.base, 'POST', '/api/v1/runs?wait=20000', { tok, body: { workflow: 'media.analyze', input: { media_url: `${base}/fixture.mp4` } } });
         assert.strictEqual(r.body.run.status, 'failed');

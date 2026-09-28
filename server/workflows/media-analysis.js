@@ -184,6 +184,9 @@ function extractive(facts, highlights) {
 }
 
 function createMediaAnalysis({ registry, pool, fetcher, quotas, config = {}, spawnImpl = spawn, log = console }) {
+    // Long recordings are streamed, not downloaded (WS-O task 2): ffmpeg reads them through a loopback reader.
+    let proxy = null;
+    const reader = () => proxy || (proxy = require('../media-proxy').createMediaProxy({ fetcher, log }));
     const ma = config.mediaAnalysis || {};
     const ffmpeg = ma.ffmpeg || 'ffmpeg';
     const ffprobe = ma.ffprobe || 'ffprobe';
@@ -318,8 +321,15 @@ function createMediaAnalysis({ registry, pool, fetcher, quotas, config = {}, spa
 
     async function analyse(stepDef, input, wf, runRow, ctx) {
         const gaps = [];
-        const dir = work();
-        const { file } = await fetcher.loadMediaToFile(input, { signal: ctx.signal, maxBytes: roomFor(dir), timeoutMs: ma.fetchTimeoutMs, dir });
+        const streamed = ma.stream !== false;
+        let file; let handle = null;
+        if (streamed) {
+            handle = await reader().register(fetcher.mediaUrlOf(input));
+            file = handle.url;
+        } else {
+            const dir = work();
+            ({ file } = await fetcher.loadMediaToFile(input, { signal: ctx.signal, maxBytes: roomFor(dir), timeoutMs: ma.fetchTimeoutMs, dir }));
+        }
         try {
             const info = await probe(file, ctx.signal);
             if (!info.video && !info.audio) throw new AiError(422, 'media.unreadable', 'the file has no audio or video stream');
@@ -375,7 +385,8 @@ function createMediaAnalysis({ registry, pool, fetcher, quotas, config = {}, spa
             // The run's provider: the model that wrote the overview, else the speech-to-text engine that ran.
             return { output, exec: ov.exec || sttExec || null, route: ov.route || null };
         } finally {
-            try { fs.unlinkSync(file); } catch { /* */ }
+            if (handle) handle.release();
+            else { try { fs.unlinkSync(file); } catch { /* */ } }
         }
     }
 

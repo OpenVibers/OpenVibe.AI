@@ -135,6 +135,9 @@ function load(env = process.env) {
             sceneThreshold: float(env.AI_MEDIA_SCENE_THRESHOLD, 10),
             // Speech-to-text in windows: each call stays well inside the whisper provider's timeout (10 min).
             sttWindowSec: Math.max(10, int(env.AI_MEDIA_STT_WINDOW_SEC, 600)),
+            // Read the recording where it lies through the loopback reader (server/media-proxy.js), never downloading
+            // it; AI_MEDIA_STREAM=0 downloads it first (then the disk cap applies).
+            stream: bool(env.AI_MEDIA_STREAM, true),
             ffmpeg: env.FFMPEG_BIN || 'ffmpeg',
             ffprobe: env.FFPROBE_BIN || 'ffprobe',
         },

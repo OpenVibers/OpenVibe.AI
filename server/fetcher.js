@@ -157,6 +157,50 @@ function createFetcher(config, { transport = null } = {}) {
         throw new AiError(502, 'source.unavailable', 'too many redirects');
     }
 
+    /**
+     * One upstream response for a media reader (server/media-proxy.js): the same URL rules as fetchUrl, redirects
+     * judged and followed here (the reader never sees them), a Range header passed through, the body left as a stream.
+     * → { res } (an http.IncomingMessage with status 200/206/416), or throws AiError.
+     */
+    async function openStream(raw, { method = 'GET', range = null, signal, timeoutMs = m.timeoutMs } = {}) {
+        let target = judge(raw);
+        for (let hop = 0; hop < 4; hop++) {
+            const res = await new Promise((resolve, reject) => {
+                const { url, internal } = target;
+                const mod = url.protocol === 'https:' ? https : http;
+                const req = mod.request(url, {
+                    method: method === 'HEAD' ? 'HEAD' : 'GET',
+                    headers: { 'User-Agent': 'OpenVibe.AI/0.1 (+https://ai.openvibe.network)', Accept: '*/*', ...(range ? { Range: range } : {}) },
+                    lookup: internal ? undefined : safeLookup,
+                    timeout: timeoutMs,
+                });
+                const onAbort = () => { req.destroy(); reject(new AiError(409, 'run.cancelled', 'cancelled')); };
+                if (signal) { if (signal.aborted) return onAbort(); signal.addEventListener('abort', onAbort, { once: true }); }
+                req.on('timeout', () => { req.destroy(); reject(new AiError(502, 'source.unavailable', 'fetch timed out')); });
+                req.on('error', (err) => reject(err.code === 'EADDRNOTPUBLIC' ? new AiError(422, 'fetch.refused', err.message) : new AiError(502, 'source.unavailable', `fetch failed: ${err.message}`)));
+                req.on('response', (r) => { if (signal) signal.removeEventListener('abort', onAbort); resolve(r); });
+                req.end();
+            });
+            if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+                res.resume();
+                if (hop === 3) throw new AiError(502, 'source.unavailable', 'too many redirects');
+                target = follow(target, new URL(res.headers.location, target.url).toString());
+                continue;
+            }
+            if (![200, 206, 416].includes(res.statusCode)) { res.resume(); throw new AiError(502, 'source.unavailable', `source answered HTTP ${res.statusCode}`); }
+            return { res };
+        }
+        throw new AiError(502, 'source.unavailable', 'too many redirects');
+    }
+
+    /** A media input's URL (media_url, or a MediaRef). */
+    function mediaUrlOf(input) {
+        const url = input.media_url || (input.media ? mediaRefUrl(input.media) : null);
+        if (!url) throw new AiError(422, 'input.invalid', 'media needs media_url or media (MediaRef)');
+        judge(url);
+        return url;
+    }
+
     /** A MediaRef -> the public URL of that object (legacy kinds only for now). */
     function mediaRefUrl(ref) {
         const id = ref && ref.media_id;
@@ -210,7 +254,7 @@ function createFetcher(config, { transport = null } = {}) {
         return { file, url };
     }
 
-    return { judge, follow, fetchUrl, mediaRefUrl, loadImage, loadMediaToFile, hostAllowed: (h) => hostAllowed(h, m.allowHosts) };
+    return { judge, follow, fetchUrl, openStream, mediaUrlOf, mediaRefUrl, loadImage, loadMediaToFile, hostAllowed: (h) => hostAllowed(h, m.allowHosts) };
 }
 
 /** Any image -> downscaled JPEG (sharp, optional). Falls back to the original bytes. */
