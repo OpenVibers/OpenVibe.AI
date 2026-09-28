@@ -71,7 +71,7 @@ t.test('the parser reads every filter\'s lines; loud means well above the typica
 });
 
 t.test('whisper reports the language it detected, not "auto"', async () => {
-    if (!HAS_FFMPEG) return console.log('    (skipped: no ffmpeg/ffprobe)');
+    if (!HAS_FFMPEG) return console.log('media-analysis whisper language: skipped (no ffmpeg/ffprobe)');
     const dir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'ov-ai-whisper-'));
     try {
         const bin = path.join(dir, 'whisper-cli');
@@ -90,7 +90,7 @@ t.test('whisper reports the language it detected, not "auto"', async () => {
 });
 
 t.test('a real run: signals, scenes, highlights with evidence, and the local model\'s overview', async () => {
-    if (!HAS_FFMPEG) return console.log('    (skipped: no ffmpeg/ffprobe)');
+    if (!HAS_FFMPEG) return console.log('media-analysis real run: skipped (no ffmpeg/ffprobe)');
     media = nodeHttp.createServer((req, res) => { res.writeHead(req.url === '/fixture.mp4' ? 200 : 404, { 'Content-Type': 'video/mp4' }); res.end(req.url === '/fixture.mp4' ? FIXTURE : ''); });
     await new Promise((r) => media.listen(0, '127.0.0.1', r));
     mediaBase = `http://127.0.0.1:${media.address().port}`;
@@ -127,7 +127,7 @@ t.test('a real run: signals, scenes, highlights with evidence, and the local mod
 });
 
 t.test('local model down: extractive, and it says so; paid only with allow_paid and a budget, never past it', async () => {
-    if (!HAS_FFMPEG) return console.log('    (skipped: no ffmpeg/ffprobe)');
+    if (!HAS_FFMPEG) return console.log('media-analysis local model down: skipped (no ffmpeg/ffprobe)');
     const local = await seamServer(() => ({ status: 500, body: { error: 'model not loaded' } }));
     const paid = await seamServer(() => completion('Paid overview of the recording.'));
     const h = await boot({ env: {
@@ -174,7 +174,7 @@ t.test('local model down: extractive, and it says so; paid only with allow_paid 
 });
 
 t.test('too little free disk refuses before downloading', async () => {
-    if (!HAS_FFMPEG) return console.log('    (skipped: no ffmpeg/ffprobe)');
+    if (!HAS_FFMPEG) return console.log('media-analysis free disk check: skipped (no ffmpeg/ffprobe)');
     let fetched = 0;
     const counting = nodeHttp.createServer((req, res) => { fetched++; res.writeHead(200, { 'Content-Type': 'video/mp4' }); res.end(FIXTURE); });
     await new Promise((r) => counting.listen(0, '127.0.0.1', r));

@@ -106,7 +106,7 @@ t.test('every workflow has compiling, versioned input and output schemas and an 
 
 t.test('every workflow runs end to end on the stub and returns schema-valid output', async () => {
     for (const w of h.registry.listWorkflows()) {
-        if (w.key === 'media.analyze' && !HAS_FFMPEG) continue;   // test/media-analysis.test.js says so
+        if (w.key === 'media.analyze' && !HAS_FFMPEG) { console.log('workflow media.analyze end to end: skipped (no ffprobe)'); continue; }
         const r = await request(h.base, 'POST', '/api/v1/runs?wait=10000', { tok, body: { workflow: w.key, input: EXAMPLES[w.key] } });
         assert.strictEqual(r.status, 201, `${w.key}: ${r.status} ${r.text.slice(0, 300)}`);
         const run = r.body.run;
