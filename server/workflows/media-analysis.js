@@ -183,10 +183,10 @@ function extractive(facts, highlights) {
     return parts.join(' ').slice(0, 1500);
 }
 
-function createMediaAnalysis({ registry, pool, fetcher, quotas, config = {}, spawnImpl = spawn, log = console }) {
+function createMediaAnalysis({ registry, pool, fetcher, quotas, config = {}, spawnImpl = spawn, log = console, reader: shared = null }) {
     // Long recordings are streamed, not downloaded (WS-O task 2): ffmpeg reads them through a loopback reader.
     let proxy = null;
-    const reader = () => proxy || (proxy = require('../media-proxy').createMediaProxy({ fetcher, log }));
+    const reader = () => (shared && shared()) || proxy || (proxy = require('../media-proxy').createMediaProxy({ fetcher, log }));
     const ma = config.mediaAnalysis || {};
     const ffmpeg = ma.ffmpeg || 'ffmpeg';
     const ffprobe = ma.ffprobe || 'ffprobe';

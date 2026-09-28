@@ -97,7 +97,10 @@ function normMessages(messages, user) {
 }
 
 function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spawnImpl, log = console }) {
-    const mediaAnalysis = require('./media-analysis').createMediaAnalysis({ registry, pool, fetcher, quotas, config, spawnImpl, log });
+    // One loopback reader for everything that streams media (server/media-proxy.js): transcripts and media.analyze.
+    let proxy = null;
+    const reader = () => proxy || (proxy = require('../media-proxy').createMediaProxy({ fetcher, log }));
+    const mediaAnalysis = require('./media-analysis').createMediaAnalysis({ registry, pool, fetcher, quotas, config, spawnImpl, log, reader });
     function routeFor(key) {
         const r = registry.resolveRoute(key);
         if (!r) throw new AiError(503, 'route.unavailable', `no route ${key}`);
@@ -186,13 +189,20 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
 
     async function transcribeStep(step, input, wf, run, ctx) {
         const route = routeFor(step.route || 'live.stt');
-        const { file } = await fetcher.loadMediaToFile(input, { signal: ctx.signal });
+        // Read where it lies (the loopback reader), one window at a time: start_sec seeks with a range request, and
+        // timestamps are offset by start_sec unless offset_sec says otherwise. AI_MEDIA_STREAM=0 downloads first.
+        const streamed = !config.mediaAnalysis || config.mediaAnalysis.stream !== false;
+        const handle = streamed ? await reader().register(fetcher.mediaUrlOf(input)) : null;
+        const file = handle ? handle.url : (await fetcher.loadMediaToFile(input, { signal: ctx.signal })).file;
         try {
-            const exec = await pool.execute(route, 'transcribe', { filePath: file, language: input.language || 'en', seconds: input.seconds || 0, offsetSec: input.offset_sec || 0, timeoutMs: 3600000 }, { ...ctx, routeKey: route.key, routeVersion: route.version, promptHash: null });
+            const startSec = Number(input.start_sec) || 0;
+            const offsetSec = input.offset_sec != null ? Number(input.offset_sec) : startSec;
+            const exec = await pool.execute(route, 'transcribe', { filePath: file, language: input.language || 'en', seconds: input.seconds || 0, startSec, offsetSec, lowPower: input.low_power === true, timeoutMs: 3600000 }, { ...ctx, routeKey: route.key, routeVersion: route.version, promptHash: null });
             const r = exec.result;
             return { output: { text: r.text || '', language: r.language || input.language || 'en', segments: r.segments || [] }, exec, route };
         } finally {
-            try { fs.unlinkSync(file); } catch { /* */ }
+            if (handle) handle.release();
+            else { try { fs.unlinkSync(file); } catch { /* */ } }
         }
     }
 

@@ -536,7 +536,7 @@ const structured = [
     {
         key: 'live.media.transcribe', name: 'Speech-to-text for a VOD, clip or audio file', namespace: 'live',
         description: 'whisper.cpp on this host (Live\'s transcribe.js), media fetched only from allow-listed OpenVibe hosts.',
-        input_schema: TEXT_OUT({ media: MEDIA_REF, media_url: STR(2048), language: LANG, seconds: { type: 'integer', minimum: 0, maximum: 36000 }, offset_sec: { type: 'number', minimum: 0 } }, []),
+        input_schema: TEXT_OUT({ media: MEDIA_REF, media_url: STR(2048), language: LANG, seconds: { type: 'integer', minimum: 0, maximum: 36000 }, start_sec: { type: 'number', minimum: 0 }, offset_sec: { type: 'number', minimum: 0 }, low_power: { type: 'boolean' } }, []),
         output_schema: TEXT_OUT({ text: { type: 'string' }, language: STR(8), segments: { type: 'array', items: { type: 'object', required: ['start', 'end', 'text'], properties: { start: { type: 'number' }, end: { type: 'number' }, text: { type: 'string' } } } } }, ['text', 'segments']),
         steps: [{ kind: 'transcribe', route: 'live.stt' }],
         cache_mode: 'private',

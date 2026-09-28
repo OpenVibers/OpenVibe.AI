@@ -103,11 +103,12 @@ function createWhisperProvider(record, { config }) {
         });
     }
 
-    function decode(wavPath, { language = 'en', live = false, offsetSec = 0, signal, timeoutMs }) {
+    function decode(wavPath, { language = 'en', live = false, lowPower = false, offsetSec = 0, signal, timeoutMs }) {
         return new Promise((resolve, reject) => {
             const lang = language && language !== 'en' && multi() ? String(language) : 'en';
             const model = lang !== 'en' ? multi() : (live && exists(MODEL_LIVE) ? MODEL_LIVE : MODEL);
-            const threads = live ? Math.max(1, Math.min(2, w.threads)) : w.threads;
+            // Live segments, and batch work while the caller says streams are live (low power), use at most 2 threads.
+            const threads = live || lowPower ? Math.max(1, Math.min(2, w.threads)) : w.threads;
             const outBase = `${wavPath}.out`;
             const jsonPath = `${outBase}.json`;
             const args = ['-m', model, '-f', wavPath, '-oj', '-of', outBase, '-t', String(threads), '-l', lang];
@@ -147,7 +148,7 @@ function createWhisperProvider(record, { config }) {
         try {
             await acquire(lane);
             try {
-                const r = await decode(wav, { language: req.language, live: req.live, offsetSec: req.offsetSec || 0, signal: req.signal, timeoutMs });
+                const r = await decode(wav, { language: req.language, live: req.live, lowPower: req.lowPower === true, offsetSec: req.offsetSec || 0, signal: req.signal, timeoutMs });
                 return { ...r, usage: { input: 0, output: 0, cached: 0 } };
             } finally { release(lane); }
         } finally { try { fs.unlinkSync(wav); } catch { /* */ } }
