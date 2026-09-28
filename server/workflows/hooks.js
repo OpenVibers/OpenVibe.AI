@@ -76,6 +76,23 @@ const MOMENT_FLAVOR = {
 const oneLine = (t, max) => String(t || '').replace(/\s+/g, ' ').trim().slice(0, max);
 
 const PREPARE = {
+    'live.hero.slogans'(input) {
+        const block = (list, head, total) => (list || []).map((x) => `- ${String(x.name || '').slice(0, head)}: ${String(x.text || '').replace(/\s+/g, ' ').slice(0, 180)}`).join('\n').slice(0, total);
+        return { vars: {
+            global: String(input.global || '').slice(0, 1800) || '(quiet)',
+            users: block((input.users || []).slice(0, 8), 64, 1600) || '(none yet)',
+            streamers: block((input.streamers || []).slice(0, 8), 64, 1400) || '(none yet)',
+            vods: (input.vods || []).slice(0, 10).map((v) => `- ${String(v.name || '').slice(0, 60)}: ${String(v.text || '').replace(/\s+/g, ' ').slice(0, 140)}`).join('\n').slice(0, 1400) || '(none yet)',
+            usernames: (input.usernames || []).join(', ') || '(none yet)',
+            target: input.count || 20,
+        } };
+    },
+    'live.easter_egg'(input) {
+        return { vars: { vibe: String(input.vibe || '').slice(0, 400) } };
+    },
+    'live.home.star'(input) {
+        return { vars: { payload: { recent_stars: input.recent_stars || [], previous_star: input.previous_star || null, candidates: input.candidates } } };
+    },
     // The Arena judges send what Live sent before, as one JSON object, in the same order.
     'live.arena.judge_beef'(input) {
         return { vars: { payload: {
@@ -198,6 +215,23 @@ const PREPARE = {
 };
 
 const POSTPROCESS = {
+    'live.hero.slogans'(r) {
+        const j = r.json || parseJsonLoose(r.text);
+        const list = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string').map((x) => x.slice(0, 200)).slice(0, 60) : []);
+        if (!j || (!list(j.audiences).length && !list(j.quips).length)) return null;
+        return { audiences: list(j.audiences), quips: list(j.quips) };
+    },
+    'live.easter_egg'(r) {
+        const j = r.json || parseJsonLoose(r.text);
+        if (!j || !Array.isArray(j.code) || !j.code.length) return null;
+        const strs = (v) => (Array.isArray(v) ? v.map((x) => String(x)).slice(0, 12) : []);
+        return { title: String(j.title || '').slice(0, 80), code: strs(j.code), clues: strs(j.clues || j.hints).map((c) => c.slice(0, 200)), effect: ['confetti', 'fireworks', 'matrix', 'rainbow', 'shake'].includes(j.effect) ? j.effect : 'confetti', reward: String(j.reward || '').slice(0, 300) };
+    },
+    'live.home.star'(r) {
+        const j = r.json || parseJsonLoose(r.text);
+        if (!j || !j.username) return null;
+        return { username: String(j.username).slice(0, 64), headline: String(j.headline || '').trim().slice(0, 60), reason: String(j.reason || '').trim().slice(0, 170) };
+    },
     // A judgement without a numeric quality is no answer (Live then uses its own heuristic).
     'live.arena.judge'(r) {
         const j = r.json || parseJsonLoose(r.text);

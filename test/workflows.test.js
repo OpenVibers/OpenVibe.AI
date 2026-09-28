@@ -48,6 +48,9 @@ const EXAMPLES = {
 };
 for (const k of new Set(Object.values(KIND_TO_WORKFLOW).concat('live.complete'))) EXAMPLES[k] = PASS;
 // Moved from passthrough to a versioned template (WS-O task 2): structured input.
+EXAMPLES['live.hero.slogans'] = { global: 'Chat argued about croutons all day.', users: [{ name: 'goosely', text: 'always defends croutons' }], streamers: [{ name: 'ann', text: 'codes rust at night' }], vods: [{ name: 'Rust night', text: 'the build finally compiles' }], usernames: ['goosely', 'ann'], count: 20 };
+EXAMPLES['live.easter_egg'] = { vibe: 'croutons' };
+EXAMPLES['live.home.star'] = { recent_stars: ['bob'], previous_star: 'bob', candidates: [{ username: 'ann', name: 'Ann', language: 'en', last_14d: { sessions: 5, hours: 12 } }] };
 EXAMPLES['live.arena.judge_beef'] = { target_names: ['ann', 'Ann the Great'], target_as_transcribed: ['ann', 'an'], target_named_in_new_speech: true, how_the_name_was_matched: 'exact', what_speaker_already_said_about_target: null, new_speech: 'ann your stream is so boring even your bots left chat' };
 EXAMPLES['live.arena.judge_mic'] = { speech: 'chat you guys are the worst mods I have ever seen in my life' };
 EXAMPLES['live.moments.pick'] = { title: 'Rust night', flavor: 'clip', timeline: [{ t: 12, text: 'the build fails' }, { t: 95, text: 'streamer jumps up cheering' }], transcript: [{ t: 94, text: 'IT COMPILES' }], sounds: [{ t: 96, label: 'Cheering' }], clipped: [95], spikes: [96], avoid: [300] };

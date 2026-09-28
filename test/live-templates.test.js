@@ -54,4 +54,21 @@ t.test('the Arena judges send what Live sent', () => {
     assert.strictEqual(post({ json: { is_trash_talk: true, quality: 14.6 } }).quality, 10);
 });
 
+t.test('slogans, the daily secret and the star render as Live rendered them', () => {
+    const tp = (k) => live.templates.find((x) => x.key === k);
+    const sl = render(tp('live.hero.slogans').user_prompt, PREPARE['live.hero.slogans']({ users: [{ name: 'goosely', text: 'loves   croutons' }], usernames: ['goosely'], count: 20 }).vars);
+    assert.match(sl, /=== GLOBAL CHAT VIBE \(overview \+ memory \+ timeline\) ===\n\(quiet\)/);
+    assert.match(sl, /PER-USER CHAT ANALYSIS \(running jokes \/ personalities\) ===\n- goosely: loves croutons/);
+    assert.match(sl, /STREAMERS \(what they stream\) ===\n\(none yet\)/);
+    assert.match(sl, /"audiences": \[ 20 noun phrases/);
+    assert.ok(!/\{\{|\$\{/.test(sl), 'nothing left unrendered');
+    const egg = tp('live.easter_egg').user_prompt;
+    assert.match(render(egg, PREPARE['live.easter_egg']({ vibe: 'croutons' }).vars), /site\.\nToday's community vibe \(for flavour only\): croutons\nReturn STRICT JSON/);
+    assert.match(render(egg, PREPARE['live.easter_egg']({}).vars), /site\.\nReturn STRICT JSON/, 'no vibe line without a vibe');
+    const star = { recent_stars: ['bob'], previous_star: null, candidates: [{ username: 'ann' }] };
+    assert.strictEqual(render(tp('live.home.star').user_prompt, PREPARE['live.home.star'](star).vars), JSON.stringify(star));
+    assert.deepStrictEqual(POSTPROCESS['live.easter_egg']({ json: { title: 'T', code: ['up', 'g'], clues: ['sky', "'goose'"], effect: 'lava', reward: 'yay' } }).effect, 'confetti');
+    assert.strictEqual(POSTPROCESS['live.home.star']({ json: { headline: 'x' } }), null);
+});
+
 t.run();
