@@ -10,10 +10,52 @@ page until the launch rule below is met.
 **Plan:** OpenVibe End-to-End Realignment & Implementation Plan, revision 3 (20 Sep 2026), §12.1, §12.13, §15.14, §33, §34.
 **License:** AGPL-3.0 (same as every OpenVibe service).
 
+## Purpose
+
 The reusable AI authority extracted from OpenVibe.Live. Products run registered, versioned
 workflows; every run returns a **draft/evidence package** (structured output + citations +
 provenance) attributed to a workflow, its version, a model and a run id — never to a person. AI never
 owns publication truth: Wiki, Blog, News, Live, … decide what to publish.
+
+## Owns
+
+- the eleven record groups ([below](#the-eleven-record-groups)): providers, models, routing profiles,
+  prompt templates, workflow definitions, runs, the request log (hashes, not prompts), citations, the
+  cache, quotas and usage, and the audit log, in AI's own SQLite
+- people's own provider keys (`ai.credential.manage`), encrypted at rest, and per-streamer
+  attribution quotas (`ai.quota.attribution.manage`)
+- the `ai.run.queued|succeeded|failed|cached` events and the `ai.preferences` / `ai.usage_summary`
+  user modules' AI side
+
+## Does not own
+
+- publication: every run is a draft/evidence package; Wiki, Blog, News, Live and the rest decide what is
+  published
+- the recordings it analyses (OpenVibe.Media), identity (OpenVibe.Network), the products' prompts'
+  meaning (each workflow's owner)
+
+## Depends on
+
+- OpenVibe.Network (JWKS, service tokens, SSO for the operator console, user modules)
+- OpenVibe.Events (the `ai.run.*` outbox relay; off without `EVENTS_URL`)
+- OpenVibe.Media (recordings `media.analyze` reads, over allow-listed https URLs or signed URLs)
+- provider APIs configured by the operator (OpenAI-compatible, Anthropic, the HTTP seam), whisper.cpp
+  and the local model server `openvibe-llm.service` on this host
+- `openvibe-contracts` v0.75.0, `openvibe-sdk` v0.11.0 (service tokens, events outbox),
+  `openvibe-shared` v1.22.0, pinned by release tarball
+
+## Capabilities
+
+Implemented here (the service manifest's `capabilities`, audience `openvibe.ai`; routes under
+[API](#api)): `ai.run.create`, `ai.run.read`, `ai.workflow.manage`, `ai.provider.manage`,
+`ai.usage.read`, `ai.credential.manage` (`/api/v1/credentials/:subject`) and
+`ai.quota.attribution.manage` (per-streamer quotas). A token's `ns` claim limits which workflow
+namespaces it may run.
+
+Called elsewhere, as the service principal `ai`: `events.event.publish` (Events, the outbox relay)
+and `network.modules.read` / `network.modules.write` for `ai.preferences` and `ai.usage_summary`
+(Network). Other services grant `ai` their own draft capabilities (for example
+`blog.post.create`, `news.story.revise`, `reviews.summary.propose`) to receive drafts.
 
 ## Run it
 
@@ -212,7 +254,9 @@ streams always win: 2 threads, at most 1.5 CPUs, nice 19, 3 GB. It uses about 0.
 28 tokens/s. Without it, `media.analyze` writes an extractive overview and says so. To swap the model, put the
 file beside it, change `--model`/`--alias` and `AI_LOCAL_LLM_MODEL`, and restart both units.
 
-## Guarantees and where they are tested
+## Acceptance: guarantees and where they are tested
+
+`npm test` runs every `test/*.test.js` with the stub provider, temp databases and local servers only.
 
 | Guarantee | Test |
 |---|---|
@@ -232,6 +276,25 @@ file beside it, change `--model`/`--alias` and `AI_LOCAL_LLM_MODEL`, and restart
 | Import from a Live snapshot: dry run, holds, idempotent re-run | `test/import.test.js` |
 | Capability proposals are valid contracts documents matching what is enforced | `test/proposals.test.js` |
 
+## Security
+
+Reporting a vulnerability: [SECURITY.md](SECURITY.md). The rules the code keeps:
+
+- **Auth.** Every API route needs a Network service token for audience `openvibe.ai`, with the route's
+  capability and, for runs, a namespace its `ns` claim allows. Runs are private to their requester.
+  The operator console is Network staff only, signed in with SSO and PKCE, with CSRF on every write.
+- **Secrets.** Shared provider keys are `env:NAME` references, never values; a person's own key is
+  AES-256-GCM encrypted with `AI_CREDENTIALS_KEY`, bound to its owner and subject, and never returned
+  (a four-character hint only). No response, log or console page carries a secret value.
+- **Private data.** The request log keeps hashes, not prompts; raw prompts and inline images are not
+  kept; the cache never crosses requester, actor, target or attribution; `history: false` keeps
+  neither input nor cache entry.
+- **Egress.** Provider calls go only to configured providers. Media is fetched only from allow-listed
+  https OpenVibe hosts, with every DNS answer and redirect hop re-checked and size caps
+  (`test/ssrf.test.js`); ffmpeg reads through a loopback proxy that applies the same rules.
+- **Abuse.** Quotas refuse with 429 before any provider call; queue caps per caller and overall.
+  `/metrics` answers direct loopback callers only.
+
 ## Live and Network
 
 `docs/live-patch.diff` added `AI_SERVICE=remote` to Live (deployed as Live `fa22de5`; production runs
@@ -246,6 +309,14 @@ and rollback are in `docs/migration.md`.
 
 ## Deploy
 
+Production deploys with `sudo ovhost deploy ai` on the host (strategy `git-checkout`: fetch,
+fast-forward `/opt/openvibe.ai`, install on a lockfile change, restart, wait for `/api/ready`).
+The unit is `openvibe-ai.service` on `127.0.0.1:4700`, the env file `/etc/openvibe/ai.env`. The local model
+runs as `openvibe-llm.service` on 127.0.0.1:8090 ([Local model](#local-model)).
+Rollback: ovhost puts the previous sha back by itself when `/api/ready` does not answer 2xx after the
+restart; afterwards `sudo ovhost rollback ai --to <sha>`. Nothing blocks a rollback: the schema
+code only adds tables and columns.
+
 Deployed: `/opt/openvibe.ai`, env `/etc/openvibe/ai.env` (0600), unit `deploy/systemd/openvibe-ai.service`
 (`StateDirectory=openvibe-ai`, database `/var/lib/openvibe-ai/ai.db`), principal `ai`. The nginx vhost
 `deploy/nginx/ai.openvibe.network.conf` (health/ready, `/`, `/robots.txt`, the operator console
@@ -257,9 +328,9 @@ Deployed: `/opt/openvibe.ai`, env `/etc/openvibe/ai.env` (0600), unit `deploy/sy
 
 ## Not done yet
 
-- `ai.run.*` events to OpenVibe.Events (and their schemas in Contracts); per-actor (BYO) provider
-  secrets; Live's VOD and clip overviews calling `media.analyze` instead of extracting frames and transcribing
-  themselves; moving the passthrough prompts into AI templates;
+- Live's VOD and clip overviews calling `media.analyze` instead of extracting frames and transcribing
+  themselves; moving the remaining passthrough prompts into AI templates (most `live.*` workflows are
+  versioned templates since 2026-09-27);
   removing Network's fallback to Live's `/internal/ai/site-copy`; a public server-rendered status page.
 - The operator console is built but not reachable yet: it needs the vhost below installed (which
   replaces the Sites placeholder), `https://ai.openvibe.network/auth/callback` listed as a redirect URI
@@ -267,7 +338,8 @@ Deployed: `/opt/openvibe.ai`, env `/etc/openvibe/ai.env` (0600), unit `deploy/sy
 - Import holds from the 2026-09-23 run: a streamer's own provider key stays in Live, and 3,021 Live
   translations cannot become cache entries (they have no source text) and stay in Live.
 - No fallback is declared on any production route, so an outage of the one real provider fails every
-  Live AI feature; `live.*` and `network.site_copy` outputs carry no citations or gaps (0 citation rows).
+  Live AI feature. On 2026-09-23 `live.*` and `network.site_copy` outputs carried no citations or gaps
+  (0 citation rows); runs record grounding (cited sources and named gaps) since 2026-09-25.
 - The host has a backup of `ai.db` but no restore drill has run for it; `/metrics` is built but not
   deployed yet.
 
