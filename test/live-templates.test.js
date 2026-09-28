@@ -117,4 +117,20 @@ t.test('Arena persona, quotes, headline and clip confirmation render as Live ren
     assert.deepStrictEqual(POSTPROCESS['live.clips.confirm']({ text: '{"clip": "yes", "title": " A  B "}' }), { clip: false, title: 'A B', desc: '' });
 });
 
+t.test('the AI viewers render as Live rendered them', () => {
+    const tp = (k) => live.templates.find((x) => x.key === k);
+    const plan = tp('live.viewers.plan');
+    assert.match(render(plan.system_prompt, PREPARE['live.viewers.plan']({ stable: 'STABLE', volatile: 'V' }).vars), /^You are the DIRECTOR of a cast of AI viewers[\s\S]*return skip=true with an empty lines array\.\n\nSTABLE$/);
+    assert.strictEqual(render(plan.user_prompt, PREPARE['live.viewers.plan']({ stable: 'S', volatile: 'VOL', max_lines: 4 }).vars), 'VOL\n\nPlan the next pass now (at most 4 lines). Return JSON only.');
+    assert.strictEqual(PREPARE['live.viewers.plan']({ stable: 'S', volatile: 'V', max_lines: 4 }).params.max_tokens, 400);
+    assert.strictEqual(render(tp('live.viewers.reply').user_prompt, PREPARE['live.viewers.reply']({ stable: 'S', situation: 'SIT', bot: 'goosebot', streamer_line: 'hi chat', max_words: 12 }).vars), 'SIT\n\nThe streamer just said: "hi chat"\n\nWrite ONE chat line as goosebot answering the streamer directly and specifically (max 12 words, plain text, in character). Return only the line.');
+    const fold = PREPARE['live.viewers.fold']({ personas: [{ username: 'goosebot', lines: ['a', 'b  c'] }] });
+    assert.strictEqual(render(tp('live.viewers.fold').user_prompt, fold.vars), 'You maintain the memories of AI chat personas for one streaming channel.\n\n### goosebot\nCurrent memory: (none)\nRecent lines:\n- a\n- b c\n\nFor each persona, write an updated memory: a tight paragraph (max 90 words) of durable facts — running jokes, who they talk to, opinions they formed, recurring topics. Keep the useful old stuff, drop the trivial. Also update the channel memory (running bits everyone shares).');
+    assert.strictEqual(fold.params.max_tokens, 320);
+    const clone = render(tp('live.viewers.clone').user_prompt, PREPARE['live.viewers.clone']({ name: 'bob', samples: ['W', 'LETS GO'] }).vars);
+    assert.strictEqual(clone, 'You are profiling a chat viewer named "bob" so an AI can role-play as them.\n\nSample messages they\'ve sent:\n- W\n- LETS GO\n\nWrite a tight 2-3 sentence character brief capturing their vibe, interests, and how they type (tone, casing, slang, length). Second person ("You are ..."). No preamble.');
+    const p = POSTPROCESS['live.viewers.plan']({ json: { skip: true, notes: 'n', lines: [{ bot: 'goosebot', target: 'weird', text: 'honk', delay_ms: 99999 }, { text: 'no bot' }], threads_close: [3] } });
+    assert.deepStrictEqual([p.skip, p.lines.length, p.lines[0].target, p.lines[0].delay_ms, p.threads_close], [false, 1, 'ambient', 45000, ['3']]);
+});
+
 t.run();

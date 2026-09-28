@@ -48,6 +48,10 @@ const EXAMPLES = {
 };
 for (const k of new Set(Object.values(KIND_TO_WORKFLOW).concat('live.complete'))) EXAMPLES[k] = PASS;
 // Moved from passthrough to a versioned template (WS-O task 2): structured input.
+EXAMPLES['live.viewers.plan'] = { stable: 'Stream: Rust night by ann. Roster: goosebot (a goose who loves croutons), bytebot (a pedantic compiler).', volatile: 'Transcript [1:34] it compiles!\nChat: bob: LETS GO', max_lines: 2, temperature: 0.9 };
+EXAMPLES['live.viewers.reply'] = { stable: 'Stream: Rust night by ann. Roster: goosebot.', situation: 'ann is celebrating a build.', bot: 'goosebot', streamer_line: 'goosebot what do you think', max_words: 18 };
+EXAMPLES['live.viewers.fold'] = { channel_memory: 'croutons', personas: [{ username: 'goosebot', memory: '', lines: ['honk', 'croutons are soup confetti', 'compile faster'] }] };
+EXAMPLES['live.viewers.clone'] = { name: 'bob', overview: 'Hypes every build.', memory: '', samples: ['LETS GO', 'W'] };
 EXAMPLES['live.arena.persona'] = { facts: { name: 'Ann', handle: 'ann', category: 'desktop', ratings: { heat: 70 }, things_they_said_on_stream: ['this borrow checker hates me'], roster_rivals: ['bob'] } };
 EXAMPLES['live.arena.quotes'] = { lines: ['this borrow checker hates me and I hate it back', 'chat you are all backseat compilers', 'I have never been this cooked'] };
 EXAMPLES['live.arena.headline'] = { kind: 'open', a: 'ann', b: 'bob', line: 'bob streams to his own alt accounts', rematch: false };

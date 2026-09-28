@@ -138,9 +138,12 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
      * request-log row per attempt under provider_key byo:<owner>:<subject>, priced by the model's list price.
      */
     async function executeWithCredential(cred, operation, req, ctx = {}) {
-        if (operation !== 'chat') throw new AiError(422, 'credential.unsupported', `a person's own key is used for chat only, not ${operation}`);
+        // Text operations are all chat completions on the person's provider (templated workflows use generate).
+        if (!['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich'].includes(operation)) throw new AiError(422, 'credential.unsupported', `a person's own key is used for text only, not ${operation}`);
         const guardedFetch = credentialFetch || require('./guarded-fetch').guardedFetch;
-        const role = ctx.role && cred.models[ctx.role] ? ctx.role : null;
+        // The person's model for this role: the run's input.role, else the Live role its route names (live.director).
+        const wanted = ctx.role || ((/^live\.(chat|vision|director|summary|legacy)$/.exec(ctx.routeKey || '') || [])[1]) || null;
+        const role = wanted && cred.models[wanted] ? wanted : null;
         const model = (req.image && cred.models.vision) || (role && cred.models[role]) || cred.models.chat || (cred.provider === 'anthropic' ? 'claude-haiku-4-5-20251001' : 'gpt-4o-mini');
         const record = { key: cred.providerKey, kind: cred.provider, base_url: cred.base_url, capabilities: ['chat', 'json', 'vision'], timeout_ms: 60000 };
         const a = cred.provider === 'anthropic' ? createAnthropicProvider(record, { apiKey: cred.apiKey, fetchImpl: guardedFetch }) : createOpenAiProvider(record, { apiKey: cred.apiKey, fetchImpl: guardedFetch });

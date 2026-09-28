@@ -87,6 +87,16 @@ t.test('a run with the credential uses that key only, uncached, and its budget s
     assert.deepStrictEqual([r.status, r.body.code], [404, 'credential.not_found']);
 });
 
+t.test("a templated workflow on a person's key uses their model for the route's role", async () => {
+    const EVE = 'usr_01JAB2C3D4E5F6G7H8J9K0MNP2';
+    let r = await request(h.base, 'PUT', `/api/v1/credentials/${EVE}`, { tok: live, body: { provider: 'openai', base_url: 'https://llm.example.com/v1', api_key: 'sk-test-dana-0123456789WXYZ', models: { chat: 'm-chat', director: 'm-director' } } });
+    assert.strictEqual(r.status, 200, r.text);
+    r = await request(h.base, 'POST', '/api/v1/runs?wait=5000', { tok: live, body: { workflow: 'live.viewers.plan', input: { stable: 'roster', volatile: 'chat', max_lines: 2 }, credential: { subject: EVE } } });
+    assert.strictEqual(r.body.run.status, 'succeeded', JSON.stringify(r.body.run.error || r.body.run).slice(0, 400));
+    assert.strictEqual(calls[calls.length - 1].body.model, 'm-director', 'live.director -> the director model');
+    await request(h.base, 'DELETE', `/api/v1/credentials/${EVE}`, { tok: live });
+});
+
 t.test('the guarded fetch reaches only public https endpoints', async () => {
     for (const [url, why] of [['http://example.com/v1', 'https only'], ['https://127.0.0.1/v1', 'IP literal'], ['https://user:pw@example.com/v1', 'credentials in URL'], ['https://localhost:9/v1', 'resolves to loopback']]) {
         await assert.rejects(guardedFetch(url, { method: 'POST', headers: {}, body: '{}' }), (e) => e.code === 'EADDRNOTPUBLIC', why);

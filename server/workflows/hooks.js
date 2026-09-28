@@ -87,6 +87,22 @@ function chatLines(messages, withWhere) {
 }
 
 const PREPARE = {
+    // AI viewers (viewers/*.js). Live builds the stream context; the rules and the asks live here.
+    'live.viewers.plan'(input) {
+        const n = input.max_lines || 3;
+        return { vars: { stable: input.stable, volatile: input.volatile, max_lines: n }, params: { max_tokens: 70 * n + 120 } };
+    },
+    'live.viewers.reply'(input) {
+        return { vars: { stable: input.stable, situation: input.situation || '', bot: input.bot, streamer_line: input.streamer_line, max_words: input.max_words || 18 } };
+    },
+    'live.viewers.fold'(input) {
+        const clip = (t, n) => String(t || '').replace(/\s+/g, ' ').trim().slice(0, n);
+        const personas = input.personas.map((p) => `### ${p.username}\nCurrent memory: ${p.memory ? clip(p.memory, 700) : '(none)'}\nRecent lines:\n- ${(p.lines || []).map((l) => clip(l, 160)).join('\n- ')}`).join('\n\n');
+        return { vars: { channel_memory: clip(input.channel_memory, 600), personas }, params: { max_tokens: 160 * input.personas.length + 160 } };
+    },
+    'live.viewers.clone'(input) {
+        return { vars: { name: input.name, overview: input.overview || '', memory: input.memory || '', samples: (input.samples || []).length ? `- ${input.samples.join('\n- ')}` : '' } };
+    },
     'live.arena.persona'(input) {
         return { vars: { facts: input.facts } };
     },
@@ -280,6 +296,28 @@ const PREPARE = {
 };
 
 const POSTPROCESS = {
+    'live.viewers.plan'(r) {
+        const p = r.json || parseJsonLoose(r.text) || { skip: true, lines: [] };
+        const str = (v) => (v == null ? null : String(v));
+        const lines = (Array.isArray(p.lines) ? p.lines : []).filter((l) => l && typeof l === 'object' && typeof l.text === 'string' && l.bot).slice(0, 12).map((l) => ({
+            bot: String(l.bot).slice(0, 80), target: ['viewer', 'bot', 'streamer', 'ambient'].includes(l.target) ? l.target : 'ambient', reply_to: str(l.reply_to), thread: str(l.thread), topic: str(l.topic),
+            delay_ms: Math.max(0, Math.min(45000, Math.round(Number(l.delay_ms) || 0))), text: l.text.slice(0, 500), reason: String(l.reason || '').slice(0, 120),
+        }));
+        return { skip: !!p.skip && !lines.length, notes: String(p.notes || '').slice(0, 200), lines, threads_close: Array.isArray(p.threads_close) ? p.threads_close.map(String).slice(0, 20) : [] };
+    },
+    'live.viewers.reply'(r) {
+        const t = String(r.text || '').trim();
+        return t ? { text: t.slice(0, 500) } : null;
+    },
+    'live.viewers.fold'(r) {
+        const j = r.json || parseJsonLoose(r.text);
+        if (!j || !Array.isArray(j.memories)) return null;
+        return { memories: j.memories.filter((m) => m && m.bot).map((m) => ({ bot: String(m.bot).slice(0, 80), memory: String(m.memory || '').slice(0, 2000) })), channel_memory: String(j.channel_memory || '').slice(0, 2000) };
+    },
+    'live.viewers.clone'(r) {
+        const t = String(r.text || '').trim();
+        return t ? { text: t.slice(0, 1000) } : null;
+    },
     'live.arena.persona'(r) {
         const j = r.json || parseJsonLoose(r.text);
         return j && typeof j === 'object' && j.fighter_name ? j : null;
