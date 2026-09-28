@@ -82,8 +82,13 @@ function createCredentials({ db, config, clock = { now: () => Date.now() } }) {
         const v = validate('ai.credential-put@1', body);
         if (!v.valid) throw new AiError(422, 'input.invalid', 'body does not match ai.credential-put@1', { errors: v.errors });
         const at = iso(clock.now());
-        const key = String(body.api_key);
         const prev = row(owner, subject);
+        // The stored key stays for a change of models or budget; a new provider or endpoint needs the key again.
+        const sameEndpoint = prev && prev.provider === body.provider && (prev.base_url || null) === (body.base_url || null);
+        if (body.api_key == null && !sameEndpoint) {
+            throw new AiError(400, 'credential.key_required', prev ? 'enter the key again to change the provider or its address' : 'api_key is required the first time');
+        }
+        const key = body.api_key != null ? String(body.api_key) : open(prev.key_enc, `${owner}|${subject}`);
         db.prepare(`INSERT INTO subject_credentials (owner, subject, provider, base_url, key_enc, key_hint, models, budget_usd_day, created_at, updated_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(owner, subject) DO UPDATE SET provider = excluded.provider, base_url = excluded.base_url, key_enc = excluded.key_enc,

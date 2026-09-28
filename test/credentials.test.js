@@ -42,6 +42,11 @@ t.test('store, read without the key, refuse other services', async () => {
     assert.ok(validate('ai.credential@1', r.body).valid, JSON.stringify(validate('ai.credential@1', r.body).errors));
     const row = h.db.prepare('SELECT key_enc FROM subject_credentials WHERE owner = ? AND subject = ?').get('live', DANA);
     assert.ok(row.key_enc.startsWith('v1:') && !row.key_enc.includes(API_KEY), 'encrypted at rest');
+    // A models change keeps the stored key; a new endpoint needs it again.
+    r = await request(h.base, 'PUT', `/api/v1/credentials/${DANA}`, { tok: live, body: { provider: 'openai', base_url: 'https://llm.example.com/v1', models: { chat: 'gpt-4o-mini', vision: 'gpt-4o' }, budget_usd_per_day: 0.003 } });
+    assert.deepStrictEqual([r.status, r.body.key_hint, r.body.models.vision], [200, '…WXYZ', 'gpt-4o']);
+    r = await request(h.base, 'PUT', `/api/v1/credentials/${DANA}`, { tok: live, body: { provider: 'openai', base_url: 'https://attacker.example/v1' } });
+    assert.deepStrictEqual([r.status, r.body.code], [400, 'credential.key_required']);
     r = await request(h.base, 'GET', `/api/v1/credentials/${DANA}`, { tok: tools });
     assert.strictEqual(r.status, 404, 'another service does not see it');
     // A row moved to another owner does not decrypt: the key is bound to owner and subject.
