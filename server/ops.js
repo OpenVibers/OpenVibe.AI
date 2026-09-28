@@ -19,7 +19,7 @@ function createOps({ db, registry, pool, quotas, cache, runs }) {
     async function status() {
         const counts = Object.fromEntries((await db.prepare('SELECT status, COUNT(*) n FROM runs GROUP BY status').all()).map(x => [x.status, x.n]));
         const today = new Date().toISOString().slice(0, 10);
-        const spend = await db.prepare('SELECT COALESCE(SUM(cost_usd),0) cost, COALESCE(SUM(requests),0) requests FROM usage_daily WHERE day = ?').get(today);
+        const spend = await db.prepare('SELECT COALESCE(SUM(cost_usd),0) cost, COALESCE(SUM(requests),0)::bigint requests FROM usage_daily WHERE day = ?').get(today);
         return {
             providers: (await Promise.all((await registry.listProviders()).map(async p => ({ key: p.key, kind: p.kind, status: p.status, credentials: (await providerView(p)).credentials, health: (await pool.health(p.key)).state })))),
             runs: counts, today: { day: today, requests: spend.requests, cost_usd: spend.cost },

@@ -73,7 +73,7 @@ function createUserModules({ db, config, env = process.env, fetchImpl = globalTh
     /** ai.usage_summary for one person over the 30 days before now, or null when there were no runs. */
     async function summarize(subject, now = clock.now()) {
         const since = new Date(now - 30 * DAY_MS).toISOString();
-        const rows = await db.prepare(`SELECT COALESCE(source_service, requester_id) AS svc, COUNT(*) AS n, SUM(tokens_in + tokens_out) AS tokens, MAX(created_at) AS last
+        const rows = await db.prepare(`SELECT COALESCE(source_service, requester_id) AS svc, COUNT(*) AS n, COALESCE(SUM(tokens_in + tokens_out), 0)::bigint AS tokens, MAX(created_at) AS last
             FROM runs WHERE (on_behalf_of::jsonb ->> 'type') = 'user' AND (on_behalf_of::jsonb ->> 'id') = ? AND created_at >= ?
             GROUP BY svc`).all(subject, since);
         const lastEver = (await db.prepare("SELECT MAX(created_at) AS last FROM runs WHERE (on_behalf_of::jsonb ->> 'type') = 'user' AND (on_behalf_of::jsonb ->> 'id') = ?").get(subject)).last;

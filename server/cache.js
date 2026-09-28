@@ -45,7 +45,7 @@ function createCache(db, { clock = { now: () => Date.now() } } = {}) {
     }
 
     async function stats() {
-        return await db.prepare('SELECT workflow_key, privacy, COUNT(*) AS entries, SUM(hits) AS hits FROM cache_entries WHERE expires_at > ? GROUP BY workflow_key, privacy ORDER BY entries DESC').all(clock.now());
+        return await db.prepare('SELECT workflow_key, privacy, COUNT(*) AS entries, COALESCE(SUM(hits), 0)::bigint AS hits FROM cache_entries WHERE expires_at > ? GROUP BY workflow_key, privacy ORDER BY entries DESC').all(clock.now());
     }
 
     async function purge({ workflow } = {}) {
