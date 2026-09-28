@@ -12,8 +12,8 @@ const tools = token('tools', ['ai.run.create', 'ai.run.read']);
 let h;
 let seam;
 
-const runCount = () => h.db.prepare('SELECT COUNT(*) n FROM runs').get().n;
-const gen = (tok, prompt, extra = {}) => request(h.base, 'POST', '/api/v1/generate', { tok, body: { prompt, options: { cache: false }, ...extra } });
+const runCount = async () => (await h.db.prepare('SELECT COUNT(*) n FROM runs').get()).n;
+const gen = async (tok, prompt, extra = {}) => await request(h.base, 'POST', '/api/v1/generate', { tok, body: { prompt, options: { cache: false }, ...extra } });
 
 t.test('boot with a counting seam provider as the only route target', async () => {
     seam = await seamServer(() => ({ text: 'ok', usage: { input: 1000, output: 1000 } }));
@@ -27,7 +27,7 @@ t.test('boot with a counting seam provider as the only route target', async () =
 t.test('the per-service rate refuses the 4th request with 429 before the provider is called', async () => {
     for (let i = 0; i < 3; i++) assert.strictEqual((await gen(live, `p${i}`)).status, 201);
     const callsBefore = seam.calls;
-    const runsBefore = runCount();
+    const runsBefore = await runCount();
     const r = await gen(live, 'one too many');
     assert.strictEqual(r.status, 429);
     assert.strictEqual(r.body.code, 'quota.exceeded');
@@ -36,7 +36,7 @@ t.test('the per-service rate refuses the 4th request with 429 before the provide
     assert.strictEqual(r.body.quota.scope_type, 'service');
     assert.strictEqual(r.body.quota.scope_id, 'live');
     assert.strictEqual(seam.calls, callsBefore, 'the provider was never called');
-    assert.strictEqual(runCount(), runsBefore, 'no run was created');
+    assert.strictEqual(await runCount(), runsBefore, 'no run was created');
 });
 
 t.test("'*' service quotas give each service its own window", async () => {

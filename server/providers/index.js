@@ -47,11 +47,11 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         }
     }
 
-    function adapter(key) {
-        const p = registry.getProvider(key);
+    async function adapter(key) {
+        const p = await registry.getProvider(key);
         if (!p) return null;
         const stamp = `${p.updated_at}|${p.secret_ref}|${resolveSecret(p.secret_ref, env) ? 1 : 0}`;
-        const hit = cache.get(key);
+        const hit = await cache.get(key);
         if (hit && hit.stamp === stamp) return { record: p, adapter: hit.adapter };
         const a = build(p);
         cache.set(key, { stamp, adapter: a });
@@ -64,30 +64,30 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         VALUES (@provider_key, @state, @consecutive_failures, @opened_at, @last_error, @last_success_at, @last_failure_at)
         ON CONFLICT(provider_key) DO UPDATE SET state = excluded.state, consecutive_failures = excluded.consecutive_failures, opened_at = excluded.opened_at,
           last_error = excluded.last_error, last_success_at = excluded.last_success_at, last_failure_at = excluded.last_failure_at`);
-    function health(key) {
-        const h = getHealth.get(key) || { provider_key: key, state: 'closed', consecutive_failures: 0, opened_at: null, last_error: null, last_success_at: null, last_failure_at: null };
+    async function health(key) {
+        const h = await getHealth.get(key) || { provider_key: key, state: 'closed', consecutive_failures: 0, opened_at: null, last_error: null, last_success_at: null, last_failure_at: null };
         if (h.state === 'open' && clock.now() - (h.opened_at || 0) >= config.breaker.cooldownMs) return { ...h, state: 'half_open' };
         return h;
     }
-    function recordSuccess(key) {
-        const h = health(key);
-        if (h.state !== 'closed') registry.audit('system', 'provider.circuit_closed', 'provider', key, { metadata: { after_failures: h.consecutive_failures } });
-        putHealth.run({ ...h, provider_key: key, state: 'closed', consecutive_failures: 0, opened_at: null, last_success_at: clock.now() });
+    async function recordSuccess(key) {
+        const h = await health(key);
+        if (h.state !== 'closed') await registry.audit('system', 'provider.circuit_closed', 'provider', key, { metadata: { after_failures: h.consecutive_failures } });
+        await putHealth.run({ ...h, provider_key: key, state: 'closed', consecutive_failures: 0, opened_at: null, last_success_at: clock.now() });
     }
-    function recordFailure(key, err) {
-        const h = health(key);
+    async function recordFailure(key, err) {
+        const h = await health(key);
         const failures = (h.consecutive_failures || 0) + 1;
         const open = h.state === 'half_open' || failures >= config.breaker.failureThreshold;
-        if (open && h.state !== 'open') registry.audit('system', 'provider.circuit_opened', 'provider', key, { metadata: { failures, error: String(err && err.message || err).slice(0, 200) } });
-        putHealth.run({ ...h, provider_key: key, state: open ? 'open' : 'closed', consecutive_failures: failures, opened_at: open ? clock.now() : h.opened_at, last_error: String(err && err.message || err).slice(0, 500), last_failure_at: clock.now() });
+        if (open && h.state !== 'open') await registry.audit('system', 'provider.circuit_opened', 'provider', key, { metadata: { failures, error: String(err && err.message || err).slice(0, 200) } });
+        await putHealth.run({ ...h, provider_key: key, state: open ? 'open' : 'closed', consecutive_failures: failures, opened_at: open ? clock.now() : h.opened_at, last_error: String(err && err.message || err).slice(0, 500), last_failure_at: clock.now() });
     }
-    function resetHealth(key) { db.prepare('DELETE FROM provider_health WHERE provider_key = ?').run(key); }
+    async function resetHealth(key) { await db.prepare('DELETE FROM provider_health WHERE provider_key = ?').run(key); }
 
     // ── Pricing (Live's rules: model row -> AI_PRICING_JSON longest prefix -> flat rates) ──
-    function priceFor(providerKey, model) {
-        const p = registry.getProvider(providerKey);
+    async function priceFor(providerKey, model) {
+        const p = await registry.getProvider(providerKey);
         if (!p || p.kind === 'stub' || p.kind === 'whisper') return { in: 0, out: 0, cached: 0 };
-        const row = model ? registry.getModel(providerKey, model) : null;
+        const row = model ? await registry.getModel(providerKey, model) : null;
         if (row && row.cost && Number.isFinite(row.cost.in_per_mtok) && row.cost.in_per_mtok !== null) {
             const inRate = Number(row.cost.in_per_mtok);
             return { in: inRate, out: Number(row.cost.out_per_mtok) || 0, cached: row.cost.cached_per_mtok != null ? Number(row.cost.cached_per_mtok) : inRate * 0.1 };
@@ -106,25 +106,25 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         const cachedRate = best && Number.isFinite(Number(best.cached)) ? Number(best.cached) : inRate * 0.1;
         return { in: inRate, out: outRate, cached: cachedRate };
     }
-    function costOf(providerKey, model, usage) {
-        const pr = priceFor(providerKey, model);
+    async function costOf(providerKey, model, usage) {
+        const pr = await priceFor(providerKey, model);
         const input = Math.max(0, (usage.input || 0) - (usage.cached || 0));
         return (input / 1e6) * pr.in + ((usage.cached || 0) / 1e6) * pr.cached + ((usage.output || 0) / 1e6) * pr.out;
     }
 
     // ── Routing ────────────────────────────────────────────
-    function candidates(route) {
+    async function candidates(route) {
         const list = [route.primary, ...(route.fallbacks || [])].filter(c => c && c.provider);
-        if (config.stubFallback && !list.some(c => c.provider === 'stub') && registry.getProvider('stub')) list.push({ provider: 'stub', model: null, auto: true });
+        if (config.stubFallback && !list.some(c => c.provider === 'stub') && await registry.getProvider('stub')) list.push({ provider: 'stub', model: null, auto: true });
         return list;
     }
 
-    function skipReason(p, a, features) {
+    async function skipReason(p, a, features) {
         if (!p || !a) return 'unknown_provider';
         if (p.status !== 'active') return 'disabled';
         if (p.auth_mode !== 'none' && !resolveSecret(p.secret_ref, env)) return 'no_credentials';
         if (features.some(f => !a.supports(f))) return 'unsupported';
-        if (health(p.key).state === 'open') return 'circuit_open';
+        if ((await health(p.key)).state === 'open') return 'circuit_open';
         return null;
     }
 
@@ -186,21 +186,21 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
     }
 
     async function execute(route, operation, req, ctx = {}) {
-        if (ctx.credential) return executeWithCredential(ctx.credential, operation, req, ctx);
+        if (ctx.credential) return await executeWithCredential(ctx.credential, operation, req, ctx);
         const features = [operation];
         if (req.image) features.push('vision');
         if (req.json) features.push('json');
         const tried = [];
-        const list = candidates(route);
+        const list = await candidates(route);
         for (let i = 0; i < list.length; i++) {
             const c = list[i];
-            const entry = adapter(c.provider);
+            const entry = await adapter(c.provider);
             const p = entry && entry.record;
             const a = entry && entry.adapter;
             const model = c.model || (p && p.default_model) || null;
             const fallback = i > 0;
             const base = { operation, provider_key: c.provider, model_key: model, route_key: ctx.routeKey || null, route_version: ctx.routeVersion || null, fallback: fallback ? 1 : 0, prompt_hash: ctx.promptHash || null, input_hash: ctx.inputHash || null };
-            const why = skipReason(p, a, features);
+            const why = await skipReason(p, a, features);
             if (why) {
                 statFor(c.provider).skipped++;
                 tried.push({ provider: c.provider, skipped: why });
@@ -221,9 +221,9 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                     const result = await fn({ ...req, model, signal: ctx.signal, timeoutMs });
                     const latency = Date.now() - t0;
                     const usage = result.usage || { input: 0, output: 0, cached: 0 };
-                    const cost = costOf(c.provider, result.model || model, usage);
+                    const cost = await costOf(c.provider, result.model || model, usage);
                     statFor(c.provider).ok++;
-                    recordSuccess(c.provider);
+                    await recordSuccess(c.provider);
                     if (ctx.logRequest) {
                         ctx.logRequest({
                             ...base, model_key: result.model || model, status: 'ok', output_hash: sha256(result.json || result.text || result.vectors || result.segments || ''),
@@ -248,7 +248,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             }
             // A request the provider rejected as malformed is the caller's fault, not a sign the
             // provider is unhealthy: it must not open the circuit other callers depend on.
-            if (!callerFault(lastErr)) recordFailure(c.provider, lastErr);
+            if (!callerFault(lastErr)) await recordFailure(c.provider, lastErr);
             tried.push({ provider: c.provider, error: String(lastErr && lastErr.message || lastErr).slice(0, 200) });
             log.warn(`[ai] ${operation} via ${c.provider}/${model || '-'} failed: ${lastErr && lastErr.message}`);
         }

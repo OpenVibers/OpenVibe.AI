@@ -99,12 +99,12 @@ t.test('passthrough prompts and inline images are not kept on the run record', a
     await request(h.base, 'POST', '/api/v1/providers', { tok: live, body: { key: 'slowstub', kind: 'stub', capabilities: ['chat', 'generate', 'summarize', 'json', 'vision'], metadata: { delay_ms: 10 } } });
     const p = await request(h.base, 'POST', '/api/v1/runs?wait=5000', { tok: live, body: { workflow: 'live.chat.insight', input: { role: 'chat', kind: 'chat_user', user: 'PRIVATE CHAT LOG: alice said hi' } } });
     assert.strictEqual(p.body.run.status, 'succeeded');
-    const row = h.db.prepare('SELECT input, input_hash FROM runs WHERE id = ?').get(p.body.run.id);
+    const row = await h.db.prepare('SELECT input, input_hash FROM runs WHERE id = ?').get(p.body.run.id);
     assert.ok(!row.input.includes('PRIVATE CHAT LOG'), 'raw prompt not stored');
     assert.ok(row.input_hash);
     const png = `data:image/png;base64,${Buffer.alloc(600, 7).toString('base64')}`;
     const img = await request(h.base, 'POST', '/api/v1/runs?wait=5000', { tok: live, body: { workflow: 'live.stream.describe_frame', input: { image: { data_url: png } } } });
-    const irow = h.db.prepare('SELECT input FROM runs WHERE id = ?').get(img.body.run.id);
+    const irow = await h.db.prepare('SELECT input FROM runs WHERE id = ?').get(img.body.run.id);
     assert.ok(!irow.input.includes(png.slice(40, 120)) && irow.input.includes('data_url_sha256'));
     await request(h.base, 'POST', '/api/v1/providers/slowstub/disable', { tok: live });
     const failed = await request(h.base, 'POST', '/api/v1/runs?wait=5000', { tok: live, body: { workflow: 'live.chat.insight', input: { role: 'chat', user: 'again' } } });
@@ -138,11 +138,11 @@ t.test('runs still in flight at shutdown end as run.interrupted, retryable after
     const d = await getRun(r.body.run.id);
     assert.strictEqual(d.run.status, 'failed');
     assert.strictEqual(d.run.error.code, 'run.interrupted');
-    h.db.prepare("UPDATE runs SET status = 'running', error_code = NULL, finished_at = NULL WHERE id = ?").run(r.body.run.id);
+    await h.db.prepare("UPDATE runs SET status = 'running', error_code = NULL, finished_at = NULL WHERE id = ?").run(r.body.run.id);
     await h.stop();
     h = await boot({ dir, env: { AI_MAX_CONCURRENT_RUNS: '1', AI_STUB_FALLBACK: 'false' } });
     assert.strictEqual((await getRun(r.body.run.id)).run.error.code, 'run.interrupted', 'boot recovery marks orphans too');
-    assert.strictEqual(h.registry.getWorkflow('ai.generate').version, 2, 'a reboot does not clobber admin versions with the seed');
+    assert.strictEqual((await h.registry.getWorkflow('ai.generate')).version, 2, 'a reboot does not clobber admin versions with the seed');
 });
 
 t.test('shutdown', async () => { await h.stop(); });

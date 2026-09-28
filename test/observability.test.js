@@ -85,7 +85,7 @@ t.test('/metrics: 404 through a proxy; queued and running runs, route templates,
 });
 
 t.test('an open circuit on a real provider degrades /api/ready (still 200) and shows on /metrics', async () => {
-    h.db.prepare("INSERT INTO provider_health (provider_key, state, consecutive_failures, opened_at, last_error) VALUES ('shared', 'open', 3, ?, 'test')").run(Date.now());
+    await h.db.prepare("INSERT INTO provider_health (provider_key, state, consecutive_failures, opened_at, last_error) VALUES ('shared', 'open', 3, ?, 'test')").run(Date.now());
     const r = await request(h.base, 'GET', '/api/ready');
     assert.strictEqual(r.status, 200, r.text);
     assert.strictEqual(r.body.status, 'degraded');
@@ -94,7 +94,7 @@ t.test('an open circuit on a real provider degrades /api/ready (still 200) and s
     const text = (await get(h.base, '/metrics')).body;
     assert.ok(/ai_provider_circuit\{provider="shared",state="open"\} 1\n/.test(text));
     assert.ok(/ai_provider_circuit\{provider="shared",state="closed"\} 0\n/.test(text));
-    h.pool.resetHealth('shared');
+    await h.pool.resetHealth('shared');
 });
 
 t.test('a broken database makes the service unready (503); /metrics still answers', async () => {

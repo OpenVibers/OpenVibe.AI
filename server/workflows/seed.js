@@ -64,59 +64,59 @@ function providerRecords(config, env) {
     return out;
 }
 
-function seed({ registry, quotas, config, env = process.env, db }) {
+async function seed({ registry, quotas, config, env = process.env, db }) {
     // Providers
     for (const p of providerRecords(config, env)) {
-        const prev = registry.getProvider(p.key);
+        const prev = await registry.getProvider(p.key);
         if (!prev || prev.origin === 'seed') {
             const same = prev && Object.keys(p).every(k => JSON.stringify(p[k] ?? null) === JSON.stringify(prev[k] ?? null));
-            if (!same) registry.upsertProvider({ base_url: null, secret_ref: null, ...p }, { actor: 'seed', origin: 'seed' });
+            if (!same) await registry.upsertProvider({ base_url: null, secret_ref: null, ...p }, { actor: 'seed', origin: 'seed' });
         }
     }
-    const shared = registry.getProvider('shared');
-    const hasFallback = Boolean(registry.getProvider('fallback'));
+    const shared = await registry.getProvider('shared');
+    const hasFallback = Boolean(await registry.getProvider('fallback'));
     const fallbacks = hasFallback ? [{ provider: 'fallback', model: null }] : [];
 
     // Models
     const models = new Set([shared.default_model, ...Object.values(config.shared.roleModels)]);
-    for (const m of models) if (m && !registry.getModel('shared', m)) registry.upsertModel({ provider_key: 'shared', model_key: m, type: 'chat', supports: { json: true, vision: true } }, { actor: 'seed' });
-    if (!registry.getModel('stub', 'stub-1')) registry.upsertModel({ provider_key: 'stub', model_key: 'stub-1', type: 'chat', supports: { json: true, vision: true }, metadata: { synthetic: true } }, { actor: 'seed' });
-    if (!registry.getModel('whisper', 'whisper.cpp')) registry.upsertModel({ provider_key: 'whisper', model_key: 'whisper.cpp', type: 'stt', supports: { json: false } }, { actor: 'seed' });
+    for (const m of models) if (m && !await registry.getModel('shared', m)) await registry.upsertModel({ provider_key: 'shared', model_key: m, type: 'chat', supports: { json: true, vision: true } }, { actor: 'seed' });
+    if (!await registry.getModel('stub', 'stub-1')) await registry.upsertModel({ provider_key: 'stub', model_key: 'stub-1', type: 'chat', supports: { json: true, vision: true }, metadata: { synthetic: true } }, { actor: 'seed' });
+    if (!await registry.getModel('whisper', 'whisper.cpp')) await registry.upsertModel({ provider_key: 'whisper', model_key: 'whisper.cpp', type: 'stt', supports: { json: false } }, { actor: 'seed' });
 
     // Routes
     for (const role of live.ROLES) {
-        registry.seedVersioned('route', `live.${role}`, {
+        await registry.seedVersioned('route', `live.${role}`, {
             primary: { provider: 'shared', model: config.shared.roleModels[role] || null }, fallbacks,
             options: {}, max_output_tokens: null, response_format: 'text', timeout_ms: ROLE_TIMEOUT[role], alias_of: null,
         });
     }
-    registry.seedVersioned('route', 'live.stt', { primary: { provider: 'whisper', model: null }, fallbacks: [], options: {}, max_output_tokens: null, response_format: 'text', timeout_ms: 600000, alias_of: null });
-    registry.seedVersioned('route', 'default.chat', { primary: { provider: 'shared', model: null }, fallbacks, options: {}, max_output_tokens: 800, response_format: 'text', timeout_ms: 30000, alias_of: null });
-    registry.seedVersioned('route', 'default.json', { primary: { provider: 'shared', model: null }, fallbacks, options: { temperature: 0.3 }, max_output_tokens: 2400, response_format: 'json', timeout_ms: 60000, alias_of: null });
-    registry.seedVersioned('route', 'default.embedding', { primary: { provider: 'shared', model: env.AI_EMBEDDING_MODEL || 'text-embedding-3-small' }, fallbacks: [], options: {}, max_output_tokens: null, response_format: 'text', timeout_ms: 30000, alias_of: null });
+    await registry.seedVersioned('route', 'live.stt', { primary: { provider: 'whisper', model: null }, fallbacks: [], options: {}, max_output_tokens: null, response_format: 'text', timeout_ms: 600000, alias_of: null });
+    await registry.seedVersioned('route', 'default.chat', { primary: { provider: 'shared', model: null }, fallbacks, options: {}, max_output_tokens: 800, response_format: 'text', timeout_ms: 30000, alias_of: null });
+    await registry.seedVersioned('route', 'default.json', { primary: { provider: 'shared', model: null }, fallbacks, options: { temperature: 0.3 }, max_output_tokens: 2400, response_format: 'json', timeout_ms: 60000, alias_of: null });
+    await registry.seedVersioned('route', 'default.embedding', { primary: { provider: 'shared', model: env.AI_EMBEDDING_MODEL || 'text-embedding-3-small' }, fallbacks: [], options: {}, max_output_tokens: null, response_format: 'text', timeout_ms: 30000, alias_of: null });
     // media.analyze (WS-O task 5): the local model when there is one; the paid route is used only under a media.paid budget.
-    if (config.localLlm && config.localLlm.url) registry.seedVersioned('route', 'media.local', { primary: { provider: 'local', model: config.localLlm.model || null }, fallbacks: [], options: { temperature: 0.3 }, max_output_tokens: 350, response_format: 'text', timeout_ms: config.localLlm.timeoutMs, alias_of: null });
-    registry.seedVersioned('route', 'media.paid', { primary: { provider: 'shared', model: config.shared.roleModels.summary || null }, fallbacks, options: { temperature: 0.3 }, max_output_tokens: 350, response_format: 'text', timeout_ms: 60000, alias_of: null });
-    for (const key of HISTORICAL_ROUTES) registry.seedVersioned('route', key, { primary: { provider: 'shared', model: null }, fallbacks: [], options: {}, max_output_tokens: null, response_format: 'json', timeout_ms: null, alias_of: 'default.json' });
+    if (config.localLlm && config.localLlm.url) await registry.seedVersioned('route', 'media.local', { primary: { provider: 'local', model: config.localLlm.model || null }, fallbacks: [], options: { temperature: 0.3 }, max_output_tokens: 350, response_format: 'text', timeout_ms: config.localLlm.timeoutMs, alias_of: null });
+    await registry.seedVersioned('route', 'media.paid', { primary: { provider: 'shared', model: config.shared.roleModels.summary || null }, fallbacks, options: { temperature: 0.3 }, max_output_tokens: 350, response_format: 'text', timeout_ms: 60000, alias_of: null });
+    for (const key of HISTORICAL_ROUTES) await registry.seedVersioned('route', key, { primary: { provider: 'shared', model: null }, fallbacks: [], options: {}, max_output_tokens: null, response_format: 'json', timeout_ms: null, alias_of: 'default.json' });
 
     // Templates, then workflows (workflows reference templates)
     for (const t of [...live.templates, ...core.templates, ...products.templates, ...media.templates]) {
         const { key, ...def } = t;
-        registry.seedVersioned('template', key, { description: null, default_route: null, owner: 'ai', visibility: 'internal', metadata: {}, ...def });
+        await registry.seedVersioned('template', key, { description: null, default_route: null, owner: 'ai', visibility: 'internal', metadata: {}, ...def });
     }
     for (const w of [...live.workflows, ...core.workflows, ...products.workflows, ...media.workflows]) {
         const { key, ...def } = w;
-        registry.seedVersioned('workflow', key, { description: null, default_route: null, cache_ttl_sec: null, metadata: {}, ...def });
+        await registry.seedVersioned('workflow', key, { description: null, default_route: null, cache_ttl_sec: null, metadata: {}, ...def });
     }
 
     // Quotas
-    const seedQuota = (q) => {
-        const prev = db.prepare("SELECT origin FROM quotas WHERE scope_type = ? AND scope_id = ? AND window = ? AND COALESCE(workflow_prefix, '') = ''").get(q.scope_type, q.scope_type === 'global' ? '*' : q.scope_id, q.window);
-        if (!prev || prev.origin === 'seed') quotas.upsert(q, { actor: 'seed', origin: 'seed' });
+    const seedQuota = async (q) => {
+        const prev = await db.prepare("SELECT origin FROM quotas WHERE scope_type = ? AND scope_id = ? AND \"window\" = ? AND COALESCE(workflow_prefix, '') = ''").get(q.scope_type, q.scope_type === 'global' ? '*' : q.scope_id, q.window);
+        if (!prev || prev.origin === 'seed') await quotas.upsert(q, { actor: 'seed', origin: 'seed' });
     };
-    if (config.quotas.globalCostPerDay > 0) seedQuota({ scope_type: 'global', window: 'day', max_cost_usd: config.quotas.globalCostPerDay });
-    if (config.quotas.serviceRequestsPerMinute > 0) seedQuota({ scope_type: 'service', scope_id: '*', window: 'minute', max_requests: config.quotas.serviceRequestsPerMinute });
-    if (config.quotas.serviceRequestsPerDay > 0) seedQuota({ scope_type: 'service', scope_id: '*', window: 'day', max_requests: config.quotas.serviceRequestsPerDay });
+    if (config.quotas.globalCostPerDay > 0) await seedQuota({ scope_type: 'global', window: 'day', max_cost_usd: config.quotas.globalCostPerDay });
+    if (config.quotas.serviceRequestsPerMinute > 0) await seedQuota({ scope_type: 'service', scope_id: '*', window: 'minute', max_requests: config.quotas.serviceRequestsPerMinute });
+    if (config.quotas.serviceRequestsPerDay > 0) await seedQuota({ scope_type: 'service', scope_id: '*', window: 'day', max_requests: config.quotas.serviceRequestsPerDay });
 }
 
 module.exports = { seed, providerRecords, HISTORICAL_ROUTES };

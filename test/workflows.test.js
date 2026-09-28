@@ -82,19 +82,19 @@ t.test('boot seeds every required workflow key', async () => {
     EXAMPLES['live.media.transcribe'].media_url = `${mediaBase}/v/1`;
     EXAMPLES['media.analyze'].media_url = `${mediaBase}/fixture.mp4`;
     h = await boot({ env: { OV_MEDIA_INTERNAL_URL: mediaBase } });
-    const keys = h.registry.listWorkflows().map(w => w.key);
+    const keys = (await h.registry.listWorkflows()).map(w => w.key);
     for (const k of ['wiki.generate_space', 'wiki.generate_page', 'blog.draft_post', 'news.summarize_story', 'news.compare_perspectives', 'reviews.summarize_entity', 'deals.enrich_deal',
         'coupons.extract_coupon', 'trade.summarize_market_context', 'codes.generate_docs', 'games.generate_lore', 'moderation.classify', 'tools.describe',
         'live.translate', 'live.stream.describe_frame', 'live.stream.summarize', 'live.viewers.reply', 'live.chat.insight', 'live.hero.slogans', 'live.stream.recap', 'network.site_copy']) {
         assert.ok(keys.includes(k), `missing ${k}`);
     }
     for (const k of ['default.chat', 'default.json', 'default.embedding', 'wiki.generate', 'blog.draft', 'news.summarize', 'reviews.summarize', 'deals.enrich', 'coupons.extract', 'trade.summarize', 'codes.generate_docs', 'games.generate_lore', 'tools.describe', 'moderation.classify']) {
-        assert.ok(h.registry.getRoute(k), `missing historical route ${k}`);
+        assert.ok(await h.registry.getRoute(k), `missing historical route ${k}`);
     }
 });
 
 t.test('every workflow has compiling, versioned input and output schemas and an example', async () => {
-    for (const w of h.registry.listWorkflows()) {
+    for (const w of await h.registry.listWorkflows()) {
         assert.strictEqual(w.version, 1);
         schemas.assertSchema(w.input_schema, `${w.key} input`);
         schemas.assertSchema(w.output_schema, `${w.key} output`);
@@ -105,7 +105,7 @@ t.test('every workflow has compiling, versioned input and output schemas and an 
 });
 
 t.test('every workflow runs end to end on the stub and returns schema-valid output', async () => {
-    for (const w of h.registry.listWorkflows()) {
+    for (const w of await h.registry.listWorkflows()) {
         if (w.key === 'media.analyze' && !HAS_FFMPEG) { console.log('workflow media.analyze end to end: skipped (no ffprobe)'); continue; }
         const r = await request(h.base, 'POST', '/api/v1/runs?wait=10000', { tok, body: { workflow: w.key, input: EXAMPLES[w.key] } });
         assert.strictEqual(r.status, 201, `${w.key}: ${r.status} ${r.text.slice(0, 300)}`);

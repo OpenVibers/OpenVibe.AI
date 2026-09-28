@@ -24,20 +24,7 @@ const SUBJECT_RE = /^usr_[0-9A-HJKMNP-TV-Z]{26}$/;
 function providerKeyFor(owner, subject) { return `byo:${owner}:${subject}`; }
 
 function createCredentials({ db, config, clock = { now: () => Date.now() } }) {
-    db.exec(`CREATE TABLE IF NOT EXISTS subject_credentials (
-        owner          TEXT NOT NULL,
-        subject        TEXT NOT NULL,
-        provider       TEXT NOT NULL CHECK (provider IN ('openai', 'anthropic')),
-        base_url       TEXT,
-        key_enc        TEXT NOT NULL,
-        key_hint       TEXT NOT NULL,
-        models         TEXT NOT NULL DEFAULT '{}',
-        budget_usd_day REAL,
-        created_at     TEXT NOT NULL,
-        updated_at     TEXT NOT NULL,
-        last_used_at   TEXT,
-        PRIMARY KEY (owner, subject)
-    )`);
+    // subject_credentials is in migrations/0001_initial.sql (ADR-035).
     const iso = (ms) => new Date(ms).toISOString();
 
     function secretKey() {
@@ -61,69 +48,69 @@ function createCredentials({ db, config, clock = { now: () => Date.now() } }) {
         return Buffer.concat([d.update(Buffer.from(body, 'base64')), d.final()]).toString('utf8');
     }
 
-    function spentToday(owner, subject) {
+    async function spentToday(owner, subject) {
         const day = iso(clock.now()).slice(0, 10);
-        const r = db.prepare("SELECT COALESCE(SUM(cost_usd), 0) AS c FROM requests WHERE provider_key = ? AND status = 'ok' AND created_at >= ?").get(providerKeyFor(owner, subject), `${day}T00:00:00.000Z`);
+        const r = await db.prepare("SELECT COALESCE(SUM(cost_usd), 0) AS c FROM requests WHERE provider_key = ? AND status = 'ok' AND created_at >= ?").get(providerKeyFor(owner, subject), `${day}T00:00:00.000Z`);
         return r ? Number(r.c) || 0 : 0;
     }
 
-    function view(row) {
+    async function view(row) {
         return {
             subject: row.subject, owner: row.owner, provider: row.provider, base_url: row.base_url || null, key_hint: row.key_hint,
             models: JSON.parse(row.models || '{}'), budget_usd_per_day: row.budget_usd_day == null ? null : row.budget_usd_day,
-            spent_usd_today: Math.round(spentToday(row.owner, row.subject) * 1e6) / 1e6,
+            spent_usd_today: Math.round(await spentToday(row.owner, row.subject) * 1e6) / 1e6,
             created_at: row.created_at, updated_at: row.updated_at, last_used_at: row.last_used_at || null,
         };
     }
-    const row = (owner, subject) => db.prepare('SELECT * FROM subject_credentials WHERE owner = ? AND subject = ?').get(owner, subject);
+    const row = async (owner, subject) => await db.prepare('SELECT * FROM subject_credentials WHERE owner = ? AND subject = ?').get(owner, subject);
 
-    function put(owner, subject, body) {
+    async function put(owner, subject, body) {
         if (!SUBJECT_RE.test(String(subject))) throw new AiError(400, 'input.invalid', 'subject must be a usr_ subject');
         const v = validate('ai.credential-put@1', body);
         if (!v.valid) throw new AiError(422, 'input.invalid', 'body does not match ai.credential-put@1', { errors: v.errors });
         const at = iso(clock.now());
-        const prev = row(owner, subject);
+        const prev = await row(owner, subject);
         // The stored key stays for a change of models or budget; a new provider or endpoint needs the key again.
         const sameEndpoint = prev && prev.provider === body.provider && (prev.base_url || null) === (body.base_url || null);
         if (body.api_key == null && !sameEndpoint) {
             throw new AiError(400, 'credential.key_required', prev ? 'enter the key again to change the provider or its address' : 'api_key is required the first time');
         }
         const key = body.api_key != null ? String(body.api_key) : open(prev.key_enc, `${owner}|${subject}`);
-        db.prepare(`INSERT INTO subject_credentials (owner, subject, provider, base_url, key_enc, key_hint, models, budget_usd_day, created_at, updated_at)
+        await db.prepare(`INSERT INTO subject_credentials (owner, subject, provider, base_url, key_enc, key_hint, models, budget_usd_day, created_at, updated_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(owner, subject) DO UPDATE SET provider = excluded.provider, base_url = excluded.base_url, key_enc = excluded.key_enc,
                       key_hint = excluded.key_hint, models = excluded.models, budget_usd_day = excluded.budget_usd_day, updated_at = excluded.updated_at`)
             .run(owner, subject, body.provider, body.base_url || null, seal(key, `${owner}|${subject}`), `…${key.slice(-4)}`, JSON.stringify(body.models || {}),
                 body.budget_usd_per_day ? Number(body.budget_usd_per_day) : null, prev ? prev.created_at : at, at);
-        return view(row(owner, subject));
+        return await view(await row(owner, subject));
     }
 
-    function get(owner, subject) {
-        const r = row(owner, subject);
+    async function get(owner, subject) {
+        const r = await row(owner, subject);
         if (!r) throw new AiError(404, 'credential.not_found', 'no credential stored for that subject');
-        return view(r);
+        return await view(r);
     }
 
-    function remove(owner, subject) {
-        return db.prepare('DELETE FROM subject_credentials WHERE owner = ? AND subject = ?').run(owner, subject).changes > 0;
+    async function remove(owner, subject) {
+        return (await db.prepare('DELETE FROM subject_credentials WHERE owner = ? AND subject = ?').run(owner, subject)).changes > 0;
     }
 
     /** Checks a run may use the credential (exists, within budget); throws AiError otherwise. */
-    function admit(owner, subject) {
-        const r = row(owner, subject);
+    async function admit(owner, subject) {
+        const r = await row(owner, subject);
         if (!r) throw new AiError(404, 'credential.not_found', 'no credential stored for that subject');
         secretKey();
-        if (r.budget_usd_day != null && r.budget_usd_day > 0 && spentToday(owner, subject) >= r.budget_usd_day) {
+        if (r.budget_usd_day != null && r.budget_usd_day > 0 && await spentToday(owner, subject) >= r.budget_usd_day) {
             const tomorrow = new Date(iso(clock.now()).slice(0, 10) + 'T00:00:00.000Z').getTime() + 86400000;
             throw new AiError(429, 'quota.exceeded', "this person's own daily budget for their key is spent", { retry_after_seconds: Math.max(60, Math.ceil((tomorrow - clock.now()) / 1000)), quota: { scope: 'credential' } });
         }
     }
 
     /** The decrypted credential for one execution: { providerKey, provider, base_url, apiKey, models }. */
-    function forRun(owner, subject) {
-        const r = row(owner, subject);
+    async function forRun(owner, subject) {
+        const r = await row(owner, subject);
         if (!r) throw new AiError(404, 'credential.not_found', 'the credential was deleted');
-        db.prepare('UPDATE subject_credentials SET last_used_at = ? WHERE owner = ? AND subject = ?').run(iso(clock.now()), owner, subject);
+        await db.prepare('UPDATE subject_credentials SET last_used_at = ? WHERE owner = ? AND subject = ?').run(iso(clock.now()), owner, subject);
         return { providerKey: providerKeyFor(owner, subject), provider: r.provider, base_url: r.base_url || null, apiKey: open(r.key_enc, `${owner}|${subject}`), models: JSON.parse(r.models || '{}') };
     }
 
@@ -139,21 +126,21 @@ function credentialsRouter({ credentials, auth, registry, sendError }) {
         if (!s || s.type !== 'service') throw new AiError(403, 'capability.denied', 'only a service stores credentials for the people it serves');
         return s.id;
     };
-    r.put('/api/v1/credentials/:subject', guard, (req, res) => {
+    r.put('/api/v1/credentials/:subject', guard, async (req, res) => {
         try {
-            const out = credentials.put(owner(req), req.params.subject, req.body || {});
-            registry.audit(req.principal.sub, 'credential.put', 'credential', `${out.owner}:${out.subject}`, { trace: req.ov && req.ov.traceId, metadata: { provider: out.provider, base_url: out.base_url } });
+            const out = await credentials.put(owner(req), req.params.subject, req.body || {});
+            await registry.audit(req.principal.sub, 'credential.put', 'credential', `${out.owner}:${out.subject}`, { trace: req.ov && req.ov.traceId, metadata: { provider: out.provider, base_url: out.base_url } });
             res.set('Cache-Control', 'no-store').json(out);
         } catch (err) { sendError(res, err, req.ov); }
     });
-    r.get('/api/v1/credentials/:subject', guard, (req, res) => {
-        try { res.set('Cache-Control', 'no-store').json(credentials.get(owner(req), req.params.subject)); } catch (err) { sendError(res, err, req.ov); }
+    r.get('/api/v1/credentials/:subject', guard, async (req, res) => {
+        try { res.set('Cache-Control', 'no-store').json(await credentials.get(owner(req), req.params.subject)); } catch (err) { sendError(res, err, req.ov); }
     });
-    r.delete('/api/v1/credentials/:subject', guard, (req, res) => {
+    r.delete('/api/v1/credentials/:subject', guard, async (req, res) => {
         try {
             const o = owner(req);
-            const gone = credentials.remove(o, req.params.subject);
-            if (gone) registry.audit(req.principal.sub, 'credential.delete', 'credential', `${o}:${req.params.subject}`, { trace: req.ov && req.ov.traceId });
+            const gone = await credentials.remove(o, req.params.subject);
+            if (gone) await registry.audit(req.principal.sub, 'credential.delete', 'credential', `${o}:${req.params.subject}`, { trace: req.ov && req.ov.traceId });
             res.status(gone ? 204 : 404).end();
         } catch (err) { sendError(res, err, req.ov); }
     });

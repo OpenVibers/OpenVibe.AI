@@ -59,6 +59,9 @@ function load(env = process.env) {
         networkPublicKey: env.OV_NETWORK_PUBLIC_KEY ? env.OV_NETWORK_PUBLIC_KEY.replace(/\\n/g, '\n') : null,
         audience: 'openvibe.ai',
 
+        // PostgreSQL (ADR-035): DATABASE_URL serves (PgBouncer), DATABASE_DIRECT_URL migrates (owner role).
+        db: { url: env.DATABASE_URL || '', directUrl: env.DATABASE_DIRECT_URL || '' },
+        // The SQLite file of releases before the switch: read once by scripts/migrate-to-postgres.js.
         dbPath: env.AI_DB_PATH || './data/ai.db',
 
         // ── Operator console (server/console): OpenVibe.Network SSO (authorization code + PKCE S256

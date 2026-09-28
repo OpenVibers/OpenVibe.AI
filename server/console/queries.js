@@ -67,7 +67,7 @@ function parseRunFilters(q = {}) {
     return { filters, form, bad };
 }
 
-function listRuns(db, f, limit = PAGE) {
+async function listRuns(db, f, limit = PAGE) {
     const where = [];
     const args = [];
     if (f.status) { where.push('status = ?'); args.push(f.status); }
@@ -81,28 +81,28 @@ function listRuns(db, f, limit = PAGE) {
     if (f.fromIso) { where.push('created_at >= ?'); args.push(f.fromIso); }
     if (f.toIso) { where.push('created_at < ?'); args.push(f.toIso); }
     if (f.before) { where.push('id < ?'); args.push(f.before); }
-    const rows = db.prepare(`SELECT id, status, workflow_key, workflow_version, requester_type, requester_id, provider_key, model_key, fallback_used, attempts,
+    const rows = await db.prepare(`SELECT id, status, workflow_key, workflow_version, requester_type, requester_id, provider_key, model_key, fallback_used, attempts,
             tokens_in, tokens_out, cost_usd, error_code, synthetic, cached_from, retry_of, created_at, finished_at
         FROM runs ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY id DESC LIMIT ?`).all(...args, limit + 1);
     return { rows: rows.slice(0, limit), next: rows.length > limit ? rows[limit - 1].id : null };
 }
 
 /** Failed runs since `sinceIso`, grouped by error code. */
-function failures(db, sinceIso) {
-    return db.prepare(`SELECT error_code, COUNT(*) AS n, COUNT(DISTINCT workflow_key) AS workflows, MAX(created_at) AS last_at
+async function failures(db, sinceIso) {
+    return await db.prepare(`SELECT error_code, COUNT(*) AS n, COUNT(DISTINCT workflow_key) AS workflows, MAX(created_at) AS last_at
         FROM runs WHERE status = 'failed' AND created_at >= ? GROUP BY error_code ORDER BY n DESC LIMIT 20`).all(sinceIso);
 }
 
-function statusCounts(db, sinceIso) {
-    return Object.fromEntries(db.prepare('SELECT status, COUNT(*) AS n FROM runs WHERE created_at >= ? GROUP BY status').all(sinceIso).map(r => [r.status, r.n]));
+async function statusCounts(db, sinceIso) {
+    return Object.fromEntries((await db.prepare('SELECT status, COUNT(*) AS n FROM runs WHERE created_at >= ? GROUP BY status').all(sinceIso)).map(r => [r.status, r.n]));
 }
 
 /** Suggestions for the run filters (<datalist>): requesters and workflow keys that have runs. */
-function runFacets(db) {
+async function runFacets(db) {
     return {
-        requesters: db.prepare("SELECT DISTINCT requester_type || ':' || requester_id AS r FROM runs ORDER BY r LIMIT 100").all().map(x => x.r),
-        workflows: db.prepare('SELECT DISTINCT workflow_key AS w FROM runs ORDER BY w LIMIT 300').all().map(x => x.w),
-        codes: db.prepare("SELECT DISTINCT error_code AS c FROM runs WHERE error_code IS NOT NULL ORDER BY c LIMIT 100").all().map(x => x.c),
+        requesters: (await db.prepare("SELECT DISTINCT requester_type || ':' || requester_id AS r FROM runs ORDER BY r LIMIT 100").all()).map(x => x.r),
+        workflows: (await db.prepare('SELECT DISTINCT workflow_key AS w FROM runs ORDER BY w LIMIT 300').all()).map(x => x.w),
+        codes: (await db.prepare("SELECT DISTINCT error_code AS c FROM runs WHERE error_code IS NOT NULL ORDER BY c LIMIT 100").all()).map(x => x.c),
     };
 }
 
@@ -138,7 +138,7 @@ function preview(value) {
 const AUDIT_KINDS = Object.freeze({
     changes: { label: 'Configuration changes', where: "target_type IN ('provider', 'model', 'route', 'template', 'workflow', 'quota', 'cache')" },
     runs: { label: 'Runs', where: "target_type = 'run'" },
-    console: { label: 'Console sign-ins and refusals', where: "action LIKE 'console.%'" },
+    console: { label: 'Console sign-ins and refusals', where: "action ILIKE 'console.%'" },
     all: { label: 'Everything', where: null },
 });
 
@@ -156,7 +156,7 @@ function parseAuditFilters(q = {}) {
     return { filters: f, form, bad };
 }
 
-function listAudit(db, f, limit = 100) {
+async function listAudit(db, f, limit = 100) {
     const where = [];
     const args = [];
     const kind = AUDIT_KINDS[f.kind] || AUDIT_KINDS.changes;
@@ -166,16 +166,16 @@ function listAudit(db, f, limit = 100) {
     if (f.targetType) { where.push('target_type = ?'); args.push(f.targetType); }
     if (f.targetId) { where.push('target_id = ?'); args.push(f.targetId); }
     if (f.before) { where.push('id < ?'); args.push(f.before); }
-    const rows = db.prepare(`SELECT * FROM audit_log ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY id DESC LIMIT ?`).all(...args, limit + 1);
+    const rows = await db.prepare(`SELECT * FROM audit_log ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY id DESC LIMIT ?`).all(...args, limit + 1);
     const page = rows.slice(0, limit).map(r => ({ ...r, metadata: parseMeta(r.metadata) }));
     return { rows: page, next: rows.length > limit ? page[page.length - 1].id : null };
 }
 function parseMeta(s) { try { const v = JSON.parse(s || '{}'); return v && typeof v === 'object' ? v : {}; } catch { return {}; } }
 
 /** subject -> username, from console sign-ins (the audit log keeps only the subject). */
-function usernames(db) {
+async function usernames(db) {
     const map = new Map();
-    for (const r of db.prepare('SELECT subject, username FROM console_sessions WHERE username IS NOT NULL ORDER BY created_at').all()) map.set(r.subject, r.username);
+    for (const r of await db.prepare('SELECT subject, username FROM console_sessions WHERE username IS NOT NULL ORDER BY created_at').all()) map.set(r.subject, r.username);
     return map;
 }
 
@@ -194,8 +194,8 @@ function parseUsageFilters(q = {}, nowMs = Date.now()) {
 }
 
 /** usage_daily rows (quotas.usage, the API's own query) summed four ways. */
-function usageReport(quotas, f) {
-    const rows = quotas.usage({ from: f.from, to: f.to, requester: f.requester });
+async function usageReport(quotas, f) {
+    const rows = await quotas.usage({ from: f.from, to: f.to, requester: f.requester });
     const blank = () => ({ requests: 0, tokens_in: 0, tokens_out: 0, tokens_cached: 0, cost_usd: 0 });
     const add = (acc, r) => { acc.requests += r.requests; acc.tokens_in += r.tokens_in; acc.tokens_out += r.tokens_out; acc.tokens_cached += r.tokens_cached; acc.cost_usd += r.cost_usd; return acc; };
     const group = (keyOf) => {

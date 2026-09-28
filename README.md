@@ -21,7 +21,8 @@ owns publication truth: Wiki, Blog, News, Live, … decide what to publish.
 
 - the eleven record groups ([below](#the-eleven-record-groups)): providers, models, routing profiles,
   prompt templates, workflow definitions, runs, the request log (hashes, not prompts), citations, the
-  cache, quotas and usage, and the audit log, in AI's own SQLite
+  cache, quotas and usage, and the audit log, in AI's own PostgreSQL database (`ov_ai`, ADR-035; schema in
+  [migrations/](migrations/))
 - people's own provider keys (`ai.credential.manage`), encrypted at rest, and per-streamer
   attribution quotas (`ai.quota.attribution.manage`)
 - the `ai.run.queued|succeeded|failed|cached` events and the `ai.preferences` / `ai.usage_summary`
@@ -36,13 +37,14 @@ owns publication truth: Wiki, Blog, News, Live, … decide what to publish.
 
 ## Depends on
 
+- PostgreSQL 18 (OpenVibe.Host `roles/data/`, ADR-035): every read and write is async through `openvibe-sdk/db`
 - OpenVibe.Network (JWKS, service tokens, SSO for the operator console, user modules)
 - OpenVibe.Events (the `ai.run.*` outbox relay; off without `EVENTS_URL`)
 - OpenVibe.Media (recordings `media.analyze` reads, over allow-listed https URLs or signed URLs)
 - provider APIs configured by the operator (OpenAI-compatible, Anthropic, the HTTP seam), whisper.cpp
   and the local model server `openvibe-llm.service` on this host
-- `openvibe-contracts` v0.75.0, `openvibe-sdk` v0.11.0 (service tokens, events outbox),
-  `openvibe-shared` v1.25.0, pinned by release tarball
+- `openvibe-contracts` v0.76.0, `openvibe-sdk` v0.20.3 (service tokens, events outbox),
+  `openvibe-shared` v1.27.0, pinned by release tarball
 
 ## Capabilities
 
@@ -300,9 +302,9 @@ Reporting a vulnerability: [SECURITY.md](SECURITY.md). The rules the code keeps:
 `docs/live-patch.diff` added `AI_SERVICE=remote` to Live (deployed as Live `fa22de5`; production runs
 with `AI_SERVICE=remote` since 2026-09-23): Live's shared-key AI calls become runs here, authenticated
 with `serviceHeaders('openvibe.ai')` from Live's `server/net/network-principal.js`. Without the flag
-Live's behaviour is unchanged. `scripts/import-from-live.js`
-moves the AI records that belong here (`--dry-run` first); it ran on production on 2026-09-23 at
-18:29 UTC (79,657 ledger rows, 11 holds recorded with their reasons).
+Live's behaviour is unchanged. The one-time `scripts/import-from-live.js` moved the AI records that belong here;
+it ran on production on 2026-09-23 at 18:29 UTC (79,657 ledger rows, 11 holds recorded with their reasons, kept in
+`import_ledger` and `import_holds`) and was retired with the move to PostgreSQL (it is in git history).
 Network's footer copy calls the `network.site_copy` workflow (Network `422f8e9`), but the deployed Network still
 falls back to Live's `/internal/ai/site-copy`, and Live still serves that route. The full plan, holds
 and rollback are in `docs/migration.md`.
@@ -311,14 +313,17 @@ and rollback are in `docs/migration.md`.
 
 Production deploys with `sudo ovhost deploy ai` on the host (strategy `git-checkout`: fetch,
 fast-forward `/opt/openvibe.ai`, install on a lockfile change, restart, wait for `/api/ready`).
-The unit is `openvibe-ai.service` on `127.0.0.1:4700`, the env file `/etc/openvibe/ai.env`. The local model
+The unit is `openvibe-ai.service` on `127.0.0.1:4700`, the env file `/etc/openvibe/ai.env`. The database is
+`ov_ai` on the host's data role (`sudo /opt/openvibe.host/roles/data/add-service.sh ai` writes its settings); the
+release migrates it at boot. The one-time move from SQLite is `scripts/migrate-to-postgres.js` (openvibe-sdk
+`runSqliteMigration`, with a `--pglite` rehearsal mode), run while the service is stopped; the old
+`/var/lib/openvibe-ai/ai.db` stays read-only for 7 days as the rollback. The local model
 runs as `openvibe-llm.service` on 127.0.0.1:8090 ([Local model](#local-model)).
 Rollback: ovhost puts the previous sha back by itself when `/api/ready` does not answer 2xx after the
-restart; afterwards `sudo ovhost rollback ai --to <sha>`. Nothing blocks a rollback: the schema
-code only adds tables and columns.
+restart; afterwards `sudo ovhost rollback ai --to <sha>`. Migrations only add tables and columns.
 
 Deployed: `/opt/openvibe.ai`, env `/etc/openvibe/ai.env` (0600), unit `deploy/systemd/openvibe-ai.service`
-(`StateDirectory=openvibe-ai`, database `/var/lib/openvibe-ai/ai.db`), principal `ai`. The nginx vhost
+(`StateDirectory=openvibe-ai`; database `ov_ai` on the host's data role, the SQLite file `/var/lib/openvibe-ai/ai.db` before the switch), principal `ai`. The nginx vhost
 `deploy/nginx/ai.openvibe.network.conf` (health/ready, `/`, `/robots.txt`, the operator console
 `/console` and its sign-in `/auth/` public; the API is host-local) is not installed:
 `ai.openvibe.network` still serves the Sites placeholder. The console also needs

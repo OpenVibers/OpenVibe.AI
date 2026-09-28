@@ -40,7 +40,7 @@ t.test('store, read without the key, refuse other services', async () => {
     assert.ok(!r.text.includes(API_KEY), 'the key never comes back');
     const { validate } = require('openvibe-contracts');
     assert.ok(validate('ai.credential@1', r.body).valid, JSON.stringify(validate('ai.credential@1', r.body).errors));
-    const row = h.db.prepare('SELECT key_enc FROM subject_credentials WHERE owner = ? AND subject = ?').get('live', DANA);
+    const row = await h.db.prepare('SELECT key_enc FROM subject_credentials WHERE owner = ? AND subject = ?').get('live', DANA);
     assert.ok(row.key_enc.startsWith('v1:') && !row.key_enc.includes(API_KEY), 'encrypted at rest');
     // A models change keeps the stored key; a new endpoint needs it again.
     r = await request(h.base, 'PUT', `/api/v1/credentials/${DANA}`, { tok: live, body: { provider: 'openai', base_url: 'https://llm.example.com/v1', models: { chat: 'gpt-4o-mini', vision: 'gpt-4o' }, budget_usd_per_day: 0.003 } });
@@ -50,14 +50,14 @@ t.test('store, read without the key, refuse other services', async () => {
     r = await request(h.base, 'GET', `/api/v1/credentials/${DANA}`, { tok: tools });
     assert.strictEqual(r.status, 404, 'another service does not see it');
     // A row moved to another owner does not decrypt: the key is bound to owner and subject.
-    h.db.prepare("INSERT INTO subject_credentials (owner, subject, provider, base_url, key_enc, key_hint, models, created_at, updated_at) SELECT 'tools', subject, provider, base_url, key_enc, key_hint, models, created_at, updated_at FROM subject_credentials WHERE owner = 'live'").run();
+    await h.db.prepare("INSERT INTO subject_credentials (owner, subject, provider, base_url, key_enc, key_hint, models, created_at, updated_at) SELECT 'tools', subject, provider, base_url, key_enc, key_hint, models, created_at, updated_at FROM subject_credentials WHERE owner = 'live'").run();
     const creds = require('../server/credentials').createCredentials({ db: h.db, config: h.config });
-    assert.throws(() => creds.forRun('tools', DANA));
-    h.db.prepare("DELETE FROM subject_credentials WHERE owner = 'tools'").run();
+    await assert.rejects(creds.forRun('tools', DANA));
+    await h.db.prepare("DELETE FROM subject_credentials WHERE owner = 'tools'").run();
 });
 
 t.test('a run with the credential uses that key only, uncached, and its budget stops it', async () => {
-    const run = (tok = live) => request(h.base, 'POST', '/api/v1/runs?wait=5000', { tok, body: { workflow: 'live.viewers.line', input: { role: 'chat', user: 'say hi' }, credential: { subject: DANA } } });
+    const run = async (tok = live) => await request(h.base, 'POST', '/api/v1/runs?wait=5000', { tok, body: { workflow: 'live.viewers.line', input: { role: 'chat', user: 'say hi' }, credential: { subject: DANA } } });
     let r = await run();
     assert.strictEqual(r.status, 201, r.text);
     assert.strictEqual(r.body.run.status, 'succeeded', JSON.stringify(r.body.run));
@@ -65,7 +65,7 @@ t.test('a run with the credential uses that key only, uncached, and its budget s
     assert.strictEqual(calls.length, 1);
     assert.strictEqual(calls[0].url, 'https://llm.example.com/v1/chat/completions');
     assert.strictEqual(calls[0].auth, `Bearer ${API_KEY}`);
-    const reqs = h.db.prepare('SELECT provider_key, status, cost_usd FROM requests WHERE run_id = ?').all(r.body.run.id);
+    const reqs = await h.db.prepare('SELECT provider_key, status, cost_usd FROM requests WHERE run_id = ?').all(r.body.run.id);
     assert.deepStrictEqual(reqs.map((x) => [x.provider_key, x.status]), [[`byo:live:${DANA}`, 'ok']]);
     assert.ok(Math.abs(reqs[0].cost_usd - 0.002) < 1e-9, 'priced at list price');
     r = await run();

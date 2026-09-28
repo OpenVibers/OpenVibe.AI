@@ -31,7 +31,7 @@ t.test('bad requests from one caller fail that caller only; the circuit stays cl
         const bad = await request(h.base, 'POST', '/api/v1/generate', { tok: attacker, body: { prompt: `BAD ${i}`, options: { cache: false } } });
         assert.strictEqual(bad.body.run.status, 'failed', bad.text);
     }
-    assert.strictEqual(h.pool.health('seam').state, 'closed', 'client errors must not open the circuit');
+    assert.strictEqual((await h.pool.health('seam')).state, 'closed', 'client errors must not open the circuit');
     const good = await request(h.base, 'POST', '/api/v1/generate', { tok: admin, body: { prompt: 'hello', options: { cache: false } } });
     assert.strictEqual(good.body.run.status, 'succeeded', good.text);
     assert.strictEqual(good.body.run.output.text, 'fine');
@@ -40,7 +40,7 @@ t.test('bad requests from one caller fail that caller only; the circuit stays cl
 t.test('server errors still open it', async () => {
     seam.handler = () => ({ status: 503, body: { error: { message: 'overloaded' } } });
     for (let i = 0; i < 2; i++) await request(h.base, 'POST', '/api/v1/generate', { tok: admin, body: { prompt: `x ${i}`, options: { cache: false } } });
-    assert.strictEqual(h.pool.health('seam').state, 'open');
+    assert.strictEqual((await h.pool.health('seam')).state, 'open');
 });
 
 t.test('shutdown', async () => { await h.stop(); await seam.close(); });

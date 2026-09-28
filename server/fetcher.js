@@ -253,7 +253,7 @@ function createFetcher(config, { transport = null } = {}) {
             type = r.contentType.split(';')[0].trim();
             if (!/^image\//i.test(type)) throw new AiError(422, 'source.invalid', `expected an image, got ${type || 'unknown type'}`);
         }
-        return downscale(buf, type, input.max_width || 1024);
+        return await downscale(buf, type, input.max_width || 1024);
     }
 
     /** Media input -> a temp file path (caller deletes it). */

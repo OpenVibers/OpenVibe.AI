@@ -46,7 +46,7 @@ function runsRouter({ runs, registry, auth, config, log = console }) {
     async function createAndRespond(req, res, body, waitMs) {
         checkNamespace(req, String(body.workflow || ''));
         const idem = body.idempotency_key || req.ov.idempotencyKey || undefined;
-        const created = runs.create({ ...body, idempotency_key: idem }, req.principal, { trace: req.ov.traceId, requestId: req.ov.requestId });
+        const created = await runs.create({ ...body, idempotency_key: idem }, req.principal, { trace: req.ov.traceId, requestId: req.ov.requestId });
         const run = await runs.wait(created, waitMs);
         const status = !created.created ? 200 : (runs.TERMINAL.has(run.status) ? 201 : 202);
         if (status === 202) res.setHeader('Location', `/api/v1/runs/${run.id}`);
@@ -60,13 +60,13 @@ function runsRouter({ runs, registry, auth, config, log = console }) {
         } catch (err) { sendError(res, err, req.ov, log); }
     });
 
-    r.get('/api/v1/runs', read, (req, res) => {
+    r.get('/api/v1/runs', read, async (req, res) => {
         const all = req.query.all === '1' && auth.principalHas(req, CAPS.usageRead);
-        res.json({ runs: runs.list(req.principal, { status: req.query.status, workflow: req.query.workflow, target: req.query.target, limit: req.query.limit, before: req.query.before, all }) });
+        res.json({ runs: await runs.list(req.principal, { status: req.query.status, workflow: req.query.workflow, target: req.query.target, limit: req.query.limit, before: req.query.before, all }) });
     });
 
-    function owned(req) {
-        const run = runs.get(req.params.id);
+    async function owned(req) {
+        const run = await runs.get(req.params.id);
         if (!run) throw new AiError(404, 'run.not_found', 'no such run');
         const s = req.principal.subject;
         const mine = run.requester.type === s.type && run.requester.id === s.id;
@@ -74,33 +74,33 @@ function runsRouter({ runs, registry, auth, config, log = console }) {
         return run;
     }
 
-    r.get('/api/v1/runs/:id', read, (req, res) => {
+    r.get('/api/v1/runs/:id', read, async (req, res) => {
         try {
-            const run = owned(req);
-            res.json({ run, citations: runs.citations(run.id), requests: runs.requestsFor(run.id) });
+            const run = await owned(req);
+            res.json({ run, citations: await runs.citations(run.id), requests: await runs.requestsFor(run.id) });
         } catch (err) { sendError(res, err, req.ov, log); }
     });
 
-    r.post('/api/v1/runs/:id/cancel', create, (req, res) => {
-        try { res.json({ run: runs.cancel(req.params.id, req.principal, { trace: req.ov.traceId, principalHas: has(req) }) }); } catch (err) { sendError(res, err, req.ov, log); }
+    r.post('/api/v1/runs/:id/cancel', create, async (req, res) => {
+        try { res.json({ run: await runs.cancel(req.params.id, req.principal, { trace: req.ov.traceId, principalHas: has(req) }) }); } catch (err) { sendError(res, err, req.ov, log); }
     });
 
     r.post('/api/v1/runs/:id/retry', create, async (req, res) => {
         try {
-            const created = runs.retry(req.params.id, req.principal, { trace: req.ov.traceId, requestId: req.ov.requestId, principalHas: has(req) });
+            const created = await runs.retry(req.params.id, req.principal, { trace: req.ov.traceId, requestId: req.ov.requestId, principalHas: has(req) });
             const wait = Math.max(0, Math.min(Number(req.query.wait) || 0, config.runs.maxWaitMs));
             const run = await runs.wait(created, wait);
             res.status(runs.TERMINAL.has(run.status) ? 201 : 202).json({ run });
         } catch (err) { sendError(res, err, req.ov, log); }
     });
 
-    r.get('/api/v1/runs/:id/citations', read, (req, res) => {
-        try { const run = owned(req); res.json({ citations: runs.citations(run.id) }); } catch (err) { sendError(res, err, req.ov, log); }
+    r.get('/api/v1/runs/:id/citations', read, async (req, res) => {
+        try { const run = await owned(req); res.json({ citations: await runs.citations(run.id) }); } catch (err) { sendError(res, err, req.ov, log); }
     });
 
-    r.post('/api/v1/runs/:id/citations', create, (req, res) => {
+    r.post('/api/v1/runs/:id/citations', create, async (req, res) => {
         try {
-            const run = owned(req);
+            const run = await owned(req);
             const s = req.principal.subject;
             if (run.requester.type !== s.type || run.requester.id !== s.id) throw new AiError(403, 'capability.denied', 'only the requester may attach citations');
             const list = Array.isArray(req.body && req.body.citations) ? req.body.citations : null;
@@ -109,9 +109,9 @@ function runsRouter({ runs, registry, auth, config, log = console }) {
                 if (!c || typeof c.source_type !== 'string' || !/^[a-z][a-z0-9_.-]{1,63}$/.test(c.source_type)) throw new AiError(422, 'input.invalid', 'every citation needs a source_type');
                 for (const k of ['url', 'title', 'author', 'snippet', 'source_id']) if (c[k] != null && String(c[k]).length > 4000) throw new AiError(422, 'input.invalid', `${k} too long`);
             }
-            runs.addCitations(run.id, list.map(c => ({ ...c, ordinal: null, provenance: { ...(c.provenance || {}), attached: true } })), req.principal.sub);
-            registry.audit(req.principal.sub, 'run.citations.attach', 'run', run.id, { trace: req.ov.traceId, metadata: { count: list.length } });
-            res.status(201).json({ citations: runs.citations(run.id) });
+            await runs.addCitations(run.id, list.map(c => ({ ...c, ordinal: null, provenance: { ...(c.provenance || {}), attached: true } })), req.principal.sub);
+            await registry.audit(req.principal.sub, 'run.citations.attach', 'run', run.id, { trace: req.ov.traceId, metadata: { count: list.length } });
+            res.status(201).json({ citations: await runs.citations(run.id) });
         } catch (err) { sendError(res, err, req.ov, log); }
     });
 

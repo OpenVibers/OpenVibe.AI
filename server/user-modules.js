@@ -67,16 +67,16 @@ function createUserModules({ db, config, env = process.env, fetchImpl = globalTh
     }
 
     function ensureSchema() {
-        db.exec(`CREATE TABLE IF NOT EXISTS ai_module_pushes (subject_id TEXT PRIMARY KEY, hash TEXT NOT NULL, pushed_at TEXT NOT NULL)`);
+        // ai_module_pushes is in migrations/0001_initial.sql (ADR-035).
     }
 
     /** ai.usage_summary for one person over the 30 days before now, or null when there were no runs. */
-    function summarize(subject, now = clock.now()) {
+    async function summarize(subject, now = clock.now()) {
         const since = new Date(now - 30 * DAY_MS).toISOString();
-        const rows = db.prepare(`SELECT COALESCE(source_service, requester_id) AS svc, COUNT(*) AS n, SUM(tokens_in + tokens_out) AS tokens, MAX(created_at) AS last
-            FROM runs WHERE json_extract(on_behalf_of, '$.type') = 'user' AND json_extract(on_behalf_of, '$.id') = ? AND created_at >= ?
+        const rows = await db.prepare(`SELECT COALESCE(source_service, requester_id) AS svc, COUNT(*) AS n, SUM(tokens_in + tokens_out) AS tokens, MAX(created_at) AS last
+            FROM runs WHERE (on_behalf_of::jsonb ->> 'type') = 'user' AND (on_behalf_of::jsonb ->> 'id') = ? AND created_at >= ?
             GROUP BY svc`).all(subject, since);
-        const lastEver = db.prepare("SELECT MAX(created_at) AS last FROM runs WHERE json_extract(on_behalf_of, '$.type') = 'user' AND json_extract(on_behalf_of, '$.id') = ?").get(subject).last;
+        const lastEver = (await db.prepare("SELECT MAX(created_at) AS last FROM runs WHERE (on_behalf_of::jsonb ->> 'type') = 'user' AND (on_behalf_of::jsonb ->> 'id') = ?").get(subject)).last;
         if (!lastEver) return null;
         const by = {};
         for (const r of rows.slice(0, 30)) if (/^[a-z][a-z0-9-]{1,39}$/.test(String(r.svc || ''))) by[r.svc] = r.n;
@@ -90,29 +90,29 @@ function createUserModules({ db, config, env = process.env, fetchImpl = globalTh
 
     async function push(subject, now = clock.now()) {
         if (!enabled || !USR.test(String(subject || ''))) return false;
-        const data = summarize(subject, now);
+        const data = await summarize(subject, now);
         if (!data) return false;
         const hash = crypto.createHash('sha256').update(JSON.stringify(data)).digest('hex').slice(0, 32);
-        const last = db.prepare('SELECT hash FROM ai_module_pushes WHERE subject_id = ?').get(subject);
+        const last = await db.prepare('SELECT hash FROM ai_module_pushes WHERE subject_id = ?').get(subject);
         if (last && last.hash === hash) { stats.unchanged++; return false; }
         try {
             const r = await call('PUT', 'ai.usage_summary', subject, { ...data, computed_at: new Date(now).toISOString() });
             if (r.status >= 300) throw new Error(`Network answered ${r.status} ${(r.body && r.body.code) || ''}`);
         } catch (err) { stats.failed++; stats.lastError = err.message; return false; }
-        db.prepare(`INSERT INTO ai_module_pushes (subject_id, hash, pushed_at) VALUES (?, ?, ?)
+        await db.prepare(`INSERT INTO ai_module_pushes (subject_id, hash, pushed_at) VALUES (?, ?, ?)
             ON CONFLICT(subject_id) DO UPDATE SET hash = excluded.hash, pushed_at = excluded.pushed_at`).run(subject, hash, new Date(now).toISOString());
         stats.written++;
         return true;
     }
 
-    const people = (sql, ...args) => db.prepare(sql).all(...args).map((r) => r.s).filter((s) => USR.test(String(s || '')));
+    const people = async (sql, ...args) => (await db.prepare(sql).all(...args)).map((r) => r.s).filter((s) => USR.test(String(s || '')));
 
     /** People with a run created since the previous scan. */
     async function scan(now = clock.now()) {
         if (!enabled) return 0;
         const from = lastScan || new Date(now - 10 * 60 * 1000).toISOString();
         const to = new Date(now).toISOString();
-        const subjects = people("SELECT DISTINCT json_extract(on_behalf_of, '$.id') AS s FROM runs WHERE on_behalf_of IS NOT NULL AND created_at >= ? AND created_at < ?", from, to);
+        const subjects = await people("SELECT DISTINCT (on_behalf_of::jsonb ->> 'id') AS s FROM runs WHERE on_behalf_of IS NOT NULL AND created_at >= ? AND created_at < ?", from, to);
         for (const s of subjects) await push(s, now);
         lastScan = to;
         return subjects.length;
@@ -122,7 +122,7 @@ function createUserModules({ db, config, env = process.env, fetchImpl = globalTh
     async function refresh(now = clock.now()) {
         if (!enabled) return 0;
         const since = new Date(now - 31 * DAY_MS).toISOString();
-        const subjects = people(`SELECT DISTINCT json_extract(on_behalf_of, '$.id') AS s FROM runs WHERE on_behalf_of IS NOT NULL AND created_at >= ?
+        const subjects = await people(`SELECT DISTINCT (on_behalf_of::jsonb ->> 'id') AS s FROM runs WHERE on_behalf_of IS NOT NULL AND created_at >= ?
             UNION SELECT subject_id AS s FROM ai_module_pushes`, since);
         for (const s of subjects) await push(s, now);
         return subjects.length;
@@ -132,7 +132,7 @@ function createUserModules({ db, config, env = process.env, fetchImpl = globalTh
         if (!enabled || timers.length) return false;
         ensureSchema();
         const safe = (fn) => () => { fn().catch((err) => { stats.lastError = err.message; }); };
-        timers = [setInterval(safe(() => scan()), 5 * 60 * 1000), setInterval(safe(() => refresh()), DAY_MS), setTimeout(safe(() => refresh()), 3 * 60 * 1000)];
+        timers = [setInterval(safe(async () => await scan()), 5 * 60 * 1000), setInterval(safe(async () => await refresh()), DAY_MS), setTimeout(safe(async () => await refresh()), 3 * 60 * 1000)];
         for (const t of timers) t.unref?.();
         return true;
     }

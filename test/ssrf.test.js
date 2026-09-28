@@ -28,7 +28,7 @@ t.test('address policy: internal, loopback, link-local, mapped IPv6 are not publ
     for (const ip of ['1.1.1.1', '93.184.216.34', '2606:4700:4700::1111']) assert.strictEqual(isPublicAddress(ip), true, ip);
 });
 
-t.test('object storage is followed only as a redirect from Media', () => {
+t.test('object storage is followed only as a redirect from Media', async () => {
     const f = createFetcher(load({ NODE_ENV: 'test', OV_MEDIA_INTERNAL_URL: 'http://127.0.0.1:4100' }));
     const media = { url: new URL('https://openvibe.media/v/1'), internal: false };
     const internal = { url: new URL('http://127.0.0.1:4100/v/1'), internal: true };
@@ -37,11 +37,11 @@ t.test('object storage is followed only as a redirect from Media', () => {
     assert.strictEqual(f.follow(media, b2).url.hostname, 's3.us-west-004.backblazeb2.com', 'Media -> B2');
     assert.strictEqual(f.follow(internal, 'https://acct.r2.cloudflarestorage.com/b/x').internal, false, 'internal Media -> R2, as a public target');
     const refused = (fn, why) => { try { fn(); assert.fail(why); } catch (e) { assert.strictEqual(e.code, 'fetch.refused', why); } };
-    refused(() => f.follow(other, b2), 'another host may not send it to storage');
-    refused(() => f.judge(b2), 'storage is never a URL a caller names');
-    refused(() => f.follow(media, 'http://s3.us-west-004.backblazeb2.com/x'), 'https only');
-    refused(() => f.follow(media, 'https://evil.example/x'), 'not storage');
-    refused(() => f.follow(media, 'https://user:pw@s3.us-west-004.backblazeb2.com/x'), 'no credentials in the URL');
+    await refused(() => f.follow(other, b2), 'another host may not send it to storage');
+    await refused(() => f.judge(b2), 'storage is never a URL a caller names');
+    await refused(() => f.follow(media, 'http://s3.us-west-004.backblazeb2.com/x'), 'https only');
+    await refused(() => f.follow(media, 'https://evil.example/x'), 'not storage');
+    await refused(() => f.follow(media, 'https://user:pw@s3.us-west-004.backblazeb2.com/x'), 'no credentials in the URL');
 });
 
 t.test('URL rules: https + allow-listed host only', async () => {

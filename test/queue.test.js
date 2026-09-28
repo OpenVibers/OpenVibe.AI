@@ -14,8 +14,8 @@ const b = token('tools', ['ai.run.create', 'ai.run.read']);
 let h;
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-const create = (tok, i) => request(h.base, 'POST', '/api/v1/runs', { tok, body: { workflow: 'ai.generate', input: { prompt: `queued ${i}` }, options: { cache: false } } });
-const count = (who) => h.db.prepare('SELECT COUNT(*) AS n FROM runs WHERE requester_id = ?').get(who).n;
+const create = async (tok, i) => await request(h.base, 'POST', '/api/v1/runs', { tok, body: { workflow: 'ai.generate', input: { prompt: `queued ${i}` }, options: { cache: false } } });
+const count = async (who) => (await h.db.prepare('SELECT COUNT(*) AS n FROM runs WHERE requester_id = ?').get(who)).n;
 
 function assertFull(r, scope) {
     assert.strictEqual(r.status, 429, r.text);
@@ -39,9 +39,9 @@ t.test('one caller is held to its per-caller cap; others still get in', async ()
         assert.strictEqual(r.status, 202, r.text);
         mine.push(r.body.run.id);
     }
-    const before = count('live');
+    const before = await count('live');
     assertFull(await create(a, 'over'), 'caller');
-    assert.strictEqual(count('live'), before, 'a refused run leaves no row');
+    assert.strictEqual(await count('live'), before, 'a refused run leaves no row');
     const other = await create(b, 0);
     assert.strictEqual(other.status, 202, 'another caller still queues');
     h.mine = mine;

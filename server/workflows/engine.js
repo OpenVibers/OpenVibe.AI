@@ -101,8 +101,8 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
     let proxy = null;
     const reader = () => proxy || (proxy = require('../media-proxy').createMediaProxy({ fetcher, log }));
     const mediaAnalysis = require('./media-analysis').createMediaAnalysis({ registry, pool, fetcher, quotas, config, spawnImpl, log, reader });
-    function routeFor(key) {
-        const r = registry.resolveRoute(key);
+    async function routeFor(key) {
+        const r = await registry.resolveRoute(key);
         if (!r) throw new AiError(503, 'route.unavailable', `no route ${key}`);
         if (r.disabled) throw new AiError(503, 'route.unavailable', `route ${key} is disabled`);
         return r;
@@ -111,8 +111,8 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
     async function llmStep(step, input, wf, run, ctx) {
         // The run pinned its template version when it was created; later steps use the active one.
         const template = run.template_key === step.template && run.template_version
-            ? registry.getTemplate(step.template, run.template_version)
-            : registry.activeTemplate(step.template);
+            ? await registry.getTemplate(step.template, run.template_version)
+            : await registry.activeTemplate(step.template);
         if (!template) throw new AiError(500, 'workflow.broken', `template ${step.template} is missing`);
         const prep = step.prepare ? PREPARE[step.prepare](input) : { vars: input };
         if (!prep) throw new AiError(500, 'workflow.broken', `prepare hook ${step.prepare} is missing`);
@@ -126,7 +126,7 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
         const system = [render(template.system_prompt, vars).trim(), asked].filter(Boolean).join('\n\n');
         const user = render(template.user_prompt, vars);
         const routeKey = step.route || template.default_route || wf.default_route || 'default.chat';
-        const route = routeFor(routeKey);
+        const route = await routeFor(routeKey);
         const sources = Array.isArray(input.sources) ? input.sources : [];
         let jsonSchema = null;
         if (step.output === 'json') {
@@ -168,7 +168,7 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
 
     async function passthroughStep(step, input, wf, run, ctx) {
         const routeKey = step.route || `${step.route_prefix || 'live'}.${input.role || 'legacy'}`;
-        const route = routeFor(routeKey);
+        const route = await routeFor(routeKey);
         const sys = typeof input.system === 'string' ? (input.system.trim() ? [{ text: input.system, cache: false }] : [])
             : Array.isArray(input.system) ? input.system.filter(x => x && String(x.text || '').trim()).map(x => ({ text: String(x.text), cache: Boolean(x.cache) })) : [];
         const messages = normMessages(input.messages, input.user);
@@ -188,7 +188,7 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
     }
 
     async function transcribeStep(step, input, wf, run, ctx) {
-        const route = routeFor(step.route || 'live.stt');
+        const route = await routeFor(step.route || 'live.stt');
         // Read where it lies (the loopback reader), one window at a time: start_sec seeks with a range request, and
         // timestamps are offset by start_sec unless offset_sec says otherwise. AI_MEDIA_STREAM=0 downloads first.
         const streamed = !config.mediaAnalysis || config.mediaAnalysis.stream !== false;
@@ -207,7 +207,7 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
     }
 
     async function embedStep(step, input, wf, run, ctx) {
-        const route = routeFor(step.route || 'default.embedding');
+        const route = await routeFor(step.route || 'default.embedding');
         const inputs = Array.isArray(input.input) ? input.input : [input.input];
         const exec = await pool.execute(route, 'embed', { input: inputs, timeoutMs: route.timeout_ms || 30000 }, { ...ctx, routeKey: route.key, routeVersion: route.version, promptHash: null });
         const vectors = exec.result.vectors || [];

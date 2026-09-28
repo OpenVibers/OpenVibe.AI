@@ -10,7 +10,7 @@ const { boot, request, token, suite, ALL } = require('./helpers');
 const t = suite('versioning');
 const tok = token('live', ALL);
 let h;
-const run = (body) => request(h.base, 'POST', '/api/v1/runs?wait=5000', { tok, body });
+const run = async (body) => await request(h.base, 'POST', '/api/v1/runs?wait=5000', { tok, body });
 
 t.test('boot', async () => { h = await boot(); });
 
@@ -34,7 +34,7 @@ t.test('an invalid edit is refused and creates no version', async () => {
     assert.strictEqual(bad.status, 422);
     const bad2 = await request(h.base, 'POST', '/api/v1/workflows/ai.summarize/versions', { tok, body: { steps: [{ kind: 'llm', template: 'no.such.template' }] } });
     assert.strictEqual(bad2.status, 422);
-    assert.strictEqual(h.registry.getWorkflow('ai.summarize').version, 1);
+    assert.strictEqual((await h.registry.getWorkflow('ai.summarize')).version, 1);
 });
 
 t.test('deprecating the newest workflow version sends new runs to the newest active one', async () => {
@@ -72,11 +72,11 @@ t.test('historical route keys are explicit aliases of default.json', async () =>
 });
 
 t.test('seed: a code change becomes a new version, unless an admin versioned the key', async () => {
-    const before = h.registry.getTemplate('ai.generate').version;
-    h.registry.seedVersioned('template', 'ai.generate', { name: 'Generate text', system_prompt: '{{system}}', user_prompt: 'CHANGED {{prompt}}', default_route: 'default.chat', input_schema: { type: 'object' }, output_schema: { type: 'object' } });
-    assert.strictEqual(h.registry.getTemplate('ai.generate').version, before + 1);
-    assert.strictEqual(h.registry.getTemplate('ai.generate').created_by, 'seed');
-    const again = h.registry.seedVersioned('template', 'ai.summarize', { name: 'x', user_prompt: 'seed wants this' });
+    const before = (await h.registry.getTemplate('ai.generate')).version;
+    await h.registry.seedVersioned('template', 'ai.generate', { name: 'Generate text', system_prompt: '{{system}}', user_prompt: 'CHANGED {{prompt}}', default_route: 'default.chat', input_schema: { type: 'object' }, output_schema: { type: 'object' } });
+    assert.strictEqual((await h.registry.getTemplate('ai.generate')).version, before + 1);
+    assert.strictEqual((await h.registry.getTemplate('ai.generate')).created_by, 'seed');
+    const again = await h.registry.seedVersioned('template', 'ai.summarize', { name: 'x', user_prompt: 'seed wants this' });
     assert.strictEqual(again.created_by, 'svc:live', 'admin version kept');
 });
 

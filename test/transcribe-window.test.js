@@ -20,7 +20,7 @@ t.test('boot with an internal Media stand-in', async () => {
 });
 
 t.test('a window starts at start_sec and its timestamps follow', async () => {
-    const run = (input) => request(h.base, 'POST', '/api/v1/runs?wait=20000', { tok, body: { workflow: 'live.media.transcribe', input: { media_url: `${base}/v/7`, language: 'en', ...input } } });
+    const run = async (input) => await request(h.base, 'POST', '/api/v1/runs?wait=20000', { tok, body: { workflow: 'live.media.transcribe', input: { media_url: `${base}/v/7`, language: 'en', ...input } } });
     let r = await run({ start_sec: 300, seconds: 60, low_power: true });
     assert.strictEqual(r.body.run.status, 'succeeded', JSON.stringify(r.body.run.error || r.body));
     const segs = r.body.run.output.segments;

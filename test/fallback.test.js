@@ -22,7 +22,7 @@ async function provider(body) {
     const r = await request(h.base, 'POST', '/api/v1/providers', { tok, body: { kind: 'http', auth_mode: 'none', capabilities: ['chat', 'generate', 'json'], timeout_ms: 5000, ...body } });
     assert.strictEqual(r.status, 201, r.text);
 }
-const generate = (prompt) => request(h.base, 'POST', '/api/v1/generate', { tok, body: { prompt, options: { cache: false } } });
+const generate = async (prompt) => await request(h.base, 'POST', '/api/v1/generate', { tok, body: { prompt, options: { cache: false } } });
 
 t.test('boot with stub fallback off and two seam providers', async () => {
     ok = await seamServer(() => ({ text: 'a real answer', model: 'seam-model', usage: { input: 12, output: 4 } }));
@@ -61,7 +61,7 @@ t.test('a failing primary falls back, and the run, request log and audit all say
 
 t.test('the circuit opens after repeated failures and the open provider is skipped', async () => {
     await generate('second');                      // second consecutive failure of `dead` opens it
-    assert.strictEqual(h.pool.health('dead').state, 'open');
+    assert.strictEqual((await h.pool.health('dead')).state, 'open');
     const r = await generate('third');
     const d = await request(h.base, 'GET', `/api/v1/runs/${r.body.run.id}`, { tok });
     const skip = d.body.requests.find(x => x.provider_key === 'dead');

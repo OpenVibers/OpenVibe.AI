@@ -7,10 +7,25 @@
   "runtime": "node 22, express, better-sqlite3",
   "port": 4700,
   "domain": "ai.openvibe.network still serves the OpenVibe.Sites placeholder; the service runs on openvibe-ovh (/opt/openvibe.ai, unit openvibe-ai) on 127.0.0.1:4700, loopback only, used by OpenVibe.Live and OpenVibe.Network",
-  "contracts": "openvibe-contracts v0.75.0",
-  "capabilities": ["ai.run.create", "ai.run.read", "ai.workflow.manage", "ai.provider.manage", "ai.usage.read", "ai.credential.manage", "ai.quota.attribution.manage"],
+  "contracts": "openvibe-contracts v0.76.0",
+  "capabilities": [
+    "ai.run.create",
+    "ai.run.read",
+    "ai.workflow.manage",
+    "ai.provider.manage",
+    "ai.usage.read",
+    "ai.credential.manage",
+    "ai.quota.attribution.manage"
+  ],
   "capabilitiesRegistered": true,
-  "providers": ["stub", "openai-compatible", "anthropic", "http-seam", "whisper.cpp", "local llama.cpp server (openvibe-llm.service)"],
+  "providers": [
+    "stub",
+    "openai-compatible",
+    "anthropic",
+    "http-seam",
+    "whisper.cpp",
+    "local llama.cpp server (openvibe-llm.service)"
+  ],
   "livePatch": "applied: Live fa22de5 runs AI_SERVICE=remote in production since 2026-09-23 ~15:34 UTC (309 runs by 18:30 UTC across 13 live.* workflows and 1 network.site_copy, 0 failed). As of 2026-09-23, not moved yet: VOD captions/whisper and streamers' own provider keys stayed in Live and most Live features were passthrough prompts built by Live (since 2026-09-27 AI has live.media.transcribe, stored provider keys and versioned templates for most live.* workflows); the deployed Network still falls back to Live's /internal/ai/site-copy; scripts/import-from-live.js ran on production at 2026-09-23 18:29 UTC (79,657 ledger rows: 79,647 live.ai_usage, 2 channel_ai_config, 8 site_settings; 11 holds: provider settings and the key stay env references, 1 streamer BYO key stays in Live, 3,021 translations are unrepresentable and stay in Live); every route has fallbacks=[]; 0 citation rows; no /metrics",
   "deployed": true,
   "updated": "2026-09-28",

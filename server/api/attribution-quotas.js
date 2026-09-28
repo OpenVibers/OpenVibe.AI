@@ -31,11 +31,11 @@ function attributionQuotasRouter({ db, quotas, auth, clock = { now: () => Date.n
         return m[0];
     }
 
-    function view(row) {
+    async function view(row) {
         const now = Math.floor(clock.now() / 1000);
         const len = WINDOW_S[row.window];
         const start = Math.floor(now / len) * len;
-        const c = db.prepare('SELECT requests, cost_usd FROM usage_counters WHERE scope_type = ? AND scope_id = ? AND window = ? AND window_start = ? AND workflow_prefix = ?')
+        const c = await db.prepare('SELECT requests, cost_usd FROM usage_counters WHERE scope_type = ? AND scope_id = ? AND "window" = ? AND window_start = ? AND workflow_prefix = ?')
             .get('attribution', row.scope_id, row.window, start, row.workflow_prefix || '') || { requests: 0, cost_usd: 0 };
         return {
             attribution: row.scope_id, window: row.window, workflow_prefix: row.workflow_prefix || null,
@@ -44,26 +44,26 @@ function attributionQuotasRouter({ db, quotas, auth, clock = { now: () => Date.n
             window_resets_at: iso((start + len) * 1000), updated_at: row.updated_at,
         };
     }
-    const rows = (attr) => db.prepare("SELECT * FROM quotas WHERE scope_type = 'attribution' AND scope_id = ? AND status = 'active' ORDER BY window, workflow_prefix").all(attr);
+    const rows = async (attr) => await db.prepare("SELECT * FROM quotas WHERE scope_type = 'attribution' AND scope_id = ? AND status = 'active' ORDER BY \"window\", workflow_prefix").all(attr);
 
-    r.put('/api/v1/attribution-quotas/:attribution', guard, (req, res) => {
+    r.put('/api/v1/attribution-quotas/:attribution', guard, async (req, res) => {
         try {
             const attr = own(req);
             const body = req.body || {};
             const v = validate('ai.attribution-quota-put@1', body);
             if (!v.valid) throw new AiError(422, 'input.invalid', 'body does not match ai.attribution-quota-put@1', { errors: v.errors });
-            const row = quotas.upsert({ scope_type: 'attribution', scope_id: attr, window: body.window, max_cost_usd: body.max_cost_usd, max_requests: body.max_requests, workflow_prefix: body.workflow_prefix || null, status: 'active' },
+            const row = await quotas.upsert({ scope_type: 'attribution', scope_id: attr, window: body.window, max_cost_usd: body.max_cost_usd, max_requests: body.max_requests, workflow_prefix: body.workflow_prefix || null, status: 'active' },
                 { actor: req.principal.sub, origin: `service:${req.principal.subject.id}`, trace: req.ov && req.ov.traceId });
-            res.set('Cache-Control', 'no-store').json(view(row));
+            res.set('Cache-Control', 'no-store').json(await view(row));
         } catch (err) { sendError(res, err, req.ov); }
     });
-    r.get('/api/v1/attribution-quotas/:attribution', guard, (req, res) => {
-        try { res.set('Cache-Control', 'no-store').json({ quotas: rows(own(req)).map(view) }); } catch (err) { sendError(res, err, req.ov); }
+    r.get('/api/v1/attribution-quotas/:attribution', guard, async (req, res) => {
+        try { res.set('Cache-Control', 'no-store').json({ quotas: (await Promise.all((await rows(own(req))).map(view))) }); } catch (err) { sendError(res, err, req.ov); }
     });
-    r.delete('/api/v1/attribution-quotas/:attribution', guard, (req, res) => {
+    r.delete('/api/v1/attribution-quotas/:attribution', guard, async (req, res) => {
         try {
             const attr = own(req);
-            const n = db.prepare("UPDATE quotas SET status = 'disabled', updated_at = ? WHERE scope_type = 'attribution' AND scope_id = ? AND status = 'active'").run(iso(clock.now()), attr).changes;
+            const n = (await db.prepare("UPDATE quotas SET status = 'disabled', updated_at = ? WHERE scope_type = 'attribution' AND scope_id = ? AND status = 'active'").run(iso(clock.now()), attr)).changes;
             res.status(n ? 204 : 404).end();
         } catch (err) { sendError(res, err, req.ov); }
     });

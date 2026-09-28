@@ -258,8 +258,8 @@ function createMediaAnalysis({ registry, pool, fetcher, quotas, config = {}, spa
     }
 
     /** A quota with workflow_prefix `media.paid` and a cost cap: today's media.* spend must be under it. */
-    function paidBudget() {
-        return quotas && quotas.paidBudget ? quotas.paidBudget('media.paid', 'media.') : null;
+    async function paidBudget() {
+        return quotas && quotas.paidBudget ? await quotas.paidBudget('media.paid', 'media.') : null;
     }
 
     /** Refuse before downloading when the temp disk could not hold the file (a full disk stops every service). */
@@ -273,14 +273,14 @@ function createMediaAnalysis({ registry, pool, fetcher, quotas, config = {}, spa
     }
 
     async function overview({ step, input, wf, run: runRow, ctx, facts, highlights, transcript, gaps }) {
-        const template = registry.activeTemplate(step.template || 'media.analyze.overview');
+        const template = await registry.activeTemplate(step.template || 'media.analyze.overview');
         const vars = {
             facts: facts.join('\n'),
             highlights: highlights.map((h) => `${clock(h.start)}–${clock(h.end)} [${h.reasons.join(', ')}] ${h.excerpt}`).join('\n') || '(none)',
             transcript: (transcript.text || '').slice(0, 8000) || '(no transcript)',
         };
         const call = async (routeKey) => {
-            const route = registry.resolveRoute(routeKey);
+            const route = await registry.resolveRoute(routeKey);
             if (!route || route.disabled) return { missing: true };
             const system = render(template.system_prompt, vars).trim();
             const req = { system: [{ text: system, cache: true }], messages: [{ role: 'user', content: render(template.user_prompt, vars) }], image: null, json: null, maxTokens: 250, temperature: 0.3, timeoutMs: route.timeout_ms || 120000, cacheKey: `${wf.key}:${wf.version}` };
@@ -298,7 +298,7 @@ function createMediaAnalysis({ registry, pool, fetcher, quotas, config = {}, spa
                 gaps.push(`The local model did not answer (${e.code || e.message}).`);
             }
             if (input.allow_paid) {
-                const budget = paidBudget();
+                const budget = await paidBudget();
                 if (!budget) gaps.push('Paid providers are off for media analysis: no quota gives media.paid a cost budget.');
                 else if (budget.spent >= budget.max_cost_usd) gaps.push(`Today's paid budget for media analysis ($${budget.max_cost_usd}) is spent.`);
                 else {
@@ -314,7 +314,7 @@ function createMediaAnalysis({ registry, pool, fetcher, quotas, config = {}, spa
     }
 
     async function step(stepDef, input, wf, runRow, ctx) {
-        const mine = turn.then(() => analyse(stepDef, input, wf, runRow, ctx));
+        const mine = turn.then(async () => await analyse(stepDef, input, wf, runRow, ctx));
         turn = mine.catch(() => {});
         return mine;
     }
@@ -346,7 +346,7 @@ function createMediaAnalysis({ registry, pool, fetcher, quotas, config = {}, spa
             let transcript = { available: false, language: input.language || 'en', text: '', segments: [] };
             let sttExec = null;
             if (streams.audio) {
-                const route = registry.resolveRoute(stepDef.stt_route || 'live.stt');
+                const route = await registry.resolveRoute(stepDef.stt_route || 'live.stt');
                 if (!route || route.disabled) gaps.push('No speech-to-text route (live.stt): no transcript.');
                 else {
                     // In windows (sttWindowSec, 10 min): each call stays inside the provider's timeout, and one

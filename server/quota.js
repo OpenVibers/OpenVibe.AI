@@ -35,9 +35,9 @@ function createQuotas(db, { clock = { now: () => Date.now() }, registry } = {}) 
      * scope_id is '*' on a non-global scope applies to EACH principal of that type separately
      * (e.g. service '*' = every service gets its own window).
      */
-    function applicable(ctx) {
+    async function applicable(ctx) {
         const scopes = scopesFor(ctx);
-        const rows = db.prepare("SELECT * FROM quotas WHERE status = 'active'").all();
+        const rows = await db.prepare("SELECT * FROM quotas WHERE status = 'active'").all();
         const out = [];
         for (const q of rows) {
             if (q.workflow_prefix && !String(ctx.workflowKey || '').startsWith(q.workflow_prefix)) continue;
@@ -47,19 +47,19 @@ function createQuotas(db, { clock = { now: () => Date.now() }, registry } = {}) 
         return out;
     }
 
-    const getCounter = db.prepare('SELECT * FROM usage_counters WHERE scope_type = ? AND scope_id = ? AND window = ? AND window_start = ? AND workflow_prefix = ?');
-    const bump = db.prepare(`INSERT INTO usage_counters (scope_type, scope_id, window, window_start, workflow_prefix, requests, tokens, cost_usd)
+    const getCounter = db.prepare('SELECT * FROM usage_counters WHERE scope_type = ? AND scope_id = ? AND "window" = ? AND window_start = ? AND workflow_prefix = ?');
+    const bump = db.prepare(`INSERT INTO usage_counters (scope_type, scope_id, "window", window_start, workflow_prefix, requests, tokens, cost_usd)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(scope_type, scope_id, window, window_start, workflow_prefix)
-        DO UPDATE SET requests = requests + excluded.requests, tokens = tokens + excluded.tokens, cost_usd = cost_usd + excluded.cost_usd`);
+        ON CONFLICT(scope_type, scope_id, "window", window_start, workflow_prefix)
+        DO UPDATE SET requests = usage_counters.requests + excluded.requests, tokens = usage_counters.tokens + excluded.tokens, cost_usd = usage_counters.cost_usd + excluded.cost_usd`);
 
-    const reserveTx = db.transaction((ctx) => {
-        const qs = applicable(ctx);
+    const reserveTx = async (ctx) => await db.tx(async () => {
+        const qs = await applicable(ctx);
         const t = nowSec();
         let worst = null;
         for (const { q, cid } of qs) {
             const ws = windowStart(q.window, t);
-            const c = getCounter.get(q.scope_type, cid, q.window, ws, q.workflow_prefix || '') || { requests: 0, tokens: 0, cost_usd: 0 };
+            const c = await getCounter.get(q.scope_type, cid, q.window, ws, q.workflow_prefix || '') || { requests: 0, tokens: 0, cost_usd: 0 };
             let reason = null;
             if (q.max_requests != null && c.requests + 1 > q.max_requests) reason = `${q.max_requests} requests per ${q.window}`;
             else if (q.max_tokens != null && c.tokens >= q.max_tokens) reason = `${q.max_tokens} tokens per ${q.window}`;
@@ -81,13 +81,13 @@ function createQuotas(db, { clock = { now: () => Date.now() }, registry } = {}) 
             if (q.workflow_prefix) keys.set(`${q.scope_type}|${cid}|${q.window}|${q.workflow_prefix}`, { scope_type: q.scope_type, scope_id: cid, window: q.window, workflow_prefix: q.workflow_prefix, ws: windowStart(q.window, t) });
         }
         const counted = [...keys.values()];
-        for (const k of counted) bump.run(k.scope_type, k.scope_id, k.window, k.ws, k.workflow_prefix, 1, 0, 0);
+        for (const k of counted) await bump.run(k.scope_type, k.scope_id, k.window, k.ws, k.workflow_prefix, 1, 0, 0);
         return { ok: true, quotas: counted };
     });
 
     /** Check + count one request. Throws 429 quota.exceeded before any provider is touched. */
-    function reserve(ctx) {
-        const r = reserveTx(ctx);
+    async function reserve(ctx) {
+        const r = await reserveTx(ctx);
         if (!r.ok) {
             throw new AiError(429, 'quota.exceeded', `quota exceeded for ${r.q.scope_type} ${r.cid}: ${r.reason}`, {
                 retry_after_seconds: Math.max(1, r.retryAfter), quota: { id: r.q.id, scope_type: r.q.scope_type, scope_id: r.cid, window: r.q.window },
@@ -98,21 +98,21 @@ function createQuotas(db, { clock = { now: () => Date.now() }, registry } = {}) 
 
     const insDaily = db.prepare(`INSERT INTO usage_daily (day, requester, attribution, workflow_key, provider_key, model_key, requests, tokens_in, tokens_out, tokens_cached, cost_usd)
         VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
-        ON CONFLICT(day, requester, attribution, workflow_key, provider_key, model_key) DO UPDATE SET requests = requests + 1,
-          tokens_in = tokens_in + excluded.tokens_in, tokens_out = tokens_out + excluded.tokens_out, tokens_cached = tokens_cached + excluded.tokens_cached, cost_usd = cost_usd + excluded.cost_usd`);
+        ON CONFLICT(day, requester, attribution, workflow_key, provider_key, model_key) DO UPDATE SET requests = usage_daily.requests + 1,
+          tokens_in = usage_daily.tokens_in + excluded.tokens_in, tokens_out = usage_daily.tokens_out + excluded.tokens_out, tokens_cached = usage_daily.tokens_cached + excluded.tokens_cached, cost_usd = usage_daily.cost_usd + excluded.cost_usd`);
 
     /** Add real usage to the reserved windows and the daily usage table. */
-    function account(ctx, reserved, { provider, model, tokensIn = 0, tokensOut = 0, tokensCached = 0, cost = 0 }) {
+    async function account(ctx, reserved, { provider, model, tokensIn = 0, tokensOut = 0, tokensCached = 0, cost = 0 }) {
         const tokens = tokensIn + tokensOut;
-        db.transaction(() => {
-            for (const r of reserved || []) bump.run(r.scope_type, r.scope_id, r.window, r.ws, r.workflow_prefix, 0, tokens, cost);
-            insDaily.run(iso(clock.now()).slice(0, 10), `${ctx.requesterType}:${ctx.requesterId}`, ctx.attributionKey || '', ctx.workflowKey, provider || '', model || '', tokensIn, tokensOut, tokensCached, cost);
-        })();
+        await db.tx(async () => {
+            for (const r of reserved || []) await bump.run(r.scope_type, r.scope_id, r.window, r.ws, r.workflow_prefix, 0, tokens, cost);
+            await insDaily.run(iso(clock.now()).slice(0, 10), `${ctx.requesterType}:${ctx.requesterId}`, ctx.attributionKey || '', ctx.workflowKey, provider || '', model || '', tokensIn, tokensOut, tokensCached, cost);
+        });
     }
 
     // ── Admin ──
-    function list() { return db.prepare('SELECT * FROM quotas ORDER BY scope_type, scope_id, window').all(); }
-    function upsert(q, { actor = 'system', origin = 'admin', trace = null } = {}) {
+    async function list() { return await db.prepare('SELECT * FROM quotas ORDER BY scope_type, scope_id, "window"').all(); }
+    async function upsert(q, { actor = 'system', origin = 'admin', trace = null } = {}) {
         if (!['global', 'service', 'actor', 'attribution'].includes(q.scope_type)) throw new AiError(422, 'ai.invalid', 'scope_type must be global, service, actor or attribution');
         if (!WINDOWS[q.window]) throw new AiError(422, 'ai.invalid', 'window must be minute, hour or day');
         const scopeId = q.scope_type === 'global' ? '*' : String(q.scope_id || '');   // '*' on other scopes = each one separately
@@ -123,36 +123,36 @@ function createQuotas(db, { clock = { now: () => Date.now() }, registry } = {}) 
         if (!['active', 'disabled'].includes(status)) throw new AiError(422, 'ai.invalid', 'status must be active or disabled');
         const t = iso(clock.now());
         const prefix = q.workflow_prefix || null;
-        const prev = db.prepare("SELECT * FROM quotas WHERE scope_type = ? AND scope_id = ? AND window = ? AND COALESCE(workflow_prefix, '') = ?").get(q.scope_type, scopeId, q.window, prefix || '');
+        const prev = await db.prepare("SELECT * FROM quotas WHERE scope_type = ? AND scope_id = ? AND \"window\" = ? AND COALESCE(workflow_prefix, '') = ?").get(q.scope_type, scopeId, q.window, prefix || '');
         if (prev) {
-            db.prepare('UPDATE quotas SET max_requests = ?, max_tokens = ?, max_cost_usd = ?, status = ?, updated_at = ? WHERE id = ?')
+            await db.prepare('UPDATE quotas SET max_requests = ?, max_tokens = ?, max_cost_usd = ?, status = ?, updated_at = ? WHERE id = ?')
                 .run(num(q.max_requests), num(q.max_tokens), num(q.max_cost_usd), status, t, prev.id);
         } else {
-            db.prepare('INSERT INTO quotas (scope_type, scope_id, window, max_requests, max_tokens, max_cost_usd, workflow_prefix, status, origin, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+            await db.prepare('INSERT INTO quotas (scope_type, scope_id, "window", max_requests, max_tokens, max_cost_usd, workflow_prefix, status, origin, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
                 .run(q.scope_type, scopeId, q.window, num(q.max_requests), num(q.max_tokens), num(q.max_cost_usd), prefix, status, origin, t, t);
         }
-        const row = db.prepare("SELECT * FROM quotas WHERE scope_type = ? AND scope_id = ? AND window = ? AND COALESCE(workflow_prefix, '') = ?").get(q.scope_type, scopeId, q.window, prefix || '');
-        if (registry) registry.audit(actor, prev ? 'quota.update' : 'quota.create', 'quota', row.id, { trace, metadata: { scope_type: row.scope_type, scope_id: row.scope_id, window: row.window, max_requests: row.max_requests, max_tokens: row.max_tokens, max_cost_usd: row.max_cost_usd, status: row.status, origin } });
+        const row = await db.prepare("SELECT * FROM quotas WHERE scope_type = ? AND scope_id = ? AND \"window\" = ? AND COALESCE(workflow_prefix, '') = ?").get(q.scope_type, scopeId, q.window, prefix || '');
+        if (registry) await registry.audit(actor, prev ? 'quota.update' : 'quota.create', 'quota', row.id, { trace, metadata: { scope_type: row.scope_type, scope_id: row.scope_id, window: row.window, max_requests: row.max_requests, max_tokens: row.max_tokens, max_cost_usd: row.max_cost_usd, status: row.status, origin } });
         return row;
     }
 
-    function usage({ from, to, requester } = {}) {
+    async function usage({ from, to, requester } = {}) {
         const where = [];
         const args = [];
         if (from) { where.push('day >= ?'); args.push(from); }
         if (to) { where.push('day <= ?'); args.push(to); }
         if (requester) { where.push('requester = ?'); args.push(requester); }
-        return db.prepare(`SELECT * FROM usage_daily ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY day DESC, cost_usd DESC LIMIT 1000`).all(...args);
+        return await db.prepare(`SELECT * FROM usage_daily ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY day DESC, cost_usd DESC LIMIT 1000`).all(...args);
     }
 
-    function counters(ctxLike) {
-        const qs = ctxLike ? applicable(ctxLike) : list().filter(q => q.status === 'active' && (q.scope_type === 'global' || q.scope_id !== '*')).map(q => ({ q, cid: q.scope_id }));
+    async function counters(ctxLike) {
+        const qs = ctxLike ? await applicable(ctxLike) : (await list()).filter(q => q.status === 'active' && (q.scope_type === 'global' || q.scope_id !== '*')).map(q => ({ q, cid: q.scope_id }));
         const t = nowSec();
-        return qs.map(({ q, cid }) => {
+        return (await Promise.all(qs.map(async ({ q, cid }) => {
             const ws = windowStart(q.window, t);
-            const c = getCounter.get(q.scope_type, cid, q.window, ws, q.workflow_prefix || '') || { requests: 0, tokens: 0, cost_usd: 0 };
+            const c = await getCounter.get(q.scope_type, cid, q.window, ws, q.workflow_prefix || '') || { requests: 0, tokens: 0, cost_usd: 0 };
             return { quota: q, scope_id: cid, window_start: iso(ws * 1000), resets_in_seconds: ws + WINDOWS[q.window] - t, used: { requests: c.requests, tokens: c.tokens, cost_usd: c.cost_usd } };
-        });
+        })));
     }
 
     /**
@@ -161,11 +161,11 @@ function createQuotas(db, { clock = { now: () => Date.now() }, registry } = {}) 
      * applies them) and whose max_cost_usd is above 0. The tightest cap counts, against today's (UTC) spend of the
      * workflows starting with `spendPrefix`. null when there is none: no budget, no paid call.
      */
-    function paidBudget(prefix, spendPrefix) {
-        const rows = db.prepare("SELECT max_cost_usd FROM quotas WHERE status = 'active' AND workflow_prefix = ? AND max_cost_usd > 0").all(prefix);
+    async function paidBudget(prefix, spendPrefix) {
+        const rows = await db.prepare("SELECT max_cost_usd FROM quotas WHERE status = 'active' AND workflow_prefix = ? AND max_cost_usd > 0").all(prefix);
         if (!rows.length) return null;
         const day = new Date(clock.now()).toISOString().slice(0, 10);
-        const spent = db.prepare("SELECT COALESCE(SUM(cost_usd), 0) AS c FROM usage_daily WHERE day = ? AND substr(workflow_key, 1, ?) = ?").get(day, spendPrefix.length, spendPrefix).c;
+        const spent = (await db.prepare("SELECT COALESCE(SUM(cost_usd), 0) AS c FROM usage_daily WHERE day = ? AND substr(workflow_key, 1, ?) = ?").get(day, spendPrefix.length, spendPrefix)).c;
         return { max_cost_usd: Math.min(...rows.map((r) => r.max_cost_usd)), spent, window: 'day' };
     }
 

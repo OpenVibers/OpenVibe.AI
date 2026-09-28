@@ -18,7 +18,7 @@ let h, seam, network;
 const prefs = { [A.id]: { style: 'casual', length: 'short', perspective: 'a night-shift worker', history: false } };
 const puts = [];
 const systemOf = () => (seam.last.system || []).map((s) => s.text || s).join('\n');
-const summarize = (extra = {}) => request(h.base, 'POST', '/api/v1/runs?wait=5000', { tok: live, body: { workflow: 'ai.summarize', input: { text: 'A long day at the plant, told briefly.' }, ...extra } });
+const summarize = async (extra = {}) => await request(h.base, 'POST', '/api/v1/runs?wait=5000', { tok: live, body: { workflow: 'ai.summarize', input: { text: 'A long day at the plant, told briefly.' }, ...extra } });
 
 t.test('boot with a stub Network and a seam provider', async () => {
     network = http.createServer((req, res) => {
@@ -56,7 +56,7 @@ t.test("a run on A's behalf follows A's preferences; history off keeps no input 
     assert.strictEqual(r.body.run.status, 'succeeded', r.text);
     const sys = systemOf();
     assert.ok(sys.includes('casual style') && sys.includes('Keep it short.') && sys.includes('a night-shift worker'), sys);
-    const row = h.db.prepare('SELECT input, cache_key, options FROM runs WHERE id = ?').get(r.body.run.id);
+    const row = await h.db.prepare('SELECT input, cache_key, options FROM runs WHERE id = ?').get(r.body.run.id);
     assert.strictEqual(row.input, 'null'); assert.strictEqual(row.cache_key, null);
     assert.strictEqual(JSON.parse(row.options).history, false);
     const calls = seam.calls;
@@ -70,13 +70,13 @@ t.test('runs for someone without preferences, or for nobody, are untouched', asy
     assert.ok(!systemOf().includes('The person this is for asked'));
     const r = await summarize();
     assert.ok(!systemOf().includes('The person this is for asked'));
-    assert.notStrictEqual(h.db.prepare('SELECT input FROM runs WHERE id = ?').get(r.body.run.id).input, 'null');
+    assert.notStrictEqual((await h.db.prepare('SELECT input FROM runs WHERE id = ?').get(r.body.run.id)).input, 'null');
 });
 
 t.test('ai.usage_summary: 30-day runs and tokens per person, written only when changed', async () => {
     const mods = require('../server/user-modules').createUserModules({ db: h.db, config: h.config || { networkInternalUrl: h.env.OV_NETWORK_INTERNAL_URL }, env: h.env, log: {} });
     mods.ensureSchema();
-    const s = mods.summarize(A.id);
+    const s = await mods.summarize(A.id);
     assert.strictEqual(s.runs_30d, 2); assert.strictEqual(s.tokens_30d, 80);
     assert.deepStrictEqual(s.by_service, { live: 2 });
     assert.ok(await mods.push(A.id));
@@ -87,7 +87,7 @@ t.test('ai.usage_summary: 30-day runs and tokens per person, written only when c
     assert.strictEqual(await mods.push(A.id), false, 'unchanged: not written again');
     assert.strictEqual(await mods.scan(Date.now() + 1000), 2, 'the scan sees A and B (their runs were just made)');
     assert.deepStrictEqual(puts.map((p) => p.subject).sort(), [A.id, B.id].sort());
-    assert.strictEqual(mods.summarize('usr_01JAB2C3D4E5F6G7H8J9K0MNPC'), null);
+    assert.strictEqual(await mods.summarize('usr_01JAB2C3D4E5F6G7H8J9K0MNPC'), null);
 });
 
 t.test('shutdown', async () => { await h.stop(); await seam.close(); network.close(); });

@@ -64,7 +64,7 @@ t.test('a namespace-limited token may only run workflows in its namespaces', asy
 });
 
 t.test('namespaces fail closed: a token without ns runs nothing (C-22/C-23 retired)', async () => {
-    const run = (tok, workflow, input) => request(h.base, 'POST', '/api/v1/runs', { tok, body: { workflow, input } });
+    const run = async (tok, workflow, input) => await request(h.base, 'POST', '/api/v1/runs', { tok, body: { workflow, input } });
     const denied = (r, what) => { assert.strictEqual(r.status, 403, what); assert.strictEqual(r.body.code, 'capability.namespace_denied', what); };
     // No ns claim, or an empty one: nothing, not even the service's own namespace.
     denied(await run(token('games', ['ai.run.create'], { ns: null }), 'games.generate_lore', {}), 'svc:games without ns -> games.*');

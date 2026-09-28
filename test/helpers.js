@@ -42,16 +42,24 @@ function tmpDir() {
 }
 
 /** Boot the service. `env` goes through config.load() and is also what secrets resolve against. */
-async function boot({ env = {}, dir = tmpDir(), clock, fetchImpl, credentialFetch } = {}) {
+// A boot on a dir used before is a restart on the same database (as the SQLite file was): its database stays open.
+const restartable = new Map();
+
+async function boot({ env = {}, dir, clock, fetchImpl, credentialFetch } = {}) {
+    const reuse = dir !== undefined;
+    if (dir === undefined) dir = tmpDir();
     const fullEnv = {
         NODE_ENV: 'test', PORT: '0', AI_DB_PATH: path.join(dir, 'ai.db'), OV_NETWORK_PUBLIC_KEY: publicKey,
         AI_PROVIDER_RETRY_DELAY_MS: '5', AI_QUOTA_SERVICE_RPM: '0', AI_QUOTA_SERVICE_RPD: '0',
         ...env,
     };
     const config = load(fullEnv);
-    const h = await start({ config, env: fullEnv, log: silent, clock, fetchImpl, credentialFetch });
+    // One database per boot (PGlite, or AI_TEST_STORE=pg: the containers), dropped when the boot stops.
+    const testdb = (reuse && restartable.get(dir)) || await require('./db').testDb();
+    if (reuse) restartable.set(dir, testdb);
+    const h = await start({ config, db: testdb.db, env: fullEnv, log: silent, clock, fetchImpl, credentialFetch });
     const base = `http://127.0.0.1:${h.server.address().port}`;
-    return { ...h, base, dir, env: fullEnv, stop: () => h.close() };
+    return { ...h, base, dir, env: fullEnv, testdb, stop: async () => { await h.close(); if (!reuse) await testdb.close(); } };
 }
 
 async function request(base, method, p, { tok, body, headers = {} } = {}) {

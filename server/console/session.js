@@ -80,27 +80,27 @@ function createSessions({ db, config, clock, secret }) {
     }
 
     // ── Sessions ─────────────────────────────────────────────
-    function create(res, { subject, username, staff, ip }) {
+    async function create(res, { subject, username, staff, ip }) {
         const t = now();
-        db.prepare('DELETE FROM console_sessions WHERE expires_at < ?').run(iso(t - 24 * 3600 * 1000));
+        await db.prepare('DELETE FROM console_sessions WHERE expires_at < ?').run(iso(t - 24 * 3600 * 1000));
         const id = random(32);
         const ttlMs = cc.sessionTtlMin * 60 * 1000;
-        db.prepare(`INSERT INTO console_sessions (id_hash, subject, username, staff, csrf, created_at, expires_at, ip_hash)
+        await db.prepare(`INSERT INTO console_sessions (id_hash, subject, username, staff, csrf, created_at, expires_at, ip_hash)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(sha256(id), subject, username || null, JSON.stringify(staff || {}), random(32), iso(t), iso(t + ttlMs), ipHash(ip));
         appendCookie(res, cookieHeader(sessionCookie, id, { maxAgeSec: ttlMs / 1000, secure: cc.cookieSecure }));
     }
 
     /** The live session of this request, or null (unknown, expired or revoked). */
-    function read(req) {
+    async function read(req) {
         const id = parseCookies(req)[sessionCookie];
         if (!id || !/^[A-Za-z0-9_-]{43}$/.test(id)) return null;
-        const row = db.prepare('SELECT * FROM console_sessions WHERE id_hash = ?').get(sha256(id));
+        const row = await db.prepare('SELECT * FROM console_sessions WHERE id_hash = ?').get(sha256(id));
         if (!row || row.revoked_at || Date.parse(row.expires_at) <= now()) return null;
         return { ...row, staff: parseJson(row.staff, {}) };
     }
 
-    function revoke(row) {
-        if (row) db.prepare('UPDATE console_sessions SET revoked_at = ? WHERE id_hash = ? AND revoked_at IS NULL').run(iso(now()), row.id_hash);
+    async function revoke(row) {
+        if (row) await db.prepare('UPDATE console_sessions SET revoked_at = ? WHERE id_hash = ? AND revoked_at IS NULL').run(iso(now()), row.id_hash);
     }
     function clear(res) {
         appendCookie(res, cookieHeader(sessionCookie, '', { maxAgeSec: 0, secure: cc.cookieSecure }));

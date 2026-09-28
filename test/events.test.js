@@ -7,23 +7,23 @@ const contracts = require('openvibe-contracts');
 process.env.EVENTS_URL = 'http://127.0.0.1:9';           // unreachable: rows stay in the outbox
 process.env.OV_OAUTH_CLIENT_SECRET = 'ai-secret-for-tests';
 process.env.OV_NETWORK_INTERNAL_URL = 'http://127.0.0.1:9';
-const { boot, request, token, suite, ALL } = require('./helpers');
+const { boot, request, token, suite, tmpDir, ALL } = require('./helpers');
 
 const t = suite('events');
 const live = token('live', ALL);
 let h;
-const queued = () => h.db.prepare('SELECT envelope FROM event_outbox ORDER BY id').all().map((r) => JSON.parse(r.envelope));
+const queued = async () => (await h.db.prepare('SELECT envelope FROM event_outbox ORDER BY id').all()).map((r) => (typeof r.envelope === 'string' ? (typeof r.envelope === 'string' ? (typeof r.envelope === 'string' ? JSON.parse(r.envelope) : r.envelope) : r.envelope) : r.envelope));
 const valid = (env) => { const r = contracts.validate(`${env.event_type}@1`, env.payload); assert.ok(r.valid, `${env.event_type}: ${JSON.stringify(r.errors)}`); };
 
 t.test('boot with events on', async () => {
-    h = await boot({ env: { AI_STUB_FALLBACK: 'true' } });
-    assert.strictEqual(require('../server/events').status().enabled, true);
+    h = await boot({ dir: tmpDir(), env: { AI_STUB_FALLBACK: 'true' } });   // a dir: the database outlives h.stop()
+    assert.strictEqual((await require('../server/events').status()).enabled, true);
 });
 
 t.test('a run queues ai.run.queued then ai.run.succeeded, valid and without the prompt or the text', async () => {
     const r = await request(h.base, 'POST', '/api/v1/runs?wait=5000', { tok: live, body: { workflow: 'ai.generate', input: { prompt: 'secret prompt words' } } });
     assert.strictEqual(r.status, 201, r.text);
-    const evs = queued().filter((e) => e.payload.run_id === r.body.run.id);
+    const evs = (await queued()).filter((e) => e.payload.run_id === r.body.run.id);
     assert.deepStrictEqual(evs.map((e) => e.event_type), ['ai.run.queued', 'ai.run.succeeded']);
     evs.forEach(valid);
     assert.strictEqual(evs[0].visibility, 'internal');
@@ -37,7 +37,7 @@ t.test('a cache hit queues ai.run.cached with cached_from', async () => {
     const body = { workflow: 'ai.generate', input: { prompt: 'cache me' } };
     const a = await request(h.base, 'POST', '/api/v1/runs?wait=5000', { tok: live, body });
     const b = await request(h.base, 'POST', '/api/v1/runs?wait=5000', { tok: live, body });
-    const ev = queued().find((e) => e.payload.run_id === b.body.run.id);
+    const ev = (await queued()).find((e) => e.payload.run_id === b.body.run.id);
     if (b.body.run.status !== 'cached') { assert.ok(ev, 'an event for the second run'); return; }   // this workflow may not cache
     assert.strictEqual(ev.event_type, 'ai.run.cached');
     assert.strictEqual(ev.payload.cached_from, a.body.run.id);
@@ -47,13 +47,13 @@ t.test('a cache hit queues ai.run.cached with cached_from', async () => {
 t.test('a failed run queues ai.run.failed with its error code; a restart announces interrupted runs', async () => {
     const r = await request(h.base, 'POST', '/api/v1/runs?wait=5000', { tok: live, body: { workflow: 'no.such.workflow', input: {} } });
     assert.ok(r.status >= 400, 'refused before a run exists: no event');
-    const before = queued().length;
+    const before = (await queued()).length;
     // A queued run left behind by a restart: recoverInterrupted fails it and announces it.
-    const row = h.db.prepare("SELECT * FROM runs WHERE status = 'succeeded' LIMIT 1").get();
-    h.db.prepare("INSERT INTO runs (id, workflow_key, workflow_version, status, requester_type, requester_id, input, input_hash, created_at) VALUES ('run_01JAB2C3D4E5F6G7H8J9K0MNPQ', ?, ?, 'running', 'service', 'live', '{}', 'x', ?)")
+    const row = await h.db.prepare("SELECT * FROM runs WHERE status = 'succeeded' LIMIT 1").get();
+    await h.db.prepare("INSERT INTO runs (id, workflow_key, workflow_version, status, requester_type, requester_id, input, input_hash, created_at) VALUES ('run_01JAB2C3D4E5F6G7H8J9K0MNPQ', ?, ?, 'running', 'service', 'live', '{}', 'x', ?)")
         .run(row.workflow_key, row.workflow_version, new Date().toISOString());
-    assert.strictEqual(h.runs.recoverInterrupted(), 1);
-    const ev = queued().slice(before).find((e) => e.payload.run_id === 'run_01JAB2C3D4E5F6G7H8J9K0MNPQ');
+    assert.strictEqual(await h.runs.recoverInterrupted(), 1);
+    const ev = (await queued()).slice(before).find((e) => e.payload.run_id === 'run_01JAB2C3D4E5F6G7H8J9K0MNPQ');
     assert.strictEqual(ev.event_type, 'ai.run.failed');
     assert.strictEqual(ev.payload.error.code, 'run.interrupted');
     assert.strictEqual(ev.priority, 'important');
@@ -62,14 +62,13 @@ t.test('a failed run queues ai.run.failed with its error code; a restart announc
 
 t.test('close() stops the ai.run.* relay (unsent rows stay in the outbox)', async () => {
     const events = require('../server/events');
-    const pending = events.status().pending;
+    const pending = (await events.status()).pending;
     assert.ok(pending > 0, 'rows are waiting (Events is unreachable)');
     await h.stop();
-    assert.strictEqual(events.status().enabled, false, 'the relay is stopped');
-    const Database = require('better-sqlite3');
-    const db = new Database(require('path').join(h.dir, 'ai.db'), { readonly: true });
-    assert.strictEqual(db.prepare('SELECT COUNT(*) AS n FROM event_outbox WHERE sent_at IS NULL AND rejected_at IS NULL').get().n, pending, 'and its rows wait for the next start');
-    db.close();
+    assert.strictEqual((await events.status()).enabled, false, 'the relay is stopped');
+    const db = h.testdb.db;
+    assert.strictEqual((await db.prepare('SELECT COUNT(*) AS n FROM event_outbox WHERE sent_at IS NULL AND rejected_at IS NULL').get()).n, pending, 'and its rows wait for the next start');
+    await h.testdb.close();
     events._reset();
 });
 t.run();

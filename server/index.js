@@ -21,10 +21,11 @@ const { createKeyStore, createAuth } = require('./auth');
 const schemas = require('./schemas');
 const { createApp } = require('./app');
 
-async function start({ config, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, listen = true, credentialFetch = null } = {}) {
+async function start({ config, db: givenDb = null, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, listen = true, credentialFetch = null } = {}) {
     config = config || load(env);
     schemas.configure(config.schemaCache);
-    const db = openDb(config.dbPath);
+    // PostgreSQL (ADR-035): opened and migrated here unless the caller (a test) hands in a migrated handle.
+    const db = givenDb || await openDb(config, { log });
     const registry = createRegistry(db, { clock, env });
     const quotas = createQuotas(db, { clock, registry });
     const cache = createCache(db, { clock });
@@ -39,8 +40,8 @@ async function start({ config, clock = { now: () => Date.now() }, fetchImpl = gl
     // A person's own provider keys (WS-O task 2): stored by the service holding their consent, used by their runs only.
     const credentials = require('./credentials').createCredentials({ db, config, clock });
     const runs = createRuns({ db, registry, engine, cache, quotas, config, clock, log, userModules, credentials });
-    seed({ registry, quotas, config, env, db });
-    const interrupted = runs.recoverInterrupted();
+    await seed({ registry, quotas, config, env, db });
+    const interrupted = await runs.recoverInterrupted();
     if (interrupted) log.warn(`[ai] marked ${interrupted} interrupted run(s) failed (run.interrupted); callers can retry them`);
 
     const keys = createKeyStore({ urls: [config.networkInternalUrl, config.networkUrl], pem: config.networkPublicKey, fetchImpl, log });
@@ -48,10 +49,10 @@ async function start({ config, clock = { now: () => Date.now() }, fetchImpl = gl
     const app = createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials });
     const keyLoaded = keys.start().catch(() => null);
 
-    const housekeeping = setInterval(() => {
+    const housekeeping = setInterval(async () => {
         try {
-            const pruned = runs.prune();
-            const expired = cache.prune();
+            const pruned = await runs.prune();
+            const expired = await cache.prune();
             if (pruned || expired) log.log(`[ai] retention: ${pruned} old run(s), ${expired} expired cache entr${expired === 1 ? 'y' : 'ies'}`);
         } catch (err) { log.error(`[ai] retention failed: ${err.message}`); }
     }, 60 * 60 * 1000);
@@ -68,7 +69,7 @@ async function start({ config, clock = { now: () => Date.now() }, fetchImpl = gl
         server.headersTimeout = 66000;
         server.requestTimeout = config.runs.maxWaitMs + 30000;
         log.log(`[ai] listening on http://${config.host}:${server.address().port} (${config.nodeEnv})`);
-        const shared = registry.getProvider('shared');
+        const shared = await registry.getProvider('shared');
         log.log(`[ai] shared provider: ${shared.kind} ${shared.status}, credentials ${registry.publicProvider(shared).credentials}; stub fallback ${config.stubFallback ? 'on' : 'off'}`);
     }
 
@@ -82,9 +83,9 @@ async function start({ config, clock = { now: () => Date.now() }, fetchImpl = gl
         }
         await runs.drain();
         await require('./events').stop();   // after the runs: their last ai.run.* rows are queued first
-        const w = pool.adapter('whisper');
+        const w = await pool.adapter('whisper');
         if (w && w.adapter.killActive) w.adapter.killActive();
-        db.close();
+        if (!givenDb) await db.close();
     }
 
     return { config, db, registry, pool, quotas, cache, fetcher, engine, runs, keys, keyLoaded, auth, app, server, close };

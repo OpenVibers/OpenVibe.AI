@@ -8,9 +8,15 @@
     "start": "node server/index.js",
     "dev": "NODE_ENV=development node server/index.js",
     "test": "node test/run.js",
-    "import-from-live": "node scripts/import-from-live.js"
+    "test:pg": "AI_TEST_STORE=pg node test/run.js"
   },
-  "keywords": ["openvibe", "ai", "llm", "workflows", "whisper"],
+  "keywords": [
+    "openvibe",
+    "ai",
+    "llm",
+    "workflows",
+    "whisper"
+  ],
   "author": "OpenVibers",
   "license": "AGPL-3.0-only",
   "repository": "github:OpenVibers/OpenVibe.AI",
@@ -19,14 +25,18 @@
     "better-sqlite3": "^11.10.0",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
-    "openvibe-contracts": "https://codeload.github.com/OpenVibers/OpenVibe.Contracts/tar.gz/refs/tags/v0.75.0",
-    "openvibe-sdk": "https://codeload.github.com/OpenVibers/OpenVibe.SDK/tar.gz/refs/tags/v0.11.0",
-    "openvibe-shared": "https://codeload.github.com/OpenVibers/OpenVibe.Shared/tar.gz/refs/tags/v1.25.0"
+    "openvibe-contracts": "https://codeload.github.com/OpenVibers/OpenVibe.Contracts/tar.gz/refs/tags/v0.76.0",
+    "openvibe-sdk": "https://codeload.github.com/OpenVibers/OpenVibe.SDK/tar.gz/refs/tags/v0.20.3",
+    "openvibe-shared": "https://codeload.github.com/OpenVibers/OpenVibe.Shared/tar.gz/refs/tags/v1.27.0",
+    "pg": "^8.23.0"
   },
   "optionalDependencies": {
     "sharp": "^0.33.5"
   },
   "engines": {
     "node": ">=20.0.0"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8"
   }
 }

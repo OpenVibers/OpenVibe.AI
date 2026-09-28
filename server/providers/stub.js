@@ -146,10 +146,10 @@ function createStubProvider(record = { key: 'stub', metadata: {} }, { stats = nu
         kind: 'stub',
         synthetic: true,
         supports: () => true,
-        transcribe: (req) => run('transcribe', req),
-        embed: (req) => run('embed', req),
+        transcribe: async (req) => await run('transcribe', req),
+        embed: async (req) => await run('embed', req),
     };
-    for (const op of ['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich']) adapter[op] = (req) => run(op, req);
+    for (const op of ['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich']) adapter[op] = async (req) => await run(op, req);
     return adapter;
 }
 

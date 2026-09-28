@@ -22,17 +22,17 @@ function createRegistry(db, { clock = { now: () => Date.now() }, env = process.e
 
     // ── Audit ──────────────────────────────────────────────
     const insAudit = db.prepare('INSERT INTO audit_log (at, actor, action, target_type, target_id, trace_id, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)');
-    function audit(actor, action, targetType, targetId, { trace = null, metadata = {} } = {}) {
-        insAudit.run(now(), actor || 'system', action, targetType || null, targetId == null ? null : String(targetId), trace, JSON.stringify(metadata || {}));
+    async function audit(actor, action, targetType, targetId, { trace = null, metadata = {} } = {}) {
+        await insAudit.run(now(), actor || 'system', action, targetType || null, targetId == null ? null : String(targetId), trace, JSON.stringify(metadata || {}));
     }
-    function listAudit({ action, targetType, targetId, limit = 100, before } = {}) {
+    async function listAudit({ action, targetType, targetId, limit = 100, before } = {}) {
         const where = [];
         const args = [];
         if (action) { where.push('action = ?'); args.push(action); }
         if (targetType) { where.push('target_type = ?'); args.push(targetType); }
         if (targetId) { where.push('target_id = ?'); args.push(String(targetId)); }
         if (before) { where.push('id < ?'); args.push(Number(before)); }
-        const rows = db.prepare(`SELECT * FROM audit_log ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY id DESC LIMIT ?`).all(...args, Math.min(500, limit));
+        const rows = await db.prepare(`SELECT * FROM audit_log ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY id DESC LIMIT ?`).all(...args, Math.min(500, limit));
         return rows.map(r => ({ ...r, metadata: parseJson(r.metadata, {}) }));
     }
 
@@ -46,8 +46,8 @@ function createRegistry(db, { clock = { now: () => Date.now() }, env = process.e
             metadata: parseJson(r.metadata, {}), origin: r.origin, created_at: r.created_at, updated_at: r.updated_at,
         };
     }
-    function getProvider(key) { return decodeProvider(db.prepare('SELECT * FROM providers WHERE key = ?').get(key)); }
-    function listProviders() { return db.prepare('SELECT * FROM providers ORDER BY priority, key').all().map(decodeProvider); }
+    async function getProvider(key) { return decodeProvider(await db.prepare('SELECT * FROM providers WHERE key = ?').get(key)); }
+    async function listProviders() { return (await db.prepare('SELECT * FROM providers ORDER BY priority, key').all()).map(decodeProvider); }
 
     /** Public view: the secret reference name and whether it resolves — never the value. */
     function publicProvider(p, health) {
@@ -66,8 +66,8 @@ function createRegistry(db, { clock = { now: () => Date.now() }, env = process.e
         if (!Array.isArray(p.capabilities) || p.capabilities.some(f => !FEATURES.includes(f))) throw new AiError(422, 'ai.invalid', `capabilities must be a subset of ${FEATURES.join(', ')}`);
     }
 
-    function upsertProvider(input, { actor = 'system', origin = 'admin', trace = null } = {}) {
-        const prev = getProvider(input.key);
+    async function upsertProvider(input, { actor = 'system', origin = 'admin', trace = null } = {}) {
+        const prev = await getProvider(input.key);
         const p = {
             key: input.key,
             display_name: input.display_name || (prev && prev.display_name) || input.key,
@@ -84,14 +84,14 @@ function createRegistry(db, { clock = { now: () => Date.now() }, env = process.e
         };
         checkProvider(p);
         const t = now();
-        db.prepare(`INSERT INTO providers (key, display_name, kind, status, base_url, auth_mode, secret_ref, default_model, capabilities, timeout_ms, priority, metadata, origin, created_at, updated_at)
+        await db.prepare(`INSERT INTO providers (key, display_name, kind, status, base_url, auth_mode, secret_ref, default_model, capabilities, timeout_ms, priority, metadata, origin, created_at, updated_at)
             VALUES (@key, @display_name, @kind, @status, @base_url, @auth_mode, @secret_ref, @default_model, @capabilities, @timeout_ms, @priority, @metadata, @origin, @t, @t)
             ON CONFLICT(key) DO UPDATE SET display_name = excluded.display_name, kind = excluded.kind, status = excluded.status, base_url = excluded.base_url,
               auth_mode = excluded.auth_mode, secret_ref = excluded.secret_ref, default_model = excluded.default_model, capabilities = excluded.capabilities,
               timeout_ms = excluded.timeout_ms, priority = excluded.priority, metadata = excluded.metadata, origin = excluded.origin, updated_at = excluded.updated_at`)
             .run({ ...p, capabilities: JSON.stringify(p.capabilities), metadata: JSON.stringify(p.metadata), origin, t });
-        audit(actor, prev ? 'provider.update' : 'provider.create', 'provider', p.key, { trace, metadata: { kind: p.kind, status: p.status, base_url: p.base_url, secret_ref: p.secret_ref, origin } });
-        return getProvider(p.key);
+        await audit(actor, prev ? 'provider.update' : 'provider.create', 'provider', p.key, { trace, metadata: { kind: p.kind, status: p.status, base_url: p.base_url, secret_ref: p.secret_ref, origin } });
+        return await getProvider(p.key);
     }
 
     // ── Models ─────────────────────────────────────────────
@@ -105,15 +105,15 @@ function createRegistry(db, { clock = { now: () => Date.now() }, env = process.e
             metadata: parseJson(r.metadata, {}), created_at: r.created_at, updated_at: r.updated_at,
         };
     }
-    function getModel(providerKey, modelKey) { return decodeModel(db.prepare('SELECT * FROM models WHERE provider_key = ? AND model_key = ?').get(providerKey, modelKey)); }
-    function listModels({ provider } = {}) {
-        const rows = provider ? db.prepare('SELECT * FROM models WHERE provider_key = ? ORDER BY model_key').all(provider) : db.prepare('SELECT * FROM models ORDER BY provider_key, model_key').all();
+    async function getModel(providerKey, modelKey) { return decodeModel(await db.prepare('SELECT * FROM models WHERE provider_key = ? AND model_key = ?').get(providerKey, modelKey)); }
+    async function listModels({ provider } = {}) {
+        const rows = provider ? await db.prepare('SELECT * FROM models WHERE provider_key = ? ORDER BY model_key').all(provider) : await db.prepare('SELECT * FROM models ORDER BY provider_key, model_key').all();
         return rows.map(decodeModel);
     }
-    function upsertModel(input, { actor = 'system', trace = null } = {}) {
-        if (!getProvider(input.provider_key)) throw new AiError(404, 'ai.not_found', `no provider ${input.provider_key}`);
+    async function upsertModel(input, { actor = 'system', trace = null } = {}) {
+        if (!await getProvider(input.provider_key)) throw new AiError(404, 'ai.not_found', `no provider ${input.provider_key}`);
         if (!input.model_key || String(input.model_key).length > 200) throw new AiError(422, 'ai.invalid', 'model_key required');
-        const prev = getModel(input.provider_key, input.model_key);
+        const prev = await getModel(input.provider_key, input.model_key);
         const type = input.type || (prev && prev.type) || 'chat';
         if (!['chat', 'vision', 'embedding', 'stt'].includes(type)) throw new AiError(422, 'ai.invalid', 'model type must be chat, vision, embedding or stt');
         const status = input.status || (prev && prev.status) || 'active';
@@ -121,7 +121,7 @@ function createRegistry(db, { clock = { now: () => Date.now() }, env = process.e
         const cost = input.cost || (prev && prev.cost) || {};
         const sup = input.supports || (prev && prev.supports) || {};
         const t = now();
-        db.prepare(`INSERT INTO models (provider_key, model_key, display_name, type, status, context_window, max_output, cost_in_per_mtok, cost_out_per_mtok, cost_cached_per_mtok,
+        await db.prepare(`INSERT INTO models (provider_key, model_key, display_name, type, status, context_window, max_output, cost_in_per_mtok, cost_out_per_mtok, cost_cached_per_mtok,
                 supports_json, supports_tools, supports_streaming, supports_vision, metadata, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(provider_key, model_key) DO UPDATE SET display_name = excluded.display_name, type = excluded.type, status = excluded.status,
@@ -134,20 +134,20 @@ function createRegistry(db, { clock = { now: () => Date.now() }, env = process.e
                 cost.in_per_mtok ?? null, cost.out_per_mtok ?? null, cost.cached_per_mtok ?? null,
                 sup.json === false ? 0 : 1, sup.tools ? 1 : 0, sup.streaming ? 1 : 0, sup.vision ? 1 : 0,
                 JSON.stringify(input.metadata || (prev && prev.metadata) || {}), t, t);
-        audit(actor, prev ? 'model.update' : 'model.create', 'model', `${input.provider_key}/${input.model_key}`, { trace, metadata: { status, type } });
-        return getModel(input.provider_key, input.model_key);
+        await audit(actor, prev ? 'model.update' : 'model.create', 'model', `${input.provider_key}/${input.model_key}`, { trace, metadata: { status, type } });
+        return await getModel(input.provider_key, input.model_key);
     }
 
     // ── Versioned records (routes, templates, workflows) ───
-    function nextVersion(table, key) {
-        const r = db.prepare(`SELECT MAX(version) AS v FROM ${table} WHERE key = ?`).get(key);
+    async function nextVersion(table, key) {
+        const r = await db.prepare(`SELECT MAX(version) AS v FROM ${table} WHERE key = ?`).get(key);
         return (r && r.v ? r.v : 0) + 1;
     }
-    function latestAny(table, key) {
-        return db.prepare(`SELECT * FROM ${table} WHERE key = ? ORDER BY version DESC LIMIT 1`).get(key);
+    async function latestAny(table, key) {
+        return await db.prepare(`SELECT * FROM ${table} WHERE key = ? ORDER BY version DESC LIMIT 1`).get(key);
     }
-    function latestActive(table, key) {
-        return db.prepare(`SELECT * FROM ${table} WHERE key = ? AND status = 'active' ORDER BY version DESC LIMIT 1`).get(key);
+    async function latestActive(table, key) {
+        return await db.prepare(`SELECT * FROM ${table} WHERE key = ? AND status = 'active' ORDER BY version DESC LIMIT 1`).get(key);
     }
 
     // Routes
@@ -160,9 +160,9 @@ function createRegistry(db, { clock = { now: () => Date.now() }, env = process.e
         };
     }
     const routeContent = (r) => sha256({ p: r.primary, f: r.fallbacks, o: r.options, m: r.max_output_tokens, rf: r.response_format, t: r.timeout_ms, a: r.alias_of, s: r.status });
-    function createRouteVersion(key, input, { actor = 'system', trace = null } = {}) {
+    async function createRouteVersion(key, input, { actor = 'system', trace = null } = {}) {
         if (!KEY_RE.test(key || '')) throw new AiError(422, 'ai.invalid', 'route key must be lowercase dotted');
-        const prev = decodeRoute(latestAny('routes', key));
+        const prev = decodeRoute(await latestAny('routes', key));
         const r = {
             primary: input.primary || (prev && prev.primary),
             fallbacks: input.fallbacks !== undefined ? input.fallbacks : (prev ? prev.fallbacks : []),
@@ -176,28 +176,28 @@ function createRegistry(db, { clock = { now: () => Date.now() }, env = process.e
         if (!r.alias_of) {
             if (!r.primary || !r.primary.provider) throw new AiError(422, 'ai.invalid', 'route needs primary.provider');
             for (const c of [r.primary, ...(r.fallbacks || [])]) {
-                if (!c || !getProvider(c.provider)) throw new AiError(422, 'ai.invalid', `route references unknown provider ${c && c.provider}`);
+                if (!c || !await getProvider(c.provider)) throw new AiError(422, 'ai.invalid', `route references unknown provider ${c && c.provider}`);
             }
-        } else if (!latestAny('routes', r.alias_of)) throw new AiError(422, 'ai.invalid', `alias target ${r.alias_of} does not exist`);
+        } else if (!await latestAny('routes', r.alias_of)) throw new AiError(422, 'ai.invalid', `alias target ${r.alias_of} does not exist`);
         if (!Array.isArray(r.fallbacks)) throw new AiError(422, 'ai.invalid', 'fallbacks must be an array');
         if (!['text', 'json'].includes(r.response_format)) throw new AiError(422, 'ai.invalid', 'response_format must be text or json');
         if (!['active', 'disabled'].includes(r.status)) throw new AiError(422, 'ai.invalid', 'route status must be active or disabled');
-        const version = nextVersion('routes', key);
-        db.prepare(`INSERT INTO routes (key, version, status, primary_provider, primary_model, fallbacks, options, max_output_tokens, response_format, timeout_ms, alias_of, created_by, created_at)
+        const version = await nextVersion('routes', key);
+        await db.prepare(`INSERT INTO routes (key, version, status, primary_provider, primary_model, fallbacks, options, max_output_tokens, response_format, timeout_ms, alias_of, created_by, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
             .run(key, version, r.status, r.alias_of ? (r.primary && r.primary.provider) || 'stub' : r.primary.provider, r.primary ? r.primary.model || null : null,
                 JSON.stringify(r.fallbacks || []), JSON.stringify(r.options || {}), r.max_output_tokens, r.response_format, r.timeout_ms, r.alias_of, actor, now());
-        audit(actor, 'route.version', 'route', key, { trace, metadata: { version, previous: prev ? prev.version : null, status: r.status, alias_of: r.alias_of } });
-        return getRoute(key, version);
+        await audit(actor, 'route.version', 'route', key, { trace, metadata: { version, previous: prev ? prev.version : null, status: r.status, alias_of: r.alias_of } });
+        return await getRoute(key, version);
     }
-    function getRoute(key, version) {
-        return decodeRoute(version ? db.prepare('SELECT * FROM routes WHERE key = ? AND version = ?').get(key, version) : latestAny('routes', key));
+    async function getRoute(key, version) {
+        return decodeRoute(version ? await db.prepare('SELECT * FROM routes WHERE key = ? AND version = ?').get(key, version) : await latestAny('routes', key));
     }
     /** The route a run uses: newest version, which must be active; aliases are followed (max 3 hops). */
-    function resolveRoute(key) {
+    async function resolveRoute(key) {
         let k = key;
         for (let hop = 0; hop < 4; hop++) {
-            const r = decodeRoute(latestAny('routes', k));
+            const r = decodeRoute(await latestAny('routes', k));
             if (!r) return null;
             if (r.status !== 'active') return { ...r, disabled: true };
             if (!r.alias_of) return r;
@@ -205,9 +205,9 @@ function createRegistry(db, { clock = { now: () => Date.now() }, env = process.e
         }
         return null;
     }
-    function listRoutes({ history = false } = {}) {
-        const rows = history ? db.prepare('SELECT * FROM routes ORDER BY key, version').all()
-            : db.prepare('SELECT r.* FROM routes r JOIN (SELECT key, MAX(version) v FROM routes GROUP BY key) m ON m.key = r.key AND m.v = r.version ORDER BY r.key').all();
+    async function listRoutes({ history = false } = {}) {
+        const rows = history ? await db.prepare('SELECT * FROM routes ORDER BY key, version').all()
+            : await db.prepare('SELECT r.* FROM routes r JOIN (SELECT key, MAX(version) v FROM routes GROUP BY key) m ON m.key = r.key AND m.v = r.version ORDER BY r.key').all();
         return rows.map(decodeRoute);
     }
 
@@ -223,9 +223,9 @@ function createRegistry(db, { clock = { now: () => Date.now() }, env = process.e
         };
     }
     const templateContent = (t) => sha256({ n: t.name, d: t.description, i: t.input_schema, o: t.output_schema, s: t.system_prompt, u: t.user_prompt, r: t.default_route, v: t.visibility, m: t.metadata });
-    function createTemplateVersion(key, input, { actor = 'system', trace = null } = {}) {
+    async function createTemplateVersion(key, input, { actor = 'system', trace = null } = {}) {
         if (!KEY_RE.test(key || '')) throw new AiError(422, 'ai.invalid', 'template key must be lowercase dotted');
-        const prev = decodeTemplate(latestAny('templates', key));
+        const prev = decodeTemplate(await latestAny('templates', key));
         const t = {
             name: input.name || (prev && prev.name) || key,
             description: input.description !== undefined ? input.description : (prev ? prev.description : null),
@@ -243,21 +243,21 @@ function createRegistry(db, { clock = { now: () => Date.now() }, env = process.e
         schemas.assertSchema(t.output_schema, 'output_schema');
         if (!LIFECYCLE.includes(t.status)) throw new AiError(422, 'ai.invalid', `template status must be one of ${LIFECYCLE.join(', ')}`);
         if (!['public', 'first-party', 'internal'].includes(t.visibility)) throw new AiError(422, 'ai.invalid', 'visibility must be public, first-party or internal');
-        const version = nextVersion('templates', key);
-        db.prepare(`INSERT INTO templates (key, version, name, description, input_schema, output_schema, system_prompt, user_prompt, default_route, owner, visibility, status, metadata, created_by, created_at)
+        const version = await nextVersion('templates', key);
+        await db.prepare(`INSERT INTO templates (key, version, name, description, input_schema, output_schema, system_prompt, user_prompt, default_route, owner, visibility, status, metadata, created_by, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
             .run(key, version, t.name, t.description, JSON.stringify(t.input_schema), JSON.stringify(t.output_schema), t.system_prompt, t.user_prompt,
                 t.default_route, t.owner, t.visibility, t.status, JSON.stringify(t.metadata), actor, now());
-        audit(actor, 'template.version', 'template', key, { trace, metadata: { version, previous: prev ? prev.version : null, status: t.status, content_hash: templateContent(t) } });
-        return getTemplate(key, version);
+        await audit(actor, 'template.version', 'template', key, { trace, metadata: { version, previous: prev ? prev.version : null, status: t.status, content_hash: templateContent(t) } });
+        return await getTemplate(key, version);
     }
-    function getTemplate(key, version) {
-        return decodeTemplate(version ? db.prepare('SELECT * FROM templates WHERE key = ? AND version = ?').get(key, version) : latestAny('templates', key));
+    async function getTemplate(key, version) {
+        return decodeTemplate(version ? await db.prepare('SELECT * FROM templates WHERE key = ? AND version = ?').get(key, version) : await latestAny('templates', key));
     }
-    function activeTemplate(key) { return decodeTemplate(latestActive('templates', key)); }
-    function listTemplates({ history = false } = {}) {
-        const rows = history ? db.prepare('SELECT * FROM templates ORDER BY key, version').all()
-            : db.prepare('SELECT t.* FROM templates t JOIN (SELECT key, MAX(version) v FROM templates GROUP BY key) m ON m.key = t.key AND m.v = t.version ORDER BY t.key').all();
+    async function activeTemplate(key) { return decodeTemplate(await latestActive('templates', key)); }
+    async function listTemplates({ history = false } = {}) {
+        const rows = history ? await db.prepare('SELECT * FROM templates ORDER BY key, version').all()
+            : await db.prepare('SELECT t.* FROM templates t JOIN (SELECT key, MAX(version) v FROM templates GROUP BY key) m ON m.key = t.key AND m.v = t.version ORDER BY t.key').all();
         return rows.map(decodeTemplate);
     }
 
@@ -272,9 +272,9 @@ function createRegistry(db, { clock = { now: () => Date.now() }, env = process.e
         };
     }
     const workflowContent = (w) => sha256({ n: w.name, d: w.description, ns: w.namespace, i: w.input_schema, o: w.output_schema, s: w.steps, r: w.default_route, c: w.cache_mode, ttl: w.cache_ttl_sec, m: w.metadata });
-    function createWorkflowVersion(key, input, { actor = 'system', trace = null } = {}) {
+    async function createWorkflowVersion(key, input, { actor = 'system', trace = null } = {}) {
         if (!KEY_RE.test(key || '') || key.split('.').length < 2) throw new AiError(422, 'ai.invalid', 'workflow key must be <namespace>.<name>');
-        const prev = decodeWorkflow(latestAny('workflows', key));
+        const prev = decodeWorkflow(await latestAny('workflows', key));
         const w = {
             name: input.name || (prev && prev.name) || key,
             description: input.description !== undefined ? input.description : (prev ? prev.description : null),
@@ -293,39 +293,39 @@ function createRegistry(db, { clock = { now: () => Date.now() }, env = process.e
         if (!Array.isArray(w.steps) || !w.steps.length) throw new AiError(422, 'ai.invalid', 'workflow needs at least one step');
         for (const s of w.steps) {
             if (!s || !['llm', 'passthrough', 'transcribe', 'embed', 'media_analysis'].includes(s.kind)) throw new AiError(422, 'ai.invalid', 'step kind must be llm, passthrough, transcribe, embed or media_analysis');
-            if ((s.kind === 'llm' || (s.kind === 'media_analysis' && s.template)) && !(s.template && latestAny('templates', s.template))) throw new AiError(422, 'ai.invalid', `step references unknown template ${s.template}`);
+            if ((s.kind === 'llm' || (s.kind === 'media_analysis' && s.template)) && !(s.template && await latestAny('templates', s.template))) throw new AiError(422, 'ai.invalid', `step references unknown template ${s.template}`);
         }
         if (!['none', 'private', 'service'].includes(w.cache_mode)) throw new AiError(422, 'ai.invalid', 'cache_mode must be none, private or service');
         if (!LIFECYCLE.includes(w.status)) throw new AiError(422, 'ai.invalid', `workflow status must be one of ${LIFECYCLE.join(', ')}`);
-        const version = nextVersion('workflows', key);
-        db.prepare(`INSERT INTO workflows (key, version, name, description, namespace, input_schema, output_schema, steps, default_route, cache_mode, cache_ttl_sec, status, metadata, created_by, created_at)
+        const version = await nextVersion('workflows', key);
+        await db.prepare(`INSERT INTO workflows (key, version, name, description, namespace, input_schema, output_schema, steps, default_route, cache_mode, cache_ttl_sec, status, metadata, created_by, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
             .run(key, version, w.name, w.description, w.namespace, JSON.stringify(w.input_schema), JSON.stringify(w.output_schema), JSON.stringify(w.steps),
                 w.default_route, w.cache_mode, w.cache_ttl_sec, w.status, JSON.stringify(w.metadata), actor, now());
-        audit(actor, 'workflow.version', 'workflow', key, { trace, metadata: { version, previous: prev ? prev.version : null, status: w.status, content_hash: workflowContent(w) } });
-        return getWorkflow(key, version);
+        await audit(actor, 'workflow.version', 'workflow', key, { trace, metadata: { version, previous: prev ? prev.version : null, status: w.status, content_hash: workflowContent(w) } });
+        return await getWorkflow(key, version);
     }
-    function getWorkflow(key, version) {
-        return decodeWorkflow(version ? db.prepare('SELECT * FROM workflows WHERE key = ? AND version = ?').get(key, version) : latestAny('workflows', key));
+    async function getWorkflow(key, version) {
+        return decodeWorkflow(version ? await db.prepare('SELECT * FROM workflows WHERE key = ? AND version = ?').get(key, version) : await latestAny('workflows', key));
     }
-    function activeWorkflow(key) { return decodeWorkflow(latestActive('workflows', key)); }
-    function listWorkflows({ history = false, namespace } = {}) {
-        let rows = history ? db.prepare('SELECT * FROM workflows ORDER BY key, version').all()
-            : db.prepare('SELECT w.* FROM workflows w JOIN (SELECT key, MAX(version) v FROM workflows GROUP BY key) m ON m.key = w.key AND m.v = w.version ORDER BY w.key').all();
+    async function activeWorkflow(key) { return decodeWorkflow(await latestActive('workflows', key)); }
+    async function listWorkflows({ history = false, namespace } = {}) {
+        let rows = history ? await db.prepare('SELECT * FROM workflows ORDER BY key, version').all()
+            : await db.prepare('SELECT w.* FROM workflows w JOIN (SELECT key, MAX(version) v FROM workflows GROUP BY key) m ON m.key = w.key AND m.v = w.version ORDER BY w.key').all();
         if (namespace) rows = rows.filter(r => r.namespace === namespace);
         return rows.map(decodeWorkflow);
     }
 
     /** Lifecycle change on one version of a template/workflow/route (status only; audited). */
-    function setStatus(kind, key, version, status, { actor = 'system', trace = null } = {}) {
+    async function setStatus(kind, key, version, status, { actor = 'system', trace = null } = {}) {
         const table = { template: 'templates', workflow: 'workflows', route: 'routes' }[kind];
         if (!table) throw new AiError(400, 'ai.invalid', 'unknown kind');
         const allowed = kind === 'route' ? ['active', 'disabled'] : LIFECYCLE;
         if (!allowed.includes(status)) throw new AiError(422, 'ai.invalid', `status must be one of ${allowed.join(', ')}`);
-        const row = db.prepare(`SELECT status FROM ${table} WHERE key = ? AND version = ?`).get(key, version);
+        const row = await db.prepare(`SELECT status FROM ${table} WHERE key = ? AND version = ?`).get(key, version);
         if (!row) throw new AiError(404, 'ai.not_found', `no ${kind} ${key} v${version}`);
-        db.prepare(`UPDATE ${table} SET status = ? WHERE key = ? AND version = ?`).run(status, key, version);
-        audit(actor, `${kind}.status`, kind, key, { trace, metadata: { version, from: row.status, to: status } });
+        await db.prepare(`UPDATE ${table} SET status = ? WHERE key = ? AND version = ?`).run(status, key, version);
+        await audit(actor, `${kind}.status`, kind, key, { trace, metadata: { version, from: row.status, to: status } });
         return { key, version, status };
     }
 
@@ -333,13 +333,13 @@ function createRegistry(db, { clock = { now: () => Date.now() }, env = process.e
      * Seeding: insert a code-defined record when it is missing, or add a new version when the code
      * changed it and nobody edited it through the admin API since (admin edits always win).
      */
-    function seedVersioned(kind, key, def) {
+    async function seedVersioned(kind, key, def) {
         const [table, create, decode, content] = {
             route: ['routes', createRouteVersion, decodeRoute, routeContent],
             template: ['templates', createTemplateVersion, decodeTemplate, templateContent],
             workflow: ['workflows', createWorkflowVersion, decodeWorkflow, workflowContent],
         }[kind];
-        const latest = decode(latestAny(table, key));
+        const latest = decode(await latestAny(table, key));
         if (!latest) return create(key, def, { actor: 'seed' });
         if (latest.created_by !== 'seed') return latest;
         const merged = { ...latest, ...def };

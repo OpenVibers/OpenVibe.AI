@@ -12,7 +12,7 @@ const live = token('live', [...ALL, 'ai.quota.attribution.manage']);
 const tools = token('tools', [...ALL, 'ai.quota.attribution.manage']);
 const plain = token('live', ALL);
 let h;
-const run = (workflow, userId) => request(h.base, 'POST', '/api/v1/runs?wait=5000', { tok: live, body: { workflow, input: { role: 'chat', user: 'hi' }, attribution: { service: 'live', type: 'user', id: String(userId) } } });
+const run = async (workflow, userId) => await request(h.base, 'POST', '/api/v1/runs?wait=5000', { tok: live, body: { workflow, input: { role: 'chat', user: 'hi' }, attribution: { service: 'live', type: 'user', id: String(userId) } } });
 
 t.test('boot', async () => { h = await boot(); });
 

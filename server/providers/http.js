@@ -40,7 +40,7 @@ function createHttpSeamProvider(record, { apiKey = '', fetchImpl = globalThis.fe
     }
 
     const adapter = { key: record.key, kind: 'http', supports: (f) => caps.has(f) };
-    for (const op of OPS) adapter[op] = (req) => call(op, req);
+    for (const op of OPS) adapter[op] = async (req) => await call(op, req);
     return adapter;
 }
 

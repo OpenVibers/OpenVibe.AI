@@ -15,7 +15,7 @@ const B = { type: 'user', id: 'usr_01JAB2C3D4E5F6G7H8J9K0MNPB' };
 let h;
 let seam;
 
-const summarize = (tok, extra = {}) => request(h.base, 'POST', '/api/v1/runs?wait=5000', { tok, body: { workflow: 'ai.summarize', input: { text: 'The same private text for everyone.' }, ...extra } });
+const summarize = async (tok, extra = {}) => await request(h.base, 'POST', '/api/v1/runs?wait=5000', { tok, body: { workflow: 'ai.summarize', input: { text: 'The same private text for everyone.' }, ...extra } });
 
 t.test('boot with a real (non-synthetic) seam provider', async () => {
     seam = await seamServer((b) => ({ text: `summary #${seam.calls}`, usage: { input: 5, output: 2 } }));
@@ -62,7 +62,7 @@ t.test('another service never reads this service\'s entries', async () => {
 });
 
 t.test('service-scoped workflows (translation) share within the service only', async () => {
-    const tr = (tok, obo) => request(h.base, 'POST', '/api/v1/runs?wait=5000', { tok, body: { workflow: 'live.translate', input: { text: 'こんにちは、みなさん', from: 'ja', to: 'en' }, on_behalf_of: obo } });
+    const tr = async (tok, obo) => await request(h.base, 'POST', '/api/v1/runs?wait=5000', { tok, body: { workflow: 'live.translate', input: { text: 'こんにちは、みなさん', from: 'ja', to: 'en' }, on_behalf_of: obo } });
     assert.strictEqual((await tr(live, A)).body.run.status, 'succeeded');
     assert.strictEqual((await tr(live, B)).body.run.status, 'cached', 'public text translation is shared inside Live');
     assert.strictEqual((await tr(other, A)).body.run.status, 'succeeded', 'but not with another service');

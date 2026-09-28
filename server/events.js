@@ -13,9 +13,10 @@
  */
 const { createClient } = require('openvibe-sdk/core');
 const { createServiceTokenClient } = require('openvibe-sdk/auth');
-const { createEventsClient, createOutbox } = require('openvibe-sdk/events');
+const { createEventsClient, createPgOutbox } = require('openvibe-sdk/events');
 
 let outbox = null;
+let dbRef = null;   // the handle enqueue joins the running transaction through (ADR-035)
 let pruneTimer = null;
 const stats = { queued: 0, lastError: null };
 const PRUNE_EVERY_MS = 6 * 60 * 60 * 1000;
@@ -23,15 +24,16 @@ const PRUNE_EVERY_MS = 6 * 60 * 60 * 1000;
 function init(db, { eventsUrl = process.env.EVENTS_URL, clientSecret = process.env.OV_OAUTH_CLIENT_SECRET, clientId = process.env.OV_OAUTH_CLIENT_ID || 'ai',
     networkUrl = process.env.OV_NETWORK_INTERNAL_URL || 'http://127.0.0.1:4000', fetchImpl, intervalMs, log = console } = {}) {
     if (outbox) return outbox;
+    dbRef = db;
     if (process.env.EVENTS_PUBLISH === 'off' || !eventsUrl || !clientSecret) return null;
     const tokens = createServiceTokenClient({ tokenUrl: `${String(networkUrl).replace(/\/+$/, '')}/oauth/token`, clientId, clientSecret, fetch: fetchImpl });
     const client = createClient({ baseUrls: { events: String(eventsUrl).replace(/\/+$/, '') }, tokenProvider: tokens, fetch: fetchImpl, retries: 0 });
-    outbox = createOutbox(db, {
+    // The PostgreSQL outbox (ADR-035): rows are written in the change's own transaction (enqueue(db, …) joins it).
+    outbox = createPgOutbox(db, {
         events: createEventsClient(client, { source: 'ai' }),
         intervalMs: intervalMs || 2000,
         onError: (err) => { const m = err && err.message; if (m !== stats.lastError) log.warn('[Events] publish failed (will retry):', m); stats.lastError = m; },
     });
-    outbox.ensureSchema();
     outbox.start();
     pruneTimer = setInterval(() => { try { outbox.prune(); } catch { /* next time */ } }, PRUNE_EVERY_MS);
     if (pruneTimer.unref) pruneTimer.unref();
@@ -76,7 +78,7 @@ function payloadOf(row) {
 function runChanged(row) {
     if (!outbox || !row || !['queued', 'cached', 'succeeded', 'failed'].includes(row.status)) return null;
     const requester = { type: row.requester_type, id: row.requester_id };
-    const env = outbox.enqueue({
+    const env = outbox.enqueue(dbRef, {
         event_type: `ai.run.${row.status}`,
         actor: requester.type === 'user' || requester.type === 'service' ? requester : { type: 'service', id: 'ai' },
         subject: { type: 'run', id: row.id },
@@ -85,13 +87,14 @@ function runChanged(row) {
         payload: payloadOf(row),
     });
     stats.queued++;
-    setImmediate(() => outbox && outbox.kick());
+    // Relay once the change (and its event) committed.
+    dbRef.afterCommit(() => outbox && outbox.kick());
     return env;
 }
 
-function status() {
+async function status() {
     if (!outbox) return { enabled: false };
-    return { enabled: true, pending: outbox.pending(), rejected: outbox.rejected(), queued_since_boot: stats.queued, last_error: stats.lastError };
+    return { enabled: true, pending: await outbox.pending(), rejected: await outbox.rejected(), queued_since_boot: stats.queued, last_error: stats.lastError };
 }
 /**
  * Graceful stop (start().close(), after runs.drain()): the relay stops and nothing more is queued; resolves

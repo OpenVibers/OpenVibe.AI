@@ -95,8 +95,8 @@ async function signIn(subject, { role = 'admin', is_owner = false, username = 's
     return { cb, setCookie: sess || null, cookie: sess ? sess.split(';')[0] : null };
 }
 const csrfOf = (page) => (page.text.match(/name="_csrf" value="([^"]+)"/) || [])[1];
-const auditRows = (where, ...args) => h.db.prepare(`SELECT * FROM audit_log WHERE ${where} ORDER BY id`).all(...args);
-const sessionCount = () => h.db.prepare('SELECT COUNT(*) AS n FROM console_sessions').get().n;
+const auditRows = async (where, ...args) => await h.db.prepare(`SELECT * FROM audit_log WHERE ${where} ORDER BY id`).all(...args);
+const sessionCount = async () => (await h.db.prepare('SELECT COUNT(*) AS n FROM console_sessions').get()).n;
 
 /** Controls that are neither hidden nor inside a <label>. */
 function unlabelled(text) {
@@ -155,7 +155,7 @@ t.test('boot with a provider secret, a seam provider, a failing stub and a few r
     const ok = await gen(live, `${'long prompt text '.repeat(40)}END-OF-PROMPT`);
     assert.strictEqual(ok.status, 'succeeded', JSON.stringify(ok.error));
     runIds.ok = ok.id;
-    assert.ok(h.cache.stats().length >= 1, 'a real answer was cached');
+    assert.ok((await h.cache.stats()).length >= 1, 'a real answer was cached');
 });
 
 t.test('the staff map: admin reads and manages workflows, only the owner manages providers, a global_mod gets nothing', () => {
@@ -176,11 +176,11 @@ t.test('anonymous: console pages answer the sign-in page (401), never data; writ
         assert.strictEqual(r.headers.get('x-robots-tag'), 'noindex, nofollow');
     }
     assert.ok((await get('/console/runs?status=failed')).text.includes(`href="/auth/login?next=${encodeURIComponent('/console/runs?status=failed')}"`));
-    const before = h.quotas.list().length;
+    const before = (await h.quotas.list()).length;
     assert.strictEqual((await post('/console/quotas', null, { scope_type: 'service', scope_id: 'live', window: 'day', max_requests: '1' })).status, 401);
     assert.strictEqual((await post('/console/providers/okseam/status', null, { status: 'disabled' })).status, 401);
-    assert.strictEqual(h.quotas.list().length, before);
-    assert.strictEqual(h.registry.getProvider('okseam').status, 'active');
+    assert.strictEqual((await h.quotas.list()).length, before);
+    assert.strictEqual((await h.registry.getProvider('okseam')).status, 'active');
 });
 
 t.test('sign-in redirects to the Network with PKCE S256 as client ai, with a signed host-only flow cookie', async () => {
@@ -212,7 +212,7 @@ t.test('the callback refuses a missing or mismatched state, a forged flow cookie
     assert.strictEqual((await get(`/auth/callback?code=${code}&state=${loc.searchParams.get('state')}`, `ovai_flow=${body}.forged`)).status, 400, 'forged signature');
     code = authorize({ subject_id: people.admin, role: 'admin', challenge: 'A'.repeat(43), redirect_uri: redirect });
     assert.strictEqual((await get(`/auth/callback?code=${code}&state=${encodeURIComponent(loc.searchParams.get('state'))}`, flow)).status, 400, 'PKCE mismatch');
-    assert.strictEqual(sessionCount(), 0);
+    assert.strictEqual(await sessionCount(), 0);
 });
 
 t.test('non-staff get 403 and no session: a user, a global_mod, a token without a subject; refusals are audited', async () => {
@@ -222,8 +222,8 @@ t.test('non-staff get 403 and no session: a user, a global_mod, a token without 
         assert.strictEqual(r.cookie, null);
         assert.ok(r.cb.text.includes('only for OpenVibe.Network staff'));
     }
-    assert.strictEqual(sessionCount(), 0);
-    const refused = auditRows("action = 'console.sign_in.refused'");
+    assert.strictEqual(await sessionCount(), 0);
+    const refused = await auditRows("action = 'console.sign_in.refused'");
     assert.deepStrictEqual(refused.map((x) => x.actor).sort(), ['anonymous', people.mod, people.user].sort());
     assert.ok(refused.every((x) => /^[0-9a-f]{32}$/.test(JSON.parse(x.metadata).ip_hash)), 'the client address is kept as a keyed hash');
     assert.ok(revoked.length >= 3, 'the Network refresh token is revoked straight away');
@@ -238,10 +238,10 @@ t.test('an admin signs in: host-only, HttpOnly, Secure, SameSite=Strict, short-l
     const maxAge = Number((r.setCookie.match(/Max-Age=(\d+)/) || [])[1]);
     assert.ok(maxAge > 0 && maxAge <= 3600, `max-age ${maxAge}`);
     cookies.admin = r.cookie;
-    const row = h.db.prepare('SELECT * FROM console_sessions WHERE subject = ?').get(people.admin);
+    const row = await h.db.prepare('SELECT * FROM console_sessions WHERE subject = ?').get(people.admin);
     assert.notStrictEqual(row.id_hash, r.cookie.split('=')[1], 'only a hash of the session id is stored');
     assert.strictEqual(JSON.parse(row.staff).role, 'admin');
-    assert.strictEqual(auditRows("action = 'console.sign_in' AND actor = ?", people.admin).length, 1);
+    assert.strictEqual((await auditRows("action = 'console.sign_in' AND actor = ?", people.admin)).length, 1);
     const g = grants.filter((x) => x.grant_type === 'authorization_code').pop();
     assert.strictEqual(g.client_id, 'ai');
     assert.strictEqual(g.redirect_uri, 'https://ai.test/auth/callback');
@@ -281,9 +281,9 @@ t.test('an admin cannot use owner-only actions (ai.provider.manage): 403, audite
         assert.strictEqual(r.status, 403, p);
         assert.ok(r.text.includes('This needs ai.provider.manage'), p);
     }
-    assert.strictEqual(h.registry.getProvider('okseam').status, 'active');
-    assert.ok(h.cache.stats().length >= 1);
-    assert.strictEqual(auditRows("action = 'console.request.refused' AND actor = ?", people.admin).length, 4);
+    assert.strictEqual((await h.registry.getProvider('okseam')).status, 'active');
+    assert.ok((await h.cache.stats()).length >= 1);
+    assert.strictEqual((await auditRows("action = 'console.request.refused' AND actor = ?", people.admin)).length, 4);
 });
 
 t.test('CSRF: a write needs the session token and a same-origin request', async () => {
@@ -291,7 +291,7 @@ t.test('CSRF: a write needs the session token and a same-origin request', async 
     assert.strictEqual(draft.status, 201, draft.text);
     const v = draft.body.workflow.version;
     const p = `/console/workflows/ai.generate/versions/${v}/status`;
-    const refusedBefore = auditRows("action = 'console.request.refused'").length;
+    const refusedBefore = (await auditRows("action = 'console.request.refused'")).length;
     for (const [form, headers, why] of [
         [{ status: 'archived' }, {}, 'no token'],
         [{ status: 'archived', _csrf: 'x'.repeat(43) }, {}, 'wrong token'],
@@ -300,14 +300,14 @@ t.test('CSRF: a write needs the session token and a same-origin request', async 
     ]) {
         const r = await post(p, cookies.admin, form, headers);
         assert.strictEqual(r.status, 403, why);
-        assert.strictEqual(h.registry.getWorkflow('ai.generate', v).status, 'draft', why);
+        assert.strictEqual((await h.registry.getWorkflow('ai.generate', v)).status, 'draft', why);
     }
-    assert.strictEqual(auditRows("action = 'console.request.refused'").length, refusedBefore + 4);
+    assert.strictEqual((await auditRows("action = 'console.request.refused'")).length, refusedBefore + 4);
     const ok = await post(p, cookies.admin, { status: 'archived', _csrf: csrf.admin }, { Origin: 'https://ai.test', 'Sec-Fetch-Site': 'same-origin' });
     assert.strictEqual(ok.status, 303, ok.text);
     assert.strictEqual(ok.headers.get('location'), `/console/workflows/ai.generate?version=${v}&done=version_status`);
-    assert.strictEqual(h.registry.getWorkflow('ai.generate', v).status, 'archived');
-    const row = auditRows("action = 'workflow.status' AND target_id = 'ai.generate'").pop();
+    assert.strictEqual((await h.registry.getWorkflow('ai.generate', v)).status, 'archived');
+    const row = (await auditRows("action = 'workflow.status' AND target_id = 'ai.generate'")).pop();
     assert.strictEqual(row.actor, people.admin);
     assert.deepStrictEqual(JSON.parse(row.metadata), { version: v, from: 'draft', to: 'archived' });
     const bad = await post(p, cookies.admin, { status: 'published', _csrf: csrf.admin });
@@ -324,11 +324,11 @@ t.test('owner: providers, circuits, quotas and cache purge through the console, 
     csrf.owner = csrfOf(page);
     let x = await post('/console/providers/badstub/status', cookies.owner, { status: 'disabled', _csrf: csrf.owner });
     assert.strictEqual(x.status, 303);
-    assert.strictEqual(h.registry.getProvider('badstub').status, 'disabled');
-    assert.strictEqual(auditRows("action = 'provider.update' AND target_id = 'badstub' AND actor = ?", people.owner).length, 1);
+    assert.strictEqual((await h.registry.getProvider('badstub')).status, 'disabled');
+    assert.strictEqual((await auditRows("action = 'provider.update' AND target_id = 'badstub' AND actor = ?", people.owner)).length, 1);
     x = await post('/console/providers/badstub/reset', cookies.owner, { _csrf: csrf.owner });
     assert.strictEqual(x.status, 303);
-    assert.strictEqual(auditRows("action = 'provider.circuit_reset' AND target_id = 'badstub' AND actor = ?", people.owner).length, 1);
+    assert.strictEqual((await auditRows("action = 'provider.circuit_reset' AND target_id = 'badstub' AND actor = ?", people.owner)).length, 1);
     assert.strictEqual((await post('/console/providers/nope/reset', cookies.owner, { _csrf: csrf.owner })).status, 404);
 
     x = await post('/console/quotas', cookies.owner, { scope_type: 'service', scope_id: 'live', window: 'fortnight', max_requests: '5', _csrf: csrf.owner });
@@ -336,20 +336,20 @@ t.test('owner: providers, circuits, quotas and cache purge through the console, 
     assert.ok(x.text.includes('window must be minute, hour or day'));
     x = await post('/console/quotas', cookies.owner, { scope_type: 'service', scope_id: 'live', window: 'day', max_requests: '500', max_tokens: '', max_cost_usd: '2.5', _csrf: csrf.owner });
     assert.strictEqual(x.status, 303);
-    const q = h.quotas.list().find((z) => z.scope_type === 'service' && z.scope_id === 'live' && z.window === 'day');
+    const q = (await h.quotas.list()).find((z) => z.scope_type === 'service' && z.scope_id === 'live' && z.window === 'day');
     assert.strictEqual(q.max_requests, 500);
     assert.strictEqual(q.max_tokens, null);
     assert.strictEqual(q.max_cost_usd, 2.5);
-    assert.strictEqual(auditRows("action = 'quota.create' AND actor = ?", people.owner).length, 1);
+    assert.strictEqual((await auditRows("action = 'quota.create' AND actor = ?", people.owner)).length, 1);
 
     x = await post('/console/cache/purge', cookies.owner, { _csrf: csrf.owner });
     assert.strictEqual(x.status, 422, 'purging everything needs the confirmation box');
-    assert.ok(h.cache.stats().length >= 1);
+    assert.ok((await h.cache.stats()).length >= 1);
     x = await post('/console/cache/purge', cookies.owner, { workflow: 'ai.generate', _csrf: csrf.owner });
     assert.strictEqual(x.status, 303);
     assert.match(x.headers.get('location'), /done=cache_purged&removed=1$/);
-    assert.strictEqual(h.cache.stats().length, 0);
-    const purge = auditRows("action = 'cache.purge' AND actor = ?", people.owner).pop();
+    assert.strictEqual((await h.cache.stats()).length, 0);
+    const purge = (await auditRows("action = 'cache.purge' AND actor = ?", people.owner)).pop();
     assert.strictEqual(purge.target_id, 'ai.generate');
     assert.strictEqual(JSON.parse(purge.metadata).removed, 1);
 });
@@ -360,7 +360,7 @@ t.test('admin API changes write the same audit rows, and the audit page shows wh
     assert.strictEqual((await request(h.base, 'POST', '/api/v1/providers/badstub/reset', { tok: ops })).status, 200);
     assert.strictEqual((await request(h.base, 'DELETE', '/api/v1/cache?workflow=ai.generate', { tok: ops })).status, 200);
     for (const action of ['provider.update', 'quota.create', 'provider.circuit_reset', 'cache.purge', 'route.version', 'workflow.version']) {
-        assert.ok(auditRows('action = ? AND actor = ?', action, 'svc:ops').length >= 1, `${action} by svc:ops`);
+        assert.ok((await auditRows('action = ? AND actor = ?', action, 'svc:ops')).length >= 1, `${action} by svc:ops`);
     }
     const a = await get('/console/audit', cookies.admin);
     assertPage(a, '/console/audit');
@@ -430,8 +430,8 @@ t.test('cancel: an admin cancels a running run (ai.workflow.manage), audited wit
     assert.ok(page.text.includes(`action="/console/runs/${id}/cancel"`));
     const x = await post(`/console/runs/${id}/cancel`, cookies.admin, { _csrf: csrf.admin });
     assert.strictEqual(x.status, 303);
-    assert.strictEqual(h.runs.get(id).status, 'cancelled');
-    assert.strictEqual(auditRows("action = 'run.cancel' AND target_id = ? AND actor = ?", id, people.admin).length, 1);
+    assert.strictEqual((await h.runs.get(id)).status, 'cancelled');
+    assert.strictEqual((await auditRows("action = 'run.cancel' AND target_id = ? AND actor = ?", id, people.admin)).length, 1);
     const again = await post(`/console/runs/${id}/cancel`, cookies.admin, { _csrf: csrf.admin });
     assert.strictEqual(again.status, 409, 'a finished run cannot be cancelled');
     await request(h.base, 'POST', '/api/v1/routes/default.chat/versions', { tok: ops, body: { primary: { provider: 'okseam' }, fallbacks: [] } });
@@ -441,7 +441,7 @@ t.test('the staff mapping is applied on every request: a session whose claims no
     const r = await signIn(people.mod, { role: 'admin', username: 'demoted' });
     assert.strictEqual(r.cb.status, 303);
     assert.strictEqual((await get('/console', r.cookie)).status, 200);
-    h.db.prepare("UPDATE console_sessions SET staff = ? WHERE subject = ? AND revoked_at IS NULL").run(JSON.stringify({ role: 'global_mod' }), people.mod);
+    await h.db.prepare("UPDATE console_sessions SET staff = ? WHERE subject = ? AND revoked_at IS NULL").run(JSON.stringify({ role: 'global_mod' }), people.mod);
     const x = await get('/console', r.cookie);
     assert.strictEqual(x.status, 403);
     assert.ok(x.cookies.some((c) => c.startsWith('__Host-ovai_staff=;')), 'the cookie is cleared');
@@ -453,8 +453,8 @@ t.test('sign out revokes the session', async () => {
     assert.strictEqual(x.status, 303);
     assert.ok(x.cookies.some((c) => c.startsWith('__Host-ovai_staff=;')));
     assert.strictEqual((await get('/console', cookies.admin)).status, 401);
-    assert.strictEqual(auditRows("action = 'console.sign_out' AND actor = ?", people.admin).length, 1);
-    for (const s of SECRETS) assert.ok(!JSON.stringify(h.db.prepare('SELECT * FROM audit_log').all()).includes(s), 'no secret in the audit log');
+    assert.strictEqual((await auditRows("action = 'console.sign_out' AND actor = ?", people.admin)).length, 1);
+    for (const s of SECRETS) assert.ok(!JSON.stringify(await h.db.prepare('SELECT * FROM audit_log').all()).includes(s), 'no secret in the audit log');
 });
 
 t.test('robots.txt keeps crawlers out of the console and sign-in; there is no sitemap', async () => {

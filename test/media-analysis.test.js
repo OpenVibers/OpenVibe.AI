@@ -40,7 +40,7 @@ const LOG = [
 const t = suite('media-analysis');
 let media; let mediaBase;
 const tok = token('live', ALL);
-const run = (h, input) => request(h.base, 'POST', '/api/v1/runs?wait=60000', { tok, body: { workflow: 'media.analyze', input: { media_url: `${mediaBase}/fixture.mp4`, language: 'en', ...input } } });
+const run = async (h, input) => await request(h.base, 'POST', '/api/v1/runs?wait=60000', { tok, body: { workflow: 'media.analyze', input: { media_url: `${mediaBase}/fixture.mp4`, language: 'en', ...input } } });
 const completion = (content) => ({ id: 'x', object: 'chat.completion', model: 'fake-model', choices: [{ index: 0, message: { role: 'assistant', content }, finish_reason: 'stop' }], usage: { prompt_tokens: 50, completion_tokens: 20 } });
 
 t.test('the parser reads every filter\'s lines; loud means well above the typical second', async () => {
@@ -151,7 +151,7 @@ t.test('local model down: extractive, and it says so; paid only with allow_paid 
         assert.ok(out.gaps.some((g) => /no quota gives media\.paid a cost budget/.test(g)));
         assert.strictEqual(paid.calls, 0, 'no paid call without a budget');
 
-        h.quotas.upsert({ scope_type: 'global', scope_id: '*', window: 'day', max_cost_usd: 0.5, workflow_prefix: 'media.paid' }, { actor: 'test' });
+        await h.quotas.upsert({ scope_type: 'global', scope_id: '*', window: 'day', max_cost_usd: 0.5, workflow_prefix: 'media.paid' }, { actor: 'test' });
         r = await run(h, { allow_paid: true });
         out = r.body.run.output;
         assert.deepStrictEqual([out.overview.source, out.overview.text], ['paid', 'Paid overview of the recording.'], JSON.stringify(out.gaps));
@@ -163,7 +163,7 @@ t.test('local model down: extractive, and it says so; paid only with allow_paid 
 
         const day = new Date().toISOString().slice(0, 10);
         const callsBefore = paid.calls;
-        h.db.prepare("INSERT INTO usage_daily (day, requester, attribution, workflow_key, provider_key, model_key, requests, cost_usd) VALUES (?, 'service:live', '', 'media.analyze', 'shared', 'paid-model', 1, 0.75)").run(day);
+        await h.db.prepare("INSERT INTO usage_daily (day, requester, attribution, workflow_key, provider_key, model_key, requests, cost_usd) VALUES (?, 'service:live', '', 'media.analyze', 'shared', 'paid-model', 1, 0.75)").run(day);
         r = await run(h, { allow_paid: true });
         out = r.body.run.output;
         assert.strictEqual(r.body.run.status, 'succeeded', 'a spent budget refuses the paid call, not the analysis');

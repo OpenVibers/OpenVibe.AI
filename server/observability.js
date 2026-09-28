@@ -20,11 +20,11 @@ const { createReadiness } = require('openvibe-shared/ready');
 const CIRCUIT_STATES = ['closed', 'half_open', 'open'];
 
 /** Active providers with what they need to answer: credentials and circuit state. */
-function providerView(registry, pool) {
-    return registry.listProviders().filter(p => p.status === 'active').map((p) => {
+async function providerView(registry, pool) {
+    return (await Promise.all((await registry.listProviders()).filter(p => p.status === 'active').map(async (p) => {
         const pub = registry.publicProvider(p);
-        return { key: p.key, kind: p.kind, credentials: pub.credentials, circuit: pool.health(p.key).state };
-    });
+        return { key: p.key, kind: p.kind, credentials: pub.credentials, circuit: (await pool.health(p.key)).state };
+    })));
 }
 
 function createAiReadiness({ db, registry, pool, keys, runs, release = null }) {
@@ -32,19 +32,19 @@ function createAiReadiness({ db, registry, pool, keys, runs, release = null }) {
         service: 'ai',
         release,
         checks: [
-            { name: 'db', required: true, check: () => (db.prepare('SELECT COUNT(*) AS n FROM providers').get().n > 0 ? true : 'the provider registry is empty') },
+            { name: 'db', required: true, check: async () => ((await db.prepare('SELECT COUNT(*) AS n FROM providers').get()).n > 0 ? true : 'the provider registry is empty') },
             {
                 name: 'workflows', required: true,
-                check: () => {
-                    const n = db.prepare("SELECT COUNT(DISTINCT key) AS n FROM workflows WHERE status = 'active'").get().n;
+                check: async () => {
+                    const n = (await db.prepare("SELECT COUNT(DISTINCT key) AS n FROM workflows WHERE status = 'active'").get()).n;
                     return n > 0 ? { ok: true, detail: { active: n } } : 'no active workflow';
                 },
             },
             { name: 'network_jwks', required: true, check: () => keys.loaded() || 'Network signing key not loaded yet: no service token can be verified' },
             {
                 name: 'providers', required: false,
-                check: () => {
-                    const list = providerView(registry, pool);
+                check: async () => {
+                    const list = await providerView(registry, pool);
                     const real = list.filter(p => p.kind !== 'stub');
                     const detail = { active: list.length, usable: real.filter(p => p.credentials !== 'missing' && p.circuit !== 'open').length };
                     if (!real.length) return { ok: false, error: 'no real provider is active: only synthetic stub output is available', detail };
@@ -54,8 +54,8 @@ function createAiReadiness({ db, registry, pool, keys, runs, release = null }) {
                 },
             },
         ],
-        details: (body) => ({
-            providers: body.checks.db.status === 'ok' ? providerView(registry, pool) : null,
+        details: async (body) => ({
+            providers: body.checks.db.status === 'ok' ? await providerView(registry, pool) : null,
             runs: runs.stats(),
         }),
     });
@@ -74,11 +74,11 @@ function registerAiGauges(registry, { runs, registry: ai, pool }) {
     registry.gauge({ name: 'ai_runs_max_queued', help: 'Runs allowed to wait for a slot (AI_MAX_QUEUED_RUNS)', collect: () => runs.stats().max_queued });
     registry.gauge({
         name: 'ai_provider_circuit', help: 'Circuit-breaker state of each active provider (1 = the current state)', labelNames: ['provider', 'state'],
-        collect: () => providerView(ai, pool).flatMap(p => CIRCUIT_STATES.map(state => ({ labels: { provider: p.key, state }, value: p.circuit === state ? 1 : 0 }))),
+        collect: async () => (await providerView(ai, pool)).flatMap(p => CIRCUIT_STATES.map(state => ({ labels: { provider: p.key, state }, value: p.circuit === state ? 1 : 0 }))),
     });
     registry.gauge({
         name: 'ai_provider_credentials_missing', help: 'Active providers whose secret reference does not resolve (1 = missing)', labelNames: ['provider'],
-        collect: () => providerView(ai, pool).filter(p => p.credentials !== 'not_required').map(p => ({ labels: { provider: p.key }, value: p.credentials === 'missing' ? 1 : 0 })),
+        collect: async () => (await providerView(ai, pool)).filter(p => p.credentials !== 'not_required').map(p => ({ labels: { provider: p.key }, value: p.credentials === 'missing' ? 1 : 0 })),
     });
 }
 
