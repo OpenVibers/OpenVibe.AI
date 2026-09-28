@@ -102,4 +102,19 @@ t.test('chat analysis, person overviews, session titles and VOD ranking render a
     assert.strictEqual(POSTPROCESS['live.person.overview']({ text: 'Overview: A coder.' }).overview, 'A coder.');
 });
 
+t.test('Arena persona, quotes, headline and clip confirmation render as Live rendered them', () => {
+    const tp = (k) => live.templates.find((x) => x.key === k);
+    const facts = { name: 'Ann', numbers: { hours_live_90d: 3 } };
+    assert.strictEqual(render(tp('live.arena.persona').user_prompt, PREPARE['live.arena.persona']({ facts }).vars), `Write the Arena persona for this fighter. Facts (JSON):\n${JSON.stringify(facts)}`);
+    assert.match(tp('live.arena.persona').system_prompt, /^You write fighting-game "character select" bios/);
+    assert.strictEqual(render(tp('live.arena.quotes').user_prompt, PREPARE['live.arena.quotes']({ lines: ['a b', 'c'] }).vars), 'Lines (index: text):\n0: a b\n1: c');
+    const ctx = { kind: 'score', winner: 'ann', loser: 'bob', score_a: 3, score_b: 1 };
+    assert.strictEqual(render(tp('live.arena.headline').user_prompt, PREPARE['live.arena.headline'](ctx).vars), JSON.stringify(ctx));
+    const clip = render(tp('live.clips.confirm').user_prompt, PREPARE['live.clips.confirm']({ scene: ['a  jump'], transcript: [{ t: 94, text: 'IT COMPILES' }], sounds: [{ t: 95, label: 'Cheering', confidence: 0.8 }], chat: [] }).vars);
+    assert.match(clip, /ON SCREEN \(recent scene notes\):\n- a jump\n\nWHAT WAS SAID \(recent transcript\):\n- \[1:34\] IT COMPILES\n\nWHAT WAS HEARD \(non-speech sounds detected\):\n- \[1:35\] Cheering \(0\.80\)\n\nCHAT \(recent messages\):\n\(none\)\n\nReturn STRICT JSON only/);
+    assert.deepStrictEqual(POSTPROCESS['live.arena.quotes']({ json: { picks: [{ index: 5, why: 'x' }, { index: 1, why: 'y' }], walkout: 9, voice_verdict: 'v', mic_style: 'm' } }, { lines: ['a', 'b'] }), { picks: [{ index: 1, why: 'y' }], walkout: 1, voice_verdict: 'v', mic_style: 'm' });
+    assert.strictEqual(POSTPROCESS['live.arena.persona']({ json: { title: 'no name' } }), null);
+    assert.deepStrictEqual(POSTPROCESS['live.clips.confirm']({ text: '{"clip": "yes", "title": " A  B "}' }), { clip: false, title: 'A B', desc: '' });
+});
+
 t.run();

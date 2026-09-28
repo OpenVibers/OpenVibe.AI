@@ -87,6 +87,30 @@ function chatLines(messages, withWhere) {
 }
 
 const PREPARE = {
+    'live.arena.persona'(input) {
+        return { vars: { facts: input.facts } };
+    },
+    'live.arena.quotes'(input) {
+        // Indexes can only point at the lines given.
+        const index = { type: 'integer', minimum: 0, maximum: input.lines.length - 1 };
+        const jsonSchema = { type: 'object', additionalProperties: false, required: ['picks', 'walkout', 'voice_verdict', 'mic_style'], properties: {
+            picks: { type: 'array', minItems: 1, maxItems: 6, items: { type: 'object', additionalProperties: false, required: ['index', 'why'], properties: { index, why: { type: 'string' } } } },
+            walkout: index, voice_verdict: { type: 'string' }, mic_style: { type: 'string' },
+        } };
+        return { vars: { lines: input.lines.map((t, i) => `${i}: ${t}`).join('\n') }, jsonSchema };
+    },
+    'live.arena.headline'(input) {
+        return { vars: { payload: input } };
+    },
+    'live.clips.confirm'(input) {
+        const clean = (t, n) => String(t || '').replace(/\s+/g, ' ').trim().slice(0, n);
+        return { vars: {
+            scene: (input.scene || []).map((d) => `- ${clean(d, 160)}`).join('\n') || '(none)',
+            script: (input.transcript || []).map((x) => `- [${mmss(Number(x.t) || 0)}] ${clean(x.text, 140)}`).join('\n') || '(none)',
+            sounds: (input.sounds || []).map((x) => `- [${mmss(Number(x.t) || 0)}] ${x.label} (${Number(x.confidence || 0).toFixed(2)})`).join('\n') || '(none)',
+            chat: (input.chat || []).slice(-30).map((c) => `- ${clean(c, 100)}`).join('\n') || '(none)',
+        } };
+    },
     // Chat analysis (chat-ai.js): messages formatted as Live formatted them, freshest 9000 characters kept.
     'live.chat.global'(input) {
         return { vars: {
@@ -256,6 +280,27 @@ const PREPARE = {
 };
 
 const POSTPROCESS = {
+    'live.arena.persona'(r) {
+        const j = r.json || parseJsonLoose(r.text);
+        return j && typeof j === 'object' && j.fighter_name ? j : null;
+    },
+    'live.arena.quotes'(r, input) {
+        const j = r.json || parseJsonLoose(r.text);
+        if (!j || !Array.isArray(j.picks)) return null;
+        const ok = (i) => Number.isInteger(Number(i)) && Number(i) >= 0 && Number(i) < input.lines.length;
+        const picks = j.picks.filter((p) => p && ok(p.index)).slice(0, 6).map((p) => ({ index: Number(p.index), why: String(p.why || '').slice(0, 200) }));
+        if (!picks.length) return null;
+        return { picks, walkout: ok(j.walkout) ? Number(j.walkout) : picks[0].index, voice_verdict: String(j.voice_verdict || '').slice(0, 400), mic_style: String(j.mic_style || '').slice(0, 400) };
+    },
+    'live.arena.headline'(r) {
+        const j = r.json || parseJsonLoose(r.text);
+        return j && j.headline ? { headline: String(j.headline).slice(0, 120) } : null;
+    },
+    'live.clips.confirm'(r) {
+        const j = r.json || parseJsonLoose(r.text);
+        if (!j || typeof j !== 'object') return null;
+        return { clip: j.clip === true, title: String(j.title || '').replace(/\s+/g, ' ').trim().slice(0, 80), desc: String(j.desc || '').replace(/\s+/g, ' ').trim().slice(0, 400) };
+    },
     // Global picture or one chatter's profile (the profile's input names its subject_kind); every key the schema asks for.
     'live.chat.insight'(r, input) {
         const j = r.json || parseJsonLoose(r.text);
