@@ -91,8 +91,24 @@ function createFetcher(config, { transport = null } = {}) {
     }
 
     /** Judge a redirect from `from`: the same rules, and a public hop may not lead to the internal origin. */
+    /** Media's own hosts: the internal origin, or its public URL's host. */
+    const mediaPublicHost = (() => { try { return new URL(m.publicUrl).hostname.toLowerCase(); } catch { return null; } })();
+    const fromMedia = (t) => t.internal || (mediaPublicHost && t.url.hostname.toLowerCase() === mediaPublicHost);
+
     function follow(from, location) {
-        const next = judge(location);
+        let next;
+        try {
+            next = judge(location);
+        } catch (err) {
+            // Media hands an offloaded recording to object storage with a 302 to a presigned URL: that storage (and
+            // only it) is followed, only from Media, over https, never to an IP literal; connect-time checks still apply.
+            let u = null;
+            try { u = new URL(String(location)); } catch { /* not a URL */ }
+            const storage = u && fromMedia(from) && u.protocol === 'https:' && !u.username && !u.password
+                && !net.isIP(u.hostname.replace(/^\[|\]$/g, '')) && hostAllowed(u.hostname, m.storageHosts || []);
+            if (!storage) throw err;
+            return { url: u, internal: false };
+        }
         if (next.internal && !from.internal) throw new AiError(422, 'fetch.refused', 'a redirect from a public host may not reach the internal Media origin');
         return next;
     }
