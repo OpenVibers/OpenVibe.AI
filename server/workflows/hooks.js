@@ -76,6 +76,16 @@ const MOMENT_FLAVOR = {
 const oneLine = (t, max) => String(t || '').replace(/\s+/g, ' ').trim().slice(0, max);
 
 const PREPARE = {
+    // The Arena judges send what Live sent before, as one JSON object, in the same order.
+    'live.arena.judge_beef'(input) {
+        return { vars: { payload: {
+            target_names: input.target_names, target_as_transcribed: input.target_as_transcribed || [], target_named_in_new_speech: input.target_named_in_new_speech !== false,
+            how_the_name_was_matched: input.how_the_name_was_matched || 'exact', what_speaker_already_said_about_target: input.what_speaker_already_said_about_target || null, new_speech: input.new_speech,
+        } } };
+    },
+    'live.arena.judge_mic'(input) {
+        return { vars: { payload: { speech: input.speech } } };
+    },
     'live.moments.pick'(input) {
         const lines = (list, max) => (list || []).map((x) => `[${mmss(Number(x.t) || 0)}] ${oneLine(x.text || x.label, max)}`).join('\n');
         const times = (list, n) => ((list || []).length ? list.slice(0, n).map((t) => mmss(Number(t) || 0)).join(', ') : 'none');
@@ -188,6 +198,12 @@ const PREPARE = {
 };
 
 const POSTPROCESS = {
+    // A judgement without a numeric quality is no answer (Live then uses its own heuristic).
+    'live.arena.judge'(r) {
+        const j = r.json || parseJsonLoose(r.text);
+        if (!j || typeof j !== 'object' || typeof j.quality !== 'number') return null;
+        return { ...j, quality: Math.max(0, Math.min(10, Math.round(j.quality))) };
+    },
     'live.moments.pick'(r) {
         const j = r.json || parseJsonLoose(r.text);
         const t = j && Number(j.t);

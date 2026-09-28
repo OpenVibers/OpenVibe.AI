@@ -1,15 +1,17 @@
 'use strict';
-// live.moments.pick moved from a prompt Live rendered to a versioned template (roadmap WS-O task 2): the prepare
-// hook formats the timeline, transcript and sounds as [m:ss] lines like Live did, names clip and chat signals, adds the
-// flavor hint, and writes the "already used" line only when there is something to avoid; nothing to work from is no
-// run; the postprocess reads the model's JSON and refuses anything without a time.
+// Live prompts moved to versioned templates (roadmap WS-O task 2); each renders as Live rendered it.
+//   live.moments.pick: the prepare hook formats the timeline, transcript and sounds as [m:ss] lines, names clip and
+//     chat signals, adds the flavor hint, and writes the "already used" line only when there is something to avoid;
+//     nothing to work from is no run; the postprocess refuses an answer without a time.
+//   live.arena.judge_beef / judge_mic: the user message is the same JSON object Live sent, keys in the same order;
+//     the system prompt and the JSON schema are Live's; an answer without a numeric quality is no answer.
 const assert = require('assert');
 const { suite } = require('./helpers');
 const { PREPARE, POSTPROCESS } = require('../server/workflows/hooks');
 const { render } = require('../server/templates');
 const live = require('../server/workflows/live');
 
-const t = suite('moments-template');
+const t = suite('live-templates');
 const tpl = (live.templates || []).find((x) => x.key === 'live.moments.pick');
 
 t.test('the prompt renders as Live rendered it', () => {
@@ -35,6 +37,21 @@ t.test('the answer is read like Live read it', () => {
     assert.deepStrictEqual(post({ text: 'Sure! {"t": 95.7, "title": "\\"It Compiles\\"", "desc": "He  jumps."}' }), { t: 95, title: 'It Compiles', desc: 'He jumps.' });
     assert.strictEqual(post({ text: '{"title": "no time"}' }), null);
     assert.strictEqual(post({ text: 'no json at all' }), null);
+});
+
+t.test('the Arena judges send what Live sent', () => {
+    const beef = live.templates.find((x) => x.key === 'live.arena.judge_beef');
+    const mic = live.templates.find((x) => x.key === 'live.arena.judge_mic');
+    assert.ok(beef && mic);
+    assert.match(beef.system_prompt, /^You judge live streamer-vs-streamer shit talk/);
+    assert.deepStrictEqual(beef.output_schema.required, ['about_target', 'aimed_at_target', 'quality', 'best_line', 'about', 'announcer', 'flagged']);
+    const input = { target_names: ['ann'], target_as_transcribed: ['an'], target_named_in_new_speech: false, how_the_name_was_matched: 'sound-alike', what_speaker_already_said_about_target: 'called her washed', new_speech: 'she is still washed' };
+    const user = render(beef.user_prompt, PREPARE['live.arena.judge_beef'](input).vars);
+    assert.strictEqual(user, JSON.stringify(input), 'the same object, keys in the same order');
+    assert.strictEqual(render(mic.user_prompt, PREPARE['live.arena.judge_mic']({ speech: 'x y' }).vars), JSON.stringify({ speech: 'x y' }));
+    const post = POSTPROCESS['live.arena.judge'];
+    assert.strictEqual(post({ json: { quality: 'high' } }), null);
+    assert.strictEqual(post({ json: { is_trash_talk: true, quality: 14.6 } }).quality, 10);
 });
 
 t.run();
