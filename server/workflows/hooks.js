@@ -68,7 +68,32 @@ function sourcesBlock(sources) {
     }).join('\n\n');
 }
 
+// Moments (ai-moments-job.js): how each flavor of moment is picked.
+const MOMENT_FLAVOR = {
+    paste: 'This moment becomes a SCREENSHOT paste: pick something visually striking in a single frame — a face or reaction, a visual gag, something odd on screen, a scene change. What was said matters less than what is SEEN.',
+    clip: 'This moment becomes a 25-SECOND VIDEO CLIP: pick a beat that plays out over time — a line that lands, a reaction, a sound, chat exploding, something HAPPENING — not a static pretty frame.',
+};
+const oneLine = (t, max) => String(t || '').replace(/\s+/g, ' ').trim().slice(0, max);
+
 const PREPARE = {
+    'live.moments.pick'(input) {
+        const lines = (list, max) => (list || []).map((x) => `[${mmss(Number(x.t) || 0)}] ${oneLine(x.text || x.label, max)}`).join('\n');
+        const times = (list, n) => ((list || []).length ? list.slice(0, n).map((t) => mmss(Number(t) || 0)).join(', ') : 'none');
+        const avoid = (input.avoid || []).map(Number).filter((t) => Number.isFinite(t)).sort((a, b) => a - b);
+        if (!(input.timeline || []).length && !(input.transcript || []).length) return { output: null };
+        return {
+            vars: {
+                title: oneLine(input.title, 80),
+                timeline: lines(input.timeline, 180) || '(none)',
+                transcript: lines(input.transcript, 160) || '(none)',
+                sounds: lines(input.sounds, 80) || '(none)',
+                clipped: times(input.clipped, 12),
+                spikes: times(input.spikes, 6),
+                flavor_hint: MOMENT_FLAVOR[input.flavor] || MOMENT_FLAVOR.paste,
+                avoid: avoid.map(mmss).join(', '),
+            },
+        };
+    },
     'live.translate'(input) {
         const text = String(input.text || '').trim();
         const from = input.from || 'auto';
@@ -163,6 +188,12 @@ const PREPARE = {
 };
 
 const POSTPROCESS = {
+    'live.moments.pick'(r) {
+        const j = r.json || parseJsonLoose(r.text);
+        const t = j && Number(j.t);
+        if (!j || !Number.isFinite(t) || t < 0) return null;
+        return { t: Math.floor(t), title: oneLine(j.title, 80).replace(/^["']+|["']+$/g, ''), desc: oneLine(j.desc, 400) };
+    },
     'ai.classify'(r, input) {
         const j = r.json || parseJsonLoose(r.text);
         if (!j || !input.labels.includes(j.label)) return null;   // a label outside the given set is not an answer

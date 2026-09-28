@@ -80,6 +80,21 @@ const templates = [
         default_route: 'live.legacy', owner: 'live',
     },
     {
+        key: 'live.moments.pick', name: 'Live: pick one moment of a VOD',
+        description: 'From ai-moments-job.js _findBestMoment (moment_pick): the most interesting visible moment for a screenshot paste or a clip, away from moments already used.',
+        input_schema: { type: 'object' },
+        output_schema: {
+            type: 'object', additionalProperties: false, required: ['t', 'title', 'desc'], properties: {
+                t: { type: 'integer', description: 'seconds into the VOD' },
+                title: { type: 'string', description: 'specific punchy 3-8 word title, not the stream name, funny, never generic' },
+                desc: { type: 'string', description: 'one vivid sentence describing the moment' },
+            },
+        },
+        system_prompt: '',
+        user_prompt: 'Below is a single livestream VOD titled "{{title}}", described by its on-screen TIMELINE (visual scene notes) and its AUDIO TRANSCRIPT, each line timestamped [m:ss].\n\nTIMELINE:\n{{timeline}}\n\nTRANSCRIPT:\n{{transcript}}\n\nSOUNDS HEARD (non-speech audio events):\n{{sounds}}\n\nViewers CLIPPED these timestamps (very strong "this was a highlight" signal): {{clipped}}\nChat activity SPIKED around: {{spikes}}\n\n{{flavor_hint}}\n{{#avoid}}ALREADY USED (a paste or clip exists there) — do NOT pick these or anything within 2 minutes of them: {{avoid}}. Find a DIFFERENT moment.{{/avoid}}\n\nFind the SINGLE most interesting/funny/dramatic/surprising/striking moment in this VOD with something clearly VISIBLE happening. Prefer moments backed by the clip/chat signals when they line up with something notable. NEVER pick a black/dark/loading/blank screen, an intro/BRB card, or a moment with no visible content or activity. Return STRICT JSON only, nothing else: {"t": <seconds into the vod>, "title": "<specific punchy 3-8 word title, not the stream name, funny, never generic>", "desc": "<one vivid sentence describing the moment>"}',
+        default_route: 'live.legacy', owner: 'live', metadata: { json_name: 'moment_pick' },
+    },
+    {
         key: 'live.stream.recap', name: 'Live: after-show report',
         description: 'From recap/recap.js aiWriteup (stream_recap).',
         input_schema: { type: 'object' },
@@ -177,6 +192,22 @@ const structured = [
         cache_mode: 'private',
     },
     {
+        key: 'live.moments.pick', name: 'Pick one moment of a VOD (a screenshot paste or a clip)', namespace: 'live',
+        description: 'The prompt Live used to render (ai-moments-job.js), now a versioned template: timeline, transcript, sounds, clip and chat signals in; one moment out.',
+        input_schema: TEXT_OUT({
+            title: STR(200), flavor: { enum: ['paste', 'clip'] },
+            timeline: { type: 'array', maxItems: 400, items: { type: 'object', required: ['t', 'text'], additionalProperties: false, properties: { t: { type: 'number', minimum: 0 }, text: STR(2000) } } },
+            transcript: { type: 'array', maxItems: 1500, items: { type: 'object', required: ['t', 'text'], additionalProperties: false, properties: { t: { type: 'number', minimum: 0 }, text: STR(2000) } } },
+            sounds: { type: 'array', maxItems: 500, items: { type: 'object', required: ['t', 'label'], additionalProperties: false, properties: { t: { type: 'number', minimum: 0 }, label: STR(120) } } },
+            clipped: { type: 'array', maxItems: 100, items: { type: 'number', minimum: 0 } },
+            spikes: { type: 'array', maxItems: 100, items: { type: 'number', minimum: 0 } },
+            avoid: { type: 'array', maxItems: 500, items: { type: 'number', minimum: 0 } },
+        }, ['title']),
+        output_schema: TEXT_OUT({ t: { type: 'integer', minimum: 0 }, title: STR(90), desc: STR(420) }, ['t', 'title', 'desc']),
+        steps: [{ kind: 'llm', template: 'live.moments.pick', operation: 'generate', output: 'json', prepare: 'live.moments.pick', postprocess: 'live.moments.pick', params: { max_tokens: 300 } }],
+        cache_mode: 'none',
+    },
+    {
         key: 'live.stream.recap', name: 'After-show report for a finished stream', namespace: 'live',
         input_schema: TEXT_OUT({ facts: { type: 'object' }, sources: SOURCES(0, 50) }, ['facts']),
         output_schema: TEXT_OUT({ headline: STR(90), summary: STR(500), moment: STR(200), tags: { type: 'array', items: STR(200), maxItems: 4 }, grade: { enum: ['S', 'A', 'B', 'C'] } }, ['headline', 'summary', 'moment', 'tags', 'grade']),
@@ -233,7 +264,6 @@ const PASSTHROUGH = [
     ['live.viewers.fold', 'AI viewers: memory fold', 'viewers/fold.js — ai_viewers_fold.'],
     ['live.chat.insight', 'Chat insights and session overviews', 'chat-ai.js and chat-ai-routes.js — chat_global, chat_user, chat_relay, chat_anon, combined_overview, session_titles.'],
     ['live.moments.rank', 'Moments: rank VOD moments', 'ai-moments-job.js — moment_vod_rank.'],
-    ['live.moments.pick', 'Moments: pick a moment', 'ai-moments-job.js — moment_pick.'],
     ['live.clips.confirm', 'Auto-clip confirmation', 'auto-clip-job.js — auto_clip_confirm.'],
     ['live.hero.slogans', 'Home hero slogans', 'slogan-job.js — hero_slogans.'],
     ['live.easter_egg', 'Easter eggs', 'easter-egg-job.js — easter_egg.'],

@@ -47,6 +47,8 @@ const EXAMPLES = {
     'tools.describe': { tool: 'img.convert', sources: [{ source_type: 'tools.tool', title: 'img.convert descriptor', content: '{"id":"img.convert","inputs":["file","format"]}' }] },
 };
 for (const k of new Set(Object.values(KIND_TO_WORKFLOW).concat('live.complete'))) EXAMPLES[k] = PASS;
+// Moved from passthrough to a versioned template (WS-O task 2): structured input.
+EXAMPLES['live.moments.pick'] = { title: 'Rust night', flavor: 'clip', timeline: [{ t: 12, text: 'the build fails' }, { t: 95, text: 'streamer jumps up cheering' }], transcript: [{ t: 94, text: 'IT COMPILES' }], sounds: [{ t: 96, label: 'Cheering' }], clipped: [95], spikes: [96], avoid: [300] };
 
 const t = suite('workflows');
 const HAS_FFMPEG = require('child_process').spawnSync('ffprobe', ['-version']).status === 0;
