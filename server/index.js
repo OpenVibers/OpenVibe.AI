@@ -21,14 +21,14 @@ const { createKeyStore, createAuth } = require('./auth');
 const schemas = require('./schemas');
 const { createApp } = require('./app');
 
-async function start({ config, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, listen = true } = {}) {
+async function start({ config, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, listen = true, credentialFetch = null } = {}) {
     config = config || load(env);
     schemas.configure(config.schemaCache);
     const db = openDb(config.dbPath);
     const registry = createRegistry(db, { clock, env });
     const quotas = createQuotas(db, { clock, registry });
     const cache = createCache(db, { clock });
-    const pool = createProviderPool({ db, registry, config, clock, fetchImpl, env, log });
+    const pool = createProviderPool({ db, registry, config, clock, fetchImpl, env, log, credentialFetch });
     const fetcher = createFetcher(config);
     const engine = createEngine({ registry, pool, fetcher, quotas, config, log });
     // ai.run.* to OpenVibe.Events through the outbox (server/events.js); before recovery, so its failures are announced.
@@ -36,14 +36,16 @@ async function start({ config, clock = { now: () => Date.now() }, fetchImpl = gl
     // ai.preferences (read) and ai.usage_summary (written): Network user modules (server/user-modules.js).
     const userModules = require('./user-modules').createUserModules({ db, config, env, fetchImpl, clock, log });
     userModules.ensureSchema();
-    const runs = createRuns({ db, registry, engine, cache, quotas, config, clock, log, userModules });
+    // A person's own provider keys (WS-O task 2): stored by the service holding their consent, used by their runs only.
+    const credentials = require('./credentials').createCredentials({ db, config, clock });
+    const runs = createRuns({ db, registry, engine, cache, quotas, config, clock, log, userModules, credentials });
     seed({ registry, quotas, config, env, db });
     const interrupted = runs.recoverInterrupted();
     if (interrupted) log.warn(`[ai] marked ${interrupted} interrupted run(s) failed (run.interrupted); callers can retry them`);
 
     const keys = createKeyStore({ urls: [config.networkInternalUrl, config.networkUrl], pem: config.networkPublicKey, fetchImpl, log });
     const auth = createAuth({ config, keys });
-    const app = createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log });
+    const app = createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials });
     const keyLoaded = keys.start().catch(() => null);
 
     const housekeeping = setInterval(() => {

@@ -9,3 +9,9 @@ description = "Sentinel provider key in the auth test that asserts secrets are n
 condition = "AND"
 paths = ['''^test/auth\.test\.js$''']
 regexes = ['''^sk-test-THIS-MUST-NEVER-BE-RETURNED-0123456789$''']
+
+[[allowlists]]
+description = "Made-up provider key in test/credentials.test.js (a person's own key is stored and used; the value is a placeholder, not a secret)"
+condition = "AND"
+paths = ['''^test/credentials\.test\.js$''']
+regexes = ['''sk-test-dana-0123456789WXYZ''']

@@ -12,7 +12,7 @@ const { createOps } = require('./ops');
 const { consoleRouter } = require('./console');
 const pkg = require('../package.json');
 
-function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console }) {
+function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, credentials = null }) {
     const app = express();
     app.disable('x-powered-by');
     app.set('trust proxy', 'loopback');
@@ -46,6 +46,7 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
     // Operator actions shared by the admin API and the operator console (one implementation, one audit row).
     const ops = createOps({ db, registry, pool, quotas, cache, runs });
     app.use(runsRouter({ runs, registry, auth, config, log }));
+    if (credentials) app.use(require('./credentials').credentialsRouter({ credentials, auth, registry, sendError: (res, err, ctx) => require('./api/runs').sendError(res, err, ctx, log) }));
     app.use(adminRouter({ db, registry, pool, quotas, cache, runs, auth, ops, log }));
     // The operator console (/console, /auth/*): Network staff, server-rendered, no scripts (server/console).
     app.use(consoleRouter({ config, db, registry, pool, quotas, cache, runs, keys, ops, env, clock, fetchImpl, log }));

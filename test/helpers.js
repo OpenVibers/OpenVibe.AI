@@ -42,14 +42,14 @@ function tmpDir() {
 }
 
 /** Boot the service. `env` goes through config.load() and is also what secrets resolve against. */
-async function boot({ env = {}, dir = tmpDir(), clock, fetchImpl } = {}) {
+async function boot({ env = {}, dir = tmpDir(), clock, fetchImpl, credentialFetch } = {}) {
     const fullEnv = {
         NODE_ENV: 'test', PORT: '0', AI_DB_PATH: path.join(dir, 'ai.db'), OV_NETWORK_PUBLIC_KEY: publicKey,
         AI_PROVIDER_RETRY_DELAY_MS: '5', AI_QUOTA_SERVICE_RPM: '0', AI_QUOTA_SERVICE_RPD: '0',
         ...env,
     };
     const config = load(fullEnv);
-    const h = await start({ config, env: fullEnv, log: silent, clock, fetchImpl });
+    const h = await start({ config, env: fullEnv, log: silent, clock, fetchImpl, credentialFetch });
     const base = `http://127.0.0.1:${h.server.address().port}`;
     return { ...h, base, dir, env: fullEnv, stop: () => h.close() };
 }

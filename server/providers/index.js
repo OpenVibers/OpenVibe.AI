@@ -29,7 +29,7 @@ function callerFault(err) {
     return Number.isInteger(st) && st >= 400 && st < 500 && ![401, 403, 404, 408, 429].includes(st);
 }
 
-function createProviderPool({ db, registry, config, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console }) {
+function createProviderPool({ db, registry, config, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, credentialFetch = null }) {
     const cache = new Map();          // key -> { stamp, adapter }
     const stats = {};                 // key -> { calls, failures, ... } (in memory; tests + /api/ready)
 
@@ -132,7 +132,58 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
      * ctx: { runId, routeKey, routeVersion, signal, logRequest(entry), debugRaw }
      * req: canonical request (system, messages, image, json, maxTokens, temperature, cacheKey, input, filePath, ...)
      */
+    /**
+     * A run with a person's own key (server/credentials.js): that provider only, no fallback, no circuit breaker
+     * shared with anyone, chat operations only; the base URL they chose is reached through guardedFetch. One
+     * request-log row per attempt under provider_key byo:<owner>:<subject>, priced by the model's list price.
+     */
+    async function executeWithCredential(cred, operation, req, ctx = {}) {
+        if (operation !== 'chat') throw new AiError(422, 'credential.unsupported', `a person's own key is used for chat only, not ${operation}`);
+        const guardedFetch = credentialFetch || require('./guarded-fetch').guardedFetch;
+        const role = ctx.role && cred.models[ctx.role] ? ctx.role : null;
+        const model = (req.image && cred.models.vision) || (role && cred.models[role]) || cred.models.chat || (cred.provider === 'anthropic' ? 'claude-haiku-4-5-20251001' : 'gpt-4o-mini');
+        const record = { key: cred.providerKey, kind: cred.provider, base_url: cred.base_url, capabilities: ['chat', 'json', 'vision'], timeout_ms: 60000 };
+        const a = cred.provider === 'anthropic' ? createAnthropicProvider(record, { apiKey: cred.apiKey, fetchImpl: guardedFetch }) : createOpenAiProvider(record, { apiKey: cred.apiKey, fetchImpl: guardedFetch });
+        const base = { operation, provider_key: cred.providerKey, model_key: model, route_key: ctx.routeKey || null, route_version: ctx.routeVersion || null, fallback: 0, prompt_hash: ctx.promptHash || null };
+        const timeoutMs = Math.max(1000, Math.min(req.timeoutMs || 60000, 120000));
+        let lastErr = null;
+        for (let attempt = 0; attempt <= config.providerRetries; attempt++) {
+            if (ctx.signal && ctx.signal.aborted) throw new AiError(409, 'run.cancelled', 'run was cancelled');
+            const t0 = Date.now();
+            try {
+                const result = await a.chat({ ...req, model, signal: ctx.signal, timeoutMs });
+                const usage = result.usage || { input: 0, output: 0, cached: 0 };
+                const listPrice = (() => {
+                    const table = config.pricing.table || {};
+                    const m = String(result.model || model).toLowerCase();
+                    let best = null; let len = -1;
+                    for (const [k, v] of Object.entries(table)) { const key = String(k).toLowerCase(); if (key !== 'default' && m.startsWith(key) && key.length > len && v && typeof v === 'object') { best = v; len = key.length; } }
+                    const b = best || table.default || {};
+                    const inRate = Number(b.in) || 0;
+                    return { in: inRate, out: Number(b.out) || 0, cached: b.cached != null ? Number(b.cached) : inRate * 0.1 };
+                })();
+                const input = Math.max(0, (usage.input || 0) - (usage.cached || 0));
+                const cost = (input / 1e6) * listPrice.in + ((usage.cached || 0) / 1e6) * listPrice.cached + ((usage.output || 0) / 1e6) * listPrice.out;
+                const latency = Date.now() - t0;
+                if (ctx.logRequest) {
+                    ctx.logRequest({ ...base, model_key: result.model || model, status: 'ok', output_hash: sha256(result.json || result.text || ''), tokens_in: usage.input || 0, tokens_out: usage.output || 0,
+                        tokens_cached: usage.cached || 0, tokens_estimated: usage.estimated ? 1 : 0, cost_usd: cost, latency_ms: latency });
+                }
+                return { result, provider: cred.providerKey, providerKind: cred.provider, model: result.model || model, fallbackUsed: false, usage, cost, latencyMs: latency, synthetic: false, tried: [], startedAt: t0 };
+            } catch (err) {
+                lastErr = err;
+                if (ctx.signal && ctx.signal.aborted) throw new AiError(409, 'run.cancelled', 'run was cancelled');
+                if (ctx.logRequest) ctx.logRequest({ ...base, status: err && err.code === 'provider.timeout' ? 'timeout' : 'error', latency_ms: Date.now() - t0, error: String(err && err.message || err).slice(0, 500) });
+                if (err && err.code === 'EADDRNOTPUBLIC') throw new AiError(422, 'credential.endpoint_refused', err.message);
+                if (attempt < config.providerRetries && retryable(err)) { await sleep(config.retryDelayMs, ctx.signal).catch(() => {}); continue; }
+                break;
+            }
+        }
+        throw new AiError(502, 'credential.provider_failed', `the person's own provider did not answer: ${String(lastErr && lastErr.message || lastErr).slice(0, 200)}`);
+    }
+
     async function execute(route, operation, req, ctx = {}) {
+        if (ctx.credential) return executeWithCredential(ctx.credential, operation, req, ctx);
         const features = [operation];
         if (req.image) features.push('vision');
         if (req.json) features.push('json');
@@ -201,7 +252,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         throw new AiError(503, 'provider.unavailable', 'no provider on this route could answer', { tried });
     }
 
-    return { adapter, health, resetHealth, execute, priceFor, costOf, stats, statFor, candidates };
+    return { adapter, health, resetHealth, execute, executeWithCredential, priceFor, costOf, stats, statFor, candidates };
 }
 
 module.exports = { createProviderPool };

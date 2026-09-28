@@ -58,7 +58,7 @@ function retainedInput(input, wf, debugRaw) {
     return { value, full: !redacted };
 }
 
-function createRuns({ db, registry, engine, cache, quotas, config, clock = { now: () => Date.now() }, log = console, userModules = null }) {
+function createRuns({ db, registry, engine, cache, quotas, config, clock = { now: () => Date.now() }, log = console, userModules = null, credentials = null }) {
     const inflight = new Map();     // run id -> { controller, promise, release, caller }
     const queue = [];               // run ids waiting for the worker
     let active = 0;
@@ -168,6 +168,13 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         const routeKey = (wf.steps[0] && wf.steps[0].route) || (tpl && tpl.default_route) || wf.default_route || null;
         const route = routeKey && !String(routeKey).includes('{') ? registry.resolveRoute(routeKey) : null;
         const options = body.options && typeof body.options === 'object' ? body.options : {};
+        // A person's own key (WS-O task 2): only the service that stored it, within its daily budget; never cached.
+        const credentialSubject = body.credential && typeof body.credential === 'object' ? String(body.credential.subject || '') : null;
+        if (credentialSubject !== null) {
+            if (!credentials) throw new AiError(503, 'credentials.unavailable', 'person credentials are not configured on this service');
+            if (requester.type !== 'service') throw new AiError(403, 'capability.denied', 'only the service that stored a credential runs with it');
+            credentials.admit(requester.id, credentialSubject);
+        }
         const ctx = {
             requesterType: requester.type, requesterId: requester.id,
             actorKey: subjectKey(body.on_behalf_of), targetKey: entityKey(body.target), attributionKey: entityKey(body.attribution), workflowKey: wf.key,
@@ -184,12 +191,12 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             source_service: requester.type === 'service' ? requester.id : null,
             target: body.target ? JSON.stringify(body.target) : null, target_key: ctx.targetKey,
             input: null, input_hash: inputHash, idempotency_key: idem, trace_id: trace, request_id: requestId, retry_of: retryOf,
-            options: JSON.stringify({ cache: options.cache !== false, debug: Boolean(options.debug), input_retained: kept.full }), created_at: now,
+            options: JSON.stringify({ cache: options.cache !== false && credentialSubject === null, debug: Boolean(options.debug), input_retained: kept.full, ...(credentialSubject !== null ? { credential_subject: credentialSubject } : {}) }), created_at: now,
         };
         base.input = stableStringify(kept.value);
 
         // Cache (scoped; never crosses requester/actor/target/attribution)
-        const scope = options.cache === false ? null : cache.scopeFor(wf.cache_mode, ctx);
+        const scope = options.cache === false || credentialSubject !== null ? null : cache.scopeFor(wf.cache_mode, ctx);
         let cacheKey = null;
         if (scope) {
             cacheKey = cache.keyFor({ scope, workflowKey: wf.key, workflowVersion: wf.version, templateVersion: base.template_version, routeKey: base.route_key, routeVersion: base.route_version, inputHash });
@@ -215,7 +222,8 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         // Queue caps, then quota: both before any provider call (a refused run is not counted).
         const caller = `${requester.type}:${requester.id}`;
         admit(caller);
-        const reserved = quotas.reserve(ctx);
+        // A run with a person's own key spends their money, not the shared quotas (its own budget was checked above).
+        const reserved = credentialSubject !== null ? null : quotas.reserve(ctx);
 
         db.transaction(() => {
             db.prepare(`INSERT INTO runs (id, workflow_key, workflow_version, template_key, template_version, route_key, route_version, status, requester_type, requester_id, on_behalf_of, attribution,
@@ -284,7 +292,9 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             if (preferences.history === false) {
                 db.prepare("UPDATE runs SET input = 'null', cache_key = NULL, options = json_set(options, '$.input_retained', json('false'), '$.history', json('false')) WHERE id = ?").run(id);
             }
-            const r = await engine.execute(wf, row, input, { signal: controller.signal, logRequest, debugRaw: Boolean(config.debugRawLog && opts.debug), inputHash: row.input_hash, preferences });
+            const credential = opts.credential_subject ? credentials.forRun(row.requester_id, opts.credential_subject) : null;
+            const r = await engine.execute(wf, row, input, { signal: controller.signal, logRequest, debugRaw: Boolean(config.debugRawLog && opts.debug), inputHash: row.input_hash, preferences,
+                ...(credential ? { credential, role: input && typeof input.role === 'string' ? input.role : null } : {}) });
             if (controller.signal.aborted) throw new AiError(409, 'run.cancelled', 'cancelled');
             // The status, its citations and the ai.run.succeeded event commit together.
             const done = db.transaction(() => {
@@ -298,7 +308,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                 return d;
             })();
             if (!done.changes) return;       // cancelled while finishing
-            if (r.provider) quotas.account(ctx, reserved, { provider: r.provider, model: r.model, tokensIn: r.usage.input, tokensOut: r.usage.output, tokensCached: r.usage.cached, cost: r.cost });
+            if (r.provider && reserved) quotas.account(ctx, reserved, { provider: r.provider, model: r.model, tokensIn: r.usage.input, tokensOut: r.usage.output, tokensCached: r.usage.cached, cost: r.cost });
             if (r.fallbackUsed) registry.audit('system', 'run.fallback', 'run', id, { trace: row.trace_id, metadata: { workflow: row.workflow_key, provider: r.provider, route: r.route && r.route.key } });
             // Output shaped by someone's preferences, or kept for nobody (history off), is never cached for reuse.
             if (scope && row.cache_key && !r.synthetic && wf.cache_mode !== 'none' && preferences.history !== false && !preferenceLines(preferences)) {
@@ -317,7 +327,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                 if (f.changes) events.runChanged(getRow(id));
             })();
             const spent = db.prepare("SELECT COALESCE(SUM(tokens_in),0) ti, COALESCE(SUM(tokens_out),0) tout, COALESCE(SUM(cost_usd),0) c FROM requests WHERE run_id = ? AND status = 'ok'").get(id);
-            if (spent && (spent.ti || spent.tout)) quotas.account(ctx, reserved, { provider: 'mixed', model: '', tokensIn: spent.ti, tokensOut: spent.tout, cost: spent.c });
+            if (reserved && spent && (spent.ti || spent.tout)) quotas.account(ctx, reserved, { provider: 'mixed', model: '', tokensIn: spent.ti, tokensOut: spent.tout, cost: spent.c });
         } finally {
             inflight.delete(id);
         }

@@ -74,6 +74,8 @@ function load(env = process.env) {
         networkUrl: trimUrl(env.OV_NETWORK_URL || 'https://openvibe.network'),
         networkInternalUrl: trimUrl(env.OV_NETWORK_INTERNAL_URL || 'http://127.0.0.1:4000'),
         issuer: trimUrl(env.OV_NETWORK_ISSUER || env.OV_NETWORK_URL || 'https://openvibe.network'),
+        // A person's own provider keys (server/credentials.js): AES-256-GCM, 64 hex characters; unset = credentials off.
+        credentialsKey: String(env.AI_CREDENTIALS_KEY || '').trim(),
         networkPublicKey: env.OV_NETWORK_PUBLIC_KEY ? env.OV_NETWORK_PUBLIC_KEY.replace(/\\n/g, '\n') : null,
         audience: 'openvibe.ai',
         // Namespaces fail closed (server/auth.js): no `ns` claim, no namespaced run, except the
