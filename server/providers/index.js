@@ -5,16 +5,22 @@
  *   pool.adapter(key)          the adapter for a provider record (rebuilt when the record changes)
  *   pool.health(key)           circuit-breaker state
  *   pool.execute(route, op, req, ctx)
- *        tries the route's primary, then each fallback, skipping candidates that are disabled,
- *        circuit-open, missing credentials or that do not support the operation; applies a strict
- *        timeout and cancellation to every call and one retry on a transient failure; records one
- *        request-log row per attempt or skip (fallback = 1 for every non-primary candidate) and
- *        returns { result, provider, model, fallbackUsed }. When nothing answers it throws
+ *        tries the route's candidates in order, skipping ones that are disabled, circuit-open,
+ *        missing credentials or that do not support the operation; applies a strict timeout and
+ *        cancellation to every call and one retry on a transient failure; records one request-log
+ *        row per attempt or skip (fallback = 1 for every non-first candidate) and returns
+ *        { result, provider, model, fallbackUsed, explain }. When nothing answers it throws
  *        AiError 503 provider.unavailable — an explicit state, never a made-up answer.
+ *
+ * A route either names a `capability` and the pool is built from every provider that can serve it,
+ * ordered by openvibe-sdk/placement (objective, price, measured latency, health, with hysteresis
+ * through placement_state.current); or it pins `[primary, ...fallbacks]`. `explain` (objective,
+ * reasons, selected, candidates with their excluded reasons) rides every run response.
  *
  * Circuit breaker per provider: `failureThreshold` consecutive failures open it for `cooldownMs`;
  * after that one half-open probe decides whether it closes again.
  */
+const placement = require('openvibe-sdk/placement');
 const { AiError, resolveSecret, sha256 } = require('../util');
 const { retryable, sleep, ProviderError } = require('./common');
 const { createStubProvider } = require('./stub');
@@ -27,6 +33,11 @@ const { createWhisperProvider } = require('./whisper');
 function callerFault(err) {
     const st = err && err.status;
     return Number.isInteger(st) && st >= 400 && st < 500 && ![401, 403, 404, 408, 429].includes(st);
+}
+
+/** An upstream 429 is rate-limit capacity, not provider ill health: it shifts to the next candidate but must not open the circuit. */
+function rateLimited(err) {
+    return (err && err.status === 429) || (err && err.code === 'provider.rate_limited');
 }
 
 function createProviderPool({ db, registry, config, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, credentialFetch = null }) {
@@ -113,10 +124,129 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
     }
 
     // ── Routing ────────────────────────────────────────────
-    async function candidates(route) {
+    /** A provider that is never billed: the deterministic stub and the local servers (llama.cpp, whisper.cpp). */
+    function isFreeProvider(p) {
+        return p.kind === 'stub' || p.kind === 'whisper' || Boolean(p.metadata && p.metadata.paid === false);
+    }
+    const offerId = (provider, model) => (model ? `${provider}:${model}` : provider);
+    const splitOfferId = (id) => {
+        const i = String(id).indexOf(':');
+        return i < 0 ? { provider: id, model: null } : { provider: id.slice(0, i), model: id.slice(i + 1) };
+    };
+
+    // ── Capability pool (T6 phase 1): placement over every provider that can serve the capability ──
+    const getRouteState = db.prepare('SELECT * FROM placement_state WHERE route_key = ?');
+    const getProviderStats = db.prepare(`SELECT provider, MAX(latency_p95_ms) AS p95, SUM(requests)::bigint AS requests, SUM(errors)::bigint AS errors
+        FROM provider_stats_daily WHERE day >= ? GROUP BY provider`);
+    async function statsByProvider(days = 7) {
+        const from = new Date(clock.now() - days * 86400000).toISOString().slice(0, 10);
+        const m = new Map();
+        for (const r of await getProviderStats.all(from)) m.set(r.provider, { p95: r.p95 == null ? null : Number(r.p95), requests: Number(r.requests), errors: Number(r.errors) });
+        return m;
+    }
+
+    /**
+     * The order the router tries for a capability route: openvibe-sdk/placement ranks every provider whose
+     * capabilities cover the operation, by objective, price (the model rate card), measured latency and
+     * health (placement_state error rate + the breaker); hysteresis through the route's current placement.
+     * The stub is never a placement candidate (synthetic output must not win on price) — it is appended last.
+     */
+    async function poolCandidates(route, features, operation) {
+        const stats = await statsByProvider();
+        const offers = [];
+        const rateCards = [];
+        const seen = new Set();
+        const addOffer = async (p, model, caps) => {
+            const id = offerId(p.key, model);
+            if (seen.has(id)) return;
+            seen.add(id);
+            const creds = p.auth_mode === 'none' || Boolean(resolveSecret(p.secret_ref, env));
+            const h = await health(p.key);
+            const st = stats.get(p.key) || { p95: null, requests: 0, errors: 0 };
+            const errorRate = st.requests ? st.errors / st.requests : 0;
+            const status = p.status !== 'active' || !creds ? 'down' : h.state === 'open' ? 'down' : (h.state === 'half_open' || errorRate > 0.5) ? 'degraded' : 'up';
+            const free = isFreeProvider(p);
+            offers.push({
+                offer_id: id, kind: 'provider', provider: p.key, region: 'global',
+                trust: (p.metadata && p.metadata.local) || p.kind === 'stub' ? 'community' : 'first-party',
+                capabilities: caps, latency_ms: st.p95 ? { p95: st.p95 } : {}, health: { status },
+                pricing: free ? { model: 'prepaid' } : { model: 'metered', rate_card: id },
+            });
+            if (!free) {
+                const price = await priceFor(p.key, model);
+                rateCards.push({ id, provider: p.key, metric: 'tokens', unit_size: 1e6, unit_price_usd: (price.in + price.out) / 2, free_allowance: 0, reset_period: 'month' });
+            }
+        };
+        for (const p of await registry.listProviders()) {
+            if (p.key === 'stub' || !p.capabilities.some(f => features.includes(f))) continue;
+            await addOffer(p, (route.constraints && route.constraints.model) || p.default_model || null, p.capabilities);
+        }
+        // A pinned candidate stays in the pool even when the provider's capability list is incomplete (migration):
+        // the pin is an explicit admin assertion that it can serve the route's capability.
+        for (const pin of route.pinned || []) {
+            if (!pin || !pin.provider || pin.provider === 'stub') continue;
+            const p = await registry.getProvider(pin.provider);
+            if (!p) continue;
+            const caps = route.capability && !p.capabilities.includes(route.capability) ? [...p.capabilities, route.capability] : p.capabilities;
+            await addOffer(p, pin.model || p.default_model || null, caps);
+        }
+        const c = route.constraints || {};
+        const requirements = {
+            kind: 'ai', mobility: 'request', latency_class: c.latency_class || 'interactive', objective: c.objective || 'balanced',
+            capabilities: features, units: Number(c.units) || 1, latency_op: operation,
+            ...(c.max_latency_ms != null ? { max_latency_ms: Number(c.max_latency_ms) } : {}),
+            ...(c.max_cost_usd != null ? { max_cost_usd: Number(c.max_cost_usd) } : {}),
+            ...(c.trust ? { trust: c.trust } : {}),
+            ...(c.authority ? { authority: c.authority } : {}),
+        };
+        const state = await getRouteState.get(route.key);
+        const current = state && state.current_provider ? offerId(state.current_provider, state.current_model) : null;
+        const result = placement.plan(requirements, offers, {
+            rateCards, now: clock.now(), current, minGain: config.placement.minGain,
+            weights: { cost: config.placement.costWeight, latency: config.placement.latencyWeight },
+        });
+        const byId = new Map(offers.map(o => [o.offer_id, o]));
+        const explain = {
+            objective: result.objective, reasons: result.reasons, selected: result.selected,
+            candidates: result.candidates.map((x) => {
+                const o = byId.get(x.id) || {};
+                return { provider: o.provider || splitOfferId(x.id).provider, model: splitOfferId(x.id).model, eligible: Boolean(x.eligible),
+                    excluded_reason: x.excluded_because || null, cost: x.estimated_cost_usd == null ? null : x.estimated_cost_usd, latency: x.estimated_latency_ms == null ? null : x.estimated_latency_ms };
+            }),
+        };
+        const order = [];
+        if (result.selected) order.push(result.selected);
+        const rest = result.candidates.filter(x => x.id !== result.selected).sort((a, b) => {
+            const ea = a.eligible && Number.isFinite(a.estimated_cost_usd) ? 0 : 1;
+            const eb = b.eligible && Number.isFinite(b.estimated_cost_usd) ? 0 : 1;
+            return ea - eb || (a.score ?? Infinity) - (b.score ?? Infinity);
+        });
+        for (const x of rest) order.push(x.id);
+        return { order: order.map(splitOfferId), explain };
+    }
+
+    /** A pinned route: [primary, ...fallbacks], exactly as before. */
+    async function pinnedCandidates(route, features) {
         const list = [route.primary, ...(route.fallbacks || [])].filter(c => c && c.provider);
-        if (config.stubFallback && !list.some(c => c.provider === 'stub') && await registry.getProvider('stub')) list.push({ provider: 'stub', model: null, auto: true });
-        return list;
+        const explain = { objective: null, reasons: ['pinned route: the primary, then its fallbacks'], selected: null, candidates: [] };
+        for (const c of list) {
+            const entry = await adapter(c.provider);
+            const p = entry && entry.record;
+            const why = await skipReason(p, entry && entry.adapter, features);
+            explain.candidates.push({ provider: c.provider, model: c.model || (p && p.default_model) || null, eligible: !why, excluded_reason: why, cost: null, latency: null });
+        }
+        return { order: list.map(c => ({ provider: c.provider, model: c.model || null })), explain };
+    }
+
+    async function candidates(route, features, operation) {
+        const { order, explain } = route.capability && operation
+            ? await poolCandidates(route, features, operation)
+            : await pinnedCandidates(route, features);
+        if (config.stubFallback && !order.some(c => c.provider === 'stub') && await registry.getProvider('stub')) {
+            order.push({ provider: 'stub', model: null });
+            explain.candidates.push({ provider: 'stub', model: null, eligible: true, excluded_reason: null, cost: 0, latency: null });
+        }
+        return { order, explain };
     }
 
     async function skipReason(p, a, features) {
@@ -191,7 +321,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         if (req.image) features.push('vision');
         if (req.json) features.push('json');
         const tried = [];
-        const list = await candidates(route);
+        const { order: list, explain } = await candidates(route, features, operation);
         for (let i = 0; i < list.length; i++) {
             const c = list[i];
             const entry = await adapter(c.provider);
@@ -233,7 +363,8 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                             debug_response: ctx.debugRaw ? String(result.text || '').slice(0, 200000) : null,
                         });
                     }
-                    return { result, provider: c.provider, providerKind: p.kind, model: result.model || model, fallbackUsed: fallback, usage, cost, latencyMs: latency, synthetic: Boolean(result.synthetic || a.synthetic), tried, startedAt: started };
+                    explain.selected = c.provider;
+                    return { result, provider: c.provider, providerKind: p.kind, model: result.model || model, fallbackUsed: fallback, usage, cost, latencyMs: latency, synthetic: Boolean(result.synthetic || a.synthetic), tried, startedAt: started, explain };
                 } catch (err) {
                     lastErr = err;
                     if (ctx.signal && ctx.signal.aborted) {
@@ -247,12 +378,15 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                 }
             }
             // A request the provider rejected as malformed is the caller's fault, not a sign the
-            // provider is unhealthy: it must not open the circuit other callers depend on.
-            if (!callerFault(lastErr)) await recordFailure(c.provider, lastErr);
+            // provider is unhealthy; a 429 is capacity, not health either, and moves on without
+            // opening the circuit. Neither must take a shared provider away from other callers.
+            if (!callerFault(lastErr) && !rateLimited(lastErr)) await recordFailure(c.provider, lastErr);
             tried.push({ provider: c.provider, error: String(lastErr && lastErr.message || lastErr).slice(0, 200) });
             log.warn(`[ai] ${operation} via ${c.provider}/${model || '-'} failed: ${lastErr && lastErr.message}`);
         }
-        throw new AiError(503, 'provider.unavailable', 'no provider on this route could answer', { tried });
+        explain.selected = null;
+        explain.reasons = [...(explain.reasons || []), 'no provider on this route could answer'];
+        throw new AiError(503, 'provider.unavailable', 'no provider on this route could answer', { tried, explain });
     }
 
     return { adapter, health, resetHealth, execute, executeWithCredential, priceFor, costOf, stats, statFor, candidates };

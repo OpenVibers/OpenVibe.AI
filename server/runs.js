@@ -85,6 +85,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                 provider: r.provider_key, model: r.model_key, fallback_used: Boolean(r.fallback_used), run_id: r.id, cached_from: r.cached_from, synthetic: Boolean(r.synthetic),
             },
             usage: { tokens_in: r.tokens_in, tokens_out: r.tokens_out, cost_usd: r.cost_usd, attempts: r.attempts },
+            explain: parseJson(r.explain, null),
             citations_count: r.citations_count,
             grounding: parseJson(r.grounding, null),
             retry_of: r.retry_of,
@@ -203,11 +204,12 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             const hit = await cache.get(cacheKey, scope);
             if (hit) {
                 await db.tx(async () => {
+                    const cacheExplain = { objective: 'cache', reasons: ["the answer was already in this scope's cache; no provider was called"], selected: null, candidates: [] };
                     await db.prepare(`INSERT INTO runs (id, workflow_key, workflow_version, template_key, template_version, route_key, route_version, status, requester_type, requester_id, on_behalf_of, attribution,
-                        source_service, target, target_key, input, input_hash, output, model_key, cache_key, cached_from, retry_of, idempotency_key, trace_id, request_id, options, created_at, started_at, finished_at, citations_count)
+                        source_service, target, target_key, input, input_hash, output, model_key, cache_key, cached_from, retry_of, idempotency_key, trace_id, request_id, options, explain, created_at, started_at, finished_at, citations_count)
                         VALUES (@id, @workflow_key, @workflow_version, @template_key, @template_version, @route_key, @route_version, 'cached', @requester_type, @requester_id, @on_behalf_of, @attribution,
-                        @source_service, @target, @target_key, @input, @input_hash, @output, @model_key, @cache_key, @cached_from, @retry_of, @idempotency_key, @trace_id, @request_id, @options, @created_at, @created_at, @created_at, 0)`)
-                        .run({ ...base, output: JSON.stringify(hit.output), model_key: hit.model_key, cache_key: cacheKey, cached_from: hit.run_id });
+                        @source_service, @target, @target_key, @input, @input_hash, @output, @model_key, @cache_key, @cached_from, @retry_of, @idempotency_key, @trace_id, @request_id, @options, @explain, @created_at, @created_at, @created_at, 0)`)
+                        .run({ ...base, output: JSON.stringify(hit.output), model_key: hit.model_key, cache_key: cacheKey, cached_from: hit.run_id, explain: JSON.stringify(cacheExplain) });
                     const src = await citations(hit.run_id);
                     if (src.length) await addCitations(id, src.map(c => ({ ...c, provenance: { ...c.provenance, via_cache: hit.run_id } })), 'cache');
                     // The reused output carries the grounding it was produced with.
@@ -301,9 +303,9 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             // The status, its citations and the ai.run.succeeded event commit together.
             const done = await db.tx(async () => {
                 const d = await db.prepare(`UPDATE runs SET status = 'succeeded', output = ?, grounding = ?, synthetic = ?, provider_key = ?, model_key = ?, fallback_used = ?, attempts = ?, tokens_in = ?, tokens_out = ?, cost_usd = ?,
-                    route_key = COALESCE(?, route_key), route_version = COALESCE(?, route_version), finished_at = ? WHERE id = ? AND status = 'running'`)
+                    route_key = COALESCE(?, route_key), route_version = COALESCE(?, route_version), explain = ?, finished_at = ? WHERE id = ? AND status = 'running'`)
                     .run(JSON.stringify(r.output), JSON.stringify(r.grounding || null), r.synthetic ? 1 : 0, r.provider, r.model, r.fallbackUsed ? 1 : 0, attempts, r.usage.input, r.usage.output, r.cost,
-                        r.route ? r.route.key : null, r.route ? r.route.version : null, iso(clock.now()), id);
+                        r.route ? r.route.key : null, r.route ? r.route.version : null, r.explain ? JSON.stringify(r.explain) : null, iso(clock.now()), id);
                 if (!d.changes) return d;
                 if (r.citations.length) await addCitations(id, r.citations, 'workflow');
                 await events.runChanged(await getRow(id));
@@ -323,9 +325,10 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             const detail = interrupted ? 'the service shut down while this run was in progress' : cancelled ? 'cancelled' : (err instanceof AiError ? err.detail : 'internal error');
             if (!(err instanceof AiError) && !cancelled) log.error(`[runs] ${id} crashed: ${err && err.stack || err}`);
             const extra = err instanceof AiError && err.extra ? JSON.stringify(err.extra).slice(0, 2000) : null;
+            const explain = err instanceof AiError && err.extra && err.extra.explain ? JSON.stringify(err.extra.explain) : null;
             await db.tx(async () => {
-                const f = await db.prepare(`UPDATE runs SET status = ?, error_code = ?, error_detail = ?, attempts = ?, finished_at = ? WHERE id = ? AND status IN ('queued', 'running')`)
-                    .run(cancelled ? 'cancelled' : 'failed', code, extra ? `${detail} ${extra}` : detail, attempts, iso(clock.now()), id);
+                const f = await db.prepare(`UPDATE runs SET status = ?, error_code = ?, error_detail = ?, attempts = ?, explain = COALESCE(?, explain), finished_at = ? WHERE id = ? AND status IN ('queued', 'running')`)
+                    .run(cancelled ? 'cancelled' : 'failed', code, extra ? `${detail} ${extra}` : detail, attempts, explain, iso(clock.now()), id);
                 if (f.changes) await events.runChanged(await getRow(id));
             });
             const spent = await db.prepare("SELECT COALESCE(SUM(tokens_in),0)::bigint ti, COALESCE(SUM(tokens_out),0)::bigint tout, COALESCE(SUM(cost_usd),0) c FROM requests WHERE run_id = ? AND status = 'ok'").get(id);

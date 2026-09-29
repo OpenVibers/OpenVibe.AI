@@ -156,16 +156,23 @@ function createRegistry(db, { clock = { now: () => Date.now() }, env = process.e
         return {
             key: r.key, version: r.version, status: r.status, primary: { provider: r.primary_provider, model: r.primary_model },
             fallbacks: parseJson(r.fallbacks, []), options: parseJson(r.options, {}), max_output_tokens: r.max_output_tokens,
-            response_format: r.response_format, timeout_ms: r.timeout_ms, alias_of: r.alias_of, created_by: r.created_by, created_at: r.created_at,
+            response_format: r.response_format, timeout_ms: r.timeout_ms, alias_of: r.alias_of,
+            capability: r.capability || null, constraints: parseJson(r.constraints, {}), pinned: parseJson(r.pinned, []),
+            created_by: r.created_by, created_at: r.created_at,
         };
     }
-    const routeContent = (r) => sha256({ p: r.primary, f: r.fallbacks, o: r.options, m: r.max_output_tokens, rf: r.response_format, t: r.timeout_ms, a: r.alias_of, s: r.status });
+    const routeContent = (r) => sha256({ p: r.primary, f: r.fallbacks, o: r.options, m: r.max_output_tokens, rf: r.response_format, t: r.timeout_ms, a: r.alias_of, s: r.status, c: r.capability || null, x: r.constraints || {}, pi: r.pinned || [] });
     async function createRouteVersion(key, input, { actor = 'system', trace = null } = {}) {
         if (!KEY_RE.test(key || '')) throw new AiError(422, 'ai.invalid', 'route key must be lowercase dotted');
         const prev = decodeRoute(await latestAny('routes', key));
         const r = {
             primary: input.primary || (prev && prev.primary),
             fallbacks: input.fallbacks !== undefined ? input.fallbacks : (prev ? prev.fallbacks : []),
+            // A pool route names a capability; sending a version without one is a deliberate pin (an admin edit
+            // that states primary/fallbacks), so capability is taken from the input only, never inherited.
+            capability: input.capability !== undefined ? (input.capability || null) : (prev && prev.capability && input.primary === undefined ? prev.capability : null),
+            constraints: input.constraints !== undefined ? input.constraints : ((input.primary === undefined && prev) ? prev.constraints : {}),
+            pinned: input.pinned !== undefined ? input.pinned : ((input.primary === undefined && prev) ? prev.pinned : []),
             options: input.options !== undefined ? input.options : (prev ? prev.options : {}),
             max_output_tokens: input.max_output_tokens !== undefined ? input.max_output_tokens : (prev ? prev.max_output_tokens : null),
             response_format: input.response_format || (prev && prev.response_format) || 'text',
@@ -173,21 +180,29 @@ function createRegistry(db, { clock = { now: () => Date.now() }, env = process.e
             alias_of: input.alias_of !== undefined ? input.alias_of : (prev ? prev.alias_of : null),
             status: input.status || 'active',
         };
-        if (!r.alias_of) {
-            if (!r.primary || !r.primary.provider) throw new AiError(422, 'ai.invalid', 'route needs primary.provider');
+        if (r.capability && !FEATURES.includes(r.capability)) throw new AiError(422, 'ai.invalid', `route capability must be one of ${FEATURES.join(', ')}`);
+        if (!r.alias_of && !r.capability) {
+            if (!r.primary || !r.primary.provider) throw new AiError(422, 'ai.invalid', 'route needs primary.provider or a capability');
             for (const c of [r.primary, ...(r.fallbacks || [])]) {
                 if (!c || !await getProvider(c.provider)) throw new AiError(422, 'ai.invalid', `route references unknown provider ${c && c.provider}`);
             }
-        } else if (!await latestAny('routes', r.alias_of)) throw new AiError(422, 'ai.invalid', `alias target ${r.alias_of} does not exist`);
+        } else if (r.alias_of && !await latestAny('routes', r.alias_of)) throw new AiError(422, 'ai.invalid', `alias target ${r.alias_of} does not exist`);
+        for (const c of r.pinned || []) {
+            if (!c || !await getProvider(c.provider)) throw new AiError(422, 'ai.invalid', `pinned candidate references unknown provider ${c && c.provider}`);
+        }
         if (!Array.isArray(r.fallbacks)) throw new AiError(422, 'ai.invalid', 'fallbacks must be an array');
+        if (r.constraints && typeof r.constraints !== 'object') throw new AiError(422, 'ai.invalid', 'constraints must be an object');
         if (!['text', 'json'].includes(r.response_format)) throw new AiError(422, 'ai.invalid', 'response_format must be text or json');
         if (!['active', 'disabled'].includes(r.status)) throw new AiError(422, 'ai.invalid', 'route status must be active or disabled');
         const version = await nextVersion('routes', key);
-        await db.prepare(`INSERT INTO routes (key, version, status, primary_provider, primary_model, fallbacks, options, max_output_tokens, response_format, timeout_ms, alias_of, created_by, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-            .run(key, version, r.status, r.alias_of ? (r.primary && r.primary.provider) || 'stub' : r.primary.provider, r.primary ? r.primary.model || null : null,
-                JSON.stringify(r.fallbacks || []), JSON.stringify(r.options || {}), r.max_output_tokens, r.response_format, r.timeout_ms, r.alias_of, actor, now());
-        await audit(actor, 'route.version', 'route', key, { trace, metadata: { version, previous: prev ? prev.version : null, status: r.status, alias_of: r.alias_of } });
+        const primaryProvider = r.alias_of ? ((r.primary && r.primary.provider) || 'stub')
+            : (r.primary && r.primary.provider) || ((r.pinned && r.pinned[0] && r.pinned[0].provider) || 'stub');
+        await db.prepare(`INSERT INTO routes (key, version, status, primary_provider, primary_model, fallbacks, options, max_output_tokens, response_format, timeout_ms, alias_of, capability, constraints, pinned, created_by, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+            .run(key, version, r.status, primaryProvider, (r.primary && r.primary.model) || null,
+                JSON.stringify(r.fallbacks || []), JSON.stringify(r.options || {}), r.max_output_tokens, r.response_format, r.timeout_ms, r.alias_of,
+                r.capability || null, JSON.stringify(r.constraints || {}), JSON.stringify(r.pinned || []), actor, now());
+        await audit(actor, 'route.version', 'route', key, { trace, metadata: { version, previous: prev ? prev.version : null, status: r.status, alias_of: r.alias_of, capability: r.capability || null } });
         return await getRoute(key, version);
     }
     async function getRoute(key, version) {

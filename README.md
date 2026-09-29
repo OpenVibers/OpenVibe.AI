@@ -196,17 +196,23 @@ definition, but never over an admin's version.
 | Kind | What | Configured by |
 |---|---|---|
 | `stub` | Deterministic, no key, realistically shaped output (schema-shaped JSON, sentences, unit-vector embeddings, timed transcript segments), clearly marked synthetic (`(synthetic)` text, `synthetic: true` on the run). Never cached. | always present |
-| `openai` | Any OpenAI-compatible API (OpenAI, OpenRouter, Groq, Together, Ollama, LM Studio, llama.cpp): chat with structured-output step-down, embeddings, Whisper-style transcription. Ported from Live's `llm.js` / `ai-provider.js`. | `AI_PROVIDER`, `AI_BASE_URL`, `AI_API_KEY`, `AI_MODEL`, `AI_MODEL_<ROLE>` — Live's setting names |
+| `openai` | Any OpenAI-compatible API (OpenAI, OpenRouter, Groq, Together, Ollama, LM Studio, llama.cpp): chat with structured-output step-down, embeddings, Whisper-style transcription. Ported from Live's `llm.js` / `ai-provider.js`. | `AI_PROVIDER`, `AI_BASE_URL`, `AI_API_KEY`, `AI_MODEL` — Live's setting names |
 | `anthropic` | Messages API with cached system blocks and forced-tool JSON. Ported from Live's `llm.js`. | same, with `AI_PROVIDER=anthropic` |
 | `http` | The local HTTP seam: `POST {operation, …}` → `{text, json, usage}` | `AI_HTTP_SEAM_URL` or the admin API |
 | `whisper` | whisper.cpp on this host, with Live's VAD, hallucination filter, multilingual model and live/batch lanes | `WHISPER_*` — Live's names |
 | `openai`, key `local` | A model server on this host speaking the OpenAI API (llama.cpp's `llama-server`, Ollama's `/v1`): no key, never paid; route `media.local` | `AI_LOCAL_LLM_URL`, `AI_LOCAL_LLM_MODEL`, `AI_LOCAL_LLM_TIMEOUT_MS` |
 
-Routing tries the route's primary, then each fallback; a provider that is disabled, missing
-credentials, circuit-open or unable to do the operation is **skipped and logged**; every call has a
-strict timeout, cancellation and one retry on a transient failure; a fallback that answers is
-recorded on the run (`fallback_used`), in the request log (`fallback = 1`) and in the audit log. The
-stub joins every route as a last resort outside production only (`AI_STUB_FALLBACK`).
+Routing: a route either names a `capability` and the router builds its pool from every provider that
+can serve it, ordered by `openvibe-sdk/placement` (objective, price, measured latency, health, with
+hysteresis through the route's current placement), or pins a `[primary, ...fallbacks]` list. A
+provider that is disabled, missing credentials, circuit-open or unable to do the operation is
+**skipped and logged**; every call has a strict timeout, cancellation and one retry on a transient
+failure; a fallback that answers is recorded on the run (`fallback_used`), in the request log
+(`fallback = 1`) and in the audit log. Every run response and `GET /api/v1/runs/:id` carry `explain`
+(objective, reasons, selected, and every candidate with its estimated cost, latency and excluded
+reason). Speech and embeddings stay single-provider until a second upstream exists: with one provider
+they answer the explicit `503 provider.unavailable`, never a synthetic answer. The stub joins every
+route as a last resort outside production only (`AI_STUB_FALLBACK`).
 
 ## Workflows
 
@@ -340,8 +346,10 @@ Deployed: `/opt/openvibe.ai`, env `/etc/openvibe/ai.env` (0600), unit `deploy/sy
   of Network OAuth client `ai`, and `AI_CONSOLE_SESSION_SECRET` in `/etc/openvibe/ai.env`.
 - Import holds from the 2026-09-23 run: a streamer's own provider key stays in Live, and 3,021 Live
   translations cannot become cache entries (they have no source text) and stay in Live.
-- No fallback is declared on any production route, so an outage of the one real provider fails every
-  Live AI feature. On 2026-09-23 `live.*` and `network.site_copy` outputs carried no citations or gaps
+- Text routes now run a capability pool (`shared` plus a local model when one is configured) instead
+  of a declared fallback, but speech and embeddings still have a single upstream, so an outage there
+  fails that feature until O9 adds a second provider. On 2026-09-23 `live.*` and `network.site_copy`
+  outputs carried no citations or gaps
   (0 citation rows); runs record grounding (cited sources and named gaps) since 2026-09-25.
 - The host has a backup of `ov_ai` but no restore drill has run for it; `/metrics` is built but not
   deployed yet.

@@ -258,6 +258,7 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
             provider: exec ? exec.provider : null, model: exec ? exec.model : null, fallbackUsed: Boolean(exec && exec.fallbackUsed),
             usage, cost,
             route: last.route || null,
+            explain: exec ? exec.explain || null : null,
         };
     }
 

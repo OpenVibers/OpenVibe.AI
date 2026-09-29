@@ -33,11 +33,6 @@ function load(env = process.env) {
     const port = int(env.PORT, 4700);
     const aiProvider = String(env.AI_PROVIDER || '').trim().toLowerCase();
     const aiBaseUrl = trimUrl(env.AI_BASE_URL);
-    const roleModels = {};
-    for (const r of LIVE_ROLES) {
-        const v = env[`AI_MODEL_${r.toUpperCase()}`];
-        if (v && String(v).trim()) roleModels[r] = String(v).trim();
-    }
     let pricing = {};
     if (env.AI_PRICING_JSON) {
         try { pricing = JSON.parse(env.AI_PRICING_JSON) || {}; } catch { throw new Error('AI_PRICING_JSON is not valid JSON'); }
@@ -89,15 +84,15 @@ function load(env = process.env) {
             baseUrl: aiBaseUrl,
             apiKeyRef: 'env:AI_API_KEY',               // secret reference, never the value
             model: String(env.AI_MODEL || '').trim(),
-            roleModels,
             timeoutMs: int(env.AI_PROVIDER_TIMEOUT_MS, 30000),
         },
-        // Optional second OpenAI-compatible provider used as the fallback of every route.
-        fallback: {
-            baseUrl: trimUrl(env.AI_FALLBACK_BASE_URL),
-            apiKeyRef: 'env:AI_FALLBACK_API_KEY',
-            model: String(env.AI_FALLBACK_MODEL || '').trim(),
-            kind: String(env.AI_FALLBACK_PROVIDER || '').trim().toLowerCase(),
+        // ── Placement (T6 provider router): openvibe-sdk/placement orders a route's capability pool ──
+        placement: {
+            // A candidate replaces the route's current placement only when it scores this much better,
+            // so a small price/latency wobble does not make the router oscillate.
+            minGain: Math.max(0, Math.min(1, float(env.AI_PLACEMENT_MIN_GAIN, 0.15))),
+            costWeight: float(env.AI_PLACEMENT_COST_WEIGHT, 0.5),
+            latencyWeight: float(env.AI_PLACEMENT_LATENCY_WEIGHT, 0.5),
         },
         // Configurable local HTTP seam: POST {operation, request} JSON to this URL.
         httpSeamUrl: trimUrl(env.AI_HTTP_SEAM_URL),
