@@ -60,6 +60,48 @@ t.test('a failed run queues ai.run.failed with its error code; a restart announc
     valid(ev);
 });
 
+t.test('an outbox write that fails rejects the caller, so a run and its event cannot diverge silently', async () => {
+    const events = require('../server/events');
+    const outbox = events.init(h.db);                       // the live outbox: init returns it once events is on
+    assert.ok(outbox, 'events is on, so there is an outbox to fail');
+    const row = await h.db.prepare("SELECT * FROM runs WHERE status = 'succeeded' LIMIT 1").get();
+    await h.db.prepare("INSERT INTO runs (id, workflow_key, workflow_version, status, requester_type, requester_id, input, input_hash, created_at) VALUES ('run_01JAB2C3D4E5F6G7H8J9K0MNPS', ?, ?, 'running', 'service', 'live', '{}', 'x', ?)")
+        .run(row.workflow_key, row.workflow_version, new Date().toISOString());
+    const real = outbox.enqueue;
+    outbox.enqueue = async () => { throw new Error('outbox write failed'); };
+    try {
+        await assert.rejects(h.runs.recoverInterrupted(), /outbox write failed/, 'the transaction must fail rather than commit the run change with its event silently absent');
+        const after = await h.db.prepare("SELECT status FROM runs WHERE id = 'run_01JAB2C3D4E5F6G7H8J9K0MNPS'").get();
+        assert.strictEqual(after.status, 'running', 'the run change rolled back with its event');
+    } finally {
+        outbox.enqueue = real;
+        await h.db.prepare("DELETE FROM runs WHERE id = 'run_01JAB2C3D4E5F6G7H8J9K0MNPS'").run();
+    }
+});
+
+t.test('a failing outbox prune is caught, not left as an unhandled rejection', async () => {
+    const events = require('../server/events');
+    events._reset();                                        // stop the live outbox so init builds a fresh one
+    const realSetInterval = global.setInterval;
+    let tick = null;
+    global.setInterval = (fn) => { tick = fn; return { unref() {} }; };
+    let rejection;
+    const onUnhandled = (e) => { rejection = e; };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+        const outbox = events.init(h.db, { log: { log() {}, warn() {} } });
+        assert.ok(outbox && tick, 'the prune timer was scheduled');
+        outbox.prune = async () => { throw new Error('prune failed'); };
+        tick();                                             // the timer fires; the rejection must be caught
+        await new Promise((r) => setImmediate(r));
+        await new Promise((r) => setImmediate(r));
+        assert.strictEqual(rejection, undefined, 'the prune rejection was handled, not left unhandled');
+    } finally {
+        process.removeListener('unhandledRejection', onUnhandled);
+        global.setInterval = realSetInterval;
+    }
+});
+
 t.test('close() stops the ai.run.* relay (unsent rows stay in the outbox)', async () => {
     const events = require('../server/events');
     const pending = (await events.status()).pending;

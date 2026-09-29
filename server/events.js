@@ -35,7 +35,7 @@ function init(db, { eventsUrl = process.env.EVENTS_URL, clientSecret = process.e
         onError: (err) => { const m = err && err.message; if (m !== stats.lastError) log.warn('[Events] publish failed (will retry):', m); stats.lastError = m; },
     });
     outbox.start();
-    pruneTimer = setInterval(() => { try { outbox.prune(); } catch { /* next time */ } }, PRUNE_EVERY_MS);
+    pruneTimer = setInterval(() => { if (outbox) outbox.prune().catch((err) => log.warn('[Events] outbox prune failed:', err && err.message)); }, PRUNE_EVERY_MS);
     if (pruneTimer.unref) pruneTimer.unref();
     log.log(`[Events] ai → ${eventsUrl} (${outbox.pending()} pending)`);
     return outbox;
@@ -72,13 +72,13 @@ function payloadOf(row) {
 }
 
 /**
- * Queue the event for a run's new status. MUST run inside the transaction that changed it; a no-op
+ * Queue the event for a run's new status. MUST be awaited inside the transaction that changed it; a no-op
  * while publishing is off, and for states without an event (running, cancelled).
  */
-function runChanged(row) {
+async function runChanged(row) {
     if (!outbox || !row || !['queued', 'cached', 'succeeded', 'failed'].includes(row.status)) return null;
     const requester = { type: row.requester_type, id: row.requester_id };
-    const env = outbox.enqueue(dbRef, {
+    const env = await outbox.enqueue(dbRef, {
         event_type: `ai.run.${row.status}`,
         actor: requester.type === 'user' || requester.type === 'service' ? requester : { type: 'service', id: 'ai' },
         subject: { type: 'run', id: row.id },

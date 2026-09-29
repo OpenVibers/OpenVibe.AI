@@ -212,7 +212,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                     if (src.length) await addCitations(id, src.map(c => ({ ...c, provenance: { ...c.provenance, via_cache: hit.run_id } })), 'cache');
                     // The reused output carries the grounding it was produced with.
                     await db.prepare('UPDATE runs SET grounding = (SELECT grounding FROM runs WHERE id = ?) WHERE id = ?').run(hit.run_id, id);
-                    events.runChanged(await getRow(id));
+                    await events.runChanged(await getRow(id));
                 });
                 await registry.audit(principal.sub, 'run.create', 'run', id, { trace, metadata: { workflow: wf.key, version: wf.version, status: 'cached', cached_from: hit.run_id } });
                 return { run: await get(id), created: true, promise: null };
@@ -231,7 +231,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                 VALUES (@id, @workflow_key, @workflow_version, @template_key, @template_version, @route_key, @route_version, 'queued', @requester_type, @requester_id, @on_behalf_of, @attribution,
                 @source_service, @target, @target_key, @input, @input_hash, @cache_key, @retry_of, @idempotency_key, @trace_id, @request_id, @options, @created_at)`)
                 .run({ ...base, cache_key: cacheKey });
-            events.runChanged(await getRow(id));
+            await events.runChanged(await getRow(id));
         });
         await registry.audit(principal.sub, retryOf ? 'run.retry' : 'run.create', 'run', id, { trace, metadata: { workflow: wf.key, version: wf.version, target: ctx.targetKey, retry_of: retryOf } });
 
@@ -304,7 +304,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                         r.route ? r.route.key : null, r.route ? r.route.version : null, iso(clock.now()), id);
                 if (!d.changes) return d;
                 if (r.citations.length) await addCitations(id, r.citations, 'workflow');
-                events.runChanged(await getRow(id));
+                await events.runChanged(await getRow(id));
                 return d;
             });
             if (!done.changes) return;       // cancelled while finishing
@@ -324,7 +324,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             await db.tx(async () => {
                 const f = await db.prepare(`UPDATE runs SET status = ?, error_code = ?, error_detail = ?, attempts = ?, finished_at = ? WHERE id = ? AND status IN ('queued', 'running')`)
                     .run(cancelled ? 'cancelled' : 'failed', code, extra ? `${detail} ${extra}` : detail, attempts, iso(clock.now()), id);
-                if (f.changes) events.runChanged(await getRow(id));
+                if (f.changes) await events.runChanged(await getRow(id));
             });
             const spent = await db.prepare("SELECT COALESCE(SUM(tokens_in),0)::bigint ti, COALESCE(SUM(tokens_out),0)::bigint tout, COALESCE(SUM(cost_usd),0) c FROM requests WHERE run_id = ? AND status = 'ok'").get(id);
             if (reserved && spent && (spent.ti || spent.tout)) await quotas.account(ctx, reserved, { provider: 'mixed', model: '', tokensIn: spent.ti, tokensOut: spent.tout, cost: spent.c });
@@ -398,7 +398,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         return await db.tx(async () => {
             const open = await db.prepare("SELECT id FROM runs WHERE status IN ('queued', 'running')").all();
             const r = await db.prepare("UPDATE runs SET status = 'failed', error_code = 'run.interrupted', error_detail = 'the service restarted while this run was in progress', finished_at = ? WHERE status IN ('queued', 'running')").run(iso(clock.now()));
-            for (const { id } of open) events.runChanged(await getRow(id));
+            for (const { id } of open) await events.runChanged(await getRow(id));
             return r.changes;
         });
     }
