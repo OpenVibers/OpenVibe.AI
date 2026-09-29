@@ -601,4 +601,13 @@ const KIND_TO_WORKFLOW = {
     status_check: 'live.status_check',
 };
 
-module.exports = { templates, workflows: [...structured, ...passthrough], KIND_TO_WORKFLOW, ROLES, PASSTHROUGH_INPUT, PASSTHROUGH_OUTPUT };
+// OpenVibe.Chat runs the chat summaries itself (plan T3): the same two workflows under Chat's own namespace, so Chat's
+// token (ai.run.* on chat.*) never needs Live's. Same templates, schemas and post-processing; only the key and
+// namespace differ.
+const CHAT_OWNED = [['live.chat.global', 'chat.global'], ['live.chat.profile', 'chat.profile']].map(([from, key]) => {
+    const w = structured.find((x) => x.key === from);
+    if (!w) throw new Error(`workflows/live.js: ${from} is missing`);
+    return { ...w, key, namespace: 'chat', description: `${w.description} Run by OpenVibe.Chat under its own namespace.` };
+});
+
+module.exports = { templates, workflows: [...structured, ...CHAT_OWNED, ...passthrough], KIND_TO_WORKFLOW, ROLES, PASSTHROUGH_INPUT, PASSTHROUGH_OUTPUT };

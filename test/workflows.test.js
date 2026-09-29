@@ -58,6 +58,9 @@ EXAMPLES['live.arena.headline'] = { kind: 'open', a: 'ann', b: 'bob', line: 'bob
 EXAMPLES['live.clips.confirm'] = { scene: ['streamer jumps up cheering'], transcript: [{ t: 94, text: 'IT COMPILES' }], sounds: [{ t: 95, label: 'Cheering', confidence: 0.8 }], chat: ['LETS GO', 'poggers'] };
 EXAMPLES['live.chat.global'] = { window_label: 'past 3 hours', prior_memory: 'croutons are a running joke', recent_labels: ['the crouton war'], messages: [{ mins_ago: 12, where: 'global', author: 'goosely', kind: null, text: 'croutons are soup confetti' }, { mins_ago: 3, where: '#ann', author: 'bob', kind: 'emote', text: 'waves' }] };
 EXAMPLES['live.chat.profile'] = { subject_kind: 'relay', name: 'KickFan', platform: 'kick', recent_24h: false, seen: 0, prior_memory: '', messages: [{ mins_ago: 2000, author: 'KickFan', text: 'hello from kick' }] };
+// Chat runs the same two workflows under its own namespace (plan T3).
+EXAMPLES['chat.global'] = EXAMPLES['live.chat.global'];
+EXAMPLES['chat.profile'] = EXAMPLES['live.chat.profile'];
 EXAMPLES['live.person.overview'] = { as_streamer: 'Codes rust late at night.', as_chatter: 'Jokes about croutons.' };
 EXAMPLES['live.stream.titles'] = { summaries: ['Fixed a borrow checker bug live', 'Built a robot arm and it waved'] };
 EXAMPLES['live.moments.rank'] = { vods: [{ title: 'Rust night', overview: 'the build finally compiles', views: 30, clips: 2, peak_viewers: 5 }, { title: 'Chill', overview: 'sitting at a desk', views: 3, clips: 0, peak_viewers: 1 }], want: 2 };
