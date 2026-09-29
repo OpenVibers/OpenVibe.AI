@@ -9,6 +9,7 @@
  *   4  templates   (versioned)           9  cache_entries
  *   5  workflows   (versioned)          10  quotas + usage_counters
  *                                       11  audit_log
+ *                                       12  provider_stats_daily + placement_state   (T6 provider router)
  *
  * Templates, workflows and routes are append-only per key: an edit inserts version n+1 and the
  * previous version stays readable, so every run can say exactly which versions produced it.

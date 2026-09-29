@@ -17,6 +17,35 @@ const { AiError, iso } = require('./util');
 
 const WINDOWS = { minute: 60, hour: 3600, day: 86400 };
 
+/**
+ * T6 provider router, phase 0 (nothing reads these yet). Every finished provider attempt is rolled up
+ * into provider_stats_daily and per-route placement_state in the SAME transaction as usage_daily, so
+ * the rollup can never drift from the accounting and a failed rollup write rolls the accounting back.
+ *
+ * Latency p50/p95 come from a fixed-bucket histogram (LATENCY_BUCKETS_MS = the inclusive upper bound of
+ * each bucket; the last array slot is the overflow), never from a scan of the requests table. The estimate
+ * is the bucket's upper bound — the smallest bucket whose cumulative count reaches the quantile.
+ */
+const EWMA_ALPHA = 0.2;                                   // documented: 20 % of the new sample, 80 % of the history
+const LATENCY_BUCKETS_MS = [50, 100, 200, 400, 800, 1600, 3200, 6400, 12800, 25600];
+
+function latencyBucket(ms) {
+    const i = LATENCY_BUCKETS_MS.findIndex((b) => ms <= b);
+    return i === -1 ? LATENCY_BUCKETS_MS.length : i;      // -1 → the overflow bucket
+}
+function estimatePercentile(hist, q) {
+    let total = 0;
+    for (const n of hist) total += n;
+    if (!total) return null;
+    const target = Math.ceil(q * total);
+    let cum = 0;
+    for (let i = 0; i < hist.length; i++) {
+        cum += hist[i];
+        if (cum >= target) return i < LATENCY_BUCKETS_MS.length ? LATENCY_BUCKETS_MS[i] : LATENCY_BUCKETS_MS[LATENCY_BUCKETS_MS.length - 1];
+    }
+    return LATENCY_BUCKETS_MS[LATENCY_BUCKETS_MS.length - 1];
+}
+
 function createQuotas(db, { clock = { now: () => Date.now() }, registry } = {}) {
     const nowSec = () => Math.floor(clock.now() / 1000);
     const windowStart = (w, t = nowSec()) => Math.floor(t / WINDOWS[w]) * WINDOWS[w];
@@ -101,13 +130,69 @@ function createQuotas(db, { clock = { now: () => Date.now() }, registry } = {}) 
         ON CONFLICT(day, requester, attribution, workflow_key, provider_key, model_key) DO UPDATE SET requests = usage_daily.requests + 1,
           tokens_in = usage_daily.tokens_in + excluded.tokens_in, tokens_out = usage_daily.tokens_out + excluded.tokens_out, tokens_cached = usage_daily.tokens_cached + excluded.tokens_cached, cost_usd = usage_daily.cost_usd + excluded.cost_usd`);
 
-    /** Add real usage to the reserved windows and the daily usage table. */
-    async function account(ctx, reserved, { provider, model, tokensIn = 0, tokensOut = 0, tokensCached = 0, cost = 0 }) {
+    // ── Provider rollup + placement state (T6 phase 0; nothing reads them yet) ──
+    const ensStats = db.prepare('INSERT INTO provider_stats_daily (day, provider, model) VALUES (?, ?, ?) ON CONFLICT (day, provider, model) DO NOTHING');
+    const getStats = db.prepare('SELECT latency_hist FROM provider_stats_daily WHERE day = ? AND provider = ? AND model = ? FOR UPDATE');
+    const bumpStats = db.prepare(`UPDATE provider_stats_daily SET requests = requests + 1, ok = ok + ?, errors = errors + ?, cost_usd_total = cost_usd_total + ?,
+        tokens_in = tokens_in + ?, tokens_out = tokens_out + ?, latency_hist = ?::bigint[], latency_p50_ms = ?, latency_p95_ms = ?
+        WHERE day = ? AND provider = ? AND model = ?`);
+    const putPlacement = db.prepare(`INSERT INTO placement_state (route_key, current_provider, current_model, ewma_latency_ms, ewma_error_rate, quality, updated_at)
+        VALUES (?, ?, ?, ?, ?, NULL, ?)
+        ON CONFLICT (route_key) DO UPDATE SET current_provider = excluded.current_provider, current_model = excluded.current_model,
+          ewma_latency_ms = excluded.ewma_latency_ms * ? + placement_state.ewma_latency_ms * ?, ewma_error_rate = excluded.ewma_error_rate * ? + placement_state.ewma_error_rate * ?, updated_at = excluded.updated_at`);
+
+    /**
+     * One provider_stats_daily upsert and one placement_state EWMA update per finished attempt
+     * (ok | error | timeout | cancelled; skips never touched a provider). The first sample for a key
+     * initialises its EWMA; later samples move it by EWMA_ALPHA. quality stays null (no signal yet).
+     */
+    async function recordStats(day, attempts) {
+        for (const a of attempts || []) {
+            if (!a.provider_key || a.status === 'skipped') continue;
+            const model = a.model_key || '';
+            const ok = a.status === 'ok' ? 1 : 0;
+            const errors = ok ? 0 : 1;
+            const latency = Number.isFinite(a.latency_ms) ? Math.max(0, Math.round(a.latency_ms)) : null;
+            await ensStats.run(day, a.provider_key, model);
+            const cur = await getStats.get(day, a.provider_key, model);
+            const hist = Array.from({ length: LATENCY_BUCKETS_MS.length + 1 }, (_, i) => Number((cur && cur.latency_hist && cur.latency_hist[i]) || 0));
+            if (latency !== null) hist[latencyBucket(latency)] += 1;
+            await bumpStats.run(ok, errors, Number(a.cost_usd) || 0, Number(a.tokens_in) || 0, Number(a.tokens_out) || 0, hist,
+                estimatePercentile(hist, 0.5), estimatePercentile(hist, 0.95), day, a.provider_key, model);
+            if (a.route_key && latency !== null) {
+                const t = iso(clock.now());
+                await putPlacement.run(a.route_key, a.provider_key, a.model_key || null, latency, errors, t, EWMA_ALPHA, 1 - EWMA_ALPHA, EWMA_ALPHA, 1 - EWMA_ALPHA);
+            }
+        }
+    }
+
+    /**
+     * Add real usage to the reserved windows, the daily usage table and — in the same transaction — the
+     * provider rollup and per-route placement state. `attempts` is the run's finished attempts (the same
+     * entries logged to `requests`); `writeUsage` is false when a run spent nothing (stats are still kept).
+     */
+    async function account(ctx, reserved, { provider, model, tokensIn = 0, tokensOut = 0, tokensCached = 0, cost = 0, attempts = null, writeUsage = true }) {
         const tokens = tokensIn + tokensOut;
+        const day = iso(clock.now()).slice(0, 10);
         await db.tx(async () => {
             for (const r of reserved || []) await bump.run(r.scope_type, r.scope_id, r.window, r.ws, r.workflow_prefix, 0, tokens, cost);
-            await insDaily.run(iso(clock.now()).slice(0, 10), `${ctx.requesterType}:${ctx.requesterId}`, ctx.attributionKey || '', ctx.workflowKey, provider || '', model || '', tokensIn, tokensOut, tokensCached, cost);
+            if (writeUsage) await insDaily.run(day, `${ctx.requesterType}:${ctx.requesterId}`, ctx.attributionKey || '', ctx.workflowKey, provider || '', model || '', tokensIn, tokensOut, tokensCached, cost);
+            await recordStats(day, attempts);
         });
+    }
+
+    /**
+     * Per provider/model totals over the last `days` UTC days, from provider_stats_daily only — never the
+     * requests table. latency_p50_ms/latency_p95_ms are the worst daily estimate in the window (a day's
+     * histogram is not summable in SQL without a custom aggregate); the router and the price/latency page
+     * read this. No route yet (T6 phase 0).
+     */
+    async function statsFor({ days = 7 } = {}) {
+        const from = new Date(clock.now() - Math.max(1, days) * 86400000).toISOString().slice(0, 10);
+        return await db.prepare(`SELECT provider, model, SUM(requests)::bigint AS requests, SUM(ok)::bigint AS ok, SUM(errors)::bigint AS errors,
+            SUM(cost_usd_total)::double precision AS cost_usd_total, SUM(tokens_in)::bigint AS tokens_in, SUM(tokens_out)::bigint AS tokens_out,
+            MAX(latency_p50_ms) AS latency_p50_ms, MAX(latency_p95_ms) AS latency_p95_ms
+            FROM provider_stats_daily WHERE day >= ? GROUP BY provider, model ORDER BY provider, model`).all(from);
     }
 
     // ── Admin ──
@@ -169,7 +254,7 @@ function createQuotas(db, { clock = { now: () => Date.now() }, registry } = {}) 
         return { max_cost_usd: Math.min(...rows.map((r) => r.max_cost_usd)), spent, window: 'day' };
     }
 
-    return { reserve, account, list, upsert, usage, counters, paidBudget, WINDOWS };
+    return { reserve, account, statsFor, list, upsert, usage, counters, paidBudget, WINDOWS };
 }
 
 module.exports = { createQuotas, WINDOWS };

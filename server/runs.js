@@ -274,8 +274,10 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         const opts = parseJson(row.options, {});
         let seq = 0;
         let attempts = 0;
+        const logged = [];      // every attempt entry, for the provider rollup in quotas.account()
         const logRequest = async (e) => {
             if (e.status !== 'skipped') attempts++;
+            logged.push(e);
             await insReq.run({
                 run_id: id, seq: seq++, operation: e.operation, provider_key: e.provider_key, model_key: e.model_key || null, route_key: e.route_key || null, route_version: e.route_version || null,
                 status: e.status, skip_reason: e.skip_reason || null, fallback: e.fallback || 0, prompt_hash: e.prompt_hash || null, input_hash: row.input_hash, output_hash: e.output_hash || null,
@@ -308,7 +310,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                 return d;
             });
             if (!done.changes) return;       // cancelled while finishing
-            if (r.provider && reserved) await quotas.account(ctx, reserved, { provider: r.provider, model: r.model, tokensIn: r.usage.input, tokensOut: r.usage.output, tokensCached: r.usage.cached, cost: r.cost });
+            if (r.provider && reserved) await quotas.account(ctx, reserved, { provider: r.provider, model: r.model, tokensIn: r.usage.input, tokensOut: r.usage.output, tokensCached: r.usage.cached, cost: r.cost, attempts: logged });
             if (r.fallbackUsed) await registry.audit('system', 'run.fallback', 'run', id, { trace: row.trace_id, metadata: { workflow: row.workflow_key, provider: r.provider, route: r.route && r.route.key } });
             // Output shaped by someone's preferences, or kept for nobody (history off), is never cached for reuse.
             if (scope && row.cache_key && !r.synthetic && wf.cache_mode !== 'none' && preferences.history !== false && !preferenceLines(preferences)) {
@@ -327,7 +329,10 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                 if (f.changes) await events.runChanged(await getRow(id));
             });
             const spent = await db.prepare("SELECT COALESCE(SUM(tokens_in),0)::bigint ti, COALESCE(SUM(tokens_out),0)::bigint tout, COALESCE(SUM(cost_usd),0) c FROM requests WHERE run_id = ? AND status = 'ok'").get(id);
-            if (reserved && spent && (spent.ti || spent.tout)) await quotas.account(ctx, reserved, { provider: 'mixed', model: '', tokensIn: spent.ti, tokensOut: spent.tout, cost: spent.c });
+            // Account the spent tokens/cost as before, but always roll up the finished attempts (the failed
+            // ones included) into provider_stats_daily/placement_state: a run that answered nothing still
+            // tells the router a provider was unhealthy.
+            if (reserved && logged.some((e) => e.status !== 'skipped')) await quotas.account(ctx, reserved, { provider: 'mixed', model: '', tokensIn: spent.ti, tokensOut: spent.tout, cost: spent.c, attempts: logged, writeUsage: Boolean(spent.ti || spent.tout) });
         } finally {
             inflight.delete(id);
         }
