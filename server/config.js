@@ -53,6 +53,8 @@ function load(env = process.env) {
         // Identity: OpenVibe.Network signs the service tokens callers present (audience openvibe.ai).
         networkUrl: trimUrl(env.OV_NETWORK_URL || 'https://openvibe.network'),
         networkInternalUrl: trimUrl(env.OV_NETWORK_INTERNAL_URL || 'http://127.0.0.1:4000'),
+        // The JWKS the SDK's client fetches (one client per URL): the internal URL unless OV_NETWORK_JWKS_URL says otherwise.
+        networkJwksUrl: `${trimUrl(env.OV_NETWORK_JWKS_URL || env.OV_NETWORK_INTERNAL_URL || 'http://127.0.0.1:4000')}/api/.well-known/jwks`,
         issuer: trimUrl(env.OV_NETWORK_ISSUER || env.OV_NETWORK_URL || 'https://openvibe.network'),
         // A person's own provider keys (server/credentials.js): AES-256-GCM, 64 hex characters; unset = credentials off.
         credentialsKey: String(env.AI_CREDENTIALS_KEY || '').trim(),

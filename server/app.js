@@ -50,7 +50,7 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
     if (credentials) app.use(require('./credentials').credentialsRouter({ credentials, auth, registry, sendError: (res, err, ctx) => require('./api/runs').sendError(res, err, ctx, log) }));
     app.use(adminRouter({ db, registry, pool, quotas, cache, runs, auth, ops, log }));
     // The operator console (/console, /auth/*): Network staff, server-rendered, no scripts (server/console).
-    app.use(consoleRouter({ config, db, registry, pool, quotas, cache, runs, keys, ops, env, clock, fetchImpl, log }));
+    app.use(consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, env, clock, fetchImpl, log }));
 
     // Crawlers: nothing here is for search engines, the console and sign-in least of all (no sitemap either).
     app.get('/robots.txt', (_req, res) => {

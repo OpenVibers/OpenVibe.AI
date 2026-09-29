@@ -1,7 +1,11 @@
 'use strict';
 /**
  * Authentication: callers present OpenVibe.Network service tokens (RS256 client-credentials JWTs,
- * audience openvibe.ai), verified with openvibe-contracts serviceAuth.verifyServiceToken.
+ * audience openvibe.ai), verified with openvibe-contracts serviceAuth.verifyServiceToken (the claim
+ * schema, sandbox refusal, issuer and audience). Only the KEY comes from the SDK: one JWKS client per
+ * URL (openvibe-sdk/auth jwksClient) gives fresh keys, the last good keys through an outage,
+ * exponential backoff, and a rotation honoured on an unknown kid. OV_NETWORK_PUBLIC_KEY still pins a
+ * PEM, which skips the fetch entirely.
  *
  * Capabilities ai.run.create / ai.run.read / ai.workflow.manage / ai.provider.manage / ai.usage.read
  * are proposed in docs/capabilities-proposal/ and are not in openvibe-contracts yet. Until they
@@ -14,8 +18,8 @@
  * ns-less service tokens (AI_NS_FALLBACK) and the open-rule lever (AI_NS_REQUIRED=false), shims
  * C-22 and C-23, were retired on 2026-09-28 once no token without `ns` was left.
  */
-const crypto = require('crypto');
 const { serviceAuth, capabilities, http } = require('openvibe-contracts');
+const { jwksClient, jwksStatus } = require('openvibe-sdk/auth');
 
 const CAPS = Object.freeze({
     runCreate: 'ai.run.create',
@@ -25,55 +29,17 @@ const CAPS = Object.freeze({
     usageRead: 'ai.usage.read',
 });
 
-/** Loads the Network signing key from /api/.well-known/jwks (retrying), or uses a configured PEM. */
-function createKeyStore({ urls = [], pem = null, fetchImpl = globalThis.fetch, log = console } = {}) {
-    let key = pem ? toPem(pem) : null;
-    let retryTimer = null;
-    let refreshTimer = null;
-
-    function toPem(value) {
-        return crypto.createPublicKey(value).export({ type: 'spki', format: 'pem' });
-    }
-
-    async function fetchOnce() {
-        for (const base of urls) {
-            if (!base) continue;
-            const url = `${base}/api/.well-known/jwks`;
-            try {
-                const res = await fetchImpl(url, { signal: AbortSignal.timeout(8000) });
-                if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                const body = await res.json();
-                const jwk = (body.keys || []).find(k => k.kty === 'RSA');
-                if (jwk) key = toPem({ key: jwk, format: 'jwk' });
-                else if (typeof body.public_key === 'string' && body.public_key.includes('BEGIN')) key = toPem(body.public_key);
-                else throw new Error('no RSA key in response');
-                log.log(`[auth] Network public key loaded from ${base}`);
-                return key;
-            } catch (err) {
-                log.warn(`[auth] key fetch from ${url} failed: ${err.message}`);
-            }
-        }
-        return null;
-    }
-
-    async function start() {
-        if (pem) return Promise.resolve(key);
-        const attempt = async () => {
-            const k = await fetchOnce();
-            if (!k && !key) {
-                retryTimer = setTimeout(attempt, 30 * 1000);
-                retryTimer.unref?.();
-            }
-            return k;
-        };
-        refreshTimer = setInterval(() => { fetchOnce().catch(() => {}); }, 6 * 60 * 60 * 1000);
-        refreshTimer.unref?.();
-        return await attempt();
-    }
-
-    function stop() { clearTimeout(retryTimer); clearInterval(refreshTimer); }
-
-    return { get: () => key, loaded: () => Boolean(key), start, stop, fetchOnce };
+/**
+ * The Network signing keys, through the SDK's process-wide JWKS client (one per URL). A pinned
+ * OV_NETWORK_PUBLIC_KEY PEM skips the fetch entirely; /api/ready reports either as ready.
+ */
+function createNetworkKeys({ config }) {
+    const pinned = config.networkPublicKey || null;
+    return {
+        pinned: Boolean(pinned),
+        /** Every JWKS client's state (url, ready, keys, fetchedAt, stale, failures, lastError, nextTryAt). */
+        status: () => (pinned ? [{ url: null, ready: true, keys: 1, pinned: true }] : jwksStatus()),
+    };
 }
 
 /** Exact id or `family.*` grant (the rule openvibe-contracts applies to the capabilities it knows). */
@@ -110,11 +76,33 @@ function principalSubject(sub) {
     return { type: m[1] === 'svc' ? 'service' : m[1], id: m[2] };
 }
 
-function createAuth({ config, keys }) {
-    function verify(token) {
-        const publicKey = keys.get();
-        if (!publicKey) return { ok: false, code: 'token.unavailable', reason: 'signing key not loaded yet' };
-        return serviceAuth.verifyServiceToken(token, { publicKey, issuer: config.issuer, audience: config.audience });
+function createAuth({ config, log = console }) {
+    /** The kid a token's header names (null when absent or undecodable). */
+    function headerKid(token) {
+        try { return JSON.parse(Buffer.from(String(token).split('.')[0], 'base64url').toString('utf8')).kid || null; } catch { return null; }
+    }
+
+    /**
+     * A Network service/app token: the key from the SDK's JWKS client (or the pinned PEM), every rule
+     * from openvibe-contracts' verifyServiceToken (identity.service-token-claims@1, env: sandbox refused).
+     */
+    async function verify(token) {
+        const check = (publicKey) => serviceAuth.verifyServiceToken(token, { publicKey, issuer: config.issuer, audience: config.audience });
+        if (config.networkPublicKey) return check(config.networkPublicKey);
+        let keys;
+        try { keys = await jwksClient(config.networkJwksUrl, { log }).keysForKid(headerKid(token)); } catch (err) {
+            // token.no_key (503): no keys loaded yet, so nothing can be verified; retryable, as before. The
+            // SDK's message names the internal JWKS URL and the fetch error: logged by the client, never answered.
+            return { ok: false, code: 'token.unavailable', reason: 'signing key not loaded yet' };
+        }
+        const kid = headerKid(token);
+        const byKid = kid ? keys.filter((k) => k.kid === kid) : [];
+        let last = { ok: false, code: 'token.unavailable', reason: 'no signing key' };
+        for (const k of byKid.length ? byKid : keys) {
+            last = check(k.key);
+            if (last.ok || last.code !== 'token.bad_signature') return last;
+        }
+        return last;
     }
 
     /**
@@ -122,21 +110,26 @@ function createAuth({ config, keys }) {
      * Sets req.principal = { sub, subject: {type,id}, cap, ns, jti }.
      */
     function requireCap(...anyOf) {
-        return function capGuard(req, res, next) {
+        return async function capGuard(req, res, next) {
             const ctx = req.ov;
-            const token = bearer(req);
-            if (!token) return http.sendProblem(res, 401, 'token.missing', { detail: 'a service token (audience openvibe.ai) is required', ctx });
-            const r = verify(token);
-            if (!r.ok) return http.sendProblem(res, r.code === 'token.unavailable' ? 503 : 401, r.code, { detail: r.reason, ctx });
-            let decision = null;
-            for (const id of anyOf) {
-                decision = allows(r.claims, id);
-                if (decision.allowed) break;
+            try {
+                const token = bearer(req);
+                if (!token) return http.sendProblem(res, 401, 'token.missing', { detail: 'a service token (audience openvibe.ai) is required', ctx });
+                const r = await verify(token);
+                if (!r.ok) return http.sendProblem(res, r.code === 'token.unavailable' ? 503 : 401, r.code, { detail: r.reason, ctx });
+                let decision = null;
+                for (const id of anyOf) {
+                    decision = allows(r.claims, id);
+                    if (decision.allowed) break;
+                }
+                if (!decision.allowed) return http.sendProblem(res, 403, decision.code, { detail: anyOf.length > 1 ? `one of ${anyOf.join(', ')} is required` : decision.reason, ctx });
+                const subject = principalSubject(r.claims.sub);
+                req.principal = { sub: r.claims.sub, subject, cap: r.claims.cap, ns: r.claims.ns || [], jti: r.claims.jti, claims: r.claims };
+                return next();
+            } catch (err) {
+                log.error(`[auth] ${req.method} ${req.path}: ${(err && err.stack) || err}`);
+                if (!res.headersSent) http.sendProblem(res, 500, 'internal.error', { detail: 'internal error', ctx });
             }
-            if (!decision.allowed) return http.sendProblem(res, 403, decision.code, { detail: anyOf.length > 1 ? `one of ${anyOf.join(', ')} is required` : decision.reason, ctx });
-            const subject = principalSubject(r.claims.sub);
-            req.principal = { sub: r.claims.sub, subject, cap: r.claims.cap, ns: r.claims.ns || [], jti: r.claims.jti, claims: r.claims };
-            return next();
         };
     }
 
@@ -146,4 +139,4 @@ function createAuth({ config, keys }) {
     return { verify, requireCap, principalHas };
 }
 
-module.exports = { CAPS, createKeyStore, createAuth, hasCap, allows, namespaceAllowed, effectiveNamespaces, principalSubject, bearer };
+module.exports = { CAPS, createNetworkKeys, createAuth, hasCap, allows, namespaceAllowed, effectiveNamespaces, principalSubject, bearer };

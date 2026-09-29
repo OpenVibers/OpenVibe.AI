@@ -88,7 +88,7 @@ const DEF_KINDS = {
 };
 const DAY_MS = 86400000;
 
-function consoleRouter({ config, db, registry, pool, quotas, cache, runs, keys, ops, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console }) {
+function consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console }) {
     const cc = config.console;
     const r = express.Router();
     const scoped = ['/console', '/auth'];
@@ -209,9 +209,7 @@ function consoleRouter({ config, db, registry, pool, quotas, cache, runs, keys, 
         }
         let person;
         try {
-            const publicKey = keys.get() || await keys.fetchOnce();
-            if (!publicKey) throw new Error('the Network key is not loaded');
-            person = await sso.exchange({ config, clientSecret: clientSecret(), code: req.query.code, verifier: flow.v, publicKey, now: clock.now(), fetchImpl });
+            person = await sso.exchange({ config, clientSecret: clientSecret(), code: req.query.code, verifier: flow.v, now: clock.now(), fetchImpl, log });
         } catch (e) {
             log.warn(`[console] sign-in failed: ${e.message}`);
             return await send(res, e.status && e.status < 500 ? 400 : 502, pages.signIn({ message: 'OpenVibe.Network did not confirm the sign-in. Please try again.' }));

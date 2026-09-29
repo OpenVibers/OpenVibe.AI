@@ -1,7 +1,8 @@
 [Unit]
 Description=OpenVibe.AI — providers, routing, versioned templates and workflows, runs, citations, cache, quotas and audit
 # Network (openvibe-network) signs the service tokens callers present. The AI service starts without
-# it and keeps retrying the JWKS fetch; /api/ready stays 503 until the key has loaded.
+# it; the SDK's JWKS client fetches at boot and backs off and retries, and /api/ready stays 503 until
+# the key has loaded (then the last good keys carry it through a Network outage).
 After=network.target postgresql.service pgbouncer.service valkey-server.service
 Wants=openvibe-network.service postgresql.service pgbouncer.service valkey-server.service
 

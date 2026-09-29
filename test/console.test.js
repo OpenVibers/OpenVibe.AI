@@ -32,9 +32,9 @@ const news = token('news', ['ai.run.create', 'ai.run.read']);
 const codes = new Map();
 const grants = [];
 const revoked = [];
-function authorize({ subject_id, role = 'user', is_owner = false, username = 'someone', staff_caps, challenge, redirect_uri }) {
+function authorize({ subject_id, role = 'user', is_owner = false, username = 'someone', staff_caps, challenge, redirect_uri, expired = false }) {
     const code = crypto.randomBytes(16).toString('hex');
-    codes.set(code, { subject_id, role, is_owner, username, staff_caps, challenge, redirect_uri });
+    codes.set(code, { subject_id, role, is_owner, username, staff_caps, challenge, redirect_uri, expired });
     return code;
 }
 function userToken(u) {
@@ -42,7 +42,7 @@ function userToken(u) {
     return serviceAuth.signServiceToken({
         sub: 42, id: 42, ...(u.subject_id ? { subject_id: u.subject_id } : {}), username: u.username, role: u.role, ...(u.is_owner ? { is_owner: true } : {}),
         ...(u.staff_caps ? { staff_caps: u.staff_caps, staff_map: '1.1.0' } : {}),
-        iss: ISSUER, aud: ['openvibe.live', 'openvibe.network'], iat: now, exp: now + 3600,
+        iss: ISSUER, aud: ['openvibe.live', 'openvibe.network'], iat: u.expired ? now - 7200 : now, exp: u.expired ? now - 3600 : now + 3600,
     }, privateKey);
 }
 const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
@@ -212,6 +212,17 @@ t.test('the callback refuses a missing or mismatched state, a forged flow cookie
     assert.strictEqual((await get(`/auth/callback?code=${code}&state=${loc.searchParams.get('state')}`, `ovai_flow=${body}.forged`)).status, 400, 'forged signature');
     code = authorize({ subject_id: people.admin, role: 'admin', challenge: 'A'.repeat(43), redirect_uri: redirect });
     assert.strictEqual((await get(`/auth/callback?code=${code}&state=${encodeURIComponent(loc.searchParams.get('state'))}`, flow)).status, 400, 'PKCE mismatch');
+    assert.strictEqual(await sessionCount(), 0);
+});
+
+// The SDK takes the clock as a number: a conversion that passed a function made every expiry check pass.
+t.test('an expired access token from the exchange starts no session', async () => {
+    const login = await get('/auth/login');
+    const loc = new URL(login.headers.get('location'));
+    const flow = login.cookies.find((c) => c.startsWith('ovai_flow=')).split(';')[0];
+    const code = authorize({ subject_id: people.admin, role: 'admin', challenge: loc.searchParams.get('code_challenge'), redirect_uri: loc.searchParams.get('redirect_uri'), expired: true });
+    const cb = await get(`/auth/callback?code=${code}&state=${encodeURIComponent(loc.searchParams.get('state'))}`, flow);
+    assert.ok(cb.status >= 400, `expired token: ${cb.status}`);
     assert.strictEqual(await sessionCount(), 0);
 });
 

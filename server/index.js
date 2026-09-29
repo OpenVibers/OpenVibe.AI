@@ -17,7 +17,8 @@ const { createCache } = require('./cache');
 const { createQuotas } = require('./quota');
 const { createRuns } = require('./runs');
 const { seed } = require('./workflows/seed');
-const { createKeyStore, createAuth } = require('./auth');
+const { createAuth, createNetworkKeys } = require('./auth');
+const { jwksClient } = require('openvibe-sdk/auth');
 const schemas = require('./schemas');
 const { createApp } = require('./app');
 
@@ -43,10 +44,18 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     const interrupted = await runs.recoverInterrupted();
     if (interrupted) log.warn(`[ai] marked ${interrupted} interrupted run(s) failed (run.interrupted); callers can retry them`);
 
-    const keys = createKeyStore({ urls: [config.networkInternalUrl, config.networkUrl], pem: config.networkPublicKey, fetchImpl, log });
-    const auth = createAuth({ config, keys });
+    // The Network signing keys live in the SDK's process-wide JWKS client (one per URL): freshness,
+    // last-good-keys, backoff and rotation are its job. A pinned PEM never fetches. Not started under
+    // NODE_ENV=test (tests pin a PEM or point the URL at a stub and let the client fetch on first use).
+    const keys = createNetworkKeys({ config });
+    const auth = createAuth({ config, log });
     const app = createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials });
-    const keyLoaded = keys.start().catch(() => null);
+    let jwks = null;
+    let keyLoaded = Promise.resolve(null);
+    if (!keys.pinned && config.nodeEnv !== 'test') {
+        jwks = jwksClient(config.networkJwksUrl, { log, fetch: fetchImpl }).start();
+        keyLoaded = jwks.keys().catch(() => null);   // resolves once the first fetch is done (null if it failed)
+    }
 
     const housekeeping = setInterval(async () => {
         try {
@@ -75,7 +84,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     async function close() {
         clearInterval(housekeeping);
         userModules.stop();
-        keys.stop();
+        if (jwks) jwks.stop();
         if (server) {
             server.closeAllConnections?.();
             await new Promise(resolve => server.close(() => resolve()));

@@ -5,8 +5,9 @@
  *
  *   db            required  a real query on AI's PostgreSQL database (the provider registry answers)
  *   workflows     required  at least one active workflow: without one there is nothing to run
- *   network_jwks  required  the Network signing key has loaded. Every endpoint but health/ready
- *                           needs a verified service token, so without it AI serves nothing
+ *   network_jwks  required  the Network signing key has loaded (openvibe-sdk/auth jwksStatus()). Every
+ *                           endpoint but health/ready needs a verified service token, so without it AI
+ *                           serves nothing; once loaded, the SDK keeps the last good keys through an outage
  *   providers     optional  provider configuration: every active non-stub provider has the
  *                           credentials it needs and a circuit that is not open. A missing key or an
  *                           open circuit sends runs to fallbacks (or to a 503 provider.unavailable),
@@ -48,7 +49,17 @@ function createAiReadiness({ db, registry, pool, keys, runs, release = null }) {
                     return n > 0 ? { ok: true, detail: { active: n } } : 'no active workflow';
                 },
             },
-            { name: 'network_jwks', required: true, check: () => keys.loaded() || 'Network signing key not loaded yet: no service token can be verified' },
+            {
+                name: 'network_jwks', required: true,
+                // The SDK's JWKS clients: a pinned PEM reports ready on its own, otherwise the last good keys do
+                // (they stay loaded through a Network outage). Public: counts and times only, never the internal
+                // URL or the fetch error.
+                check: () => {
+                    const ready = keys.status().find(s => s.ready);
+                    if (!ready) return 'Network signing key not loaded yet: no service token can be verified';
+                    return { ok: true, detail: { keys: ready.keys, pinned: Boolean(ready.pinned), stale: Boolean(ready.stale), failures: ready.failures || 0 } };
+                },
+            },
             {
                 name: 'providers', required: false,
                 check: async () => {
