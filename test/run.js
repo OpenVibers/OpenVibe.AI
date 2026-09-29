@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Runs every test in test/ — the files named *.test.js — each in its own process, and fails
- * if any of them fails. They use temp SQLite databases, a generated signing key, the deterministic
+ * if any of them fails. They use temp databases (PGlite by default, PostgreSQL with npm run test:pg), a generated signing key, the deterministic
  * stub provider and local HTTP servers on random ports; none of them needs the network, a paid
  * key or a running OpenVibe.Network.
  *

@@ -315,15 +315,13 @@ Production deploys with `sudo ovhost deploy ai` on the host (strategy `git-check
 fast-forward `/opt/openvibe.ai`, install on a lockfile change, restart, wait for `/api/ready`).
 The unit is `openvibe-ai.service` on `127.0.0.1:4700`, the env file `/etc/openvibe/ai.env`. The database is
 `ov_ai` on the host's data role (`sudo /opt/openvibe.host/roles/data/add-service.sh ai` writes its settings); the
-release migrates it at boot. The one-time move from SQLite is `scripts/migrate-to-postgres.js` (openvibe-sdk
-`runSqliteMigration`, with a `--pglite` rehearsal mode), run while the service is stopped; the old
-`/var/lib/openvibe-ai/ai.db` stays read-only for 7 days as the rollback. The local model
+release migrates it at boot. The local model
 runs as `openvibe-llm.service` on 127.0.0.1:8090 ([Local model](#local-model)).
 Rollback: ovhost puts the previous sha back by itself when `/api/ready` does not answer 2xx after the
 restart; afterwards `sudo ovhost rollback ai --to <sha>`. Migrations only add tables and columns.
 
 Deployed: `/opt/openvibe.ai`, env `/etc/openvibe/ai.env` (0600), unit `deploy/systemd/openvibe-ai.service`
-(`StateDirectory=openvibe-ai`; database `ov_ai` on the host's data role, the SQLite file `/var/lib/openvibe-ai/ai.db` before the switch), principal `ai`. The nginx vhost
+(`StateDirectory=openvibe-ai`; database `ov_ai` on the host's data role), principal `ai`. The nginx vhost
 `deploy/nginx/ai.openvibe.network.conf` (health/ready, `/`, `/robots.txt`, the operator console
 `/console` and its sign-in `/auth/` public; the API is host-local) is not installed:
 `ai.openvibe.network` still serves the Sites placeholder. The console also needs
@@ -345,7 +343,7 @@ Deployed: `/opt/openvibe.ai`, env `/etc/openvibe/ai.env` (0600), unit `deploy/sy
 - No fallback is declared on any production route, so an outage of the one real provider fails every
   Live AI feature. On 2026-09-23 `live.*` and `network.site_copy` outputs carried no citations or gaps
   (0 citation rows); runs record grounding (cited sources and named gaps) since 2026-09-25.
-- The host has a backup of `ai.db` but no restore drill has run for it; `/metrics` is built but not
+- The host has a backup of `ov_ai` but no restore drill has run for it; `/metrics` is built but not
   deployed yet.
 
 ## Launch rule

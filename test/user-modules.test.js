@@ -75,7 +75,6 @@ t.test('runs for someone without preferences, or for nobody, are untouched', asy
 
 t.test('ai.usage_summary: 30-day runs and tokens per person, written only when changed', async () => {
     const mods = require('../server/user-modules').createUserModules({ db: h.db, config: h.config || { networkInternalUrl: h.env.OV_NETWORK_INTERNAL_URL }, env: h.env, log: {} });
-    mods.ensureSchema();
     const s = await mods.summarize(A.id);
     assert.strictEqual(s.runs_30d, 2); assert.strictEqual(s.tokens_30d, 80);
     assert.deepStrictEqual(s.by_service, { live: 2 });

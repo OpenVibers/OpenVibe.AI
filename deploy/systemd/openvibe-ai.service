@@ -26,9 +26,10 @@ ProtectSystem=strict
 ProtectHome=read-only
 # whisper.cpp (live.media.transcribe) runs as a child process; it reads its binary and models from
 # WHISPER_BIN / WHISPER_MODEL* (defaults under ~/whisper.cpp, readable with ProtectHome=read-only).
-# The code tree stays read-only; the database lives in /var/lib/openvibe-ai.
+# The code tree stays read-only; the media work directory lives in /var/lib/openvibe-ai.
 StateDirectory=openvibe-ai
-Environment=AI_DB_PATH=/var/lib/openvibe-ai/ai.db
+# media.analyze's work directory under StateDirectory (writable; the code tree is read-only).
+Environment=AI_MEDIA_ANALYSIS_DIR=/var/lib/openvibe-ai/media-tmp
 
 [Install]
 WantedBy=multi-user.target

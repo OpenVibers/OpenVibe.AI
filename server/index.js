@@ -36,7 +36,6 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     require('./events').init(db, { log });
     // ai.preferences (read) and ai.usage_summary (written): Network user modules (server/user-modules.js).
     const userModules = require('./user-modules').createUserModules({ db, config, env, fetchImpl, clock, log });
-    userModules.ensureSchema();
     // A person's own provider keys (WS-O task 2): stored by the service holding their consent, used by their runs only.
     const credentials = require('./credentials').createCredentials({ db, config, clock });
     const runs = createRuns({ db, registry, engine, cache, quotas, config, clock, log, userModules, credentials });

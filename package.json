@@ -22,7 +22,6 @@
   "repository": "github:OpenVibers/OpenVibe.AI",
   "dependencies": {
     "ajv": "^8.17.1",
-    "better-sqlite3": "^11.10.0",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "openvibe-contracts": "https://codeload.github.com/OpenVibers/OpenVibe.Contracts/tar.gz/refs/tags/v0.76.0",

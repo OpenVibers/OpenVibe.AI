@@ -4,7 +4,7 @@
   "code": true,
   "wave": "W13",
   "plan": "OpenVibe End-to-End Realignment & Implementation Plan, revision 3 (20 Sep 2026)",
-  "runtime": "node 22, express, better-sqlite3",
+  "runtime": "node 22, express, postgresql",
   "port": 4700,
   "domain": "ai.openvibe.network still serves the OpenVibe.Sites placeholder; the service runs on openvibe-ovh (/opt/openvibe.ai, unit openvibe-ai) on 127.0.0.1:4700, loopback only, used by OpenVibe.Live and OpenVibe.Network",
   "contracts": "openvibe-contracts v0.76.0",

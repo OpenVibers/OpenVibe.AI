@@ -42,14 +42,14 @@ function tmpDir() {
 }
 
 /** Boot the service. `env` goes through config.load() and is also what secrets resolve against. */
-// A boot on a dir used before is a restart on the same database (as the SQLite file was): its database stays open.
+// A boot on a dir used before is a restart on the same database: its database stays open.
 const restartable = new Map();
 
 async function boot({ env = {}, dir, clock, fetchImpl, credentialFetch } = {}) {
     const reuse = dir !== undefined;
     if (dir === undefined) dir = tmpDir();
     const fullEnv = {
-        NODE_ENV: 'test', PORT: '0', AI_DB_PATH: path.join(dir, 'ai.db'), OV_NETWORK_PUBLIC_KEY: publicKey,
+        NODE_ENV: 'test', PORT: '0', OV_NETWORK_PUBLIC_KEY: publicKey, AI_MEDIA_ANALYSIS_DIR: path.join(dir, 'media-tmp'),
         AI_PROVIDER_RETRY_DELAY_MS: '5', AI_QUOTA_SERVICE_RPM: '0', AI_QUOTA_SERVICE_RPD: '0',
         ...env,
     };

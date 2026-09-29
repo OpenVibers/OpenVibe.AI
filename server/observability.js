@@ -3,7 +3,7 @@
  * Track O: truthful readiness for GET /api/ready and the AI gauges on GET /metrics
  * (openvibe-shared/ready and openvibe-shared/metrics).
  *
- *   db            required  a real query on AI's SQLite (the provider registry answers)
+ *   db            required  a real query on AI's PostgreSQL database (the provider registry answers)
  *   workflows     required  at least one active workflow: without one there is nothing to run
  *   network_jwks  required  the Network signing key has loaded. Every endpoint but health/ready
  *                           needs a verified service token, so without it AI serves nothing

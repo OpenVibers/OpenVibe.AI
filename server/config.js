@@ -61,8 +61,6 @@ function load(env = process.env) {
 
         // PostgreSQL (ADR-035): DATABASE_URL serves (PgBouncer), DATABASE_DIRECT_URL migrates (owner role).
         db: { url: env.DATABASE_URL || '', directUrl: env.DATABASE_DIRECT_URL || '' },
-        // The SQLite file of releases before the switch: read once by scripts/migrate-to-postgres.js.
-        dbPath: env.AI_DB_PATH || './data/ai.db',
 
         // ── Operator console (server/console): OpenVibe.Network SSO (authorization code + PKCE S256
         // as OAuth client `ai`), for Network staff only (README "Operator console"). Both secrets are
@@ -107,8 +105,8 @@ function load(env = process.env) {
         // media.analyze (server/workflows/media-analysis.js): the file cap (also bounded by free disk minus a reserve),
         // the download timeout, the scene-change threshold (scdet, 0-100) and the tools.
         mediaAnalysis: {
-            // On disk beside the database, not os.tmpdir(): a tmpfs /tmp is memory, and a VOD is gigabytes.
-            workDir: env.AI_MEDIA_ANALYSIS_DIR || require('path').join(require('path').dirname(env.AI_DB_PATH || './data/ai.db'), 'media-tmp'),
+            // On disk under the service's data directory, not os.tmpdir(): a tmpfs /tmp is memory, and a VOD is gigabytes.
+            workDir: env.AI_MEDIA_ANALYSIS_DIR || 'data/media-tmp',
             maxBytes: int(env.AI_MEDIA_ANALYSIS_MAX_BYTES, 4 * 1024 * 1024 * 1024),
             reserveBytes: int(env.AI_MEDIA_ANALYSIS_DISK_RESERVE_BYTES, 3 * 1024 * 1024 * 1024),
             fetchTimeoutMs: int(env.AI_MEDIA_ANALYSIS_FETCH_TIMEOUT_MS, 20 * 60000),

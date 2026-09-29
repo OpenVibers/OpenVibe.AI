@@ -66,10 +66,6 @@ function createUserModules({ db, config, env = process.env, fetchImpl = globalTh
         return data;
     }
 
-    function ensureSchema() {
-        // ai_module_pushes is in migrations/0001_initial.sql (ADR-035).
-    }
-
     /** ai.usage_summary for one person over the 30 days before now, or null when there were no runs. */
     async function summarize(subject, now = clock.now()) {
         const since = new Date(now - 30 * DAY_MS).toISOString();
@@ -130,7 +126,6 @@ function createUserModules({ db, config, env = process.env, fetchImpl = globalTh
 
     function start() {
         if (!enabled || timers.length) return false;
-        ensureSchema();
         const safe = (fn) => () => { fn().catch((err) => { stats.lastError = err.message; }); };
         timers = [setInterval(safe(async () => await scan()), 5 * 60 * 1000), setInterval(safe(async () => await refresh()), DAY_MS), setTimeout(safe(async () => await refresh()), 3 * 60 * 1000)];
         for (const t of timers) t.unref?.();
@@ -138,7 +133,7 @@ function createUserModules({ db, config, env = process.env, fetchImpl = globalTh
     }
     function stop() { for (const t of timers) { clearInterval(t); clearTimeout(t); } timers = []; }
 
-    return { enabled, preferencesFor, ensureSchema, summarize, push, scan, refresh, start, stop, stats: () => ({ enabled, ...stats }) };
+    return { enabled, preferencesFor, summarize, push, scan, refresh, start, stop, stats: () => ({ enabled, ...stats }) };
 }
 
 /** The system-prompt lines a person's ai.preferences add ('' when none). */
