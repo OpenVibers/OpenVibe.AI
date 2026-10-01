@@ -43,8 +43,8 @@ owns publication truth: Wiki, Blog, News, Live, … decide what to publish.
 - OpenVibe.Media (recordings `media.analyze` reads, over allow-listed https URLs or signed URLs)
 - provider APIs configured by the operator (OpenAI-compatible, Anthropic, the HTTP seam), whisper.cpp
   and the local model server `openvibe-llm.service` on this host
-- `openvibe-contracts` v0.76.0, `openvibe-sdk` v0.20.3 (service tokens, events outbox),
-  `openvibe-shared` v1.27.0, pinned by release tarball
+- `openvibe-contracts` v0.76.0, `openvibe-sdk` v0.25.2 (service tokens, events outbox),
+  `openvibe-shared` v2.3.1, pinned by release tarball
 
 ## Capabilities
 
