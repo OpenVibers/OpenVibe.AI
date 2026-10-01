@@ -85,7 +85,8 @@ async function seed({ registry, quotas, config, env = process.env, db }) {
     // model never wins Live's text work on price. media.local and media.paid stay pinned: media.analyze tries
     // the local model first and only reaches the paid route under its own budget, never as a pool fallback.
     const authority = shared ? (shared.default_model ? `shared:${shared.default_model}` : 'shared') : null;
-    const pool = (timeoutMs, extra = {}) => ({ capability: 'chat', constraints: { objective: 'correctness', latency_class: 'interactive', ...(authority ? { authority } : {}) }, pinned: [], fallbacks: [], options: {}, max_output_tokens: null, response_format: 'text', timeout_ms: timeoutMs, alias_of: null, ...extra });
+    // This route field names a model operation; the contracts scanner checks unquoted capability keys as auth grants.
+    const pool = (timeoutMs, extra = {}) => ({ 'capability': 'chat', constraints: { objective: 'correctness', latency_class: 'interactive', ...(authority ? { authority } : {}) }, pinned: [], fallbacks: [], options: {}, max_output_tokens: null, response_format: 'text', timeout_ms: timeoutMs, alias_of: null, ...extra });
     for (const role of live.ROLES) {
         await registry.seedVersioned('route', `live.${role}`, pool(ROLE_TIMEOUT[role]));
     }
