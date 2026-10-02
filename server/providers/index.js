@@ -21,6 +21,7 @@
  * after that one half-open probe decides whether it closes again.
  */
 const placement = require('openvibe-sdk/placement');
+const contracts = require('openvibe-contracts');
 const { AiError, resolveSecret, sha256 } = require('../util');
 const { retryable, sleep, ProviderError } = require('./common');
 const { createStubProvider } = require('./stub');
@@ -208,6 +209,12 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             ...(c.trust ? { trust: c.trust } : {}),
             ...(c.authority ? { authority: c.authority } : {}),
         };
+        for (const offer of offers) {
+            const validation = contracts.validate('platform.resource-offer@1', offer);
+            if (!validation.valid) throw new Error(`invalid platform.resource-offer@1 ${offer.offer_id}: ${JSON.stringify(validation.errors)}`);
+        }
+        const validation = contracts.validate('platform.workload-requirements@1', requirements);
+        if (!validation.valid) throw new Error(`invalid platform.workload-requirements@1: ${JSON.stringify(validation.errors)}`);
         const state = await getRouteState.get(route.key);
         const current = state && state.current_provider ? offerId(state.current_provider, state.current_model) : null;
         const states = await providerStates(cardsByProvider);
