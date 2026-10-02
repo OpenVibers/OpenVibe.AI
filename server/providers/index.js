@@ -222,7 +222,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             return ea - eb || (a.score ?? Infinity) - (b.score ?? Infinity);
         });
         for (const x of rest) order.push(x.id);
-        return { order: order.map(splitOfferId), explain };
+        return { order: order.map(splitOfferId), explain, placement: result };
     }
 
     /** A pinned route: [primary, ...fallbacks], exactly as before. */
@@ -239,14 +239,14 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
     }
 
     async function candidates(route, features, operation) {
-        const { order, explain } = route.capability && operation
+        const { order, explain, placement: result = null } = route.capability && operation
             ? await poolCandidates(route, features, operation)
             : await pinnedCandidates(route, features);
         if (config.stubFallback && !order.some(c => c.provider === 'stub') && await registry.getProvider('stub')) {
             order.push({ provider: 'stub', model: null });
             explain.candidates.push({ provider: 'stub', model: null, eligible: true, excluded_reason: null, cost: 0, latency: null });
         }
-        return { order, explain };
+        return { order, explain, placement: result };   // placement: the platform.placement-result@1 explain is built from (pool routes)
     }
 
     async function skipReason(p, a, features) {

@@ -21,6 +21,7 @@ const { createAuth, createNetworkKeys } = require('./auth');
 const { jwksClient } = require('openvibe-sdk/auth');
 const schemas = require('./schemas');
 const { createApp } = require('./app');
+const { gracefulStop } = require('openvibe-sdk/service');
 
 async function start({ config, db: givenDb = null, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, listen = true, credentialFetch = null } = {}) {
     config = config || load(env);
@@ -102,13 +103,10 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
 if (require.main === module) {
     require('dotenv').config();
     start().then((handles) => {
-        const shutdown = (sig) => {
-            console.log(`[ai] ${sig}: shutting down`);
-            handles.close().then(() => process.exit(0), () => process.exit(1));
-            setTimeout(() => process.exit(1), 10000).unref();
-        };
-        process.on('SIGTERM', () => shutdown('SIGTERM'));
-        process.on('SIGINT', () => shutdown('SIGINT'));
+        // SIGTERM/SIGINT (openvibe-sdk/service, docs/service.md's handles family): requests in flight get 8 s,
+        // then handles.close() (runs drained, the relay stopped, the database closed; a rejection exits 1);
+        // past 10 s the process exits 1.
+        gracefulStop({ name: 'ai', server: handles.server, handles, drainMs: 8000, deadlineMs: 10000 });
     }).catch((err) => {
         console.error(`[ai] failed to start: ${err.stack || err}`);
         process.exit(1);
