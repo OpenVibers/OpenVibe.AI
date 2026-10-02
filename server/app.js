@@ -11,6 +11,8 @@ const { sendError } = require('./util');
 const { adminRouter } = require('./api/admin');
 const { createOps } = require('./ops');
 const { consoleRouter } = require('./console');
+const views = require('./console/views');
+const cachePolicy = require('openvibe-shared/cache-policy');
 const pkg = require('../package.json');
 
 function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, credentials = null }) {
@@ -53,6 +55,33 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
     // The operator console (/console, /auth/*): Network staff, server-rendered, no scripts (server/console).
     app.use(consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, env, clock, fetchImpl, log }));
 
+    // Public price and latency (no sign-in, no scripts): provider_stats_daily totals and the rate cards,
+    // nothing per caller. Only registered providers are listed: a person's own key records its runs as
+    // byo:<owner>:<subject>, which must never reach a public page.
+    const STATS_DAYS = 7;
+    app.get('/stats', async (req, res, next) => {
+        try {
+            const now = clock.now();
+            const rows = [];
+            for (const s of await quotas.statsFor({ days: STATS_DAYS })) {
+                const p = await registry.getProvider(s.provider);
+                if (!p) continue;
+                const m = s.model ? await registry.getModel(s.provider, s.model) : null;
+                rows.push({
+                    provider: s.provider, model: s.model, capability: (m && m.type) || p.capabilities.join(', '),
+                    requests: Number(s.requests) || 0, ok: Number(s.ok) || 0, p50: s.latency_p50_ms, p95: s.latency_p95_ms,
+                    cards: await pool.rateCardsFor(s.provider, s.model || null),
+                });
+            }
+            res.setHeader('Cache-Control', cachePolicy.htmlHeaders());
+            res.setHeader('Content-Security-Policy', views.CSP);
+            res.type('html').send(views.pages.stats({
+                days: STATS_DAYS, rows,
+                from: new Date(now - STATS_DAYS * 86400000).toISOString().slice(0, 10), to: new Date(now).toISOString().slice(0, 10),
+            }));
+        } catch (e) { next(e); }
+    });
+
     // Crawlers: nothing here is for search engines, the console and sign-in least of all (no sitemap either).
     app.get('/robots.txt', (_req, res) => {
         res.type('text/plain').send('User-agent: *\nDisallow: /console\nDisallow: /auth/\nDisallow: /api/\n');
@@ -67,6 +96,7 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
             'POST /api/v1/{chat,generate,summarize,classify,extract,enrich,embed}',
             'GET  /api/v1/workflows | templates | routes | providers | models | quotas | usage | audit',
             'GET  /api/health, /api/ready, /release.json',
+            'GET  /stats      price and latency per provider and model (public)',
             'GET  /console    the operator console (OpenVibe.Network staff sign-in)',
             '',
             'Callers authenticate with OpenVibe.Network service tokens (audience openvibe.ai).',

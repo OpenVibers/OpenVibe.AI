@@ -108,6 +108,7 @@ idempotent replay):
 | `GET /metrics` | direct loopback callers only (a request carrying X-Forwarded-For gets 404) |
 | `GET /console…`, `/auth/login\|callback`, `POST /auth/logout` | Network staff, signed in (see [Operator console](#operator-console)) |
 | `GET /robots.txt` | public: disallows `/console`, `/auth/`, `/api/` |
+| `GET /stats` | public: p50/p95 latency, success rate and rate-card price per registered provider and model over the last 7 days (server-rendered, `openvibe-shared/cache-policy` HTML headers, nothing per caller) |
 
 `/api/ready` (openvibe-shared/ready) is 503 when the database, the active workflows or the Network
 key fail; provider configuration (an active provider without its credentials, or with an open
@@ -279,6 +280,7 @@ file beside it, change `--model`/`--alias` and `AI_LOCAL_LLM_MODEL`, and restart
 | The shared compiled-schema cache (caller-supplied schemas) is an LRU bounded by count and bytes, in Ajv too | `test/schemas.test.js` |
 | Token and capability denial, namespaces, no secret values in any response, runs private to the requester | `test/auth.test.js` |
 | Operator console: SSO + PKCE, staff-only (anonymous → sign-in, non-staff 403), the staff → AI capability map, CSRF on every write, no script/secret on any page, noindex/robots, failed-run filters, audit rows from API and console changes | `test/console.test.js` |
+| Public price/latency page: 200 without auth, rows from seeded stats and rate cards, the empty state, no caller ids, own-key providers, URLs or secrets | `test/stats-page.test.js` |
 | Ported adapters against fake OpenAI/Anthropic servers, stub determinism, whisper filter, templates | `test/providers.test.js` |
 | `media.analyze` on a real 28 s fixture: signals, scenes and loud moments measured, highlights with evidence, the local model's overview from the facts only; the local model down → extractive and said; paid only with `allow_paid` and a `media.paid` budget, never past it; too little disk refused before downloading | `test/media-analysis.test.js` |
 | Import from a Live snapshot: dry run, holds, idempotent re-run | `test/import.test.js` |
