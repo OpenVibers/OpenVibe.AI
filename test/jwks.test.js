@@ -6,15 +6,17 @@
 const assert = require('assert');
 const crypto = require('crypto');
 const nodeHttp = require('http');
-const { boot, request, token, suite, publicKey, ALL } = require('./helpers');
+const { serviceAuth } = require('openvibe-contracts');
+const { jwksClient } = require('openvibe-sdk/auth');
+const { boot, request, token, suite, publicKey, privateKey, ALL } = require('./helpers');
 
 const t = suite('jwks');
 
 const KID = 'test-key-1';
 /** The test public key as Network publishes it (the SDK filters on kty/use/alg and matches on kid). */
-function jwksDoc() {
-    const jwk = crypto.createPublicKey(publicKey).export({ format: 'jwk' });
-    return { keys: [{ ...jwk, kid: KID, use: 'sig', alg: 'RS256' }] };
+function jwksDoc(key = publicKey, kid = KID) {
+    const jwk = (key.type === 'public' ? key : crypto.createPublicKey(key)).export({ format: 'jwk' });
+    return { keys: [{ ...jwk, kid, use: 'sig', alg: 'RS256' }] };
 }
 function jwksServer(doc) {
     const s = { calls: 0, doc };
@@ -32,11 +34,19 @@ function jwksServer(doc) {
 
 let h;
 let jwks;
+let jwksNow;
 const body = { workflow: 'ai.generate', input: { prompt: 'jwks' } };
 const run = (tok) => request(h.base, 'POST', '/api/v1/runs?wait=3000', { tok, body });
+function tokenWithKid(key, kid) {
+    const claims = JSON.parse(Buffer.from(token('live', ALL, { key }).split('.')[1], 'base64url').toString('utf8'));
+    return serviceAuth.signServiceToken(claims, key, { kid });
+}
 
 t.test('boot with a stub JWKS (no pinned key)', async () => {
     jwks = await jwksServer(jwksDoc());
+    jwksNow = Date.now();
+    // The service uses this process-wide client for the same URL; pin its refetch clock for exact hit counts.
+    jwksClient(`${jwks.url}/api/.well-known/jwks`, { now: () => jwksNow });
     h = await boot({ env: { OV_NETWORK_PUBLIC_KEY: '', OV_NETWORK_INTERNAL_URL: jwks.url } });
 });
 
@@ -51,7 +61,7 @@ t.test('/api/ready: 503 until the keys load (every endpoint needs a verified tok
 t.test('a token signed by a key from the stub JWKS verifies', async () => {
     const r = await run(token('live', ALL));
     assert.strictEqual(r.status, 201, r.text);
-    assert.ok(jwks.calls >= 1, 'the SDK fetched the JWKS');
+    assert.strictEqual(jwks.calls, 1, 'the SDK fetched the JWKS once');
 });
 
 t.test('/api/ready: the JWKS check turns ok once the keys are cached', async () => {
@@ -61,14 +71,6 @@ t.test('/api/ready: the JWKS check turns ok once the keys are cached', async () 
     assert.strictEqual(c.detail.keys, 1);
     assert.strictEqual(r.status, 200, r.text);
     assert.ok(!r.text.includes(jwks.url), 'the internal JWKS URL is never public');
-});
-
-t.test('with the keys cached, a JWKS outage still verifies', async () => {
-    await jwks.close();
-    const before = jwks.calls;
-    const r = await run(token('live', ALL));   // fresh token, same signing key
-    assert.strictEqual(r.status, 201, r.text);
-    assert.strictEqual(jwks.calls, before, 'the cached keys were used, no fetch attempted');
 });
 
 // The SDK supplies only the key: every claim rule is still openvibe-contracts' verifyServiceToken (a review caught a
@@ -82,6 +84,31 @@ t.test('a sandbox token is still refused', async () => {
 t.test('a token whose sub is not a principal is a 401, never a 500', async () => {
     const r = await run(token('probe', ALL, { sub: 'not-a-service' }));
     assert.strictEqual(r.status, 401, r.text);
+});
+
+const rotated = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+const ROTATED_KID = 'test-key-2';
+t.test('an uncached kid refetches JWKS and verifies its signing key', async () => {
+    jwks.doc = jwksDoc(rotated.publicKey, ROTATED_KID);
+    const r = await run(tokenWithKid(rotated.privateKey, ROTATED_KID));
+    assert.strictEqual(r.status, 201, r.text);
+    assert.strictEqual(jwks.calls, 2, 'the unknown kid caused exactly one refetch');
+});
+
+t.test('rotation rejects the old key after the replacement is cached', async () => {
+    const old = await run(tokenWithKid(privateKey, KID));
+    assert.strictEqual(old.status, 401, old.text);
+    const current = await run(tokenWithKid(rotated.privateKey, ROTATED_KID));
+    assert.strictEqual(current.status, 201, current.text);
+    assert.strictEqual(jwks.calls, 2, 'cached replacement served both checks');
+});
+
+t.test('with the keys cached, a JWKS outage still verifies', async () => {
+    await jwks.close();
+    const before = jwks.calls;
+    const r = await run(tokenWithKid(rotated.privateKey, ROTATED_KID));
+    assert.strictEqual(r.status, 201, r.text);
+    assert.strictEqual(jwks.calls, before, 'the cached keys were used, no fetch attempted');
 });
 
 t.test('shutdown', async () => { await h.stop(); });
