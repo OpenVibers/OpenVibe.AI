@@ -9,6 +9,7 @@
 //   - explain{objective,reasons,selected,candidates} rides every run response and GET /runs/:id, with
 //     the per-attempt request log still there.
 const assert = require('assert');
+const contracts = require('openvibe-contracts');
 const { boot, request, token, suite, seamServer, ALL } = require('./helpers');
 
 const t = suite('provider-router');
@@ -93,6 +94,16 @@ t.test('two providers on one capability: the cheaper is chosen; a circuit-open o
     assert.strictEqual(exec.explain.selected, 'cheap');
     const byProvider = Object.fromEntries(exec.explain.candidates.map((c) => [c.provider, c]));
     assert.ok(byProvider.cheap.cost < byProvider.pricey.cost, 'rate cards carry the real prices');
+
+    // explain is AI's projection of the placement result; that result is a platform.placement-result@1.
+    const placed = await h.pool.candidates(r, ['classify'], 'classify');
+    let v = null;
+    try { v = contracts.validate('platform.placement-result@1', placed.placement); } catch (e) { if (!/unknown contract/.test(e.message)) throw e; }
+    if (v) assert.ok(v.valid, `platform.placement-result@1: ${JSON.stringify(v.errors)}`);
+    else console.log(`placement-result: skipped (openvibe-contracts ${require('openvibe-contracts/package.json').version} has no platform.placement-result@1; it lands in 0.77.0)`);
+    assert.strictEqual(placed.placement.selected, 'cheap:cheap-m');
+    assert.strictEqual(placed.explain.selected, placed.placement.selected, 'explain.selected is the placement\'s');
+    assert.deepStrictEqual(placed.explain.candidates.map((c) => (c.model ? `${c.provider}:${c.model}` : c.provider)), placed.placement.candidates.map((c) => c.id), 'one explain candidate per placement candidate');
 
     // A provider that keeps failing opens its circuit; placement then excludes it and the other answers.
     await provider({ key: 'flaky', base_url: flaky.url, capabilities: ['extract'], default_model: 'flaky-m' });

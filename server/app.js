@@ -7,6 +7,7 @@ const { instrument } = require('openvibe-shared/metrics');
 const { createRelease } = require('openvibe-shared/release');
 const { createAiReadiness, registerAiGauges } = require('./observability');
 const { runsRouter } = require('./api/runs');
+const { sendError } = require('./util');
 const { adminRouter } = require('./api/admin');
 const { createOps } = require('./ops');
 const { consoleRouter } = require('./console');
@@ -46,8 +47,8 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
     // Operator actions shared by the admin API and the operator console (one implementation, one audit row).
     const ops = createOps({ db, registry, pool, quotas, cache, runs });
     app.use(runsRouter({ runs, registry, auth, config, log }));
-    app.use(require('./api/attribution-quotas').attributionQuotasRouter({ db, quotas, auth, clock, sendError: (res, err, ctx) => require('./api/runs').sendError(res, err, ctx, log) }));
-    if (credentials) app.use(require('./credentials').credentialsRouter({ credentials, auth, registry, sendError: (res, err, ctx) => require('./api/runs').sendError(res, err, ctx, log) }));
+    app.use(require('./api/attribution-quotas').attributionQuotasRouter({ db, quotas, auth, clock, sendError: (res, err, ctx) => sendError(res, err, ctx, log) }));
+    if (credentials) app.use(require('./credentials').credentialsRouter({ credentials, auth, registry, sendError: (res, err, ctx) => sendError(res, err, ctx, log) }));
     app.use(adminRouter({ db, registry, pool, quotas, cache, runs, auth, ops, log }));
     // The operator console (/console, /auth/*): Network staff, server-rendered, no scripts (server/console).
     app.use(consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, env, clock, fetchImpl, log }));
@@ -78,13 +79,14 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
 
     app.use((req, res) => http.sendProblem(res, 404, 'ai.not_found', { detail: `no route ${req.method} ${req.path}`, ctx: req.ov }));
 
+    // AI's own codes for a miss and a bad body (openvibe-sdk/service jsonErrors() would answer not_found and
+    // request.invalid_json); everything else goes through sendError (openvibe-sdk/service): 500 ai.internal.
     // eslint-disable-next-line no-unused-vars
     app.use((err, req, res, _next) => {
         if (err.type === 'entity.parse.failed') return http.sendProblem(res, 400, 'input.bad_json', { detail: 'request body is not valid JSON', ctx: req.ov });
         if (err.type === 'entity.too.large') return http.sendProblem(res, 413, 'input.too_large', { detail: 'request body too large', ctx: req.ov });
-        log.error(`[app] ${req.method} ${req.path}: ${err.stack || err}`);
-        if (res.headersSent) return res.end();
-        return http.sendProblem(res, 500, 'ai.internal', { detail: 'internal error', ctx: req.ov });
+        if (res.headersSent) { log.error(`[app] ${req.method} ${req.path}: ${err.stack || err}`); return res.end(); }
+        return sendError(res, { stack: `${req.method} ${req.path}: ${err.stack || err}` }, req.ov, log);   // never the error's own status: a 500
     });
 
     app.locals.metrics = metrics;

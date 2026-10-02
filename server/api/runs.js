@@ -17,21 +17,8 @@
  * problem+json; a quota refusal or a full run queue (queue.full) is 429 with Retry-After.
  */
 const express = require('express');
-const { http } = require('openvibe-contracts');
-const { AiError } = require('../util');
+const { AiError, sendError } = require('../util');
 const { CAPS, namespaceAllowed } = require('../auth');
-
-function sendError(res, err, ctx, log = console) {
-    if (err instanceof AiError) {
-        const extra = err.extra && typeof err.extra === 'object' ? { ...err.extra } : undefined;
-        const errors = extra && Array.isArray(extra.errors) ? extra.errors : undefined;
-        if (extra) delete extra.errors;
-        if (err.status === 429 && extra && extra.retry_after_seconds) res.setHeader('Retry-After', String(extra.retry_after_seconds));
-        return http.sendProblem(res, err.status, err.code, { detail: err.detail, ctx, errors, extra });
-    }
-    log.error(`[api] ${err && err.stack || err}`);
-    return http.sendProblem(res, 500, 'ai.internal', { detail: 'internal error', ctx });
-}
 
 function runsRouter({ runs, registry, auth, config, log = console }) {
     const r = express.Router();
@@ -130,4 +117,4 @@ function runsRouter({ runs, registry, auth, config, log = console }) {
     return r;
 }
 
-module.exports = { runsRouter, sendError };
+module.exports = { runsRouter };

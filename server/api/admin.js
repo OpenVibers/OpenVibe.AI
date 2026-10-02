@@ -22,8 +22,7 @@
  */
 const express = require('express');
 const { CAPS } = require('../auth');
-const { AiError } = require('../util');
-const { sendError } = require('./runs');
+const { AiError, sendError } = require('../util');
 const { createOps } = require('../ops');
 
 function adminRouter({ db, registry, pool, quotas, cache, runs, auth, ops = createOps({ db, registry, pool, quotas, cache, runs }), log = console }) {

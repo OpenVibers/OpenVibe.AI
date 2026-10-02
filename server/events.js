@@ -11,34 +11,30 @@
  *
  * Off unless EVENTS_URL and OV_OAUTH_CLIENT_SECRET are set (EVENTS_PUBLISH=off disables it).
  */
-const { createClient } = require('openvibe-sdk/core');
-const { createServiceTokenClient } = require('openvibe-sdk/auth');
-const { createEventsClient, createPgOutbox } = require('openvibe-sdk/events');
+const { createServiceOutbox } = require('openvibe-sdk/events');
 
-let outbox = null;
-let dbRef = null;   // the handle enqueue joins the running transaction through (ADR-035)
+let svc = null;     // openvibe-sdk/events createServiceOutbox (event_outbox) while publishing is on
+let dbRef = null;   // the handle a run change commits through (its afterCommit kicks the relay)
 let pruneTimer = null;
-const stats = { queued: 0, lastError: null };
+let queued = 0;
 const PRUNE_EVERY_MS = 6 * 60 * 60 * 1000;
 
+/** Starts the relay and returns the PostgreSQL outbox under it (null while publishing is off). */
 function init(db, { eventsUrl = process.env.EVENTS_URL, clientSecret = process.env.OV_OAUTH_CLIENT_SECRET, clientId = process.env.OV_OAUTH_CLIENT_ID || 'ai',
     networkUrl = process.env.OV_NETWORK_INTERNAL_URL || 'http://127.0.0.1:4000', fetchImpl, intervalMs, log = console } = {}) {
-    if (outbox) return outbox;
+    if (svc) return svc.outbox;
     dbRef = db;
     if (process.env.EVENTS_PUBLISH === 'off' || !eventsUrl || !clientSecret) return null;
-    const tokens = createServiceTokenClient({ tokenUrl: `${String(networkUrl).replace(/\/+$/, '')}/oauth/token`, clientId, clientSecret, fetch: fetchImpl });
-    const client = createClient({ baseUrls: { events: String(eventsUrl).replace(/\/+$/, '') }, tokenProvider: tokens, fetch: fetchImpl, retries: 0 });
-    // The PostgreSQL outbox (ADR-035): rows are written in the change's own transaction (enqueue(db, …) joins it).
-    outbox = createPgOutbox(db, {
-        events: createEventsClient(client, { source: 'ai' }),
-        intervalMs: intervalMs || 2000,
-        onError: (err) => { const m = err && err.message; if (m !== stats.lastError) log.warn('[Events] publish failed (will retry):', m); stats.lastError = m; },
+    // The PostgreSQL outbox (ADR-035): emit joins the change's own transaction.
+    svc = createServiceOutbox({
+        db, source: 'ai', eventsUrl: String(eventsUrl).replace(/\/+$/, ''), networkInternalUrl: networkUrl, clientId, clientSecret,
+        intervalMs: intervalMs || 2000, fetch: fetchImpl, log,
     });
-    outbox.start();
-    pruneTimer = setInterval(() => { if (outbox) outbox.prune().catch((err) => log.warn('[Events] outbox prune failed:', err && err.message)); }, PRUNE_EVERY_MS);
+    svc.start();
+    pruneTimer = setInterval(() => { if (svc) svc.outbox.prune().catch((err) => log.warn('[Events] outbox prune failed:', err && err.message)); }, PRUNE_EVERY_MS);
     if (pruneTimer.unref) pruneTimer.unref();
-    log.log(`[Events] ai → ${eventsUrl} (${outbox.pending()} pending)`);
-    return outbox;
+    log.log(`[Events] ai → ${eventsUrl} (${svc.outbox.pending()} pending)`);
+    return svc.outbox;
 }
 
 const iso = (v) => (v ? new Date(v).toISOString() : null);
@@ -76,9 +72,9 @@ function payloadOf(row) {
  * while publishing is off, and for states without an event (running, cancelled).
  */
 async function runChanged(row) {
-    if (!outbox || !row || !['queued', 'cached', 'succeeded', 'failed'].includes(row.status)) return null;
+    if (!svc || !row || !['queued', 'cached', 'succeeded', 'failed'].includes(row.status)) return null;
     const requester = { type: row.requester_type, id: row.requester_id };
-    const env = await outbox.enqueue(dbRef, {
+    const env = await svc.emitIn(dbRef, {
         event_type: `ai.run.${row.status}`,
         actor: requester.type === 'user' || requester.type === 'service' ? requester : { type: 'service', id: 'ai' },
         subject: { type: 'run', id: row.id },
@@ -86,15 +82,16 @@ async function runChanged(row) {
         priority: row.status === 'failed' ? 'important' : 'low',
         payload: payloadOf(row),
     });
-    stats.queued++;
+    queued++;
     // Relay once the change (and its event) committed.
-    dbRef.afterCommit(() => outbox && outbox.kick());
+    dbRef.afterCommit(() => svc && svc.kick());
     return env;
 }
 
 async function status() {
-    if (!outbox) return { enabled: false };
-    return { enabled: true, pending: await outbox.pending(), rejected: await outbox.rejected(), queued_since_boot: stats.queued, last_error: stats.lastError };
+    if (!svc) return { enabled: false };
+    const s = await svc.status();
+    return { enabled: true, pending: s.pending, rejected: s.rejected, queued_since_boot: queued, last_error: s.last_error };
 }
 /**
  * Graceful stop (start().close(), after runs.drain()): the relay stops and nothing more is queued; resolves
@@ -103,10 +100,10 @@ async function status() {
 async function stop() {
     if (pruneTimer) clearInterval(pruneTimer);
     pruneTimer = null;
-    const o = outbox;
-    outbox = null;
+    const o = svc;
+    svc = null;
     if (o) await o.stop();
 }
-function _reset() { if (outbox) outbox.stop(); outbox = null; stats.queued = 0; stats.lastError = null; }
+function _reset() { if (svc) svc.stop(); svc = null; queued = 0; }
 
 module.exports = { init, runChanged, payloadOf, status, stop, _reset };

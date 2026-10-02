@@ -1,6 +1,7 @@
 'use strict';
 /** Small helpers shared by every module: hashing, stable JSON, row decoding, errors. */
 const crypto = require('crypto');
+const svc = require('openvibe-sdk/service');
 
 /** JSON with sorted object keys, so equal inputs always hash equal. */
 function stableStringify(value) {
@@ -23,15 +24,22 @@ function parseJson(text, fallback = null) {
 
 const iso = (ms = Date.now()) => new Date(ms).toISOString();
 
-/** An error that the API layer turns into a problem+json response. */
-class AiError extends Error {
-    constructor(status, code, detail, extra) {
-        super(detail || code);
-        this.status = status;
-        this.code = code;
-        this.detail = detail;
-        this.extra = extra;
-    }
+/** An error that the API layer turns into a problem+json response: (status, code, detail?, extra?). */
+const AiError = svc.createServiceError('AiError');
+
+const PROBLEMS = { name: 'api', internalCode: 'ai.internal', internalDetail: 'internal error' };
+
+/**
+ * Any error -> problem+json (openvibe-sdk/service sendError). Only an AiError answers with its own status,
+ * code and extra (extra.errors is the problem's errors list; a 429 with retry_after_seconds sets Retry-After).
+ * Anything else is logged and answers 500 ai.internal: it is passed on as its stack alone, so a provider
+ * error's upstream HTTP status never becomes AI's answer.
+ */
+function sendError(res, err, ctx, log = console) {
+    const req = { ov: ctx };
+    if (!(err instanceof AiError)) return svc.sendError(res, req, { stack: (err && err.stack) || String(err) }, log, PROBLEMS);
+    if (err.status === 429 && err.extra && err.extra.retry_after_seconds && !res.headersSent) res.setHeader('Retry-After', String(err.extra.retry_after_seconds));
+    return svc.sendError(res, req, err, log, PROBLEMS);
 }
 
 /** 'env:NAME' -> the value of process.env.NAME (read by name; never logged). */
@@ -64,4 +72,4 @@ function parseJsonLoose(text) {
     } catch { return null; }
 }
 
-module.exports = { stableStringify, sha256, parseJson, iso, AiError, resolveSecret, secretRefValid, parseJsonLoose };
+module.exports = { stableStringify, sha256, parseJson, iso, AiError, sendError, resolveSecret, secretRefValid, parseJsonLoose };
