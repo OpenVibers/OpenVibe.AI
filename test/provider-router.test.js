@@ -97,10 +97,8 @@ t.test('two providers on one capability: the cheaper is chosen; a circuit-open o
 
     // explain is AI's projection of the placement result; that result is a platform.placement-result@1.
     const placed = await h.pool.candidates(r, ['classify'], 'classify');
-    let v = null;
-    try { v = contracts.validate('platform.placement-result@1', placed.placement); } catch (e) { if (!/unknown contract/.test(e.message)) throw e; }
-    if (v) assert.ok(v.valid, `platform.placement-result@1: ${JSON.stringify(v.errors)}`);
-    else console.log(`placement-result: skipped (openvibe-contracts ${require('openvibe-contracts/package.json').version} has no platform.placement-result@1; it lands in 0.77.0)`);
+    const v = contracts.validate('platform.placement-result@1', placed.placement);
+    assert.ok(v.valid, `platform.placement-result@1: ${JSON.stringify(v.errors)}`);
     assert.strictEqual(placed.placement.selected, 'cheap:cheap-m');
     assert.strictEqual(placed.explain.selected, placed.placement.selected, 'explain.selected is the placement\'s');
     assert.deepStrictEqual(placed.explain.candidates.map((c) => (c.model ? `${c.provider}:${c.model}` : c.provider)), placed.placement.candidates.map((c) => c.id), 'one explain candidate per placement candidate');
