@@ -6,7 +6,7 @@
  * load(env) is pure so tests can build a config without touching process.env.
  *
  * Provider settings keep the names OpenVibe.Live used for them (its admin site settings
- * ai_provider / ai_base_url / ai_api_key / ai_model / ai_model_<role> / ai_pricing_json /
+ * ai_provider / ai_base_url / ai_api_key / ai_model / ai_pricing_json /
  * ai_max_cost_usd_per_day, upper-cased here) and Live's own environment names for whisper.cpp
  * (WHISPER_*), so the same keys work on both sides of the move. Secrets are only ever read by
  * NAME through secretRef(); nothing here logs or returns a value.

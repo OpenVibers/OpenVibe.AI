@@ -122,7 +122,7 @@ produce a real answer ends `failed` with an explicit code — `provider.unavaila
 `route.unavailable`, `fetch.refused`, `source.unavailable`, `input.insufficient`, `output.empty`,
 `output.invalid`, `run.interrupted` — and never with filler content.
 
-The capability ids and the `ai` service manifest are released in openvibe-contracts v0.29.0 (the
+The capability ids and the `ai` service manifest are released in openvibe-contracts v0.76.0 (the
 drafts stay in `docs/capabilities-proposal/`); `server/auth.js` checks them with the contracts grant
 rule (exact id or `family.*`). A token's `ns` claim limits which
 workflow namespaces it may run (`live.*`, `wiki.*`, …), and namespaces fail closed: a token with
