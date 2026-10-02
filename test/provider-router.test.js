@@ -96,7 +96,21 @@ t.test('two providers on one capability: the cheaper is chosen; a circuit-open o
     assert.ok(byProvider.cheap.cost < byProvider.pricey.cost, 'rate cards carry the real prices');
 
     // explain is AI's projection of the placement result; that result is a platform.placement-result@1.
-    const placed = await h.pool.candidates(r, ['classify'], 'classify');
+    const validated = [];
+    const originalValidate = contracts.validate;
+    let placed;
+    contracts.validate = (name, value) => {
+        const result = originalValidate(name, value);
+        validated.push({ name, value, result });
+        return result;
+    };
+    try { placed = await h.pool.candidates(r, ['classify'], 'classify'); }
+    finally { contracts.validate = originalValidate; }
+    const checkedOffers = validated.filter((x) => x.name === 'platform.resource-offer@1');
+    const checkedRequirements = validated.filter((x) => x.name === 'platform.workload-requirements@1');
+    assert.deepStrictEqual(checkedOffers.map((x) => x.value.offer_id).sort(), placed.placement.candidates.map((x) => x.id).sort(), 'every offer was validated before planning');
+    assert.strictEqual(checkedRequirements.length, 1, 'requirements were validated before planning');
+    for (const x of [...checkedOffers, ...checkedRequirements]) assert.ok(x.result.valid, `${x.name}: ${JSON.stringify(x.result.errors)}`);
     const v = contracts.validate('platform.placement-result@1', placed.placement);
     assert.ok(v.valid, `platform.placement-result@1: ${JSON.stringify(v.errors)}`);
     assert.strictEqual(placed.placement.selected, 'cheap:cheap-m');
@@ -122,6 +136,38 @@ t.test('two providers on one capability: the cheaper is chosen; a circuit-open o
     assert.match(flakyCand.excluded_reason, /health down/);
     assert.strictEqual(e3.provider, 'good');
     await ok.close(); await flaky.close();
+});
+
+t.test('an invalid offer fails closed before reaching the planner', async () => {
+    const r = await h.registry.resolveRoute('test.pool-cheap');
+    const originalListProviders = h.registry.listProviders;
+    const placement = require('openvibe-sdk/placement');
+    const originalPlan = placement.plan;
+    let plannerCalls = 0;
+    h.registry.listProviders = async (...args) => (await originalListProviders.apply(h.registry, args))
+        .map((p) => p.key === 'cheap' ? { ...p, capabilities: ['classify', 42] } : p);
+    placement.plan = () => { plannerCalls++; throw new Error('invalid offer reached planner'); };
+    try {
+        await assert.rejects(h.pool.candidates(r, ['classify'], 'classify'), /invalid platform\.resource-offer@1/);
+        assert.strictEqual(plannerCalls, 0, 'planner was not called with the invalid offer');
+    } finally {
+        h.registry.listProviders = originalListProviders;
+        placement.plan = originalPlan;
+    }
+});
+
+t.test('invalid requirements fail closed before reaching the planner', async () => {
+    const r = await h.registry.resolveRoute('test.pool-cheap');
+    const placement = require('openvibe-sdk/placement');
+    const originalPlan = placement.plan;
+    let plannerCalls = 0;
+    placement.plan = () => { plannerCalls++; throw new Error('invalid requirements reached planner'); };
+    try {
+        await assert.rejects(h.pool.candidates(r, ['classify', 42], 'classify'), /invalid platform\.workload-requirements@1/);
+        assert.strictEqual(plannerCalls, 0, 'planner was not called with invalid requirements');
+    } finally {
+        placement.plan = originalPlan;
+    }
 });
 
 t.test('an upstream 429 shifts to another provider without opening the circuit', async () => {

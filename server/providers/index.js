@@ -21,6 +21,7 @@
  * after that one half-open probe decides whether it closes again.
  */
 const placement = require('openvibe-sdk/placement');
+const contracts = require('openvibe-contracts');
 const { AiError, resolveSecret, sha256 } = require('../util');
 const { retryable, sleep, ProviderError } = require('./common');
 const { createStubProvider } = require('./stub');
@@ -178,8 +179,10 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             offers.push({
                 offer_id: id, kind: 'provider', provider: p.key, region: 'global',
                 trust: (p.metadata && p.metadata.local) || p.kind === 'stub' ? 'community' : 'first-party',
-                capabilities: caps, latency_ms: st.p95 ? { p95: st.p95 } : {}, health: { status },
-                pricing: cards ? { model: 'metered', rate_card: cards.in.id } : { model: 'prepaid' },
+                capabilities: caps.map(f => typeof f === 'string' ? `ai:${f}` : f),
+                latency_ms: st.p95 ? { p95: st.p95 } : {}, health: { status },
+                pricing: cards ? { model: 'per-operation', rate_card: cards.in.id } : { model: 'prepaid' },
+                updated_at: p.updated_at,
             });
             if (cards) {
                 rateCards.push(cards.in, cards.cached, cards.out);
@@ -202,12 +205,20 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         const c = route.constraints || {};
         const requirements = {
             kind: 'ai', mobility: 'request', latency_class: c.latency_class || 'interactive', objective: c.objective || 'balanced',
-            capabilities: features, units: Number(c.units) || 1, latency_op: operation,
+            capabilities: features.map(f => typeof f === 'string' ? `ai:${f}` : f), units: Number(c.units) || 1, latency_op: operation,
             ...(c.max_latency_ms != null ? { max_latency_ms: Number(c.max_latency_ms) } : {}),
             ...(c.max_cost_usd != null ? { max_cost_usd: Number(c.max_cost_usd) } : {}),
             ...(c.trust ? { trust: c.trust } : {}),
             ...(c.authority ? { authority: c.authority } : {}),
         };
+        for (const offer of offers) {
+            const validation = contracts.validate('platform.resource-offer@1', offer);
+            if (!validation.valid) throw new Error(`invalid platform.resource-offer@1 ${offer.offer_id}: ${JSON.stringify(validation.errors)}`);
+        }
+        // These are SDK planner options, not fields in the workload contract.
+        const { units, latency_op, authority, ...contractRequirements } = requirements;
+        const validation = contracts.validate('platform.workload-requirements@1', contractRequirements);
+        if (!validation.valid) throw new Error(`invalid platform.workload-requirements@1: ${JSON.stringify(validation.errors)}`);
         const state = await getRouteState.get(route.key);
         const current = state && state.current_provider ? offerId(state.current_provider, state.current_model) : null;
         const states = await providerStates(cardsByProvider);
