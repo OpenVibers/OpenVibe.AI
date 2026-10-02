@@ -28,6 +28,7 @@ const { createOpenAiProvider } = require('./openai');
 const { createAnthropicProvider } = require('./anthropic');
 const { createHttpSeamProvider } = require('./http');
 const { createWhisperProvider } = require('./whisper');
+const rates = require('./rate-cards');
 
 /** 4xx that the request itself caused (bad image, schema, max_tokens...), as opposed to auth, rate or availability. */
 function callerFault(err) {
@@ -94,33 +95,37 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
     }
     async function resetHealth(key) { await db.prepare('DELETE FROM provider_health WHERE provider_key = ?').run(key); }
 
-    // ── Pricing (Live's rules: model row -> AI_PRICING_JSON longest prefix -> flat rates) ──
-    async function priceFor(providerKey, model) {
+    // ── Pricing: platform.rate-card@1 per metric (server/providers/rate-cards.js; models row -> AI_PRICING_JSON -> flat) ──
+    /** The { in, cached, out } rate cards for a provider + model, or null for a provider that is never billed (stub, whisper). */
+    async function rateCardsFor(providerKey, model) {
         const p = await registry.getProvider(providerKey);
-        if (!p || p.kind === 'stub' || p.kind === 'whisper') return { in: 0, out: 0, cached: 0 };
+        if (!p || p.kind === 'stub' || p.kind === 'whisper') return null;
         const row = model ? await registry.getModel(providerKey, model) : null;
-        if (row && row.cost && Number.isFinite(row.cost.in_per_mtok) && row.cost.in_per_mtok !== null) {
-            const inRate = Number(row.cost.in_per_mtok);
-            return { in: inRate, out: Number(row.cost.out_per_mtok) || 0, cached: row.cost.cached_per_mtok != null ? Number(row.cost.cached_per_mtok) : inRate * 0.1 };
-        }
-        const table = config.pricing.table || {};
-        const m = String(model || '').toLowerCase();
-        let best = null; let bestLen = -1;
-        for (const [k, v] of Object.entries(table)) {
-            const key = String(k).toLowerCase();
-            if (key === 'default') continue;
-            if (m.startsWith(key) && key.length > bestLen && v && typeof v === 'object') { best = v; bestLen = key.length; }
-        }
-        if (!best && table.default && typeof table.default === 'object') best = table.default;
-        const inRate = best && Number.isFinite(Number(best.in)) ? Number(best.in) : config.pricing.inputPerMtok;
-        const outRate = best && Number.isFinite(Number(best.out)) ? Number(best.out) : config.pricing.outputPerMtok;
-        const cachedRate = best && Number.isFinite(Number(best.cached)) ? Number(best.cached) : inRate * 0.1;
-        return { in: inRate, out: outRate, cached: cachedRate };
+        return rates.buildCards({ providerKey, model: model || null, row, pricing: config.pricing });
+    }
+    async function priceFor(providerKey, model) {
+        const cards = await rateCardsFor(providerKey, model);
+        return cards ? rates.pricesOf(cards) : { in: 0, out: 0, cached: 0 };
     }
     async function costOf(providerKey, model, usage) {
-        const pr = await priceFor(providerKey, model);
-        const input = Math.max(0, (usage.input || 0) - (usage.cached || 0));
-        return (input / 1e6) * pr.in + ((usage.cached || 0) / 1e6) * pr.cached + ((usage.output || 0) / 1e6) * pr.out;
+        const cards = await rateCardsFor(providerKey, model);
+        return cards ? rates.costOfUsage(cards, usage) : 0;
+    }
+
+    // ── Provider state: platform.provider-state@1 per provider, from usage_daily and the breaker ──
+    const getPeriodUsage = db.prepare(`SELECT day, model_key, SUM(tokens_in)::bigint AS tokens_in, SUM(tokens_out)::bigint AS tokens_out, SUM(tokens_cached)::bigint AS tokens_cached
+        FROM usage_daily WHERE provider_key = ? AND day >= ? GROUP BY day, model_key`);
+    /** One state per provider over the cards the plan uses (cards: { provider: [card, ...] }); each card counts its own period. */
+    async function providerStates(cardsByProvider) {
+        const now = clock.now();
+        const out = [];
+        for (const [key, cards] of Object.entries(cardsByProvider)) {
+            const usageRows = (await getPeriodUsage.all(key, rates.usageSince(cards, now)))
+                .map(r => ({ day: r.day, model_key: r.model_key, tokens_in: Number(r.tokens_in), tokens_out: Number(r.tokens_out), tokens_cached: Number(r.tokens_cached) }));
+            const p = await registry.getProvider(key);
+            out.push(rates.providerState({ provider: key, cards, usageRows, breaker: (await health(key)).state, reserve: p && p.metadata ? p.metadata.reserve : null, now }));
+        }
+        return out;
     }
 
     // ── Routing ────────────────────────────────────────────
@@ -155,6 +160,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         const stats = await statsByProvider();
         const offers = [];
         const rateCards = [];
+        const cardsByProvider = {};
         const seen = new Set();
         const addOffer = async (p, model, caps) => {
             const id = offerId(p.key, model);
@@ -166,15 +172,18 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             const errorRate = st.requests ? st.errors / st.requests : 0;
             const status = p.status !== 'active' || !creds ? 'down' : h.state === 'open' ? 'down' : (h.state === 'half_open' || errorRate > 0.5) ? 'degraded' : 'up';
             const free = isFreeProvider(p);
+            // Placement prices an offer on one card: input tokens, the part of a call known before it runs.
+            // The cached-input and output cards ride along (costOf bills all three; the state counts each metric).
+            const cards = free ? null : await rateCardsFor(p.key, model);
             offers.push({
                 offer_id: id, kind: 'provider', provider: p.key, region: 'global',
                 trust: (p.metadata && p.metadata.local) || p.kind === 'stub' ? 'community' : 'first-party',
                 capabilities: caps, latency_ms: st.p95 ? { p95: st.p95 } : {}, health: { status },
-                pricing: free ? { model: 'prepaid' } : { model: 'metered', rate_card: id },
+                pricing: cards ? { model: 'metered', rate_card: cards.in.id } : { model: 'prepaid' },
             });
-            if (!free) {
-                const price = await priceFor(p.key, model);
-                rateCards.push({ id, provider: p.key, metric: 'tokens', unit_size: 1e6, unit_price_usd: (price.in + price.out) / 2, free_allowance: 0, reset_period: 'month' });
+            if (cards) {
+                rateCards.push(cards.in, cards.cached, cards.out);
+                (cardsByProvider[p.key] || (cardsByProvider[p.key] = [])).push(cards.in, cards.cached, cards.out);
             }
         };
         for (const p of await registry.listProviders()) {
@@ -201,8 +210,9 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         };
         const state = await getRouteState.get(route.key);
         const current = state && state.current_provider ? offerId(state.current_provider, state.current_model) : null;
+        const states = await providerStates(cardsByProvider);
         const result = placement.plan(requirements, offers, {
-            rateCards, now: clock.now(), current, minGain: config.placement.minGain,
+            rateCards, states, now: clock.now(), current, minGain: config.placement.minGain,
             weights: { cost: config.placement.costWeight, latency: config.placement.latencyWeight },
         });
         const byId = new Map(offers.map(o => [o.offer_id, o]));
@@ -222,7 +232,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             return ea - eb || (a.score ?? Infinity) - (b.score ?? Infinity);
         });
         for (const x of rest) order.push(x.id);
-        return { order: order.map(splitOfferId), explain, placement: result };
+        return { order: order.map(splitOfferId), explain, placement: result, rateCards, states };
     }
 
     /** A pinned route: [primary, ...fallbacks], exactly as before. */
@@ -239,14 +249,14 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
     }
 
     async function candidates(route, features, operation) {
-        const { order, explain, placement: result = null } = route.capability && operation
+        const { order, explain, placement: result = null, ...rest } = route.capability && operation
             ? await poolCandidates(route, features, operation)
             : await pinnedCandidates(route, features);
         if (config.stubFallback && !order.some(c => c.provider === 'stub') && await registry.getProvider('stub')) {
             order.push({ provider: 'stub', model: null });
             explain.candidates.push({ provider: 'stub', model: null, eligible: true, excluded_reason: null, cost: 0, latency: null });
         }
-        return { order, explain, placement: result };   // placement: the platform.placement-result@1 explain is built from (pool routes)
+        return { order, explain, placement: result, rateCards: rest.rateCards || [], states: rest.states || [] };   // placement: the platform.placement-result@1 explain is built from (pool routes)
     }
 
     async function skipReason(p, a, features) {
@@ -286,17 +296,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             try {
                 const result = await a.chat({ ...req, model, signal: ctx.signal, timeoutMs });
                 const usage = result.usage || { input: 0, output: 0, cached: 0 };
-                const listPrice = (() => {
-                    const table = config.pricing.table || {};
-                    const m = String(result.model || model).toLowerCase();
-                    let best = null; let len = -1;
-                    for (const [k, v] of Object.entries(table)) { const key = String(k).toLowerCase(); if (key !== 'default' && m.startsWith(key) && key.length > len && v && typeof v === 'object') { best = v; len = key.length; } }
-                    const b = best || table.default || {};
-                    const inRate = Number(b.in) || 0;
-                    return { in: inRate, out: Number(b.out) || 0, cached: b.cached != null ? Number(b.cached) : inRate * 0.1 };
-                })();
-                const input = Math.max(0, (usage.input || 0) - (usage.cached || 0));
-                const cost = (input / 1e6) * listPrice.in + ((usage.cached || 0) / 1e6) * listPrice.cached + ((usage.output || 0) / 1e6) * listPrice.out;
+                const cost = rates.costOfUsage(rates.buildCards({ providerKey: cred.providerKey, model: result.model || model, pricing: config.pricing, flat: false }), usage);
                 const latency = Date.now() - t0;
                 if (ctx.logRequest) {
                     ctx.logRequest({ ...base, model_key: result.model || model, status: 'ok', output_hash: sha256(result.json || result.text || ''), tokens_in: usage.input || 0, tokens_out: usage.output || 0,
@@ -389,7 +389,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         throw new AiError(503, 'provider.unavailable', 'no provider on this route could answer', { tried, explain });
     }
 
-    return { adapter, health, resetHealth, execute, executeWithCredential, priceFor, costOf, stats, statFor, candidates };
+    return { adapter, health, resetHealth, execute, executeWithCredential, priceFor, costOf, rateCardsFor, providerStates, stats, statFor, candidates };
 }
 
 module.exports = { createProviderPool };
