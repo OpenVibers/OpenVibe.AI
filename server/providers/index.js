@@ -280,7 +280,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         const { order, explain, placement: result = null, ...rest } = route.capability && operation
             ? await poolCandidates(route, features, operation)
             : await pinnedCandidates(route, features);
-        if (config.stubFallback && !['embed', 'transcribe'].includes(operation) && !(route.constraints && route.constraints.provider_scope)
+        if (config.stubFallback && !(route.constraints && route.constraints.provider_scope)
             && !order.some(c => c.provider === 'stub') && await registry.getProvider('stub')) {
             order.push({ provider: 'stub', model: null });
             explain.candidates.push({ provider: 'stub', model: null, eligible: true, excluded_reason: null, cost: 0, latency: null });
