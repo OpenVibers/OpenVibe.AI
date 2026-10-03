@@ -36,6 +36,8 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     const engine = createEngine({ registry, pool, fetcher, quotas, config, log });
     // ai.run.* to OpenVibe.Events through the outbox (server/events.js); before recovery, so its failures are announced.
     require('./events').init(db, { log });
+    // platform.usage-sample@1 readings to OpenVibe.Billing through their own outbox (server/usage-samples.js).
+    require('./usage-samples').init(db, { ...config.billing, clientId: config.console.clientId, networkUrl: config.networkInternalUrl, log });
     // ai.preferences (read) and ai.usage_summary (written): Network user modules (server/user-modules.js).
     const userModules = require('./user-modules').createUserModules({ db, config, env, fetchImpl, clock, log });
     // A person's own provider keys (WS-O task 2): stored by the service holding their consent, used by their runs only.
@@ -92,6 +94,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         }
         await runs.drain();
         await require('./events').stop();   // after the runs: their last ai.run.* rows are queued first
+        await require('./usage-samples').stop();   // the readings the runs queued get one last send; unsent rows wait for the next start
         const w = await pool.adapter('whisper');
         if (w && w.adapter.killActive) w.adapter.killActive();
         if (!givenDb) await db.close();
