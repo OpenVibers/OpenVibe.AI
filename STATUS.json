@@ -7,7 +7,7 @@
   "runtime": "node 22, express, postgresql",
   "port": 4700,
   "domain": "ai.openvibe.network still serves the OpenVibe.Sites placeholder; the service runs on openvibe-ovh (/opt/openvibe.ai, unit openvibe-ai) on 127.0.0.1:4700, loopback only, used by OpenVibe.Live and OpenVibe.Network",
-  "contracts": "openvibe-contracts v0.84.0",
+  "contracts": "openvibe-contracts v0.86.0",
   "sdk": "openvibe-sdk v0.26.0",
   "capabilities": [
     "ai.run.create",

@@ -8,9 +8,10 @@
  * PEM, which skips the fetch entirely.
  *
  * Capabilities ai.run.create / ai.run.read / ai.workflow.manage / ai.provider.manage / ai.usage.read
- * are proposed in docs/capabilities-proposal/ and are not in openvibe-contracts yet. Until they
- * ship, allows() decides with the contracts' own grant rule (the exact id, or a `family.*` grant);
- * once contracts knows an id, contracts decides.
+ * are proposed in docs/capabilities-proposal/ and are not in openvibe-contracts yet; ai.credential.manage
+ * and ai.quota.attribution.manage ship in contracts (0.73.0 / 0.75.0). Until the five do, allows()
+ * decides with the contracts' own grant rule (the exact id, or a `family.*` grant); once contracts
+ * knows an id, contracts decides.
  *
  * Namespaces fail closed: a token may only run workflows inside the namespaces its `ns` claim holds
  * (the same matching as contracts' namespaceAllowed: 'live.*' allows 'live.translate'). A token
@@ -27,6 +28,8 @@ const CAPS = Object.freeze({
     workflowManage: 'ai.workflow.manage',
     providerManage: 'ai.provider.manage',
     usageRead: 'ai.usage.read',
+    credentialManage: 'ai.credential.manage',
+    quotaAttributionManage: 'ai.quota.attribution.manage',
 });
 
 /**

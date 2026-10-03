@@ -1,0 +1,23 @@
+{
+  "id": "ai.quota.attribution.manage",
+  "version": "1.0",
+  "owner": "ai",
+  "status": "active",
+  "visibility": "first-party",
+  "description": "Cap what runs attributed to one of the caller's own entities may cost or request per hour or day (a streamer's daily AI budget on Live). Only the service named in the attribution sets, reads or removes its caps; a run over a cap is refused before any provider is called.",
+  "permissions": [
+    "ai:quotas"
+  ],
+  "resourceConstraints": [
+    "owner"
+  ],
+  "quotaClass": "ai-quotas",
+  "events": [],
+  "implementedBy": [
+    "PUT /api/v1/attribution-quotas/:attribution",
+    "GET /api/v1/attribution-quotas/:attribution",
+    "DELETE /api/v1/attribution-quotas/:attribution"
+  ],
+  "inputSchema": "ai.attribution-quota-put@1",
+  "outputSchema": "ai.attribution-quota@1"
+}

@@ -1,5 +1,5 @@
 {
-  "version": "0.1.0",
+  "version": "0.2.0",
   "contractRanges": {
     "openvibe-contracts": ">=0.6.0 <1.0.0"
   },
@@ -13,15 +13,77 @@
   "publicOrigin": "https://ai.openvibe.network",
   "health": "/api/health",
   "ready": "/api/ready",
+  "internalOrigin": "http://127.0.0.1:4700",
+  "exposure": {
+    "state": "internal",
+    "publicSite": null,
+    "note": "called by other services at 127.0.0.1:4700; ai.openvibe.network serves the OpenVibe.Sites placeholder page"
+  },
   "capabilities": [
+    "ai.credential.manage",
+    "ai.provider.manage",
+    "ai.quota.attribution.manage",
     "ai.run.create",
     "ai.run.read",
-    "ai.workflow.manage",
-    "ai.provider.manage",
-    "ai.usage.read"
+    "ai.usage.read",
+    "ai.workflow.manage"
   ],
-  "eventsProduced": [],
+  "eventsProduced": [
+    "ai.run.queued",
+    "ai.run.succeeded",
+    "ai.run.failed",
+    "ai.run.cached"
+  ],
   "eventsConsumed": [],
-  "namespacesOwned": [],
-  "notes": "Providers, models, routing profiles, versioned prompt templates and workflows, runs, request logs, citations, scoped cache, quotas and audit. Workflow output is a draft/evidence package attributed to workflow + model + run. ai.run.queued|succeeded|failed|cached events follow once the Events client is wired in."
+  "namespacesOwned": [
+    "ai.usage_summary"
+  ],
+  "lifecycle": {
+    "liveness": {
+      "endpoint": "/api/health",
+      "means": "the process is up and answers HTTP; it checks nothing else (the database and dependencies are what ready checks)"
+    },
+    "shutdown": {
+      "signal": "SIGTERM",
+      "deadlineSeconds": 10,
+      "drains": [
+        "housekeeping timer, user-module sync and Network key refresh stopped",
+        "open HTTP connections closed (closeAllConnections), then the server",
+        "runs in progress awaited (runs.drain)",
+        "ai.run.* outbox relay stopped after the runs (its send in progress awaited; unsent rows stay for the next start)",
+        "whisper child processes killed",
+        "database closed"
+      ],
+      "note": "the forced exit after 10 s exits 1"
+    },
+    "startupRecovery": {
+      "resumes": [
+        {
+          "kind": "jobs",
+          "what": "runs left queued or running are marked failed with error_code run.interrupted (announced as ai.run.failed); the caller retries them"
+        },
+        {
+          "kind": "outbox",
+          "what": "unsent ai.run.* events in the outbox (server/events.js) go to OpenVibe.Events once the relay starts"
+        }
+      ]
+    },
+    "rollback": {
+      "conditions": [
+        "automatic: ovhost deploy puts the previous sha back and restarts again when the ready URL does not answer 2xx within ready.timeoutSeconds after the restart (exit 3)",
+        "manual: ovhost rollback <service> --to <sha>"
+      ],
+      "window": "automatic only while ovhost waits for readiness after the restart (30 s in host.example.json); manual afterwards, as long as no blocker applies",
+      "blockers": {
+        "none": "the schema code only adds (CREATE … IF NOT EXISTS, ADD COLUMN; no DROP, RENAME or table rebuild), which an older release ignores"
+      }
+    },
+    "contracts": {
+      "range": ">=0.6.0 <1.0.0"
+    },
+    "leases": {
+      "none": "no claims: one process owns ai.db (better-sqlite3, single writer); a run is taken with a compare-and-set on its status (queued → running)"
+    }
+  },
+  "notes": "Providers, models, routing profiles, versioned prompt templates and workflows, runs, request logs, citations, scoped cache, quotas and audit. Workflow output is a draft/evidence package attributed to workflow + model + run. ai.run.queued|succeeded|failed|cached have payload contracts (v0.30.0, status planned): AI publishes them once its Events client is wired in; it publishes none today. ai.run.create takes ai.run-request@1 and returns ai.run@1."
 }
