@@ -205,6 +205,8 @@ function createRegistry(db, { clock = { now: () => Date.now() }, env = process.e
         }
         if (!Array.isArray(r.fallbacks)) throw new AiError(422, 'ai.invalid', 'fallbacks must be an array');
         if (r.constraints && typeof r.constraints !== 'object') throw new AiError(422, 'ai.invalid', 'constraints must be an object');
+        if (r.constraints && r.constraints.provider_scope !== undefined && !['local', 'paid'].includes(r.constraints.provider_scope))
+            throw new AiError(422, 'ai.invalid', 'constraints.provider_scope must be local or paid');
         if (!['text', 'json'].includes(r.response_format)) throw new AiError(422, 'ai.invalid', 'response_format must be text or json');
         if (!['active', 'disabled'].includes(r.status)) throw new AiError(422, 'ai.invalid', 'route status must be active or disabled');
         const version = await nextVersion('routes', key);

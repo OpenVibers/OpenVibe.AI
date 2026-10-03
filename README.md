@@ -211,9 +211,10 @@ provider that is disabled, missing credentials, circuit-open or unable to do the
 failure; a fallback that answers is recorded on the run (`fallback_used`), in the request log
 (`fallback = 1`) and in the audit log. Every run response and `GET /api/v1/runs/:id` carry `explain`
 (objective, reasons, selected, and every candidate with its estimated cost, latency and excluded
-reason). Speech and embeddings stay single-provider until a second upstream exists: with one provider
-they answer the explicit `503 provider.unavailable`, never a synthetic answer. The stub joins every
-route as a last resort outside production only (`AI_STUB_FALLBACK`).
+reason). Speech and embeddings use placement pools of registered `stt` and `embedding` models; until
+a second upstream exists, an unavailable sole provider answers `503 provider.unavailable`. Media
+uses separate local and paid pools so paid work still requires its explicit budget. The synthetic
+stub can join general text routes as a last resort outside production only (`AI_STUB_FALLBACK`).
 
 ## Workflows
 
@@ -240,10 +241,10 @@ route as a last resort outside production only (`AI_STUB_FALLBACK`).
      `AI_MEDIA_SCENE_THRESHOLD`), black and frozen picture, silence, and loudness. Loudness has the integrated level
      and range, the typical level (the median audible second) and loud moments at least 6 LU above it.
   2. **Scenes** from the scene changes (at most 300).
-  3. **Speech**: whisper.cpp through `live.stt`.
+  3. **Speech**: whisper.cpp through `live.stt`, with another registered STT model eligible for fallback.
   4. **Highlights**: windows scored by loud, scene changes and speech, each with its reasons and transcript excerpt.
-  5. **An overview** from the local model (`media.local`), else extractive from the measured facts. A paid provider
-     (`media.paid`, the shared provider) writes it only with `allow_paid: true` **and** an active quota with
+  5. **An overview** from a local model (`media.local`), else extractive from the measured facts. A paid provider
+     (`media.paid`, including the shared provider) writes it only with `allow_paid: true` **and** an active quota with
      `workflow_prefix` `media.paid` and `max_cost_usd` > 0, while today's `media.*` spend is under it. That quota
      gates only this call, never whole runs.
 

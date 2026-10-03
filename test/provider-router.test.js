@@ -74,7 +74,7 @@ t.test('forced failure on every route: a logged fallback, or an explicit 503 (ne
             }
         }
     }
-    assert.deepStrictEqual(failed.sort(), ['default.embedding', 'live.stt', 'media.paid'], `failed routes: ${failed}`);
+    assert.deepStrictEqual(failed.sort(), ['default.embedding', 'live.stt'], `failed routes: ${failed}`);
     await h.stop(); await ok.close();
 });
 

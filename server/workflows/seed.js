@@ -6,8 +6,8 @@
  *              AI_MODEL), http-seam (AI_HTTP_SEAM_URL), whisper (WHISPER_*), local (AI_LOCAL_LLM_URL)
  *              — records whose origin is 'seed' follow the environment; admin-edited ones are left alone
  *   models     the configured default model
- *   routes     live.<role> for Live's roles, live.stt, default.chat|json|embedding as capability pools
- *              ordered by openvibe-sdk/placement; media.local|paid stay pinned; and the historical
+ *   routes     live.<role> for Live's roles, live.stt, default.chat|json|embedding and media.local|paid
+ *              as capability pools ordered by openvibe-sdk/placement; and the historical
  *              product route keys as explicit aliases of default.json
  *   templates, workflows   from server/workflows/{live,core,products}.js — a code change becomes a
  *              new version unless an admin has versioned that key since (admin edits win)
@@ -77,28 +77,30 @@ async function seed({ registry, quotas, config, env = process.env, db }) {
     for (const m of models) if (m && !await registry.getModel('shared', m)) await registry.upsertModel({ provider_key: 'shared', model_key: m, type: 'chat', supports: { json: true, vision: true } }, { actor: 'seed' });
     if (!await registry.getModel('stub', 'stub-1')) await registry.upsertModel({ provider_key: 'stub', model_key: 'stub-1', type: 'chat', supports: { json: true, vision: true }, metadata: { synthetic: true } }, { actor: 'seed' });
     if (!await registry.getModel('whisper', 'whisper.cpp')) await registry.upsertModel({ provider_key: 'whisper', model_key: 'whisper.cpp', type: 'stt', supports: { json: false } }, { actor: 'seed' });
+    const embeddingModel = env.AI_EMBEDDING_MODEL || 'text-embedding-3-small';
+    if (!await registry.getModel('shared', embeddingModel)) await registry.upsertModel({ provider_key: 'shared', model_key: embeddingModel, type: 'embedding' }, { actor: 'seed' });
 
     // Routes. A capability pool covers every provider that can serve the capability, ordered by
     // openvibe-sdk/placement (brief §4/§5): no static primary/fallbacks and no AI_MODEL_<ROLE> pins.
     // The shared provider is the pool's authority (objective correctness): it serves while it is healthy and
     // the planner fails over to the rest of the pool (the local model) only when it is not, so a small local
-    // model never wins Live's text work on price. media.local and media.paid stay pinned: media.analyze tries
-    // the local model first and only reaches the paid route under its own budget, never as a pool fallback.
+    // model never wins Live's text work on price. The media pools remain separate: media.analyze tries
+    // local providers first and only reaches paid providers under its own budget.
     const authority = shared ? (shared.default_model ? `shared:${shared.default_model}` : 'shared') : null;
     // This route field names a model operation; the contracts scanner checks unquoted capability keys as auth grants.
     const pool = (timeoutMs, extra = {}) => ({ 'capability': 'chat', constraints: { objective: 'correctness', latency_class: 'interactive', ...(authority ? { authority } : {}) }, pinned: [], fallbacks: [], options: {}, max_output_tokens: null, response_format: 'text', timeout_ms: timeoutMs, alias_of: null, ...extra });
     for (const role of live.ROLES) {
         await registry.seedVersioned('route', `live.${role}`, pool(ROLE_TIMEOUT[role]));
     }
-    // Speech and embeddings stay single-provider until O9 brings a second upstream (decision 8): a pool there
-    // would pull in any OpenAI-shaped provider and answer 200 with nothing, so they answer the explicit 503.
-    await registry.seedVersioned('route', 'live.stt', { primary: { provider: 'whisper', model: null }, fallbacks: [], options: {}, max_output_tokens: null, response_format: 'text', timeout_ms: 600000, alias_of: null });
+    // Speech and embeddings only admit registered models of the matching type. Until O9 adds another
+    // upstream, an unavailable sole provider still answers the explicit 503.
+    await registry.seedVersioned('route', 'live.stt', pool(600000, { 'capability': 'transcribe', constraints: { objective: 'balanced' } }));
     await registry.seedVersioned('route', 'default.chat', pool(30000, { max_output_tokens: 800 }));
     await registry.seedVersioned('route', 'default.json', pool(60000, { options: { temperature: 0.3 }, max_output_tokens: 2400, response_format: 'json' }));
-    await registry.seedVersioned('route', 'default.embedding', { primary: { provider: 'shared', model: env.AI_EMBEDDING_MODEL || 'text-embedding-3-small' }, fallbacks: [], options: {}, max_output_tokens: null, response_format: 'text', timeout_ms: 30000, alias_of: null });
+    await registry.seedVersioned('route', 'default.embedding', pool(30000, { 'capability': 'embed', constraints: { objective: 'balanced' } }));
     // media.analyze (WS-O task 5): the local model when there is one; the paid route is used only under a media.paid budget.
-    if (config.localLlm && config.localLlm.url) await registry.seedVersioned('route', 'media.local', { primary: { provider: 'local', model: config.localLlm.model || null }, fallbacks: [], options: { temperature: 0.3 }, max_output_tokens: 350, response_format: 'text', timeout_ms: config.localLlm.timeoutMs, alias_of: null });
-    await registry.seedVersioned('route', 'media.paid', { primary: { provider: 'shared', model: null }, fallbacks: [], options: { temperature: 0.3 }, max_output_tokens: 350, response_format: 'text', timeout_ms: 60000, alias_of: null });
+    if (config.localLlm && config.localLlm.url) await registry.seedVersioned('route', 'media.local', pool(config.localLlm.timeoutMs, { 'capability': 'summarize', constraints: { objective: 'balanced', provider_scope: 'local' }, options: { temperature: 0.3 }, max_output_tokens: 350 }));
+    await registry.seedVersioned('route', 'media.paid', pool(60000, { 'capability': 'summarize', constraints: { objective: 'correctness', provider_scope: 'paid', ...(authority ? { authority } : {}) }, options: { temperature: 0.3 }, max_output_tokens: 350 }));
     for (const key of HISTORICAL_ROUTES) await registry.seedVersioned('route', key, { primary: { provider: 'shared', model: null }, fallbacks: [], options: {}, max_output_tokens: null, response_format: 'json', timeout_ms: null, alias_of: 'default.json' });
 
     // Templates, then workflows (workflows reference templates)
