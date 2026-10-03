@@ -94,13 +94,13 @@ async function seed({ registry, quotas, config, env = process.env, db }) {
     }
     // Speech and embeddings only admit registered models of the matching type. Until O9 adds another
     // upstream, an unavailable sole provider still answers the explicit 503.
-    await registry.seedVersioned('route', 'live.stt', pool(600000, { capability: 'transcribe', constraints: { objective: 'balanced' } }));
+    await registry.seedVersioned('route', 'live.stt', pool(600000, { 'capability': 'transcribe', constraints: { objective: 'balanced' } }));
     await registry.seedVersioned('route', 'default.chat', pool(30000, { max_output_tokens: 800 }));
     await registry.seedVersioned('route', 'default.json', pool(60000, { options: { temperature: 0.3 }, max_output_tokens: 2400, response_format: 'json' }));
-    await registry.seedVersioned('route', 'default.embedding', pool(30000, { capability: 'embed', constraints: { objective: 'balanced' } }));
+    await registry.seedVersioned('route', 'default.embedding', pool(30000, { 'capability': 'embed', constraints: { objective: 'balanced' } }));
     // media.analyze (WS-O task 5): the local model when there is one; the paid route is used only under a media.paid budget.
-    if (config.localLlm && config.localLlm.url) await registry.seedVersioned('route', 'media.local', pool(config.localLlm.timeoutMs, { capability: 'summarize', constraints: { objective: 'balanced', provider_scope: 'local' }, options: { temperature: 0.3 }, max_output_tokens: 350 }));
-    await registry.seedVersioned('route', 'media.paid', pool(60000, { capability: 'summarize', constraints: { objective: 'correctness', provider_scope: 'paid', ...(authority ? { authority } : {}) }, options: { temperature: 0.3 }, max_output_tokens: 350 }));
+    if (config.localLlm && config.localLlm.url) await registry.seedVersioned('route', 'media.local', pool(config.localLlm.timeoutMs, { 'capability': 'summarize', constraints: { objective: 'balanced', provider_scope: 'local' }, options: { temperature: 0.3 }, max_output_tokens: 350 }));
+    await registry.seedVersioned('route', 'media.paid', pool(60000, { 'capability': 'summarize', constraints: { objective: 'correctness', provider_scope: 'paid', ...(authority ? { authority } : {}) }, options: { temperature: 0.3 }, max_output_tokens: 350 }));
     for (const key of HISTORICAL_ROUTES) await registry.seedVersioned('route', key, { primary: { provider: 'shared', model: null }, fallbacks: [], options: {}, max_output_tokens: null, response_format: 'json', timeout_ms: null, alias_of: 'default.json' });
 
     // Templates, then workflows (workflows reference templates)
