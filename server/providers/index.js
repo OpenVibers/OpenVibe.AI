@@ -97,10 +97,10 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
     async function resetHealth(key) { await db.prepare('DELETE FROM provider_health WHERE provider_key = ?').run(key); }
 
     // ── Pricing: platform.rate-card@1 per metric (server/providers/rate-cards.js; models row -> AI_PRICING_JSON -> flat) ──
-    /** The { in, cached, out } rate cards for a provider + model, or null for a provider that is never billed (stub, whisper). */
+    /** The { in, cached, out } rate cards for a provider + model, or null for a provider that is never billed. */
     async function rateCardsFor(providerKey, model) {
         const p = await registry.getProvider(providerKey);
-        if (!p || p.kind === 'stub' || p.kind === 'whisper') return null;
+        if (!p || isFreeProvider(p)) return null;
         const row = model ? await registry.getModel(providerKey, model) : null;
         return rates.buildCards({ providerKey, model: model || null, row, pricing: config.pricing });
     }
@@ -130,9 +130,13 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
     }
 
     // ── Routing ────────────────────────────────────────────
-    /** A provider that is never billed: the deterministic stub and the local servers (llama.cpp, whisper.cpp). */
+    /** Local execution never enters the media paid pool, even if a record has no explicit price flag. */
+    function isLocalProvider(p) {
+        return p.kind === 'whisper' || Boolean(p.metadata && p.metadata.local);
+    }
+    /** A provider that is never billed: the deterministic stub and free or local servers. */
     function isFreeProvider(p) {
-        return p.kind === 'stub' || p.kind === 'whisper' || Boolean(p.metadata && p.metadata.paid === false);
+        return p.kind === 'stub' || isLocalProvider(p) || Boolean(p.metadata && p.metadata.paid === false);
     }
     const offerId = (provider, model) => (model ? `${provider}:${model}` : provider);
     const splitOfferId = (id) => {
@@ -189,9 +193,20 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                 (cardsByProvider[p.key] || (cardsByProvider[p.key] = [])).push(cards.in, cards.cached, cards.out);
             }
         };
+        const scope = route.constraints && route.constraints.provider_scope;
         for (const p of await registry.listProviders()) {
             if (p.key === 'stub' || !p.capabilities.some(f => features.includes(f))) continue;
-            await addOffer(p, (route.constraints && route.constraints.model) || p.default_model || null, p.capabilities);
+            if (scope === 'local' && !isLocalProvider(p)) continue;
+            if (scope === 'paid' && isFreeProvider(p)) continue;
+            if (operation === 'embed' || operation === 'transcribe') {
+                // A chat model advertised by an OpenAI-shaped provider is not an embedding or STT model.
+                const type = operation === 'embed' ? 'embedding' : 'stt';
+                for (const m of await registry.listModels({ provider: p.key })) {
+                    if (m.type === type && m.status === 'active') await addOffer(p, m.model_key, p.capabilities);
+                }
+            } else {
+                await addOffer(p, (route.constraints && route.constraints.model) || p.default_model || null, p.capabilities);
+            }
         }
         // A pinned candidate stays in the pool even when the provider's capability list is incomplete (migration):
         // the pin is an explicit admin assertion that it can serve the route's capability.
@@ -199,6 +214,8 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             if (!pin || !pin.provider || pin.provider === 'stub') continue;
             const p = await registry.getProvider(pin.provider);
             if (!p) continue;
+            if (scope === 'local' && !isLocalProvider(p)) continue;
+            if (scope === 'paid' && isFreeProvider(p)) continue;
             const caps = route.capability && !p.capabilities.includes(route.capability) ? [...p.capabilities, route.capability] : p.capabilities;
             await addOffer(p, pin.model || p.default_model || null, caps);
         }
@@ -263,7 +280,8 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         const { order, explain, placement: result = null, ...rest } = route.capability && operation
             ? await poolCandidates(route, features, operation)
             : await pinnedCandidates(route, features);
-        if (config.stubFallback && !order.some(c => c.provider === 'stub') && await registry.getProvider('stub')) {
+        if (config.stubFallback && !['embed', 'transcribe'].includes(operation) && !(route.constraints && route.constraints.provider_scope)
+            && !order.some(c => c.provider === 'stub') && await registry.getProvider('stub')) {
             order.push({ provider: 'stub', model: null });
             explain.candidates.push({ provider: 'stub', model: null, eligible: true, excluded_reason: null, cost: 0, latency: null });
         }
@@ -360,6 +378,9 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                     if (typeof fn !== 'function') throw new ProviderError(`${operation} not implemented`, { code: 'provider.unsupported' });
                     statFor(c.provider).calls += p.kind === 'stub' ? 0 : 1;   // stub counts its own calls
                     const result = await fn({ ...req, model, signal: ctx.signal, timeoutMs });
+                    if (operation === 'embed' && (!Array.isArray(result.vectors) || result.vectors.length !== req.input.length
+                        || result.vectors.some(v => !Array.isArray(v) || !v.length || v.some(n => typeof n !== 'number' || !Number.isFinite(n)))))
+                        throw new ProviderError('embedding response has invalid vectors', { code: 'provider.output' });
                     const latency = Date.now() - t0;
                     const usage = result.usage || { input: 0, output: 0, cached: 0 };
                     const cost = await costOf(c.provider, result.model || model, usage);

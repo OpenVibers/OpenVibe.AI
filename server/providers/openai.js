@@ -81,9 +81,10 @@ function createOpenAiProvider(record, { apiKey = '', fetchImpl = globalThis.fetc
 
     async function transcribe(req) {
         if (!req.filePath || !fs.existsSync(req.filePath)) throw new ProviderError('transcription audio file missing', { code: 'provider.input' });
+        if (!req.model) throw new ProviderError('transcription model is not configured', { code: 'provider.model' });
         const form = new FormData();
         form.append('file', new Blob([fs.readFileSync(req.filePath)], { type: 'audio/wav' }), path.basename(req.filePath));
-        form.append('model', req.model || 'whisper-1');
+        form.append('model', req.model);
         form.append('response_format', 'verbose_json');
         if (req.language && req.language !== 'auto') form.append('language', req.language);
         let res;
@@ -97,10 +98,13 @@ function createOpenAiProvider(record, { apiKey = '', fetchImpl = globalThis.fetc
         // verbose_json has segments; some providers still answer plain text.
         try {
             const j = JSON.parse(raw);
+            if (!j || typeof j !== 'object' || (typeof j.text !== 'string' && typeof j.transcript !== 'string'))
+                throw new ProviderError('transcription response has no text field', { code: 'provider.output' });
             const segments = Array.isArray(j.segments) ? j.segments.map(s => ({ start: Number(s.start) || 0, end: Number(s.end) || 0, text: String(s.text || '').trim() })) : [];
-            return { text: String(j.text || j.transcript || '').trim(), segments, model: req.model || 'whisper-1', usage: { input: 0, output: 0, cached: 0 } };
-        } catch {
-            return { text: String(raw || '').trim(), segments: [], model: req.model || 'whisper-1', usage: { input: 0, output: 0, cached: 0 } };
+            return { text: String(j.text || j.transcript || '').trim(), segments, model: req.model, usage: { input: 0, output: 0, cached: 0 } };
+        } catch (err) {
+            if (err instanceof ProviderError) throw err;
+            return { text: String(raw || '').trim(), segments: [], model: req.model, usage: { input: 0, output: 0, cached: 0 } };
         }
     }
 
