@@ -5,6 +5,7 @@
  *   POST /api/v1/runs                       create (ai.run.create); ?wait=ms waits for the result
  *   GET  /api/v1/runs                       the caller's runs (ai.run.read)
  *   GET  /api/v1/runs/:id                   one run (+ citations, request log metadata)
+ *   run.usage.usage_sample_id: the run's Billing reading (server/usage-samples.js), null when none
  *   POST /api/v1/runs/:id/cancel            (ai.run.create, owner)
  *   POST /api/v1/runs/:id/retry             (ai.run.create, owner) -> a new run with retry_of
  *   GET  /api/v1/runs/:id/citations         (ai.run.read)

@@ -21,6 +21,7 @@ const { AiError, sha256, stableStringify, parseJson, iso } = require('./util');
 const { preferenceLines } = require('./user-modules');
 const schemas = require('./schemas');
 const events = require('./events');
+const usageSamples = require('./usage-samples');
 
 const TERMINAL = new Set(['succeeded', 'failed', 'cancelled', 'cached']);
 const QUEUE_RETRY_AFTER_S = 5;
@@ -84,7 +85,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                 origin: 'ai', workflow: r.workflow_key, workflow_version: r.workflow_version, template_version: r.template_version, route: r.route_key, route_version: r.route_version,
                 provider: r.provider_key, model: r.model_key, fallback_used: Boolean(r.fallback_used), run_id: r.id, cached_from: r.cached_from, synthetic: Boolean(r.synthetic),
             },
-            usage: { tokens_in: r.tokens_in, tokens_out: r.tokens_out, cost_usd: r.cost_usd, attempts: r.attempts },
+            usage: { tokens_in: r.tokens_in, tokens_out: r.tokens_out, cost_usd: r.cost_usd, attempts: r.attempts, usage_sample_id: r.usage_sample_id || null },
             explain: parseJson(r.explain, null),
             citations_count: r.citations_count,
             grounding: parseJson(r.grounding, null),
@@ -214,6 +215,8 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                     if (src.length) await addCitations(id, src.map(c => ({ ...c, provenance: { ...c.provenance, via_cache: hit.run_id } })), 'cache');
                     // The reused output carries the grounding it was produced with.
                     await db.prepare('UPDATE runs SET grounding = (SELECT grounding FROM runs WHERE id = ?) WHERE id = ?').run(hit.run_id, id);
+                    // A cache hit is still a served run: its reading (no tokens, no cost) goes to Billing with it.
+                    await usageSamples.record(db, { runId: id, workflowKey: wf.key, requester: `${requester.type}:${requester.id}`, at: now, traceId: trace });
                     await events.runChanged(await getRow(id));
                 });
                 await registry.audit(principal.sub, 'run.create', 'run', id, { trace, metadata: { workflow: wf.key, version: wf.version, status: 'cached', cached_from: hit.run_id } });
@@ -312,7 +315,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                 return d;
             });
             if (!done.changes) return;       // cancelled while finishing
-            if (r.provider && reserved) await quotas.account(ctx, reserved, { provider: r.provider, model: r.model, tokensIn: r.usage.input, tokensOut: r.usage.output, tokensCached: r.usage.cached, cost: r.cost, attempts: logged });
+            if (r.provider && reserved) await quotas.account(ctx, reserved, { provider: r.provider, model: r.model, tokensIn: r.usage.input, tokensOut: r.usage.output, tokensCached: r.usage.cached, cost: r.cost, attempts: logged, runId: id, traceId: row.trace_id });
             if (r.fallbackUsed) await registry.audit('system', 'run.fallback', 'run', id, { trace: row.trace_id, metadata: { workflow: row.workflow_key, provider: r.provider, route: r.route && r.route.key } });
             // Output shaped by someone's preferences, or kept for nobody (history off), is never cached for reuse.
             if (scope && row.cache_key && !r.synthetic && wf.cache_mode !== 'none' && preferences.history !== false && !preferenceLines(preferences)) {
@@ -335,7 +338,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             // Account the spent tokens/cost as before, but always roll up the finished attempts (the failed
             // ones included) into provider_stats_daily/placement_state: a run that answered nothing still
             // tells the router a provider was unhealthy.
-            if (reserved && logged.some((e) => e.status !== 'skipped')) await quotas.account(ctx, reserved, { provider: 'mixed', model: '', tokensIn: spent.ti, tokensOut: spent.tout, cost: spent.c, attempts: logged, writeUsage: Boolean(spent.ti || spent.tout) });
+            if (reserved && logged.some((e) => e.status !== 'skipped')) await quotas.account(ctx, reserved, { provider: 'mixed', model: '', tokensIn: spent.ti, tokensOut: spent.tout, cost: spent.c, attempts: logged, writeUsage: Boolean(spent.ti || spent.tout), runId: id, traceId: row.trace_id });
         } finally {
             inflight.delete(id);
         }

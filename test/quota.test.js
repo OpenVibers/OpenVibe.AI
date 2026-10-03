@@ -44,6 +44,14 @@ t.test("'*' service quotas give each service its own window", async () => {
     assert.strictEqual(r.status, 201, 'another service is not limited by live\'s usage');
 });
 
+t.test('every accounted run has one Billing reading; the refused request queued none', async () => {
+    const runs = await h.db.prepare("SELECT id, usage_sample_id FROM runs WHERE status = 'succeeded'").all();
+    assert.ok(runs.length > 0, 'runs succeeded');
+    for (const r of runs) assert.strictEqual(r.usage_sample_id, `ai:${r.id}:tokens`, `no reading for ${r.id}`);
+    const n = Number((await h.db.prepare('SELECT COUNT(*) n FROM usage_sample_outbox').get()).n);
+    assert.strictEqual(n, runs.length, 'one reading per succeeded run; the 429 request queued none');
+});
+
 t.test('attribution quotas limit one attributed owner (Live per-streamer budget)', async () => {
     await request(h.base, 'POST', '/api/v1/quotas', { tok: live, body: { scope_type: 'service', scope_id: '*', window: 'minute', max_requests: 1000 } });
     const q = await request(h.base, 'POST', '/api/v1/quotas', { tok: live, body: { scope_type: 'attribution', scope_id: 'live:user:42', window: 'day', max_requests: 1 } });

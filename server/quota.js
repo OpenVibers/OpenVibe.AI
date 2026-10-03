@@ -14,6 +14,7 @@
  * request once a window's spend has reached them, the same way Live's daily USD cap worked).
  */
 const { AiError, iso } = require('./util');
+const usageSamples = require('./usage-samples');
 
 const WINDOWS = { minute: 60, hour: 3600, day: 86400 };
 
@@ -170,13 +171,17 @@ function createQuotas(db, { clock = { now: () => Date.now() }, registry } = {}) 
      * Add real usage to the reserved windows, the daily usage table and — in the same transaction — the
      * provider rollup and per-route placement state. `attempts` is the run's finished attempts (the same
      * entries logged to `requests`); `writeUsage` is false when a run spent nothing (stats are still kept).
+     * `runId`/`traceId` name the run a reading is written for (server/usage-samples.js): with a runId the
+     * run's platform.usage-sample@1 reading commits with its usage.
      */
-    async function account(ctx, reserved, { provider, model, tokensIn = 0, tokensOut = 0, tokensCached = 0, cost = 0, attempts = null, writeUsage = true }) {
+    async function account(ctx, reserved, { provider, model, tokensIn = 0, tokensOut = 0, tokensCached = 0, cost = 0, attempts = null, writeUsage = true, runId = null, traceId = null }) {
         const tokens = tokensIn + tokensOut;
         const day = iso(clock.now()).slice(0, 10);
         await db.tx(async () => {
             for (const r of reserved || []) await bump.run(r.scope_type, r.scope_id, r.window, r.ws, r.workflow_prefix, 0, tokens, cost);
             if (writeUsage) await insDaily.run(day, `${ctx.requesterType}:${ctx.requesterId}`, ctx.attributionKey || '', ctx.workflowKey, provider || '', model || '', tokensIn, tokensOut, tokensCached, cost);
+            // The run's platform.usage-sample@1 reading for Billing commits with its usage (server/usage-samples.js).
+            if (writeUsage && runId) await usageSamples.record(db, { runId, workflowKey: ctx.workflowKey, requester: `${ctx.requesterType}:${ctx.requesterId}`, provider, tokensIn, tokensOut, cost, at: clock.now(), traceId });
             await recordStats(day, attempts);
         });
     }
