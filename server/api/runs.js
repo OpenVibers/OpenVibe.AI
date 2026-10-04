@@ -6,6 +6,7 @@
  *   GET  /api/v1/runs                       the caller's runs (ai.run.read)
  *   GET  /api/v1/runs/:id                   one run (+ citations, request log metadata)
  *   run.usage.usage_sample_id: the run's Billing reading (server/usage-samples.js), null when none
+ *   run.explain.usage_readings: that reading's idempotency key, delivery state (queued/sent/failed), last error, free_allowance_used
  *   POST /api/v1/runs/:id/cancel            (ai.run.create, owner)
  *   POST /api/v1/runs/:id/retry             (ai.run.create, owner) -> a new run with retry_of
  *   GET  /api/v1/runs/:id/citations         (ai.run.read)
@@ -64,7 +65,7 @@ function runsRouter({ runs, registry, auth, config, log = console }) {
 
     r.get('/api/v1/runs/:id', read, async (req, res) => {
         try {
-            const run = await owned(req);
+            const run = await runs.explained(await owned(req));
             res.json({ run, citations: await runs.citations(run.id), requests: await runs.requestsFor(run.id) });
         } catch (err) { sendError(res, err, req.ov, log); }
     });

@@ -149,8 +149,8 @@ needs scripts and inline styles), like Billing's staff console. Code: `server/co
 | `/console/providers` | every provider (kind, status, **secret reference name and whether it resolves, never a value**, circuit, base URL without query/user info, default model, priority/timeout) and the models |
 | `/console/routes`, `/templates`, `/workflows` (`/:key[?version=]`) | every key's newest version and the version in use; per key every version with its status and content (primary and fallbacks in order, prompts, steps, schemas) |
 | `/console/runs` | runs newest first, filtered by status (tabs), workflow, requester (`live` = `service:live`), error code and a UTC time range; failed runs grouped by error code |
-| `/console/runs/:id` | versions used, provider/model, fallback, attempts, tokens, cost, error code and detail, requester/attribution/target, grounding, citations, the request log (hashes only), and the stored input/output **bounded**: strings cut at 240 characters, lists at 20 items, 6 KB in all, credential-named keys blanked; raw debug fields never |
-| `/console/quotas`, `/console/usage` | active quotas with their current windows and counters, every quota; usage by day, requester, workflow and provider/model over a day range (`quotas.usage`) |
+| `/console/runs/:id` | versions used, provider/model, fallback, attempts, tokens, cost, the Billing reading with its delivery state, free share and last send error, error code and detail, requester/attribution/target, grounding, citations, the request log (hashes only), and the stored input/output **bounded**: strings cut at 240 characters, lists at 20 items, 6 KB in all, credential-named keys blanked; raw debug fields never |
+| `/console/quotas`, `/console/usage` | active quotas with their current windows and counters, every quota; usage by day, requester, workflow and provider/model over a day range (`quotas.usage`); the **free allowance this period** per subject × provider × metric (free used, allowance, remaining, period end; `quotas.freeAllowance.current()`); the `platform.usage-sample@1` readings by delivery state (queued, retrying, sent, failed) and the last send errors with their run. Staff only: the public `/stats` page never shows a subject |
 | `/console/cache` | live entries and hits by workflow |
 | `/console/audit` | the `audit_log`, filtered by kind (configuration changes by default, runs, console, everything), action, actor, target |
 
@@ -216,7 +216,11 @@ provider that is disabled, missing credentials, circuit-open or unable to do the
 failure; a fallback that answers is recorded on the run (`fallback_used`), in the request log
 (`fallback = 1`) and in the audit log. Every run response and `GET /api/v1/runs/:id` carry `explain`
 (objective, reasons, selected, and every candidate with its estimated cost, latency and excluded
-reason). Speech and embeddings use placement pools of registered `stt` and `embedding` models; until
+reason). `GET /api/v1/runs/:id` adds `explain.usage_readings` when the run has a Billing reading: per
+reading its `idempotency_key`, `state` (`queued` until Billing accepts it, `sent`, or `failed` when Billing
+refused it), `attempts`, `queued_at`, `sent_at`, `rejected_at`, `next_attempt_at`, `last_error` (the
+outbox's last send error, also while a queued reading is retried) and `free_allowance_used` when some
+was free; a sent reading the relay has pruned reads `{ state: 'sent', pruned: true }`. Speech and embeddings use placement pools of registered `stt` and `embedding` models; until
 a second upstream exists, an unavailable sole provider answers `503 provider.unavailable`. Media
 uses separate local and paid pools so paid work still requires its explicit budget. The synthetic
 stub can join general text routes as a last resort outside production only (`AI_STUB_FALLBACK`).

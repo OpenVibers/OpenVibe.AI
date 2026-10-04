@@ -168,7 +168,7 @@ t.test('the staff map: admin reads and manages workflows, only the owner manages
 });
 
 t.test('anonymous: console pages answer the sign-in page (401), never data; writes change nothing', async () => {
-    for (const p of ['/console', '/console/runs?status=failed', '/console/providers', '/console/audit', `/console/runs/${runIds.failLive}`, '/console/nope']) {
+    for (const p of ['/console', '/console/runs?status=failed', '/console/providers', '/console/usage', '/console/audit', `/console/runs/${runIds.failLive}`, '/console/nope']) {
         const r = await get(p);
         assert.strictEqual(r.status, 401, p);
         assert.ok(r.text.includes('Sign in with OpenVibe.Network'), p);
@@ -430,6 +430,25 @@ t.test('run detail: error code, attempts, provider, request log; input bounded a
     assert.ok(r.text.includes('a real answer'), 'the output is shown');
     assert.ok(!/debug_(prompt|response)/.test(r.text));
     assert.ok(r.text.includes('Grounding'));
+});
+
+t.test('usage: free allowance per subject this period and Billing readings by state, with the last send errors', async () => {
+    await h.registry.upsertModel({ provider_key: 'okseam', model_key: 'seam-model', type: 'chat', cost: { in_per_mtok: 1, out_per_mtok: 1, free_allowance: 500, reset_period: 'month' } });
+    assert.strictEqual((await h.quotas.freeAllowance.claim('live:user:4242', 'okseam', 'seam-model', { in: 120 })).tokens, 120);
+    const key = `ai:${runIds.ok}:tokens`;
+    assert.ok(await h.db.prepare('SELECT 1 AS x FROM usage_sample_outbox WHERE event_id = ?').get(key), 'the succeeded run queued a reading');
+    await h.db.prepare("UPDATE usage_sample_outbox SET attempts = 2, last_error = 'billing.usage.record answered 503' WHERE event_id = ?").run(key);
+    const r = await get('/console/usage', cookies.admin);
+    assertPage(r, '/console/usage');
+    const row = r.text.split('</tr>').find((x) => x.includes('<code>live:user:4242</code>'));
+    assert.ok(row, 'the subject has a row');
+    const cells = [...row.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((m) => m[1].replace(/<[^>]+>/g, '').trim());
+    assert.deepStrictEqual(cells.slice(0, 6), ['live:user:4242', 'okseam', 'input-tokens:seam-model', '120', '500', '380']);
+    assert.ok(r.text.includes('Readings by delivery state') && r.text.includes(`<code>${key}</code>`) && r.text.includes('billing.usage.record answered 503'));
+    const run = await get(`/console/runs/${runIds.ok}`, cookies.admin);
+    assert.ok(run.text.includes(`<code>${key}</code>`) && run.text.includes('billing.usage.record answered 503'), 'the run page shows its reading\'s state and error');
+    assert.strictEqual((await get('/console/usage')).status, 401, 'signed out: refused');
+    assert.ok(!(await fetch(`${h.base}/stats`).then((x) => x.text())).includes('live:user:4242'), 'the public page has no subject');
 });
 
 t.test('cancel: an admin cancels a running run (ai.workflow.manage), audited with the person as actor', async () => {

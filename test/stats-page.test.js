@@ -52,9 +52,15 @@ t.test('seeded stats: one row per provider and model with p50, p95, success rate
     assert.match(r.text, /last 7 UTC days \(\d{4}-\d{2}-\d{2} to \d{4}-\d{2}-\d{2}\)/);
 });
 
+t.test('a subject with free allowance used this period is still not on the page', async () => {
+    const free = await h.quotas.freeAllowance.claim('live:user:4242', 'seam', 'seam-model', { in: 10 });
+    assert.strictEqual(free.tokens, 10);
+    assert.ok((await h.quotas.freeAllowance.current()).some((r) => r.subject === 'live:user:4242'), 'the staff console has the row');
+});
+
 t.test('no caller identifiers, internal URLs or secrets in the HTML', async () => {
     const r = await request(h.base, 'GET', '/stats');
-    for (const leak of ['byo:', 'usr_owner1', 'usr_subject1', 'own-model', 'service:live', 'live:user:4242', 'default.generate', SEAM_URL, '127.0.0.1', 'SEAM_SECRET_KEY', 'env:']) {
+    for (const leak of ['byo:', 'usr_owner1', 'usr_subject1', 'own-model', 'service:live', 'live:user:4242', 'default.generate', 'ai:run_', SEAM_URL, '127.0.0.1', 'SEAM_SECRET_KEY', 'env:']) {
         assert.ok(!r.text.includes(leak), `the page shows ${leak}`);
     }
 });

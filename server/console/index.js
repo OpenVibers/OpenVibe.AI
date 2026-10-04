@@ -14,7 +14,8 @@
  *   GET  /console/runs[?status&workflow&requester&code&from&to&before], /console/runs/:id
  *   POST /console/runs/:id/cancel        (ai.workflow.manage; runs.cancel)
  *   GET  /console/quotas; POST /console/quotas   (writes: ai.provider.manage; quotas.upsert)
- *   GET  /console/usage[?from&to&requester]      (quotas.usage)
+ *   GET  /console/usage[?from&to&requester]      (quotas.usage; free allowance this period, quotas.freeAllowance.current;
+ *                                                  Billing readings by delivery state, usage-samples deliveryReport)
  *   GET  /console/cache; POST /console/cache/purge   (writes: ai.provider.manage; ops.purgeCache)
  *   GET  /console/audit[?kind&action&actor&target_type&target_id&before]
  *
@@ -38,6 +39,7 @@
 const crypto = require('crypto');
 const express = require('express');
 const { AiError, resolveSecret } = require('../util');
+const usageSamples = require('../usage-samples');
 const { CAPS } = require('../auth');
 const { staff: staffMap } = require('openvibe-contracts');
 const { createSessions, sameString, random } = require('./session');
@@ -323,7 +325,7 @@ function consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, e
         }));
     }));
     r.get('/console/runs/:id', read, wrap(async (req, res) => {
-        const run = await runs.get(req.params.id);
+        const run = await runs.explained(await runs.get(req.params.id));
         if (!run) return await send(res, 404, pages.message({ title: 'Not found', text: `No run ${req.params.id}.`, back: '/console/runs', ...common(req) }));
         return await send(res, 200, pages.run({
             ...common(req), r: run, citations: await runs.citations(run.id), requests: await runs.requestsFor(run.id), input: q.preview(run.input), output: q.preview(run.output),
@@ -354,7 +356,10 @@ function consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, e
     }));
     r.get('/console/usage', read, wrap(async (req, res) => {
         const { filters, form, bad } = q.parseUsageFilters(req.query, clock.now());
-        await send(res, bad.length ? 400 : 200, pages.usage({ ...common(req), form, bad, report: await q.usageReport(quotas, filters) }));
+        await send(res, bad.length ? 400 : 200, pages.usage({
+            ...common(req), form, bad, report: await q.usageReport(quotas, filters),
+            free: quotas.freeAllowance ? await quotas.freeAllowance.current() : [], readings: await usageSamples.deliveryReport(db),
+        }));
     }));
 
     // ── Cache ────────────────────────────────────────────────

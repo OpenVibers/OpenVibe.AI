@@ -20,8 +20,9 @@ const contracts = require('openvibe-contracts');
 const TABLE = 'usage_sample_outbox'; const METRIC = 'tokens'; const SCHEMA = 'platform.usage-sample@1';
 const REFUSED = new Set([400, 409, 413, 422]); const PRUNE_EVERY_MS = 6 * 60 * 60 * 1000;
 let relay = null; let on = false; let pruneTimer = null; let lastError = null; let queued = 0;
+const keyOf = (runId) => `ai:${runId}:${METRIC}`;
 function sampleOf({ runId, workflowKey, requester, provider = null, tokensIn = 0, tokensOut = 0, cost = 0, freeAllowanceUsed = 0, at, traceId = null }) {
-  const key = `ai:${runId}:${METRIC}`;
+  const key = keyOf(runId);
   const s = { id: key, idempotency_key: key, service: 'ai', subject: requester, resource: runId, operation: workflowKey,
     quantity: Math.max(0, (Number(tokensIn) || 0) + (Number(tokensOut) || 0)), unit: 'tokens', at: new Date(at).toISOString(),
     cost_estimate: Math.max(0, Number(cost) || 0), source: 'ai.runs' };
@@ -66,6 +67,34 @@ function init(db, { enabled = true, billingUrl = '', audience = 'openvibe.billin
   log.log(`[Billing] ai usage samples → ${billingUrl}`);
   return relay;
 }
+// Delivery state as the outbox records it: sent, failed (Billing refused it; never retried), else queued (last_error
+// set while a send is being retried).
+const stateOf = (r) => (r.sent_at != null ? 'sent' : r.rejected_at != null ? 'failed' : 'queued');
+const isoOrNull = (ms) => (ms == null ? null : new Date(Number(ms)).toISOString());
+const envelopeOf = (e) => (typeof e === 'string' ? JSON.parse(e) : e) || {};
+/**
+ * A run's readings for its explain: [{ idempotency_key, state, attempts, queued_at, sent_at, rejected_at,
+ * next_attempt_at, last_error, free_allowance_used? }]. A sent row the relay has pruned reads { state: 'sent', pruned: true }.
+ */
+async function readingsFor(db, usageSampleId) {
+  if (!usageSampleId) return [];
+  const r = await db.prepare(`SELECT event_id, envelope, created_at, attempts, next_attempt_at, sent_at, rejected_at, last_error FROM ${TABLE} WHERE event_id = ?`).get(usageSampleId);
+  if (!r) return [{ idempotency_key: usageSampleId, state: 'sent', pruned: true }];
+  const state = stateOf(r);
+  const out = { idempotency_key: r.event_id, state, attempts: Number(r.attempts), queued_at: isoOrNull(r.created_at), sent_at: isoOrNull(r.sent_at), rejected_at: isoOrNull(r.rejected_at),
+    next_attempt_at: state === 'queued' ? isoOrNull(r.next_attempt_at) : null, last_error: r.last_error || null };
+  const free = envelopeOf(r.envelope).free_allowance_used;
+  if (free != null) out.free_allowance_used = free;
+  return [out];
+}
+/** Staff console: readings by delivery state and the latest rows carrying a send error (never a public page: keys name runs). */
+async function deliveryReport(db, { failures = 10 } = {}) {
+  const c = await db.prepare(`SELECT count(*) FILTER (WHERE sent_at IS NOT NULL) AS sent, count(*) FILTER (WHERE rejected_at IS NOT NULL) AS failed,
+    count(*) FILTER (WHERE sent_at IS NULL AND rejected_at IS NULL) AS queued, count(*) FILTER (WHERE sent_at IS NULL AND rejected_at IS NULL AND last_error IS NOT NULL) AS retrying FROM ${TABLE}`).get();
+  const rows = await db.prepare(`SELECT event_id, envelope, attempts, created_at, sent_at, rejected_at, last_error FROM ${TABLE} WHERE last_error IS NOT NULL ORDER BY id DESC LIMIT ?`).all(failures);
+  return { enabled: on, relay: Boolean(relay), counts: { queued: Number(c.queued), retrying: Number(c.retrying), sent: Number(c.sent), failed: Number(c.failed) },
+    failures: rows.map((r) => ({ idempotency_key: r.event_id, run_id: envelopeOf(r.envelope).resource || null, state: stateOf(r), attempts: Number(r.attempts), queued_at: isoOrNull(r.created_at), last_error: r.last_error })) };
+}
 async function status() { if (!relay) return { enabled: on, relay: false }; return { enabled: on, relay: true, pending: Number(await relay.pending()), rejected: Number(await relay.rejected()), queued_since_boot: queued, last_error: lastError }; }
 /** Graceful stop (after runs.drain(), before db.close()): one last bounded pass sends what is due, then the relay stops; unsent rows wait for the next start. */
 async function stop({ drainMs = 3000 } = {}) {
@@ -74,4 +103,4 @@ async function stop({ drainMs = 3000 } = {}) {
   if (r) { let timer; await Promise.race([r.flush().catch(() => {}), new Promise((res) => { timer = setTimeout(res, drainMs); if (timer.unref) timer.unref(); })]); clearTimeout(timer); await r.stop(); }
 }
 function _reset() { if (pruneTimer) clearInterval(pruneTimer); pruneTimer = null; if (relay) relay.stop(); relay = null; on = false; queued = 0; lastError = null; }
-module.exports = { init, record, sampleOf, status, stop, _reset, TABLE };
+module.exports = { init, record, sampleOf, keyOf, readingsFor, deliveryReport, status, stop, _reset, TABLE };

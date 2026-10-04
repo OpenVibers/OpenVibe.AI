@@ -88,7 +88,7 @@ function secs(s) {
     return v < 120 ? `${v} s` : v < 7200 ? `${Math.round(v / 60)} min` : `${Math.round(v / 3600)} h`;
 }
 const clip = (s, max = 200) => { const t = String(s == null ? '' : s); return t.length > max ? `${t.slice(0, max)}…` : t; };
-const GOOD = new Set(['succeeded', 'active', 'closed', 'configured', 'ok', 'cached', 'not_required']);
+const GOOD = new Set(['succeeded', 'sent', 'active', 'closed', 'configured', 'ok', 'cached', 'not_required']);
 const BAD = new Set(['failed', 'open', 'disabled', 'missing', 'error', 'timeout', 'archived']);
 const badge = (s) => html`<span class="${GOOD.has(s) ? 'ok' : BAD.has(s) ? 'bad' : 'warn'}">${s || '—'}</span>`;
 /** A base URL without user info, query or fragment (a key must never ride along in a URL shown here). */
@@ -346,7 +346,7 @@ function run({ staff, csrf, r, citations, requests, input, output, canCancel, no
 <dt>Attempts</dt><dd>${n(r.usage.attempts)}</dd>
 <dt>Tokens</dt><dd>${n(r.usage.tokens_in)} in · ${n(r.usage.tokens_out)} out</dd>
 <dt>Cost</dt><dd>${usd(r.usage.cost_usd)}</dd>
-<dt>Billing reading</dt><dd>${r.usage.usage_sample_id ? html`<code>${r.usage.usage_sample_id}</code>` : '—'}</dd>
+<dt>Billing reading</dt><dd>${r.usage.usage_sample_id ? html`<code>${r.usage.usage_sample_id}</code>` : '—'}${((r.explain && r.explain.usage_readings) || []).map((u) => html` ${badge(u.state)}${u.free_allowance_used != null ? html` <span class="muted">${n(u.free_allowance_used)} free</span>` : ''}${u.last_error ? html`<br><span class="bad">${clip(u.last_error, 300)}</span>` : ''}`)}</dd>
 ${r.error ? html`<dt>Error</dt><dd><code class="bad">${r.error.code}</code><br>${clip(r.error.detail, 500)}</dd>` : ''}
 </dl></div><div class="card"><dl>
 <dt>Requester</dt><dd><code>${r.requester.type}:${r.requester.id}</code></dd>
@@ -410,7 +410,9 @@ function usageRows(caption, first, rows) {
 <td>${n(r.tokens_in)}</td><td>${n(r.tokens_out)}</td><td>${n(r.tokens_cached)}</td><td>${usd(r.cost_usd)}</td></tr>`), 'no usage in this range.');
 }
 
-function usage({ staff, csrf, form, bad, report }) {
+const day = (ms) => (ms >= 8.64e15 ? 'never' : when(new Date(ms).toISOString()));
+
+function usage({ staff, csrf, form, bad, report, free = [], readings }) {
     const t = report.total;
     return layout({
         title: 'Usage', section: 'usage', staff, csrf, error: bad.length ? `ignored malformed filter(s): ${bad.join(', ')}` : null, body: html`<h1>Usage</h1>
@@ -424,7 +426,15 @@ function usage({ staff, csrf, form, bad, report }) {
 ${report.truncated ? html`<p class="warn">Only the first 1,000 daily rows are summed; narrow the range.</p>` : ''}
 <h2>Breakdown</h2>
 ${usageRows('By day', 'Day', report.byDay)}${usageRows('By requester', 'Requester', report.byRequester)}
-${usageRows('By workflow', 'Workflow', report.byWorkflow)}${usageRows('By provider and model', 'Provider / model', report.byModel)}`,
+${usageRows('By workflow', 'Workflow', report.byWorkflow)}${usageRows('By provider and model', 'Provider / model', report.byModel)}
+<h2>Free allowance this period</h2>
+${table('Free allowance by subject, provider and metric', ['Subject', 'Provider', 'Metric', 'Free used', 'Allowance', 'Remaining', 'Period ends'], free.map((f) => html`<tr><td><code>${f.subject}</code></td><td><code>${f.provider}</code></td>
+<td><code>${f.metric}</code></td><td>${n(f.free_used)}</td><td>${n(f.free_allowance)}</td><td>${n(f.remaining)}</td><td>${day(f.period_end)}</td></tr>`), 'no free allowance used this period.')}
+<h2>Billing readings</h2>
+${readings ? html`<p class="muted">${readings.relay ? 'Sending to Billing.' : readings.enabled ? 'Queued only: Billing sending is not configured.' : 'Readings are off (USAGE_SAMPLES=off).'}</p>
+${table('Readings by delivery state', ['Queued', 'Retrying', 'Sent', 'Failed'], [html`<tr><td>${n(readings.counts.queued)}</td><td>${n(readings.counts.retrying)}</td><td>${n(readings.counts.sent)}</td><td>${n(readings.counts.failed)}</td></tr>`])}
+${table('Last send errors', ['Reading', 'Run', 'State', 'Attempts', 'Queued', 'Last error'], readings.failures.map((f) => html`<tr><td><code>${f.idempotency_key}</code></td>
+<td>${f.run_id ? html`<a class="mono" href="/console/runs/${enc(f.run_id)}">${f.run_id}</a>` : '—'}</td><td>${badge(f.state)}</td><td>${n(f.attempts)}</td><td>${when(f.queued_at)}</td><td>${clip(f.last_error, 300)}</td></tr>`), 'no send error.')}` : ''}`,
     });
 }
 
