@@ -13,7 +13,7 @@ const { sha256, parseJson, iso, AiError, secretRefValid, resolveSecret } = requi
 const schemas = require('./schemas');
 const { provenance } = require('./providers/rate-cards');
 
-const PROVIDER_KINDS = ['stub', 'openai', 'anthropic', 'http', 'whisper'];
+const PROVIDER_KINDS = ['stub', 'openai', 'responses', 'anthropic', 'http', 'whisper'];
 const FEATURES = ['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich', 'embed', 'vision', 'json', 'transcribe'];
 const LIFECYCLE = ['draft', 'active', 'deprecated', 'archived'];
 const KEY_RE = /^[a-z][a-z0-9_-]*(\.[a-z0-9_-]+)*$/;

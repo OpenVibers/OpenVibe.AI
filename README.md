@@ -41,7 +41,7 @@ owns publication truth: Wiki, Blog, News, Live, … decide what to publish.
 - OpenVibe.Network (JWKS, service tokens, SSO for the operator console, user modules)
 - OpenVibe.Events (the `ai.run.*` outbox relay; off without `EVENTS_URL`)
 - OpenVibe.Media (recordings `media.analyze` reads, over allow-listed https URLs or signed URLs)
-- provider APIs configured by the operator (OpenAI-compatible, Anthropic, the HTTP seam), whisper.cpp
+- provider APIs configured by the operator (OpenAI-compatible, OpenAI Responses, Anthropic, the HTTP seam), whisper.cpp
   and the local model server `openvibe-llm.service` on this host
 - `openvibe-contracts` v0.86.0, `openvibe-sdk` v0.26.0 (service tokens, events outbox),
   `openvibe-shared` v2.3.1, pinned by release tarball
@@ -204,6 +204,7 @@ definition, but never over an admin's version.
 |---|---|---|
 | `stub` | Deterministic, no key, realistically shaped output (schema-shaped JSON, sentences, unit-vector embeddings, timed transcript segments), clearly marked synthetic (`(synthetic)` text, `synthetic: true` on the run). Never cached. | always present |
 | `openai` | Any OpenAI-compatible API (OpenAI, OpenRouter, Groq, Together, Ollama, LM Studio, llama.cpp): chat with structured-output step-down, embeddings, Whisper-style transcription. Ported from Live's `llm.js` / `ai-provider.js`. | `AI_PROVIDER`, `AI_BASE_URL`, `AI_API_KEY`, `AI_MODEL` — Live's setting names |
+| `responses` | The OpenAI Responses API (`POST {base}/responses`) for GPT-family models that only speak it, at any OpenAI-compatible `base_url` (default `https://api.openai.com/v1`): chat and every text operation, structured output through `text.format` with the same step-down, vision; no embeddings or transcription. | the admin API (`kind: "responses"`, `base_url`, `secret_ref`) |
 | `anthropic` | Messages API with cached system blocks and forced-tool JSON. Ported from Live's `llm.js`. | same, with `AI_PROVIDER=anthropic` |
 | `http` | The local HTTP seam: `POST {operation, …}` → `{text, json, usage}` | `AI_HTTP_SEAM_URL` or the admin API |
 | `whisper` | whisper.cpp on this host, with Live's VAD, hallucination filter, multilingual model and live/batch lanes | `WHISPER_*` — Live's names |
@@ -333,6 +334,7 @@ file beside it, change `--model`/`--alias` and `AI_LOCAL_LLM_MODEL`, and restart
 | Token and capability denial, namespaces, no secret values in any response, runs private to the requester | `test/auth.test.js` |
 | Operator console: SSO + PKCE, staff-only (anonymous → sign-in, non-staff 403), the staff → AI capability map, CSRF on every write, no script/secret on any page, noindex/robots, failed-run filters, audit rows from API and console changes | `test/console.test.js` |
 | Public price/latency page: 200 without auth, rows from seeded stats and rate cards, the empty state, no caller ids, own-key providers, URLs or secrets | `test/stats-page.test.js` |
+| The OpenAI Responses adapter (`kind: responses`) with a stubbed fetch: request shape, output and usage parsing, `text.format`, error mapping, the key never in an error | `test/provider-responses.test.js` |
 | Ported adapters against fake OpenAI/Anthropic servers, stub determinism, whisper filter, templates | `test/providers.test.js` |
 | `media.analyze` on a real 28 s fixture: signals, scenes and loud moments measured, highlights with evidence, the local model's overview from the facts only; the local model down → extractive and said; paid only with `allow_paid` and a `media.paid` budget, never past it; too little disk refused before downloading | `test/media-analysis.test.js` |
 | Import from a Live snapshot: dry run, holds, idempotent re-run | `test/import.test.js` |
