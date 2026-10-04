@@ -12,6 +12,8 @@
  * NAME through secretRef(); nothing here logs or returns a value.
  */
 
+const { loadGovern } = require('./govern');
+
 const int = (v, d) => {
     const n = parseInt(v, 10);
     return Number.isFinite(n) ? n : d;
@@ -205,6 +207,9 @@ function load(env = process.env) {
             audience: 'openvibe.billing',
             intervalMs: Math.max(100, int(env.USAGE_SAMPLES_INTERVAL_MS, 2000)),
         },
+
+        // ── Tier budgets (T6 step 8, server/govern.js): openvibe-sdk/govern in Valkey, off unless AI_GOVERN_TIERS=1.
+        govern: loadGovern(env, { bool, int, num: float }),
     };
 }
 

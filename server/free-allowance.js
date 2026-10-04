@@ -11,6 +11,10 @@
  * share is computed, so concurrent claims for one subject, provider, metric and period never exceed the card's
  * free_allowance in total.
  *
+ * With AI_GOVERN_TIERS on, `store` (server/govern.js freeStore) holds the counter in Valkey instead, claimed in one
+ * atomic step; free_allowance_usage then keeps the store's total (never lower), which is the store's floor when
+ * a key was lost and what the console reads. The numbers are the same either way.
+ *
  *   const free = createFreeAllowance(db, { cardsFor: pool.rateCardsFor });
  *   const { tokens, usd } = await free.claim(subject, provider, model, { in, cached, out });   // inside db.tx
  */
@@ -39,11 +43,23 @@ function periodFor(card, now) {
     return { start: Number.isFinite(from) ? from : 0, end: Number.isFinite(until) ? until : NEVER };
 }
 
-function createFreeAllowance(db, { cardsFor, clock = { now: () => Date.now() } }) {
+function createFreeAllowance(db, { cardsFor, clock = { now: () => Date.now() }, store = null }) {
     const open = db.prepare(`INSERT INTO free_allowance_usage (subject, provider, metric, period_start, period_end, free_used, updated_at)
         VALUES (?, ?, ?, ?, ?, 0, ?) ON CONFLICT (subject, provider, metric, period_start) DO NOTHING`);
     const lock = db.prepare('SELECT free_used FROM free_allowance_usage WHERE subject = ? AND provider = ? AND metric = ? AND period_start = ? FOR UPDATE');
     const take = db.prepare('UPDATE free_allowance_usage SET free_used = free_used + ?, updated_at = ? WHERE subject = ? AND provider = ? AND metric = ? AND period_start = ?');
+    const floor = db.prepare('SELECT free_used FROM free_allowance_usage WHERE subject = ? AND provider = ? AND metric = ? AND period_start = ?');
+    const mirror = db.prepare(`INSERT INTO free_allowance_usage (subject, provider, metric, period_start, period_end, free_used, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (subject, provider, metric, period_start)
+        DO UPDATE SET free_used = GREATEST(free_allowance_usage.free_used, excluded.free_used), updated_at = excluded.updated_at`);
+
+    /** The free share of q on the store: one atomic claim, then its total is kept in free_allowance_usage. */
+    async function claimOnStore(subject, provider, c, p, q, cap, at, now) {
+        const row = await floor.get(subject, provider, c.metric, p.start);
+        const r = await store.claim(`${subject}|${provider}|${c.metric}|${p.start}`, q, cap, row ? Number(row.free_used) : 0, p.end >= NEVER ? 0 : p.end + 86400000, now);
+        if (r.used != null) await mirror.run(subject, provider, c.metric, p.start, p.end, r.used, at);
+        return r.free;
+    }
 
     /**
      * Claim this attempt's free tokens: usage { in (excluding cached), cached, out } on `provider`/`model`.
@@ -63,6 +79,12 @@ function createFreeAllowance(db, { cardsFor, clock = { now: () => Date.now() } }
                 const q = Math.max(0, Math.floor(Number(usage[kind]) || 0));
                 if (cap <= 0 || q <= 0) continue;
                 const p = periodFor(c, now);
+                if (store) {
+                    const free = await claimOnStore(subject, provider, c, p, q, cap, at, now);
+                    out.tokens += free;
+                    out.usd += (free / c.unit_size) * c.unit_price_usd;
+                    continue;
+                }
                 await open.run(subject, provider, c.metric, p.start, p.end, at);
                 const row = await lock.get(subject, provider, c.metric, p.start);
                 const free = Math.min(q, Math.max(0, cap - Number(row.free_used)));

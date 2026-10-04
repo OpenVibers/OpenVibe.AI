@@ -43,6 +43,7 @@
     "ai.preferences and ai.usage_summary user modules",
     "server-rendered operator console for Network staff",
     "Live import",
-    "platform.usage-sample@1 readings to Billing with a per-subject provider free allowance; each run's reading state in explain and the free allowance on the staff console"
+    "platform.usage-sample@1 readings to Billing with a per-subject provider free allowance; each run's reading state in explain and the free allowance on the staff console",
+    "tier budgets (free, paid, staff) per subject and per project on openvibe-sdk/govern in Valkey, behind AI_GOVERN_TIERS (off by default); readings from govern's onUsage"
   ]
 }

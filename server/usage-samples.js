@@ -12,15 +12,19 @@
  * USAGE_SAMPLES=off. The relay runs while OV_BILLING_INTERNAL_URL and OV_OAUTH_CLIENT_SECRET are set.
  * Runs on a person's own key, and runs that called no provider and were not a cache hit, are not
  * accounted and have no reading. free_allowance_used (§2.1.8) is the share the provider free allowance covered; the
- * cost_estimate the caller passes already leaves that share out.
+ * cost_estimate the caller passes already leaves that share out. Each reading comes from the onUsage record of an
+ * openvibe-sdk/govern meter (server/govern.js createMeter) reserving the run's tokens under the reading's
+ * idempotency key, so a key read twice at once yields one reading.
  */
 const { createPgOutbox } = require('openvibe-sdk/events');
 const { createServiceTokenClient } = require('openvibe-sdk/auth');
 const contracts = require('openvibe-contracts');
+const { createMeter } = require('./govern');
 const TABLE = 'usage_sample_outbox'; const METRIC = 'tokens'; const SCHEMA = 'platform.usage-sample@1';
 const REFUSED = new Set([400, 409, 413, 422]); const PRUNE_EVERY_MS = 6 * 60 * 60 * 1000;
 let relay = null; let on = false; let pruneTimer = null; let lastError = null; let queued = 0;
 const keyOf = (runId) => `ai:${runId}:${METRIC}`;
+const meter = createMeter();
 function sampleOf({ runId, workflowKey, requester, provider = null, tokensIn = 0, tokensOut = 0, cost = 0, freeAllowanceUsed = 0, at, traceId = null }) {
   const key = keyOf(runId);
   const s = { id: key, idempotency_key: key, service: 'ai', subject: requester, resource: runId, operation: workflowKey,
@@ -33,10 +37,16 @@ function sampleOf({ runId, workflowKey, requester, provider = null, tokensIn = 0
   if (traceId) s.trace_id = String(traceId);
   return s;
 }
+/** The reading: govern's onUsage record (id, subject, quantity) on the run's own fields. */
+function sampleFromUsage(e, fields) {
+  return { ...sampleOf(fields), id: e.idempotency_key, idempotency_key: e.idempotency_key, subject: e.subject, quantity: e.amount };
+}
 /** MUST be awaited inside the transaction that accounts the run; a second call for the same run changes nothing. */
 async function record(db, fields) {
   if (!on) return null;
-  const s = sampleOf(fields);
+  const e = await meter({ subject: fields.requester, quantity: Math.max(0, (Number(fields.tokensIn) || 0) + (Number(fields.tokensOut) || 0)), key: keyOf(fields.runId) });
+  if (!e) return null;   // this run's reading is being written by another call right now
+  const s = sampleFromUsage(e, fields);
   const v = contracts.validate(SCHEMA, s);
   if (!v.valid) throw new Error(`usage sample for ${fields.runId} is not a valid ${SCHEMA}: ${JSON.stringify(v.errors)}`);
   const ins = await db.prepare(`INSERT INTO ${TABLE} (event_id, envelope, created_at) VALUES (?, ?, ?) ON CONFLICT (event_id) DO NOTHING`).run(s.id, JSON.stringify(s), Date.now());
@@ -103,4 +113,4 @@ async function stop({ drainMs = 3000 } = {}) {
   if (r) { let timer; await Promise.race([r.flush().catch(() => {}), new Promise((res) => { timer = setTimeout(res, drainMs); if (timer.unref) timer.unref(); })]); clearTimeout(timer); await r.stop(); }
 }
 function _reset() { if (pruneTimer) clearInterval(pruneTimer); pruneTimer = null; if (relay) relay.stop(); relay = null; on = false; queued = 0; lastError = null; }
-module.exports = { init, record, sampleOf, keyOf, readingsFor, deliveryReport, status, stop, _reset, TABLE };
+module.exports = { init, record, sampleOf, sampleFromUsage, keyOf, readingsFor, deliveryReport, status, stop, _reset, TABLE };

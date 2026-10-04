@@ -59,7 +59,7 @@ function retainedInput(input, wf, debugRaw) {
     return { value, full: !redacted };
 }
 
-function createRuns({ db, registry, engine, cache, quotas, config, clock = { now: () => Date.now() }, log = console, userModules = null, credentials = null }) {
+function createRuns({ db, registry, engine, cache, quotas, config, clock = { now: () => Date.now() }, log = console, userModules = null, credentials = null, tiers = null }) {
     const inflight = new Map();     // run id -> { controller, promise, release, caller }
     const queue = [];               // run ids waiting for the worker
     let active = 0;
@@ -228,22 +228,30 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         const caller = `${requester.type}:${requester.id}`;
         admit(caller);
         // A run with a person's own key spends their money, not the shared quotas (its own budget was checked above).
-        const reserved = credentialSubject !== null ? null : await quotas.reserve(ctx);
+        // The tier budgets (server/govern.js, AI_GOVERN_TIERS) hold first, so a run they refuse is not counted by reserve().
+        const hold = credentialSubject !== null || !tiers ? null : await tiers.admit(ctx, id);
+        let reserved;
+        try {
+            reserved = credentialSubject !== null ? null : await quotas.reserve(ctx);
+        } catch (err) { if (hold) await tiers.release(hold); throw err; }
 
-        await db.tx(async () => {
-            await db.prepare(`INSERT INTO runs (id, workflow_key, workflow_version, template_key, template_version, route_key, route_version, status, requester_type, requester_id, on_behalf_of, attribution,
-                source_service, target, target_key, input, input_hash, cache_key, retry_of, idempotency_key, trace_id, request_id, options, created_at)
-                VALUES (@id, @workflow_key, @workflow_version, @template_key, @template_version, @route_key, @route_version, 'queued', @requester_type, @requester_id, @on_behalf_of, @attribution,
-                @source_service, @target, @target_key, @input, @input_hash, @cache_key, @retry_of, @idempotency_key, @trace_id, @request_id, @options, @created_at)`)
-                .run({ ...base, cache_key: cacheKey });
-            await events.runChanged(await getRow(id));
-        });
+        try {
+            await db.tx(async () => {
+                await db.prepare(`INSERT INTO runs (id, workflow_key, workflow_version, template_key, template_version, route_key, route_version, status, requester_type, requester_id, on_behalf_of, attribution,
+                    source_service, target, target_key, input, input_hash, cache_key, retry_of, idempotency_key, trace_id, request_id, options, created_at)
+                    VALUES (@id, @workflow_key, @workflow_version, @template_key, @template_version, @route_key, @route_version, 'queued', @requester_type, @requester_id, @on_behalf_of, @attribution,
+                    @source_service, @target, @target_key, @input, @input_hash, @cache_key, @retry_of, @idempotency_key, @trace_id, @request_id, @options, @created_at)`)
+                    .run({ ...base, cache_key: cacheKey });
+                await events.runChanged(await getRow(id));
+            });
+        } catch (err) { if (hold) await tiers.release(hold); throw err; }
         await registry.audit(principal.sub, retryOf ? 'run.retry' : 'run.create', 'run', id, { trace, metadata: { workflow: wf.key, version: wf.version, target: ctx.targetKey, retry_of: retryOf } });
 
         const controller = new AbortController();
         let release;
         const gate = new Promise((r) => { release = r; });
-        const promise = gate.then(async () => await execute(id, { controller, reserved, scope, ctx, input })).catch((err) => { log.error(`[runs] ${id}: ${err.stack || err}`); });
+        // Whatever the run's end, a tier hold it did not settle (accounted) goes back.
+        const promise = gate.then(async () => { try { await execute(id, { controller, reserved, scope, ctx, input, hold }); } finally { if (hold) await tiers.release(hold); } }).catch((err) => { log.error(`[runs] ${id}: ${err.stack || err}`); });
         inflight.set(id, { controller, promise, release, caller });
         queue.push(id);
         pump();
@@ -271,7 +279,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         }
     }
 
-    async function execute(id, { controller, reserved, scope, ctx, input }) {
+    async function execute(id, { controller, reserved, scope, ctx, input, hold = null }) {
         const row = await getRow(id);
         if (!row || row.status !== 'queued') { inflight.delete(id); return; }
         await db.prepare("UPDATE runs SET status = 'running', started_at = ? WHERE id = ? AND status = 'queued'").run(iso(clock.now()), id);
@@ -315,7 +323,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                 return d;
             });
             if (!done.changes) return;       // cancelled while finishing
-            if (r.provider && reserved) await quotas.account(ctx, reserved, { provider: r.provider, model: r.model, tokensIn: r.usage.input, tokensOut: r.usage.output, tokensCached: r.usage.cached, cost: r.cost, attempts: logged, runId: id, traceId: row.trace_id });
+            if (r.provider && reserved) await quotas.account(ctx, reserved, { provider: r.provider, model: r.model, tokensIn: r.usage.input, tokensOut: r.usage.output, tokensCached: r.usage.cached, cost: r.cost, attempts: logged, runId: id, traceId: row.trace_id, hold });
             if (r.fallbackUsed) await registry.audit('system', 'run.fallback', 'run', id, { trace: row.trace_id, metadata: { workflow: row.workflow_key, provider: r.provider, route: r.route && r.route.key } });
             // Output shaped by someone's preferences, or kept for nobody (history off), is never cached for reuse.
             if (scope && row.cache_key && !r.synthetic && wf.cache_mode !== 'none' && preferences.history !== false && !preferenceLines(preferences)) {
@@ -338,7 +346,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             // Account the spent tokens/cost as before, but always roll up the finished attempts (the failed
             // ones included) into provider_stats_daily/placement_state: a run that answered nothing still
             // tells the router a provider was unhealthy.
-            if (reserved && logged.some((e) => e.status !== 'skipped')) await quotas.account(ctx, reserved, { provider: 'mixed', model: '', tokensIn: spent.ti, tokensOut: spent.tout, cost: spent.c, attempts: logged, writeUsage: Boolean(spent.ti || spent.tout), runId: id, traceId: row.trace_id });
+            if (reserved && logged.some((e) => e.status !== 'skipped')) await quotas.account(ctx, reserved, { provider: 'mixed', model: '', tokensIn: spent.ti, tokensOut: spent.tout, cost: spent.c, attempts: logged, writeUsage: Boolean(spent.ti || spent.tout), runId: id, traceId: row.trace_id, hold });
         } finally {
             inflight.delete(id);
         }

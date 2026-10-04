@@ -16,6 +16,7 @@ const { createEngine } = require('./workflows/engine');
 const { createCache } = require('./cache');
 const { createQuotas } = require('./quota');
 const { createFreeAllowance } = require('./free-allowance');
+const { createTiers } = require('./govern');
 const { createRuns } = require('./runs');
 const { seed } = require('./workflows/seed');
 const { createAuth, createNetworkKeys } = require('./auth');
@@ -24,16 +25,19 @@ const schemas = require('./schemas');
 const { createApp } = require('./app');
 const { gracefulStop } = require('openvibe-sdk/service');
 
-async function start({ config, db: givenDb = null, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, listen = true, credentialFetch = null } = {}) {
+async function start({ config, db: givenDb = null, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, listen = true, credentialFetch = null, valkey = null } = {}) {
     config = config || load(env);
     schemas.configure(config.schemaCache);
     // PostgreSQL (ADR-035): opened and migrated here unless the caller (a test) hands in a migrated handle.
     const db = givenDb || await openDb(config, { log });
     const registry = createRegistry(db, { clock, env });
     const pool = createProviderPool({ db, registry, config, clock, fetchImpl, env, log, credentialFetch });
-    // §2.1.8: the provider free allowance per subject, priced off the pool's own rate cards (server/free-allowance.js).
-    const freeAllowance = createFreeAllowance(db, { cardsFor: pool.rateCardsFor, clock });
-    const quotas = createQuotas(db, { clock, registry, freeAllowance });
+    // T6 step 8: the SaaS tier budgets on openvibe-sdk/govern in Valkey (server/govern.js); off unless AI_GOVERN_TIERS=1.
+    const tiers = createTiers({ config, valkey, clock, log });
+    // §2.1.8: the provider free allowance per subject, priced off the pool's own rate cards (server/free-allowance.js);
+    // with the tiers on, its counter is in their Valkey store.
+    const freeAllowance = createFreeAllowance(db, { cardsFor: pool.rateCardsFor, clock, store: tiers.freeStore });
+    const quotas = createQuotas(db, { clock, registry, freeAllowance, tiers });
     const cache = createCache(db, { clock });
     const fetcher = createFetcher(config);
     const engine = createEngine({ registry, pool, fetcher, quotas, config, log });
@@ -45,7 +49,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     const userModules = require('./user-modules').createUserModules({ db, config, env, fetchImpl, clock, log });
     // A person's own provider keys (WS-O task 2): stored by the service holding their consent, used by their runs only.
     const credentials = require('./credentials').createCredentials({ db, config, clock });
-    const runs = createRuns({ db, registry, engine, cache, quotas, config, clock, log, userModules, credentials });
+    const runs = createRuns({ db, registry, engine, cache, quotas, config, clock, log, userModules, credentials, tiers });
     await seed({ registry, quotas, config, env, db });
     const interrupted = await runs.recoverInterrupted();
     if (interrupted) log.warn(`[ai] marked ${interrupted} interrupted run(s) failed (run.interrupted); callers can retry them`);
@@ -100,10 +104,11 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         await require('./usage-samples').stop();   // the readings the runs queued get one last send; unsent rows wait for the next start
         const w = await pool.adapter('whisper');
         if (w && w.adapter.killActive) w.adapter.killActive();
+        await tiers.close();
         if (!givenDb) await db.close();
     }
 
-    return { config, db, registry, pool, quotas, cache, fetcher, engine, runs, keys, keyLoaded, auth, app, server, close };
+    return { config, db, registry, pool, quotas, tiers, cache, fetcher, engine, runs, keys, keyLoaded, auth, app, server, close };
 }
 
 if (require.main === module) {

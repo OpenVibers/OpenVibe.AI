@@ -48,7 +48,7 @@ function estimatePercentile(hist, q) {
     return LATENCY_BUCKETS_MS[LATENCY_BUCKETS_MS.length - 1];
 }
 
-function createQuotas(db, { clock = { now: () => Date.now() }, registry, freeAllowance = null } = {}) {
+function createQuotas(db, { clock = { now: () => Date.now() }, registry, freeAllowance = null, tiers = null } = {}) {
     const nowSec = () => Math.floor(clock.now() / 1000);
     const windowStart = (w, t = nowSec()) => Math.floor(t / WINDOWS[w]) * WINDOWS[w];
 
@@ -176,20 +176,25 @@ function createQuotas(db, { clock = { now: () => Date.now() }, registry, freeAll
      * run's platform.usage-sample@1 reading commits with its usage. Before it, the run's tokens claim the subject's
      * provider free allowance (server/free-allowance.js, §2.1.8): the free share is the reading's free_allowance_used
      * and its list price is left out of the reading's cost_estimate. Pricing only: the counters above are unchanged.
+     * `hold` is the run's tier hold (server/govern.js): once the accounting committed, it is settled with the
+     * run's tokens and its priced cost (the free share left out), so a fully free run spends no ai-usd.
      */
-    async function account(ctx, reserved, { provider, model, tokensIn = 0, tokensOut = 0, tokensCached = 0, cost = 0, attempts = null, writeUsage = true, runId = null, traceId = null }) {
+    async function account(ctx, reserved, { provider, model, tokensIn = 0, tokensOut = 0, tokensCached = 0, cost = 0, attempts = null, writeUsage = true, runId = null, traceId = null, hold = null }) {
         const tokens = tokensIn + tokensOut;
         const day = iso(clock.now()).slice(0, 10);
+        let freeUsd = 0;
         await db.tx(async () => {
             for (const r of reserved || []) await bump.run(r.scope_type, r.scope_id, r.window, r.ws, r.workflow_prefix, 0, tokens, cost);
             if (writeUsage) await insDaily.run(day, `${ctx.requesterType}:${ctx.requesterId}`, ctx.attributionKey || '', ctx.workflowKey, provider || '', model || '', tokensIn, tokensOut, tokensCached, cost);
             // The run's platform.usage-sample@1 reading for Billing commits with its usage (server/usage-samples.js).
             if (writeUsage && runId) {
                 const free = freeAllowance ? await freeAllowance.claim(subjectOf(ctx), provider, model, { in: Math.max(0, tokensIn - tokensCached), cached: tokensCached, out: tokensOut }, clock.now()) : { tokens: 0, usd: 0 };
+                freeUsd = free.usd;
                 await usageSamples.record(db, { runId, workflowKey: ctx.workflowKey, requester: `${ctx.requesterType}:${ctx.requesterId}`, provider, tokensIn, tokensOut, cost: Math.max(0, cost - free.usd), freeAllowanceUsed: free.tokens, at: clock.now(), traceId });
             }
             await recordStats(day, attempts);
         });
+        if (tiers && hold) await tiers.settle(hold, { tokens: (Number(tokensIn) || 0) + (Number(tokensOut) || 0), usd: Math.max(0, (Number(cost) || 0) - freeUsd) });
     }
 
     /**

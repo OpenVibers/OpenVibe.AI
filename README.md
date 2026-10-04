@@ -122,7 +122,8 @@ circuit) degrades it. `/metrics` (openvibe-shared/metrics) carries golden signal
 
 Errors are `application/problem+json` (openvibe-contracts `http.problem`): `input.invalid` (with the
 schema errors), `workflow.not_found`, `idempotency.conflict`, `quota.exceeded` (429 +
-`Retry-After`), `queue.full` (429 + `Retry-After`: the run would wait behind `AI_MAX_QUEUED_RUNS`
+`Retry-After`), `govern.exceeded` (429 + `Retry-After`: a tier budget) and `govern.unavailable` (503: Valkey
+unreachable for a paid or staff run), `queue.full` (429 + `Retry-After`: the run would wait behind `AI_MAX_QUEUED_RUNS`
 runs, or `AI_MAX_QUEUED_RUNS_PER_CALLER` of this caller's), `capability.denied`, `capability.namespace_denied`, `token.*`. A run that cannot
 produce a real answer ends `failed` with an explicit code — `provider.unavailable`,
 `route.unavailable`, `fetch.refused`, `source.unavailable`, `input.insufficient`, `output.empty`,
@@ -235,6 +236,35 @@ their price out. It is pricing, never admission: quotas, request counting and th
 unchanged, and no call is ever refused because the allowance is used up. Every card defaults to 0, so
 nothing is free and the field is absent until an operator configures an allowance.
 
+Tier budgets (T6 step 8, decision D5; `server/govern.js`, off unless `AI_GOVERN_TIERS=1`): the SaaS tiers
+`free`, `paid` and `staff` on `openvibe-sdk/govern`, counted in Valkey. Before a run touches a provider
+(and before `reserve()` counts it), it holds an estimate of the units `ai-token` and `ai-usd` against two
+budgets: its **subject** (attribution, else actor, else requester) inside its **project** (the calling
+product, e.g. `service:live`), and the **project** as a whole. Each hold is one atomic step, so two runs
+never both take the last unit; a hold that does not fit refuses the run with `govern.exceeded` (429 +
+`Retry-After`). When the run is accounted the hold becomes its real tokens and its priced cost (the free
+allowance's share left out, so a fully free run spends no `ai-usd`); a run that spent nothing gives it back.
+Like the quotas, a run that spends more than its hold bounds the next run, not itself. A subject's tier is
+its own `AI_GOVERN_TIER_MAP` entry, else its project's, else `AI_GOVERN_DEFAULT_TIER`. With the tiers on,
+the free allowance's counter lives in the same Valkey (same numbers, one atomic claim per metric);
+`free_allowance_usage` keeps its total for the console and is the floor a lost key restarts from. Each
+`platform.usage-sample@1` comes from the `onUsage` record of an in-process govern meter, with the same
+idempotency key (`ai:<run>:tokens`), whether the tiers are on or off. **Valkey unreachable:** a run with
+any budget on `paid` or `staff` is refused with `govern.unavailable` (503, fail closed); an all-`free` run
+is admitted on the PostgreSQL quotas alone (today's behaviour) and its tokens are priced in full (nothing is
+free while the counter cannot be read). Reads never touch the tiers. With the flag off nothing here runs and
+the service boots without Valkey; with it on, production refuses to boot without `VALKEY_URL`.
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `AI_GOVERN_TIERS` | `0` | `1` turns the tier budgets on |
+| `AI_GOVERN_POLICY_JSON` | free: 200,000 `ai-token`/day and 2,000,000/month, $0.50 `ai-usd`/day and $5/month; paid: 5,000,000 `ai-token`/day, $50/day; staff: unlimited | govern policy `{ unit: { tier: { minute?, hour?, day?, month? } } }` for `ai-token` and `ai-usd`; a missing tier or window is unlimited, 0 refuses |
+| `AI_GOVERN_TIER_MAP` | empty | `subject=tier` pairs, comma separated (`service:live=paid,user:usr_1=staff`) |
+| `AI_GOVERN_DEFAULT_TIER` | `free` | the tier of a subject or project not in the map |
+| `AI_GOVERN_HOLD_TOKENS`, `AI_GOVERN_HOLD_USD` | `4000`, `0.02` | the estimate a run holds before its provider call |
+| `AI_GOVERN_TIMEOUT_MS` | `1000` | longest wait for Valkey before it counts as unreachable |
+| `VALKEY_URL`, `VALKEY_PREFIX` | empty | the shared Valkey (ADR-035) the counters live in |
+
 ## Workflows
 
 - **Seed product workflows** — `wiki.generate_space`, `wiki.generate_page`, `blog.draft_post`,
@@ -294,6 +324,7 @@ file beside it, change `--model`/`--alias` and `AI_LOCAL_LLM_MODEL`, and restart
 | A degraded primary falls back and records it; breaker; skips; timeouts; explicit `provider.unavailable` | `test/fallback.test.js` |
 | Quotas refuse with 429 + Retry-After **before** any provider call; per-service, attribution, cost caps | `test/quota.test.js` |
 | Free allowance: free up to the card's allowance then fully priced, reset per day/month (never for `none`), per subject, never past the cap under concurrent claims, absent at 0 | `test/free-allowance.test.js` |
+| Tier budgets: enforced per subject and per project and reset per window, two concurrent runs never both take the last unit, the free allowance's numbers unchanged on the Valkey store, one reading per accounted run from govern's `onUsage`, Valkey unreachable (paid 503, free admitted), off by default | `test/govern-tiers.test.js` |
 | The cache never crosses requester, actor, target or attribution scope | `test/cache.test.js` |
 | Queue caps: one caller cannot fill the run queue (per-caller and global 429 `queue.full` + Retry-After) | `test/queue.test.js` |
 | Idempotency, cancel (running and queued), retry, async polling, audit rows, restart recovery, no raw prompts or inline images kept | `test/runs.test.js` |
