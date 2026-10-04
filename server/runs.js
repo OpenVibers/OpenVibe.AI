@@ -400,6 +400,12 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         return (await db.prepare(`SELECT * FROM runs ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY id DESC LIMIT ?`).all(...args, Math.min(200, Number(limit) || 50))).map(decode);
     }
 
+    /** The run with its Billing readings in explain.usage_readings (server/usage-samples.js readingsFor); unchanged when it has none. */
+    async function explained(run) {
+        const readings = run ? await usageSamples.readingsFor(db, run.usage.usage_sample_id) : [];
+        return readings.length ? { ...run, explain: { ...(run.explain || {}), usage_readings: readings } } : run;
+    }
+
     async function requestsFor(runId) {
         return await db.prepare('SELECT id, seq, operation, provider_key, model_key, route_key, route_version, status, skip_reason, fallback, prompt_hash, input_hash, output_hash, tokens_in, tokens_out, tokens_cached, tokens_estimated, cost_usd, latency_ms, error, created_at FROM requests WHERE run_id = ? ORDER BY seq').all(runId);
     }
@@ -437,7 +443,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
     /** Queue depth for /metrics and /api/ready: runs waiting for a slot, and runs holding one. */
     function stats() { return { queued: queue.length, running: active, inflight: inflight.size, max_concurrent: config.runs.maxConcurrent, max_queued: config.runs.maxQueued }; }
 
-    return { create, wait, get, list, cancel, retry, citations, addCitations, requestsFor, recoverInterrupted, prune, drain, stats, inflight, TERMINAL, decode };
+    return { create, wait, get, list, cancel, retry, citations, addCitations, requestsFor, explained, recoverInterrupted, prune, drain, stats, inflight, TERMINAL, decode };
 }
 
 module.exports = { createRuns, entityKey, subjectKey };

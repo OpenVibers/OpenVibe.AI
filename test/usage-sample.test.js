@@ -18,12 +18,13 @@ const readings = async () => (await h.db.prepare('SELECT event_id, envelope, sen
     .map((r) => ({ ...r, envelope: typeof r.envelope === 'string' ? JSON.parse(r.envelope) : r.envelope }));
 
 function fakeBilling() {
-    const b = { fail: false, got: [] };
+    const b = { fail: false, refuse: false, got: [] };
     b.fetch = async (url, init = {}) => {
         if (String(url).endsWith('/oauth/token')) {
             return new Response(JSON.stringify({ access_token: 'tok', token_type: 'Bearer', expires_in: 300, scope: 'billing.usage.record' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
         }
         if (String(url).endsWith('/api/v1/usage')) {
+            if (b.refuse) return new Response(JSON.stringify({ error: 'invalid' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
             if (b.fail) return new Response(JSON.stringify({ error: 'unavailable' }), { status: 503, headers: { 'Content-Type': 'application/json' } });
             b.got.push(JSON.parse(init.body));
             return new Response(JSON.stringify({ record: { id: 'use_1' } }), { status: 200, headers: { 'Content-Type': 'application/json' } });
@@ -63,6 +64,15 @@ t.test('a succeeded run queues exactly one valid reading that keeps the prompt o
     assert.ok(!JSON.stringify(s).includes('secret prompt'), 'no prompt');
     const got = await request(h.base, 'GET', `/api/v1/runs/${runId}`, { tok: live });
     assert.strictEqual(got.body.run.usage.usage_sample_id, `ai:${runId}:tokens`);
+    // explain carries the reading: its key and delivery state (no relay here, so it waits queued).
+    const [u] = got.body.run.explain.usage_readings;
+    assert.strictEqual(got.body.run.explain.usage_readings.length, 1);
+    assert.strictEqual(u.idempotency_key, `ai:${runId}:tokens`);
+    assert.strictEqual(u.state, 'queued');
+    assert.strictEqual(u.attempts, 0);
+    assert.strictEqual(u.last_error, null);
+    assert.ok(!('free_allowance_used' in u), 'nothing was free');
+    assert.ok(Array.isArray(got.body.run.explain.candidates), 'the placement explain is kept');
 });
 
 t.test('a cache hit writes its own zero reading', async () => {
@@ -99,6 +109,11 @@ t.test('a failed send stays queued and replays', async () => {
     assert.ok(pending.length >= 1, 'rows exist');
     for (const r of pending) { assert.strictEqual(r.sent_at, null, 'every row is unsent'); assert.ok(r.attempts >= 1, 'the send was attempted'); }
     assert.strictEqual(b.got.length, 0, 'nothing accepted');
+    const explainOf = async (key) => (await request(h.base, 'GET', `/api/v1/runs/${key.split(':')[1]}`, { tok: live })).body.run.explain.usage_readings[0];
+    let u = await explainOf(pending[0].event_id);
+    assert.strictEqual(u.state, 'queued', 'a transient failure is retried');
+    assert.match(u.last_error, /billing\.usage\.record answered 503/);
+    assert.ok(u.attempts >= 1 && u.next_attempt_at, JSON.stringify(u));
     b.fail = false;
     await h.db.prepare('UPDATE usage_sample_outbox SET next_attempt_at = 0').run();
     await relay.flush();
@@ -107,6 +122,10 @@ t.test('a failed send stays queued and replays', async () => {
     const keys = b.got.map((s) => s.idempotency_key).sort();
     assert.deepStrictEqual(keys, sent.map((r) => r.event_id).sort());
     for (const s of b.got) assert.ok(contracts.validate('platform.usage-sample@1', s).valid, JSON.stringify(s));
+    u = await explainOf(pending[0].event_id);
+    assert.strictEqual(u.state, 'sent');
+    assert.strictEqual(u.last_error, null);
+    assert.ok(u.sent_at);
 });
 
 t.test('the outbox outlives a restart', async () => {
@@ -139,6 +158,25 @@ t.test('free_allowance_used: the free share when some was free, never more than 
 
 t.test('runs on default cards (free_allowance 0) carry no free_allowance_used', async () => {
     for (const r of await readings()) assert.ok(!('free_allowance_used' in r.envelope), JSON.stringify(r.envelope));
+});
+
+t.test('a reading Billing refuses is failed, with its error, in explain and on the console report', async () => {
+    usageSamples._reset();
+    b = fakeBilling();
+    const relay = usageSamples.init(h.db, { billingUrl: 'http://billing.test', clientSecret: 's', networkUrl: 'http://network.test', fetchImpl: b.fetch, intervalMs: 60000 });
+    b.refuse = true;
+    const r = await request(h.base, 'POST', '/api/v1/generate', { tok: live, body: { prompt: 'refused reading', options: { cache: false } } });
+    assert.strictEqual(r.status, 201, r.text);
+    await relay.flush();
+    const [u] = (await request(h.base, 'GET', `/api/v1/runs/${r.body.run.id}`, { tok: live })).body.run.explain.usage_readings;
+    assert.strictEqual(u.idempotency_key, `ai:${r.body.run.id}:tokens`);
+    assert.strictEqual(u.state, 'failed');
+    assert.match(u.last_error, /answered 400/);
+    assert.ok(u.rejected_at);
+    const report = await usageSamples.deliveryReport(h.db);
+    assert.ok(report.relay && report.counts.failed >= 1 && report.counts.sent >= 1, JSON.stringify(report.counts));
+    const f = report.failures.find((x) => x.idempotency_key === u.idempotency_key);
+    assert.deepStrictEqual([f.run_id, f.state], [r.body.run.id, 'failed']);
 });
 
 t.test('shutdown', async () => { usageSamples._reset(); await h.stop(); await seam.close(); });

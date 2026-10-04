@@ -140,6 +140,14 @@ t.test('the first run is free up to the allowance per metric, the next one is fu
     assert.ok(Math.abs(Number(run.cost_usd) - 2) < 1e-9);
 });
 
+t.test('explain shows the free share on the first run\'s reading and leaves it out on the next', async () => {
+    const [first, next] = await h.db.prepare('SELECT id FROM runs ORDER BY created_at, id').all();
+    const explain = async (id) => (await request(h.base, 'GET', `/api/v1/runs/${id}`, { tok: live })).body.run.explain.usage_readings[0];
+    const a = await explain(first.id);
+    assert.deepStrictEqual([a.idempotency_key, a.state, a.free_allowance_used], [`ai:${first.id}:tokens`, 'queued', 200]);
+    assert.ok(!('free_allowance_used' in await explain(next.id)));
+});
+
 t.test('shutdown', async () => { usageSamples._reset(); await h.stop(); await seam.close(); });
 
 t.run();
