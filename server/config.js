@@ -193,6 +193,18 @@ function load(env = process.env) {
             maxImageBytes: int(env.AI_FETCH_MAX_IMAGE_BYTES, 12 * 1024 * 1024),
             timeoutMs: int(env.AI_FETCH_TIMEOUT_MS, 120000),
         },
+
+        // ── Billing (plan T5 lane F): one platform.usage-sample@1 reading per accounted run, posted by
+        // server/usage-samples.js to billing.usage.record (POST /api/v1/usage, audience openvibe.billing).
+        // Readings are queued unless USAGE_SAMPLES=off; they are sent while OV_BILLING_INTERNAL_URL is set.
+        // No `capability:` key: AI asks for billing.usage.record (named in usage-samples.js), Billing enforces it,
+        // and openvibe-contracts-check reads a `capability: 'x'` literal as one this service enforces.
+        billing: {
+            enabled: bool(env.USAGE_SAMPLES, true),
+            billingUrl: trimUrl(env.OV_BILLING_INTERNAL_URL),
+            audience: 'openvibe.billing',
+            intervalMs: Math.max(100, int(env.USAGE_SAMPLES_INTERVAL_MS, 2000)),
+        },
     };
 }
 

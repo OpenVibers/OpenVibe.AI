@@ -346,6 +346,7 @@ function run({ staff, csrf, r, citations, requests, input, output, canCancel, no
 <dt>Attempts</dt><dd>${n(r.usage.attempts)}</dd>
 <dt>Tokens</dt><dd>${n(r.usage.tokens_in)} in · ${n(r.usage.tokens_out)} out</dd>
 <dt>Cost</dt><dd>${usd(r.usage.cost_usd)}</dd>
+<dt>Billing reading</dt><dd>${r.usage.usage_sample_id ? html`<code>${r.usage.usage_sample_id}</code>` : '—'}</dd>
 ${r.error ? html`<dt>Error</dt><dd><code class="bad">${r.error.code}</code><br>${clip(r.error.detail, 500)}</dd>` : ''}
 </dl></div><div class="card"><dl>
 <dt>Requester</dt><dd><code>${r.requester.type}:${r.requester.id}</code></dd>
