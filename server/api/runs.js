@@ -6,7 +6,7 @@
  *   GET  /api/v1/runs                       the caller's runs (ai.run.read)
  *   GET  /api/v1/runs/:id                   one run (+ citations, request log metadata)
  *   run.usage.usage_sample_id: the run's Billing reading (server/usage-samples.js), null when none
- *   run.explain.usage_readings: that reading's idempotency key, delivery state (queued/sent/failed), last error, free_allowance_used
+ *   run.explain.usage_readings (on every run response): that reading's idempotency key, delivery state (queued/sent/failed), last error, free_allowance_used
  *   POST /api/v1/runs/:id/cancel            (ai.run.create, owner)
  *   POST /api/v1/runs/:id/retry             (ai.run.create, owner) -> a new run with retry_of
  *   GET  /api/v1/runs/:id/citations         (ai.run.read)
@@ -36,7 +36,7 @@ function runsRouter({ runs, registry, auth, config, log = console }) {
         checkNamespace(req, String(body.workflow || ''));
         const idem = body.idempotency_key || req.ov.idempotencyKey || undefined;
         const created = await runs.create({ ...body, idempotency_key: idem }, req.principal, { trace: req.ov.traceId, requestId: req.ov.requestId });
-        const run = await runs.wait(created, waitMs);
+        const run = await runs.explained(await runs.wait(created, waitMs));
         const status = !created.created ? 200 : (runs.TERMINAL.has(run.status) ? 201 : 202);
         if (status === 202) res.setHeader('Location', `/api/v1/runs/${run.id}`);
         return res.status(status).json({ run, replayed: !created.created || undefined });
@@ -78,7 +78,7 @@ function runsRouter({ runs, registry, auth, config, log = console }) {
         try {
             const created = await runs.retry(req.params.id, req.principal, { trace: req.ov.traceId, requestId: req.ov.requestId, principalHas: has(req) });
             const wait = Math.max(0, Math.min(Number(req.query.wait) || 0, config.runs.maxWaitMs));
-            const run = await runs.wait(created, wait);
+            const run = await runs.explained(await runs.wait(created, wait));
             res.status(runs.TERMINAL.has(run.status) ? 201 : 202).json({ run });
         } catch (err) { sendError(res, err, req.ov, log); }
     });
