@@ -221,6 +221,16 @@ a second upstream exists, an unavailable sole provider answers `503 provider.una
 uses separate local and paid pools so paid work still requires its explicit budget. The synthetic
 stub can join general text routes as a last resort outside production only (`AI_STUB_FALLBACK`).
 
+Free allowance (§2.1.8): a rate card's `free_allowance` (tokens per metric, from a models row or
+`AI_PRICING_JSON`) is free provider capacity for **each subject** (the run's attribution, else its
+actor, else its requester) per provider, metric and `reset_period` (`day` and `month` reset at the UTC
+boundary; `none` never resets for the card's terms). An accounted run claims it first, atomically, in
+the same transaction as its usage (`free_allowance_usage`, `server/free-allowance.js`); the free tokens
+are the reading's `free_allowance_used` on its `platform.usage-sample@1`, and its `cost_estimate` leaves
+their price out. It is pricing, never admission: quotas, request counting and the run's own cost are
+unchanged, and no call is ever refused because the allowance is used up. Every card defaults to 0, so
+nothing is free and the field is absent until an operator configures an allowance.
+
 ## Workflows
 
 - **Seed product workflows** — `wiki.generate_space`, `wiki.generate_page`, `blog.draft_post`,
@@ -279,6 +289,7 @@ file beside it, change `--model`/`--alias` and `AI_LOCAL_LLM_MODEL`, and restart
 | Edits are new versions; runs pin versions; lifecycle; admin versions survive reseeding | `test/versioning.test.js` |
 | A degraded primary falls back and records it; breaker; skips; timeouts; explicit `provider.unavailable` | `test/fallback.test.js` |
 | Quotas refuse with 429 + Retry-After **before** any provider call; per-service, attribution, cost caps | `test/quota.test.js` |
+| Free allowance: free up to the card's allowance then fully priced, reset per day/month (never for `none`), per subject, never past the cap under concurrent claims, absent at 0 | `test/free-allowance.test.js` |
 | The cache never crosses requester, actor, target or attribution scope | `test/cache.test.js` |
 | Queue caps: one caller cannot fill the run queue (per-caller and global 429 `queue.full` + Retry-After) | `test/queue.test.js` |
 | Idempotency, cancel (running and queued), retry, async polling, audit rows, restart recovery, no raw prompts or inline images kept | `test/runs.test.js` |
