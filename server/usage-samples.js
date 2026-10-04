@@ -11,7 +11,8 @@
  * never carries the input, the output or a prompt. Readings are queued once init() ran, unless
  * USAGE_SAMPLES=off. The relay runs while OV_BILLING_INTERNAL_URL and OV_OAUTH_CLIENT_SECRET are set.
  * Runs on a person's own key, and runs that called no provider and were not a cache hit, are not
- * accounted and have no reading.
+ * accounted and have no reading. free_allowance_used (§2.1.8) is the share the provider free allowance covered; the
+ * cost_estimate the caller passes already leaves that share out.
  */
 const { createPgOutbox } = require('openvibe-sdk/events');
 const { createServiceTokenClient } = require('openvibe-sdk/auth');
@@ -19,12 +20,15 @@ const contracts = require('openvibe-contracts');
 const TABLE = 'usage_sample_outbox'; const METRIC = 'tokens'; const SCHEMA = 'platform.usage-sample@1';
 const REFUSED = new Set([400, 409, 413, 422]); const PRUNE_EVERY_MS = 6 * 60 * 60 * 1000;
 let relay = null; let on = false; let pruneTimer = null; let lastError = null; let queued = 0;
-function sampleOf({ runId, workflowKey, requester, provider = null, tokensIn = 0, tokensOut = 0, cost = 0, at, traceId = null }) {
+function sampleOf({ runId, workflowKey, requester, provider = null, tokensIn = 0, tokensOut = 0, cost = 0, freeAllowanceUsed = 0, at, traceId = null }) {
   const key = `ai:${runId}:${METRIC}`;
   const s = { id: key, idempotency_key: key, service: 'ai', subject: requester, resource: runId, operation: workflowKey,
     quantity: Math.max(0, (Number(tokensIn) || 0) + (Number(tokensOut) || 0)), unit: 'tokens', at: new Date(at).toISOString(),
     cost_estimate: Math.max(0, Number(cost) || 0), source: 'ai.runs' };
   if (provider && provider !== 'mixed') s.provider = provider;
+  // §2.1.8: the tokens the provider free allowance covered (server/free-allowance.js); absent when nothing was free.
+  const free = Math.min(s.quantity, Math.max(0, Math.floor(Number(freeAllowanceUsed) || 0)));
+  if (free > 0) s.free_allowance_used = free;
   if (traceId) s.trace_id = String(traceId);
   return s;
 }

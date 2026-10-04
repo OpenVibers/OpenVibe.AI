@@ -15,6 +15,7 @@ const { createFetcher } = require('./fetcher');
 const { createEngine } = require('./workflows/engine');
 const { createCache } = require('./cache');
 const { createQuotas } = require('./quota');
+const { createFreeAllowance } = require('./free-allowance');
 const { createRuns } = require('./runs');
 const { seed } = require('./workflows/seed');
 const { createAuth, createNetworkKeys } = require('./auth');
@@ -29,9 +30,11 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     // PostgreSQL (ADR-035): opened and migrated here unless the caller (a test) hands in a migrated handle.
     const db = givenDb || await openDb(config, { log });
     const registry = createRegistry(db, { clock, env });
-    const quotas = createQuotas(db, { clock, registry });
-    const cache = createCache(db, { clock });
     const pool = createProviderPool({ db, registry, config, clock, fetchImpl, env, log, credentialFetch });
+    // §2.1.8: the provider free allowance per subject, priced off the pool's own rate cards (server/free-allowance.js).
+    const freeAllowance = createFreeAllowance(db, { cardsFor: pool.rateCardsFor, clock });
+    const quotas = createQuotas(db, { clock, registry, freeAllowance });
+    const cache = createCache(db, { clock });
     const fetcher = createFetcher(config);
     const engine = createEngine({ registry, pool, fetcher, quotas, config, log });
     // ai.run.* to OpenVibe.Events through the outbox (server/events.js); before recovery, so its failures are announced.

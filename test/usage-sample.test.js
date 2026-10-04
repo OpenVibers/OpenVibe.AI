@@ -127,6 +127,20 @@ t.test('the outbox outlives a restart', async () => {
     assert.strictEqual(b.got.filter((s) => s.idempotency_key === key).length, 1, 'sent exactly once');
 });
 
+t.test('free_allowance_used: the free share when some was free, never more than the quantity, absent at 0', () => {
+    const base = { runId: 'run_x', workflowKey: 'ai.generate', requester: 'service:live', provider: 'seam', tokensIn: 300, tokensOut: 100, cost: 0.1, at: Date.UTC(2026, 9, 4) };
+    const some = usageSamples.sampleOf({ ...base, freeAllowanceUsed: 150 });
+    assert.strictEqual(some.free_allowance_used, 150);
+    assert.ok(contracts.validate('platform.usage-sample@1', some).valid);
+    assert.strictEqual(usageSamples.sampleOf({ ...base, freeAllowanceUsed: 9999 }).free_allowance_used, 400);
+    assert.ok(!('free_allowance_used' in usageSamples.sampleOf({ ...base, freeAllowanceUsed: 0 })));
+    assert.ok(!('free_allowance_used' in usageSamples.sampleOf(base)));
+});
+
+t.test('runs on default cards (free_allowance 0) carry no free_allowance_used', async () => {
+    for (const r of await readings()) assert.ok(!('free_allowance_used' in r.envelope), JSON.stringify(r.envelope));
+});
+
 t.test('shutdown', async () => { usageSamples._reset(); await h.stop(); await seam.close(); });
 
 t.run();
