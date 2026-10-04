@@ -25,6 +25,37 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
     const metrics = instrument(app, { service: 'ai', release: release.release });
     registerAiGauges(metrics.registry, { runs, registry, pool });
     app.use(http.middleware());
+    // Browser reads of the two public GETs (/stats, /release.json) only: an exact origin from
+    // AI_CORS_ORIGINS is echoed back, never credentials, and OPTIONS answers their preflight.
+    // Token (/api/v1/*) and console (/console, /auth/*) routes never reach this branch.
+    const publicCorsPaths = new Set(['/stats', '/release.json']);
+    const corsOrigins = new Set((config.cors && config.cors.origins) || []);
+    app.use((req, res, next) => {
+        if (!publicCorsPaths.has(req.path) || (req.method !== 'GET' && req.method !== 'OPTIONS')) return next();
+        const origin = req.get('Origin');
+        const allowed = Boolean(origin) && corsOrigins.has(origin);
+        res.vary('Origin');
+        // openvibe-shared/release sends a wildcard ACAO itself: keep the exact-origin decision ours,
+        // and let nothing (a rejected origin included) send Access-Control-Allow-Origin.
+        const rawSetHeader = res.setHeader.bind(res);
+        res.setHeader = (name, value) => {
+            if (String(name).toLowerCase() !== 'access-control-allow-origin') return rawSetHeader(name, value);
+            return allowed ? rawSetHeader(name, value === '*' ? origin : value) : res;
+        };
+        if (req.method === 'OPTIONS') {
+            res.vary('Access-Control-Request-Method');
+            const method = req.get('Access-Control-Request-Method');
+            if (allowed && (!method || method === 'GET')) {
+                rawSetHeader('Access-Control-Allow-Origin', origin);
+                rawSetHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+                rawSetHeader('Access-Control-Allow-Headers', 'Accept, Content-Type');
+                rawSetHeader('Access-Control-Max-Age', '600');
+            }
+            return res.sendStatus(204);
+        }
+        if (allowed) rawSetHeader('Access-Control-Allow-Origin', origin);
+        return next();
+    });
     // One W3C trace across services (openvibe-shared/trace): calls made while serving a request carry its traceparent.
     require('openvibe-shared/trace').install(app);
     app.use((req, res, next) => {

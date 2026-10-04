@@ -110,6 +110,11 @@ idempotent replay):
 | `GET /robots.txt` | public: disallows `/console`, `/auth/`, `/api/` |
 | `GET /stats` | public: p50/p95 latency, success rate and rate-card price per registered provider and model over the last 7 days (server-rendered, `openvibe-shared/cache-policy` HTML headers, nothing per caller) |
 
+Browser reads of `GET /stats` and `GET /release.json` allow exact origins from `AI_CORS_ORIGINS`
+(comma-separated; default `https://ai.openvibe.services,https://openvibe.services`). Their `OPTIONS`
+preflight allows GET. Responses never allow credentials; `/api/v1/*`, `/console` and `/auth/*`
+have no CORS access. Service callers do not need CORS.
+
 `/api/ready` (openvibe-shared/ready) is 503 when the database, the active workflows or the Network
 key fail; provider configuration (an active provider without its credentials, or with an open
 circuit) degrades it. `/metrics` (openvibe-shared/metrics) carries golden signals by route template,

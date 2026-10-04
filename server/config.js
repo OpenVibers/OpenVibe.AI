@@ -44,6 +44,9 @@ function load(env = process.env) {
         nodeEnv,
         isProduction,
         baseUrl,
+        // Browser reads of the public stats and release endpoints only. Values are exact origins;
+        // CORS never allows credentials, and token/console routes do not use this list.
+        cors: { origins: list(env.AI_CORS_ORIGINS, ['https://ai.openvibe.services', 'https://openvibe.services']) },
 
         // Identity: OpenVibe.Network signs the service tokens callers present (audience openvibe.ai).
         networkUrl: trimUrl(env.OV_NETWORK_URL || 'https://openvibe.network'),
