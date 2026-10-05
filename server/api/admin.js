@@ -34,7 +34,9 @@ function adminRouter({ db, registry, pool, quotas, cache, runs, auth, ops = crea
     const usageRead = auth.requireCap(CAPS.usageRead);
     const wrap = (fn) => async (req, res) => { try { const out = await fn(req, res); if (out !== undefined) res.json(out); } catch (err) { sendError(res, err, req.ov, log); } };
     const actor = (req) => ({ actor: req.principal.sub, trace: req.ov.traceId });
-    const view = ops.providerView;
+    // Operators see the billing profile and shared pool name (migrations/0008) alongside the secret reference:
+    // names only, never a value.
+    const view = async (p) => { const v = await ops.providerView(p); return v && { ...v, billing_profile: p.billing_profile, pool_key: p.pool_key }; };
     const body = (req) => (req.body && typeof req.body === 'object' ? req.body : {});
 
     r.get('/api/v1/status', usageRead, wrap(async () => await ops.status()));

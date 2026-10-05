@@ -14,6 +14,7 @@ const schemas = require('./schemas');
 const { provenance } = require('./providers/rate-cards');
 
 const PROVIDER_KINDS = ['stub', 'openai', 'responses', 'anthropic', 'http', 'whisper'];
+const BILLING_PROFILES = ['metered', 'subscription', 'payg', 'free', 'byok'];
 const FEATURES = ['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich', 'embed', 'vision', 'json', 'transcribe'];
 const LIFECYCLE = ['draft', 'active', 'deprecated', 'archived'];
 const KEY_RE = /^[a-z][a-z0-9_-]*(\.[a-z0-9_-]+)*$/;
@@ -44,6 +45,9 @@ function createRegistry(db, { clock = { now: () => Date.now() }, env = process.e
             key: r.key, display_name: r.display_name, kind: r.kind, status: r.status, base_url: r.base_url,
             auth_mode: r.auth_mode, secret_ref: r.secret_ref, default_model: r.default_model,
             capabilities: parseJson(r.capabilities, []), timeout_ms: r.timeout_ms, priority: r.priority,
+            // The billing profile and shared pool (migrations/0008): exposed on every provider response; pool_key
+            // is a name, never a secret value.
+            billing_profile: r.billing_profile || 'metered', pool_key: r.pool_key == null ? null : r.pool_key,
             metadata: parseJson(r.metadata, {}), origin: r.origin, created_at: r.created_at, updated_at: r.updated_at,
         };
     }
@@ -64,6 +68,14 @@ function createRegistry(db, { clock = { now: () => Date.now() }, env = process.e
         if (!['none', 'bearer', 'x-api-key'].includes(p.auth_mode)) throw new AiError(422, 'ai.invalid', 'auth_mode must be none, bearer or x-api-key');
         if (!secretRefValid(p.secret_ref)) throw new AiError(422, 'ai.invalid', "secret_ref must be 'env:NAME' (a reference, never a secret value)");
         if (p.base_url && !/^https?:\/\/[^\s]+$/i.test(p.base_url)) throw new AiError(422, 'ai.invalid', 'base_url must be an http(s) URL');
+        if (!BILLING_PROFILES.includes(p.billing_profile)) throw new AiError(422, 'ai.invalid', `billing_profile must be one of ${BILLING_PROFILES.join(', ')}`);
+        // metadata.billing_profile only seeds the column (upsertProvider), but it is refused here too so an
+        // unknown value can never be stored as an inert, silently-ignored profile.
+        if (p.metadata && p.metadata.billing_profile !== undefined && !BILLING_PROFILES.includes(p.metadata.billing_profile))
+            throw new AiError(422, 'ai.invalid', `metadata.billing_profile must be one of ${BILLING_PROFILES.join(', ')}`);
+        // The shared subscription pool is a name, never a secret: the same shape as a provider key.
+        if (p.pool_key != null && (typeof p.pool_key !== 'string' || !KEY_RE.test(p.pool_key)))
+            throw new AiError(422, 'ai.invalid', 'pool_key must be a lowercase dotted/dashed name');
         if (!Array.isArray(p.capabilities) || p.capabilities.some(f => !FEATURES.includes(f))) throw new AiError(422, 'ai.invalid', `capabilities must be a subset of ${FEATURES.join(', ')}`);
     }
 
@@ -81,15 +93,21 @@ function createRegistry(db, { clock = { now: () => Date.now() }, env = process.e
             capabilities: input.capabilities || (prev && prev.capabilities) || [],
             timeout_ms: Number.isFinite(Number(input.timeout_ms)) ? Math.max(1000, Math.min(600000, Number(input.timeout_ms))) : (prev ? prev.timeout_ms : 30000),
             priority: Number.isFinite(Number(input.priority)) ? Number(input.priority) : (prev ? prev.priority : 100),
+            // The providers.billing_profile column is the profile the router reads (server/providers/index.js).
+            // metadata.billing_profile only seeds it when the row is created; once the column exists it wins, so
+            // a later metadata edit can never silently re-route the provider.
+            billing_profile: input.billing_profile || (prev && prev.billing_profile) || (input.metadata && input.metadata.billing_profile) || 'metered',
+            pool_key: input.pool_key !== undefined ? (input.pool_key || null) : (prev ? prev.pool_key : null),
             metadata: input.metadata || (prev && prev.metadata) || {},
         };
         checkProvider(p);
         const t = now();
-        await db.prepare(`INSERT INTO providers (key, display_name, kind, status, base_url, auth_mode, secret_ref, default_model, capabilities, timeout_ms, priority, metadata, origin, created_at, updated_at)
-            VALUES (@key, @display_name, @kind, @status, @base_url, @auth_mode, @secret_ref, @default_model, @capabilities, @timeout_ms, @priority, @metadata, @origin, @t, @t)
+        await db.prepare(`INSERT INTO providers (key, display_name, kind, status, base_url, auth_mode, secret_ref, default_model, capabilities, timeout_ms, priority, billing_profile, pool_key, metadata, origin, created_at, updated_at)
+            VALUES (@key, @display_name, @kind, @status, @base_url, @auth_mode, @secret_ref, @default_model, @capabilities, @timeout_ms, @priority, @billing_profile, @pool_key, @metadata, @origin, @t, @t)
             ON CONFLICT(key) DO UPDATE SET display_name = excluded.display_name, kind = excluded.kind, status = excluded.status, base_url = excluded.base_url,
               auth_mode = excluded.auth_mode, secret_ref = excluded.secret_ref, default_model = excluded.default_model, capabilities = excluded.capabilities,
-              timeout_ms = excluded.timeout_ms, priority = excluded.priority, metadata = excluded.metadata, origin = excluded.origin, updated_at = excluded.updated_at`)
+              timeout_ms = excluded.timeout_ms, priority = excluded.priority, billing_profile = excluded.billing_profile, pool_key = excluded.pool_key,
+              metadata = excluded.metadata, origin = excluded.origin, updated_at = excluded.updated_at`)
             .run({ ...p, capabilities: JSON.stringify(p.capabilities), metadata: JSON.stringify(p.metadata), origin, t });
         await audit(actor, prev ? 'provider.update' : 'provider.create', 'provider', p.key, { trace, metadata: { kind: p.kind, status: p.status, base_url: p.base_url, secret_ref: p.secret_ref, origin } });
         return await getProvider(p.key);
