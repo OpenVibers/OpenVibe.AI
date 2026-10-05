@@ -136,9 +136,16 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
     function isLocalProvider(p) {
         return p.kind === 'whisper' || Boolean(p.metadata && p.metadata.local);
     }
-    /** A provider that is never billed: the deterministic stub and free or local servers. */
+    /**
+     * Billing profiles whose capacity is already paid for: a subscription, a free server or a person's own key.
+     * They carry no per-token rate card and need no authority credential — the router offers them as prepaid.
+     */
+    const PREPAID_PROFILES = ['subscription', 'free', 'byok'];
+    function billingProfile(p) { return (p.metadata && p.metadata.billing_profile) || 'metered'; }
+    function isPrepaidProvider(p) { return PREPAID_PROFILES.includes(billingProfile(p)); }
+    /** A provider that is never metered: the deterministic stub, free or local servers, and every prepaid profile. */
     function isFreeProvider(p) {
-        return p.kind === 'stub' || isLocalProvider(p) || Boolean(p.metadata && p.metadata.paid === false);
+        return p.kind === 'stub' || isLocalProvider(p) || Boolean(p.metadata && p.metadata.paid === false) || isPrepaidProvider(p);
     }
     const offerId = (provider, model) => (model ? `${provider}:${model}` : provider);
     const splitOfferId = (id) => {
@@ -173,7 +180,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             const id = offerId(p.key, model);
             if (seen.has(id)) return;
             seen.add(id);
-            const creds = p.auth_mode === 'none' || Boolean(resolveSecret(p.secret_ref, env));
+            const creds = p.auth_mode === 'none' || isPrepaidProvider(p) || Boolean(resolveSecret(p.secret_ref, env));
             const h = await health(p.key);
             const st = stats.get(p.key) || { p95: null, requests: 0, errors: 0 };
             const errorRate = st.requests ? st.errors / st.requests : 0;
@@ -293,7 +300,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
     async function skipReason(p, a, features) {
         if (!p || !a) return 'unknown_provider';
         if (p.status !== 'active') return 'disabled';
-        if (p.auth_mode !== 'none' && !resolveSecret(p.secret_ref, env)) return 'no_credentials';
+        if (p.auth_mode !== 'none' && !isPrepaidProvider(p) && !resolveSecret(p.secret_ref, env)) return 'no_credentials';
         if (features.some(f => !a.supports(f))) return 'unsupported';
         if ((await health(p.key)).state === 'open') return 'circuit_open';
         return null;
