@@ -388,11 +388,13 @@ Deployed: `/opt/openvibe.ai`, env `/etc/openvibe/ai.env` (0600), unit `deploy/sy
 `/console` and its sign-in `/auth/` public; the API is host-local) is not installed:
 `ai.openvibe.network` still serves the Sites placeholder. `deploy/nginx/ai.openvibe.services.conf`
 mirrors that vhost for `ai.openvibe.services` (the same proxied locations to the same upstream,
-`/metrics` and the API still blocked) and replaces the Sites placeholder for `ai.openvibe.services`
-once its certificate exists; it is not installed or live yet. The console also needs
+`/metrics` and the API still blocked, on the `*.openvibe.services` certificate the host already holds) and
+replaces the Sites placeholder for `ai.openvibe.services` when installed; it is not installed or live yet. The console also needs
 `AI_CONSOLE_SESSION_SECRET` (32+ random characters) and `OV_OAUTH_CLIENT_SECRET` in the env file
 (without them it answers 503 in production), and the Network must list
-`https://ai.openvibe.network/auth/callback` among client `ai`'s redirect URIs.
+`https://ai.openvibe.network/auth/callback` among client `ai`'s redirect URIs (and
+`https://ai.openvibe.services/auth/callback` once that vhost serves the console, since the callback is built from
+the base URL).
 
 ## Not done yet
 
