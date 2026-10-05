@@ -5,8 +5,8 @@
  *   POST /api/v1/runs                       create (ai.run.create); ?wait=ms waits for the result
  *   GET  /api/v1/runs                       the caller's runs (ai.run.read)
  *   GET  /api/v1/runs/:id                   one run (+ citations, request log metadata)
- *   run.usage.usage_sample_id: the run's Billing reading (server/usage-samples.js), null when none
- *   run.explain.usage_readings (on every run response): that reading's idempotency key, delivery state (queued/sent/failed), last error, free_allowance_used
+ *   run.usage.usage_sample_ids: the run's Billing readings (one per attempt per token metric), null when none
+ *   run.explain.usage_readings (on every run response): each reading's idempotency key, delivery state (queued/sent/failed), last error, free_allowance_used
  *   POST /api/v1/runs/:id/cancel            (ai.run.create, owner)
  *   POST /api/v1/runs/:id/retry             (ai.run.create, owner) -> a new run with retry_of
  *   GET  /api/v1/runs/:id/citations         (ai.run.read)

@@ -97,7 +97,8 @@ t.test('on the store: free up to the allowance per metric, then fully priced; th
     assert.ok(Math.abs(c.usd - (60 * 1 + 30 * 2) / 1e6) < 1e-12, `usd ${c.usd}`);
     assert.strictEqual((await fa.claim('s1', 'p', 'm', { in: 60, out: 30 }, now + 1000)).tokens, 40 + 30);
     assert.strictEqual((await fa.claim('s1', 'p', 'm', { in: 60, cached: 10, out: 100 }, now + 2000)).tokens, 10 + 40);
-    assert.deepStrictEqual(await fa.claim('s1', 'p', 'm', { in: 60, out: 60 }, now + 3000), { tokens: 0, usd: 0 });
+    const exhausted = await fa.claim('s1', 'p', 'm', { in: 60, out: 60 }, now + 3000);
+    assert.deepStrictEqual([exhausted.tokens, exhausted.usd], [0, 0], 'fully priced once exhausted');
     const rows = await usedRows();
     assert.deepStrictEqual(rows.map((r) => [r.metric, r.free_used]), [['cached-input-tokens:m', 10], ['input-tokens:m', 100], ['output-tokens:m', 100]]);
     for (const r of rows) assert.deepStrictEqual([r.period_start, r.period_end], [Date.UTC(2026, 9, 4), Date.UTC(2026, 9, 5)]);
@@ -182,16 +183,18 @@ t.test('boot with AI_GOVERN_TIERS=1 and a seam model with a free allowance of 10
     assert.strictEqual(r.status, 201, r.text);
 });
 
-t.test('the readings carry step 2\'s numbers and come one per accounted run', async () => {
+t.test('the readings carry step 2\'s numbers and come one per attempt per metric', async () => {
     assert.strictEqual((await gen()).status, 201);
     assert.strictEqual((await gen()).status, 201);
     const runs = await h.db.prepare('SELECT id FROM runs ORDER BY created_at, id').all();
-    const [a, b] = await readings();
-    assert.deepStrictEqual([a, b].map((s) => s.idempotency_key), runs.map((r) => `ai:${r.id}:tokens`), 'one reading per run, the same key as before');
-    assert.strictEqual(a.free_allowance_used, 200);
-    assert.ok(Math.abs(a.cost_estimate - 1.8) < 1e-9, `${a.cost_estimate}`);
-    assert.ok(!('free_allowance_used' in b));
-    assert.ok(Math.abs(b.cost_estimate - 2) < 1e-9, `${b.cost_estimate}`);
+    const all = await readings();
+    const byKind = (id) => Object.fromEntries(all.filter((x) => x.idempotency_key.startsWith(`ai:${id}:0:`)).map((x) => [x.idempotency_key.split(':')[3], x]));
+    const a = byKind(runs[0].id); const b = byKind(runs[1].id);
+    assert.deepStrictEqual(Object.keys(a).sort(), ['cached', 'in', 'out'], 'one reading per metric');
+    assert.deepStrictEqual([a.in.free_allowance_used, a.out.free_allowance_used], [100, 100]);
+    assert.ok(Math.abs(a.in.cost_estimate - 0.9) < 1e-9 && Math.abs(a.out.cost_estimate - 0.9) < 1e-9, `${a.in.cost_estimate}, ${a.out.cost_estimate}`);
+    assert.ok(!('free_allowance_used' in b.in) && !('free_allowance_used' in b.out));
+    assert.ok(Math.abs(b.in.cost_estimate - 1) < 1e-9 && Math.abs(b.out.cost_estimate - 1) < 1e-9, `${b.in.cost_estimate}, ${b.out.cost_estimate}`);
     const rows = await h.quotas.freeAllowance.current();
     assert.deepStrictEqual(rows.map((r) => [r.metric, r.free_used, r.remaining]), [['input-tokens:m1', 100, 0], ['output-tokens:m1', 100, 0]]);
 });
@@ -206,7 +209,7 @@ t.test('a run whose hold no longer fits is refused before the provider; reserve(
     assert.deepStrictEqual([no.status, no.body.code], [429, 'govern.exceeded'], no.text);
     assert.strictEqual(seam.calls, calls, 'no provider call');
     assert.strictEqual(await counted(), before + 1, 'the refused run is not counted');
-    assert.strictEqual((await readings()).length, 3);
+    assert.strictEqual((await readings()).length, 9, 'three runs, one reading per attempt per metric');
 });
 
 t.test('shutdown', async () => { usageSamples._reset(); await h.stop(); await seam.close(); });

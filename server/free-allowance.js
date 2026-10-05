@@ -16,7 +16,10 @@
  * a key was lost and what the console reads. The numbers are the same either way.
  *
  *   const free = createFreeAllowance(db, { cardsFor: pool.rateCardsFor });
- *   const { tokens, usd } = await free.claim(subject, provider, model, { in, cached, out });   // inside db.tx
+ *   const { tokens, usd, byKind } = await free.claim(subject, provider, model, { in, cached, out });   // inside db.tx
+ *
+ * `byKind[kind]` is { tokens, usd, cost }: that kind's free tokens, their list price, and the list price of its
+ * whole quantity — account() turns each into one reading with its own free_allowance_used and cost_estimate.
  */
 const rates = require('./providers/rate-cards');
 
@@ -63,11 +66,16 @@ function createFreeAllowance(db, { cardsFor, clock = { now: () => Date.now() }, 
 
     /**
      * Claim this attempt's free tokens: usage { in (excluding cached), cached, out } on `provider`/`model`.
-     * Returns { tokens, usd }: the free tokens and their list price on the same cards. A provider with no
-     * cards (never billed) or a card with free_allowance 0 claims nothing and writes nothing.
+     * Returns { tokens, usd, byKind }: the free tokens and their list price in total, and, per kind
+     * (`in` | `cached` | `out`), { tokens, usd, cost } — the free tokens, their list price, and the list
+     * price of the whole requested quantity. account() writes one platform.usage-sample@1 per kind from
+     * this, so each reading's free_allowance_used and cost_estimate are its own (server/usage-samples.js).
+     * A provider with no cards (never billed) claims nothing: byKind is all zeros. A card with
+     * free_allowance 0 claims nothing but still reports its list cost (the reading is fully priced).
      */
     async function claim(subject, provider, model, usage = {}, now = clock.now()) {
-        const out = { tokens: 0, usd: 0 };
+        const byKind = Object.fromEntries(KINDS.map((kind) => [kind, { tokens: 0, usd: 0, cost: 0 }]));
+        const out = { tokens: 0, usd: 0, byKind };
         if (!subject || !provider) return out;
         const cards = await cardsFor(provider, model || null);
         if (!cards) return out;
@@ -77,21 +85,21 @@ function createFreeAllowance(db, { cardsFor, clock = { now: () => Date.now() }, 
                 const c = cards[kind];
                 const cap = Math.floor(Number(c && c.free_allowance) || 0);
                 const q = Math.max(0, Math.floor(Number(usage[kind]) || 0));
+                const k = byKind[kind];
+                if (c) k.cost = (q / c.unit_size) * c.unit_price_usd;   // the whole quantity's list price, free or not
                 if (cap <= 0 || q <= 0) continue;
                 const p = periodFor(c, now);
                 if (store) {
-                    const free = await claimOnStore(subject, provider, c, p, q, cap, at, now);
-                    out.tokens += free;
-                    out.usd += (free / c.unit_size) * c.unit_price_usd;
-                    continue;
+                    k.tokens = await claimOnStore(subject, provider, c, p, q, cap, at, now);
+                } else {
+                    await open.run(subject, provider, c.metric, p.start, p.end, at);
+                    const row = await lock.get(subject, provider, c.metric, p.start);
+                    const free = Math.min(q, Math.max(0, cap - Number(row.free_used)));
+                    if (free) { await take.run(free, at, subject, provider, c.metric, p.start); k.tokens = free; }
                 }
-                await open.run(subject, provider, c.metric, p.start, p.end, at);
-                const row = await lock.get(subject, provider, c.metric, p.start);
-                const free = Math.min(q, Math.max(0, cap - Number(row.free_used)));
-                if (!free) continue;
-                await take.run(free, at, subject, provider, c.metric, p.start);
-                out.tokens += free;
-                out.usd += (free / c.unit_size) * c.unit_price_usd;
+                k.usd = (k.tokens / c.unit_size) * c.unit_price_usd;
+                out.tokens += k.tokens;
+                out.usd += k.usd;
             }
         });
         return out;

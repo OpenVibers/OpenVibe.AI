@@ -334,6 +334,7 @@ const ref = (x) => (x ? (x.service ? `${x.service}:${x.type}:${x.id}` : `${x.typ
 
 function run({ staff, csrf, r, citations, requests, input, output, canCancel, notice, error }) {
     const g = r.grounding;
+    const sampleIds = r.usage.usage_sample_ids || [];
     const open = r.status === 'queued' || r.status === 'running';
     return layout({
         title: `Run ${r.id}`, section: 'runs', staff, csrf, notice, error, body: html`<h1>Run <span class="mono">${r.id}</span> ${badge(r.status)}</h1>
@@ -346,7 +347,7 @@ function run({ staff, csrf, r, citations, requests, input, output, canCancel, no
 <dt>Attempts</dt><dd>${n(r.usage.attempts)}</dd>
 <dt>Tokens</dt><dd>${n(r.usage.tokens_in)} in · ${n(r.usage.tokens_out)} out</dd>
 <dt>Cost</dt><dd>${usd(r.usage.cost_usd)}</dd>
-<dt>Billing reading</dt><dd>${r.usage.usage_sample_id ? html`<code>${r.usage.usage_sample_id}</code>` : '—'}${((r.explain && r.explain.usage_readings) || []).map((u) => html` ${badge(u.state)}${u.free_allowance_used != null ? html` <span class="muted">${n(u.free_allowance_used)} free</span>` : ''}${u.last_error ? html`<br><span class="bad">${clip(u.last_error, 300)}</span>` : ''}`)}</dd>
+<dt>Billing readings</dt><dd>${sampleIds.length ? html`${sampleIds.map((id) => html`<code>${id}</code>`)}` : '—'}${((r.explain && r.explain.usage_readings) || []).map((u) => html` ${badge(u.state)}${u.free_allowance_used != null ? html` <span class="muted">${n(u.free_allowance_used)} free</span>` : ''}${u.last_error ? html`<br><span class="bad">${clip(u.last_error, 300)}</span>` : ''}`)}</dd>
 ${r.error ? html`<dt>Error</dt><dd><code class="bad">${r.error.code}</code><br>${clip(r.error.detail, 500)}</dd>` : ''}
 </dl></div><div class="card"><dl>
 <dt>Requester</dt><dd><code>${r.requester.type}:${r.requester.id}</code></dd>

@@ -435,7 +435,7 @@ t.test('run detail: error code, attempts, provider, request log; input bounded a
 t.test('usage: free allowance per subject this period and Billing readings by state, with the last send errors', async () => {
     await h.registry.upsertModel({ provider_key: 'okseam', model_key: 'seam-model', type: 'chat', cost: { in_per_mtok: 1, out_per_mtok: 1, free_allowance: 500, reset_period: 'month' } });
     assert.strictEqual((await h.quotas.freeAllowance.claim('live:user:4242', 'okseam', 'seam-model', { in: 120 })).tokens, 120);
-    const key = `ai:${runIds.ok}:tokens`;
+    const key = `ai:${runIds.ok}:0:in`;
     assert.ok(await h.db.prepare('SELECT 1 AS x FROM usage_sample_outbox WHERE event_id = ?').get(key), 'the succeeded run queued a reading');
     await h.db.prepare("UPDATE usage_sample_outbox SET attempts = 2, last_error = 'billing.usage.record answered 503' WHERE event_id = ?").run(key);
     const r = await get('/console/usage', cookies.admin);
