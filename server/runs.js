@@ -85,7 +85,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                 origin: 'ai', workflow: r.workflow_key, workflow_version: r.workflow_version, template_version: r.template_version, route: r.route_key, route_version: r.route_version,
                 provider: r.provider_key, model: r.model_key, fallback_used: Boolean(r.fallback_used), run_id: r.id, cached_from: r.cached_from, synthetic: Boolean(r.synthetic),
             },
-            usage: { tokens_in: r.tokens_in, tokens_out: r.tokens_out, cost_usd: r.cost_usd, attempts: r.attempts, usage_sample_id: r.usage_sample_id || null },
+            usage: { tokens_in: r.tokens_in, tokens_out: r.tokens_out, cost_usd: r.cost_usd, attempts: r.attempts, usage_sample_ids: r.usage_sample_ids || (r.usage_sample_id ? [r.usage_sample_id] : null) },
             explain: parseJson(r.explain, null),
             citations_count: r.citations_count,
             grounding: parseJson(r.grounding, null),
@@ -215,8 +215,9 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                     if (src.length) await addCitations(id, src.map(c => ({ ...c, provenance: { ...c.provenance, via_cache: hit.run_id } })), 'cache');
                     // The reused output carries the grounding it was produced with.
                     await db.prepare('UPDATE runs SET grounding = (SELECT grounding FROM runs WHERE id = ?) WHERE id = ?').run(hit.run_id, id);
-                    // A cache hit is still a served run: its reading (no tokens, no cost) goes to Billing with it.
-                    await usageSamples.record(db, { runId: id, workflowKey: wf.key, requester: `${requester.type}:${requester.id}`, at: now, traceId: trace });
+                    // A cache hit is still a served run: its zero reading (no attempt, no tokens, no cost) goes to Billing with it.
+                    await usageSamples.record(db, { runId: id, workflowKey: wf.key, requester: `${requester.type}:${requester.id}`, at: now, traceId: trace,
+                        readings: [{ attempt: 0, kind: 'in', model: hit.model_key || null, quantity: 0, cost: 0, freeAllowanceUsed: 0 }] });
                     await events.runChanged(await getRow(id));
                 });
                 await registry.audit(principal.sub, 'run.create', 'run', id, { trace, metadata: { workflow: wf.key, version: wf.version, status: 'cached', cached_from: hit.run_id } });
@@ -410,7 +411,8 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
 
     /** The run with its Billing readings in explain.usage_readings (server/usage-samples.js readingsFor); unchanged when it has none. */
     async function explained(run) {
-        const readings = run ? await usageSamples.readingsFor(db, run.usage.usage_sample_id) : [];
+        const ids = run && run.usage ? run.usage.usage_sample_ids : null;
+        const readings = ids && ids.length ? await usageSamples.readingsFor(db, ids) : [];
         return readings.length ? { ...run, explain: { ...(run.explain || {}), usage_readings: readings } } : run;
     }
 

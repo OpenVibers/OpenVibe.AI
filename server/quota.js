@@ -170,14 +170,16 @@ function createQuotas(db, { clock = { now: () => Date.now() }, registry, freeAll
 
     /**
      * Add real usage to the reserved windows, the daily usage table and — in the same transaction — the
-     * provider rollup and per-route placement state. `attempts` is the run's finished attempts (the same
-     * entries logged to `requests`); `writeUsage` is false when a run spent nothing (stats are still kept).
-     * `runId`/`traceId` name the run a reading is written for (server/usage-samples.js): with a runId the
-     * run's platform.usage-sample@1 reading commits with its usage. Before it, the run's tokens claim the subject's
-     * provider free allowance (server/free-allowance.js, §2.1.8): the free share is the reading's free_allowance_used
-     * and its list price is left out of the reading's cost_estimate. Pricing only: the counters above are unchanged.
-     * `hold` is the run's tier hold (server/govern.js): once the accounting committed, it is settled with the
-     * run's tokens and its priced cost (the free share left out), so a fully free run spends no ai-usd.
+     * provider rollup, per-route placement state and the run's Billing readings. `attempts` is the run's
+     * finished attempts (the same entries logged to `requests`); `writeUsage` is false when a run spent
+     * nothing (stats are still kept). `runId`/`traceId` name the run a reading is written for
+     * (server/usage-samples.js): with a runId, one platform.usage-sample@1 per attempt per token kind
+     * (in excluding cached, cached, out) commits with its usage, under the attempt's provider/model metric.
+     * Each attempt's tokens claim the subject's provider free allowance (server/free-allowance.js, §2.1.8) per
+     * kind: the free share is that reading's free_allowance_used and its list price is left out of the
+     * reading's cost_estimate. Pricing only: the counters above are unchanged. `hold` is the run's tier hold
+     * (server/govern.js): once the accounting committed, it is settled with the run's tokens and its priced
+     * cost (the free share left out), so a fully free run spends no ai-usd.
      */
     async function account(ctx, reserved, { provider, model, tokensIn = 0, tokensOut = 0, tokensCached = 0, cost = 0, attempts = null, writeUsage = true, runId = null, traceId = null, hold = null }) {
         const tokens = tokensIn + tokensOut;
@@ -186,11 +188,26 @@ function createQuotas(db, { clock = { now: () => Date.now() }, registry, freeAll
         await db.tx(async () => {
             for (const r of reserved || []) await bump.run(r.scope_type, r.scope_id, r.window, r.ws, r.workflow_prefix, 0, tokens, cost);
             if (writeUsage) await insDaily.run(day, `${ctx.requesterType}:${ctx.requesterId}`, ctx.attributionKey || '', ctx.workflowKey, provider || '', model || '', tokensIn, tokensOut, tokensCached, cost);
-            // The run's platform.usage-sample@1 reading for Billing commits with its usage (server/usage-samples.js).
+            // One reading per finished attempt per token kind, for Billing (server/usage-samples.js).
             if (writeUsage && runId) {
-                const free = freeAllowance ? await freeAllowance.claim(subjectOf(ctx), provider, model, { in: Math.max(0, tokensIn - tokensCached), cached: tokensCached, out: tokensOut }, clock.now()) : { tokens: 0, usd: 0 };
-                freeUsd = free.usd;
-                await usageSamples.record(db, { runId, workflowKey: ctx.workflowKey, requester: `${ctx.requesterType}:${ctx.requesterId}`, provider, tokensIn, tokensOut, cost: Math.max(0, cost - free.usd), freeAllowanceUsed: free.tokens, at: clock.now(), traceId });
+                const at = clock.now();
+                const readings = [];
+                const list = attempts || [];
+                for (let attempt = 0; attempt < list.length; attempt++) {
+                    const a = list[attempt];
+                    if (!a || !a.provider_key || a.status === 'skipped') continue;   // a skipped attempt never touched a provider
+                    const attemptModel = a.model_key || null;
+                    const qty = { in: Math.max(0, (Number(a.tokens_in) || 0) - (Number(a.tokens_cached) || 0)), cached: Math.max(0, Number(a.tokens_cached) || 0), out: Math.max(0, Number(a.tokens_out) || 0) };
+                    const free = freeAllowance ? await freeAllowance.claim(subjectOf(ctx), a.provider_key, attemptModel, qty, at) : null;
+                    const byKind = (free && free.byKind) || {};
+                    if (free) freeUsd += Number(free.usd) || 0;
+                    for (const kind of usageSamples.KINDS) {
+                        const f = byKind[kind] || { tokens: 0, usd: 0, cost: 0 };
+                        readings.push({ attempt, kind, provider: a.provider_key, model: attemptModel, quantity: qty[kind],
+                            cost: Math.max(0, (Number(f.cost) || 0) - (Number(f.usd) || 0)), freeAllowanceUsed: Number(f.tokens) || 0 });
+                    }
+                }
+                await usageSamples.record(db, { runId, workflowKey: ctx.workflowKey, requester: `${ctx.requesterType}:${ctx.requesterId}`, at, traceId, readings });
             }
             await recordStats(day, attempts);
         });

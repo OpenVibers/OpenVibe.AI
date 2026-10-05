@@ -23,6 +23,8 @@ const cardsWith = (terms) => async (provider, model) => rates.buildCards({ provi
 const usedRows = async () => (await tdb.db.prepare('SELECT subject, provider, metric, period_start, period_end, free_used FROM free_allowance_usage ORDER BY subject, metric, period_start').all())
     .map((r) => ({ ...r, period_start: Number(r.period_start), period_end: Number(r.period_end), free_used: Number(r.free_used) }));
 const clear = async () => { await tdb.db.prepare('DELETE FROM free_allowance_usage').run(); };
+// claim() also returns byKind (per metric, for the readings); the aggregate is what these totals assert.
+const agg = (c) => ({ tokens: c.tokens, usd: c.usd });
 
 t.test('a migrated database', async () => { tdb = await testDb(); });
 
@@ -32,7 +34,7 @@ t.test('the subject is the attribution, else the actor, else the requester; none
     assert.strictEqual(subjectOf({ requesterType: 'service', requesterId: 'live' }), 'service:live');
     assert.strictEqual(subjectOf({}), null);
     const fa = createFreeAllowance(tdb.db, { cardsFor: cardsWith({ free_allowance: 100, reset_period: 'day' }) });
-    assert.deepStrictEqual(await fa.claim(null, 'p', 'm', { in: 50 }, at(2026, 10, 4)), { tokens: 0, usd: 0 });
+    assert.deepStrictEqual(agg(await fa.claim(null, 'p', 'm', { in: 50 }, at(2026, 10, 4))), { tokens: 0, usd: 0 });
     assert.deepStrictEqual(await usedRows(), []);
 });
 
@@ -48,7 +50,8 @@ t.test('free up to the allowance per metric, then fully priced; the real period 
     c = await fa.claim('s1', 'p', 'm', { in: 60, cached: 10, out: 100 }, now + 2000);
     assert.strictEqual(c.tokens, 10 + 40, 'input exhausted; cached has its own 100; output the 40 left');
     c = await fa.claim('s1', 'p', 'm', { in: 60, out: 60 }, now + 3000);
-    assert.deepStrictEqual(c, { tokens: 0, usd: 0 }, 'fully priced once exhausted');
+    assert.deepStrictEqual(agg(c), { tokens: 0, usd: 0 }, 'fully priced once exhausted');
+    assert.ok(Math.abs(c.byKind.in.cost - 60 / 1e6) < 1e-15 && Math.abs(c.byKind.out.cost - 120 / 1e6) < 1e-15 && c.byKind.cached.cost === 0, 'byKind carries each metric\'s list cost even when nothing is free');
     const rows = await usedRows();
     assert.deepStrictEqual(rows.map((r) => [r.metric, r.free_used]), [['cached-input-tokens:m', 10], ['input-tokens:m', 100], ['output-tokens:m', 100]]);
     for (const r of rows) assert.deepStrictEqual([r.period_start, r.period_end], [Date.UTC(2026, 9, 4), Date.UTC(2026, 9, 5)]);
@@ -79,9 +82,9 @@ t.test('the counter resets at the period boundary: day and month; none never res
 t.test('free_allowance 0 (the default) claims nothing and writes nothing', async () => {
     await clear();
     const fa = createFreeAllowance(tdb.db, { cardsFor: cardsWith({}) });
-    assert.deepStrictEqual(await fa.claim('s1', 'p', 'm', { in: 100, cached: 10, out: 100 }, at(2026, 10, 4)), { tokens: 0, usd: 0 });
+    assert.deepStrictEqual(agg(await fa.claim('s1', 'p', 'm', { in: 100, cached: 10, out: 100 }, at(2026, 10, 4))), { tokens: 0, usd: 0 });
     const unbilled = createFreeAllowance(tdb.db, { cardsFor: async () => null });
-    assert.deepStrictEqual(await unbilled.claim('s1', 'p', 'm', { in: 100 }, at(2026, 10, 4)), { tokens: 0, usd: 0 });
+    assert.deepStrictEqual(agg(await unbilled.claim('s1', 'p', 'm', { in: 100 }, at(2026, 10, 4))), { tokens: 0, usd: 0 });
     assert.deepStrictEqual(await usedRows(), []);
 });
 
@@ -125,13 +128,17 @@ t.test('boot with a seam provider whose model has a free allowance of 100 tokens
 t.test('the first run is free up to the allowance per metric, the next one is fully priced', async () => {
     assert.strictEqual((await gen()).status, 201);
     assert.strictEqual((await gen()).status, 201);
-    const [a, b] = await readings();
-    for (const s of [a, b]) assert.ok(contracts.validate('platform.usage-sample@1', s).valid, JSON.stringify(s));
-    assert.strictEqual(a.quantity, 2000);
-    assert.strictEqual(a.free_allowance_used, 200, '100 input + 100 output tokens free');
-    assert.ok(Math.abs(a.cost_estimate - 1.8) < 1e-9, `the free share is not priced: ${a.cost_estimate}`);
-    assert.ok(!('free_allowance_used' in b), 'nothing free: the field is absent');
-    assert.ok(Math.abs(b.cost_estimate - 2) < 1e-9, `fully priced: ${b.cost_estimate}`);
+    const all = await readings();
+    for (const s of all) assert.ok(contracts.validate('platform.usage-sample@1', s).valid, JSON.stringify(s));
+    const runs = await h.db.prepare('SELECT id FROM runs ORDER BY created_at, id').all();
+    const byKind = (s) => Object.fromEntries(all.filter((x) => x.idempotency_key.startsWith(`ai:${s}:0:`)).map((x) => [x.idempotency_key.split(':')[3], x]));
+    const a = byKind(runs[0].id); const b = byKind(runs[1].id);
+    assert.deepStrictEqual([a.in.quantity, a.cached.quantity, a.out.quantity], [1000, 0, 1000], 'one reading per kind');
+    assert.deepStrictEqual([a.in.free_allowance_used, a.out.free_allowance_used], [100, 100], '100 input + 100 output tokens free, each on its own reading');
+    assert.ok(!('free_allowance_used' in a.cached), 'the cached metric was fully free of charge');
+    assert.ok(Math.abs(a.in.cost_estimate - 0.9) < 1e-9 && Math.abs(a.out.cost_estimate - 0.9) < 1e-9, `the free share is not priced: ${a.in.cost_estimate}, ${a.out.cost_estimate}`);
+    for (const s of [b.in, b.cached, b.out]) assert.ok(!('free_allowance_used' in s), 'nothing free: the field is absent');
+    assert.ok(Math.abs(b.in.cost_estimate - 1) < 1e-9 && Math.abs(b.out.cost_estimate - 1) < 1e-9, `fully priced: ${b.in.cost_estimate}, ${b.out.cost_estimate}`);
     const rows = await h.quotas.freeAllowance.current();
     assert.deepStrictEqual(rows.map((r) => [r.subject, r.provider, r.metric, r.free_used, r.free_allowance, r.remaining]),
         [['service:live', 'seam', 'input-tokens:m1', 100, 100, 0], ['service:live', 'seam', 'output-tokens:m1', 100, 100, 0]]);
@@ -140,12 +147,13 @@ t.test('the first run is free up to the allowance per metric, the next one is fu
     assert.ok(Math.abs(Number(run.cost_usd) - 2) < 1e-9);
 });
 
-t.test('explain shows the free share on the first run\'s reading and leaves it out on the next', async () => {
+t.test('explain shows the free share on the first run\'s readings and leaves it out on the next', async () => {
     const [first, next] = await h.db.prepare('SELECT id FROM runs ORDER BY created_at, id').all();
-    const explain = async (id) => (await request(h.base, 'GET', `/api/v1/runs/${id}`, { tok: live })).body.run.explain.usage_readings[0];
+    const explain = async (id) => Object.fromEntries((await request(h.base, 'GET', `/api/v1/runs/${id}`, { tok: live })).body.run.explain.usage_readings.map((u) => [u.idempotency_key.split(':')[3], u]));
     const a = await explain(first.id);
-    assert.deepStrictEqual([a.idempotency_key, a.state, a.free_allowance_used], [`ai:${first.id}:tokens`, 'queued', 200]);
-    assert.ok(!('free_allowance_used' in await explain(next.id)));
+    assert.deepStrictEqual([a.in.idempotency_key, a.in.state, a.in.free_allowance_used], [`ai:${first.id}:0:in`, 'queued', 100]);
+    assert.strictEqual(a.out.free_allowance_used, 100);
+    assert.ok(!('free_allowance_used' in (await explain(next.id)).in));
 });
 
 t.test('shutdown', async () => { usageSamples._reset(); await h.stop(); await seam.close(); });

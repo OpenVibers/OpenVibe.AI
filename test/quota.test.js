@@ -44,12 +44,17 @@ t.test("'*' service quotas give each service its own window", async () => {
     assert.strictEqual(r.status, 201, 'another service is not limited by live\'s usage');
 });
 
-t.test('every accounted run has one Billing reading; the refused request queued none', async () => {
-    const runs = await h.db.prepare("SELECT id, usage_sample_id FROM runs WHERE status = 'succeeded'").all();
+t.test('every accounted run has one Billing reading per attempt per token kind; the refused request queued none', async () => {
+    const runs = await h.db.prepare("SELECT id, usage_sample_ids FROM runs WHERE status = 'succeeded'").all();
     assert.ok(runs.length > 0, 'runs succeeded');
-    for (const r of runs) assert.strictEqual(r.usage_sample_id, `ai:${r.id}:tokens`, `no reading for ${r.id}`);
+    let expected = 0;
+    for (const r of runs) {
+        const ids = r.usage_sample_ids || [];
+        assert.deepStrictEqual(ids, ['in', 'cached', 'out'].map((k) => `ai:${r.id}:0:${k}`), `no readings for ${r.id}`);
+        expected += ids.length;
+    }
     const n = Number((await h.db.prepare('SELECT COUNT(*) n FROM usage_sample_outbox').get()).n);
-    assert.strictEqual(n, runs.length, 'one reading per succeeded run; the 429 request queued none');
+    assert.strictEqual(n, expected, 'one reading per attempt per kind; the 429 request queued none');
 });
 
 t.test('attribution quotas limit one attributed owner (Live per-streamer budget)', async () => {
