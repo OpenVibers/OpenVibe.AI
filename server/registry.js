@@ -69,6 +69,13 @@ function createRegistry(db, { clock = { now: () => Date.now() }, env = process.e
         if (!secretRefValid(p.secret_ref)) throw new AiError(422, 'ai.invalid', "secret_ref must be 'env:NAME' (a reference, never a secret value)");
         if (p.base_url && !/^https?:\/\/[^\s]+$/i.test(p.base_url)) throw new AiError(422, 'ai.invalid', 'base_url must be an http(s) URL');
         if (!BILLING_PROFILES.includes(p.billing_profile)) throw new AiError(422, 'ai.invalid', `billing_profile must be one of ${BILLING_PROFILES.join(', ')}`);
+        // metadata.billing_profile only seeds the column (upsertProvider), but it is refused here too so an
+        // unknown value can never be stored as an inert, silently-ignored profile.
+        if (p.metadata && p.metadata.billing_profile !== undefined && !BILLING_PROFILES.includes(p.metadata.billing_profile))
+            throw new AiError(422, 'ai.invalid', `metadata.billing_profile must be one of ${BILLING_PROFILES.join(', ')}`);
+        // The shared subscription pool is a name, never a secret: the same shape as a provider key.
+        if (p.pool_key != null && (typeof p.pool_key !== 'string' || !KEY_RE.test(p.pool_key)))
+            throw new AiError(422, 'ai.invalid', 'pool_key must be a lowercase dotted/dashed name');
         if (!Array.isArray(p.capabilities) || p.capabilities.some(f => !FEATURES.includes(f))) throw new AiError(422, 'ai.invalid', `capabilities must be a subset of ${FEATURES.join(', ')}`);
     }
 
@@ -86,9 +93,10 @@ function createRegistry(db, { clock = { now: () => Date.now() }, env = process.e
             capabilities: input.capabilities || (prev && prev.capabilities) || [],
             timeout_ms: Number.isFinite(Number(input.timeout_ms)) ? Math.max(1000, Math.min(600000, Number(input.timeout_ms))) : (prev ? prev.timeout_ms : 30000),
             priority: Number.isFinite(Number(input.priority)) ? Number(input.priority) : (prev ? prev.priority : 100),
-            // The profile the router reads (server/providers/index.js) lives in metadata for seeded providers; the
-            // same value is mirrored into the column so /api/v1/providers shows one answer, not two.
-            billing_profile: input.billing_profile || (input.metadata && input.metadata.billing_profile) || (prev && prev.billing_profile) || 'metered',
+            // The providers.billing_profile column is the profile the router reads (server/providers/index.js).
+            // metadata.billing_profile only seeds it when the row is created; once the column exists it wins, so
+            // a later metadata edit can never silently re-route the provider.
+            billing_profile: input.billing_profile || (prev && prev.billing_profile) || (input.metadata && input.metadata.billing_profile) || 'metered',
             pool_key: input.pool_key !== undefined ? (input.pool_key || null) : (prev ? prev.pool_key : null),
             metadata: input.metadata || (prev && prev.metadata) || {},
         };

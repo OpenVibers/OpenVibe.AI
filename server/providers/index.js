@@ -138,11 +138,23 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
     }
     /**
      * Billing profiles whose capacity is already paid for: a subscription, a free server or a person's own key.
-     * They carry no per-token rate card and need no authority credential — the router offers them as prepaid.
+     * They carry no per-token rate card and are offered as prepaid. The profile is the providers.billing_profile
+     * column (migrations/0008): registry.upsertProvider seeds it from metadata on create, the column is the
+     * authority afterwards, and the router never reads metadata.
      */
     const PREPAID_PROFILES = ['subscription', 'free', 'byok'];
-    function billingProfile(p) { return (p.metadata && p.metadata.billing_profile) || 'metered'; }
+    function billingProfile(p) { return (p && p.billing_profile) || 'metered'; }
     function isPrepaidProvider(p) { return PREPAID_PROFILES.includes(billingProfile(p)); }
+    /**
+     * Prepaid capacity that runs with no authority credential in secret_ref: a free server, or a pooled
+     * subscription whose credential is held outside the provider record. A byok key is the caller's own
+     * (executeWithCredential), so a pool record for it still needs a resolvable secret_ref or is skipped.
+     */
+    function credentialNotRequired(p) {
+        const profile = billingProfile(p);
+        if (profile === 'free') return true;
+        return profile === 'subscription' && (p.secret_ref == null || p.secret_ref === '');
+    }
     /** A provider that is never metered: the deterministic stub, free or local servers, and every prepaid profile. */
     function isFreeProvider(p) {
         return p.kind === 'stub' || isLocalProvider(p) || Boolean(p.metadata && p.metadata.paid === false) || isPrepaidProvider(p);
@@ -180,7 +192,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             const id = offerId(p.key, model);
             if (seen.has(id)) return;
             seen.add(id);
-            const creds = p.auth_mode === 'none' || isPrepaidProvider(p) || Boolean(resolveSecret(p.secret_ref, env));
+            const creds = p.auth_mode === 'none' || credentialNotRequired(p) || Boolean(resolveSecret(p.secret_ref, env));
             const h = await health(p.key);
             const st = stats.get(p.key) || { p95: null, requests: 0, errors: 0 };
             const errorRate = st.requests ? st.errors / st.requests : 0;
@@ -300,7 +312,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
     async function skipReason(p, a, features) {
         if (!p || !a) return 'unknown_provider';
         if (p.status !== 'active') return 'disabled';
-        if (p.auth_mode !== 'none' && !isPrepaidProvider(p) && !resolveSecret(p.secret_ref, env)) return 'no_credentials';
+        if (p.auth_mode !== 'none' && !credentialNotRequired(p) && !resolveSecret(p.secret_ref, env)) return 'no_credentials';
         if (features.some(f => !a.supports(f))) return 'unsupported';
         if ((await health(p.key)).state === 'open') return 'circuit_open';
         return null;
