@@ -85,7 +85,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                 origin: 'ai', workflow: r.workflow_key, workflow_version: r.workflow_version, template_version: r.template_version, route: r.route_key, route_version: r.route_version,
                 provider: r.provider_key, model: r.model_key, fallback_used: Boolean(r.fallback_used), run_id: r.id, cached_from: r.cached_from, synthetic: Boolean(r.synthetic),
             },
-            usage: { tokens_in: r.tokens_in, tokens_out: r.tokens_out, cost_usd: r.cost_usd, attempts: r.attempts, usage_sample_ids: r.usage_sample_ids || null },
+            usage: { tokens_in: r.tokens_in, tokens_out: r.tokens_out, cost_usd: r.cost_usd, attempts: r.attempts, usage_sample_ids: r.usage_sample_ids || (r.usage_sample_id ? [r.usage_sample_id] : null) },
             explain: parseJson(r.explain, null),
             citations_count: r.citations_count,
             grounding: parseJson(r.grounding, null),
