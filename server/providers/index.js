@@ -26,6 +26,7 @@ const { AiError, resolveSecret, sha256 } = require('../util');
 const { retryable, sleep, ProviderError } = require('./common');
 const { createStubProvider } = require('./stub');
 const { createOpenAiProvider } = require('./openai');
+const { createResponsesProvider } = require('./responses');
 const { createAnthropicProvider } = require('./anthropic');
 const { createHttpSeamProvider } = require('./http');
 const { createWhisperProvider } = require('./whisper');
@@ -53,6 +54,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         switch (p.kind) {
             case 'stub': return createStubProvider(p, { stats: statFor(p.key) });
             case 'openai': return createOpenAiProvider(p, { apiKey, fetchImpl });
+            case 'responses': return createResponsesProvider(p, { apiKey, fetchImpl });
             case 'anthropic': return createAnthropicProvider(p, { apiKey, fetchImpl });
             case 'http': return createHttpSeamProvider(p, { apiKey, fetchImpl });
             case 'whisper': return createWhisperProvider(p, { config });

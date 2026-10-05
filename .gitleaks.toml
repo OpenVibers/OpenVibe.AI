@@ -15,3 +15,9 @@ description = "Made-up provider key in test/credentials.test.js (a person's own 
 condition = "AND"
 paths = ['''^test/credentials\.test\.js$''']
 regexes = ['''sk-test-dana-0123456789WXYZ''']
+
+[[allowlists]]
+description = "Made-up provider key in test/provider-responses.test.js (asserts the key never reaches a thrown error; a placeholder, not a secret)"
+condition = "AND"
+paths = ['''^test/provider-responses\.test\.js$''']
+regexes = ['''^sk-resp-secret-0123456789$''']
