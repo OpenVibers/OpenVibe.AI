@@ -154,6 +154,9 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         if (!v.valid) throw new AiError(422, 'input.invalid', `input does not match ${wf.key} v${wf.version}`, { errors: v.errors });
         const inputHash = sha256(inputJson);
         const requester = principal.subject;
+        // A developer app (ADR-014): the requester IS its project, the run is metered with the project's
+        // id on every Billing reading, and a sandbox run may use free/local capacity only (server/providers).
+        const app = principal.kind === 'app' ? { projectId: principal.projectId, sandbox: principal.env === 'sandbox' } : null;
         const idem = body.idempotency_key != null ? String(body.idempotency_key) : null;
         if (idem !== null && !/^[A-Za-z0-9._:-]{8,128}$/.test(idem)) throw new AiError(422, 'input.invalid', 'idempotency_key must be 8-128 of [A-Za-z0-9._:-]');
 
@@ -180,6 +183,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         const ctx = {
             requesterType: requester.type, requesterId: requester.id,
             actorKey: subjectKey(body.on_behalf_of), targetKey: entityKey(body.target), attributionKey: entityKey(body.attribution), workflowKey: wf.key,
+            ...(app ? { appRun: true, projectId: app.projectId, sandbox: app.sandbox } : {}),
         };
         const now = iso(clock.now());
         const id = newRunId();
@@ -216,7 +220,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                     // The reused output carries the grounding it was produced with.
                     await db.prepare('UPDATE runs SET grounding = (SELECT grounding FROM runs WHERE id = ?) WHERE id = ?').run(hit.run_id, id);
                     // A cache hit is still a served run: its zero reading (no attempt, no tokens, no cost) goes to Billing with it.
-                    await usageSamples.record(db, { runId: id, workflowKey: wf.key, requester: `${requester.type}:${requester.id}`, at: now, traceId: trace,
+                    await usageSamples.record(db, { runId: id, workflowKey: wf.key, requester: `${requester.type}:${requester.id}`, project: ctx.projectId || null, at: now, traceId: trace,
                         readings: [{ attempt: 0, kind: 'in', model: hit.model_key || null, quantity: 0, cost: 0, freeAllowanceUsed: 0 }] });
                     await events.runChanged(await getRow(id));
                 });
@@ -310,6 +314,10 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             }
             const credential = opts.credential_subject ? await credentials.forRun(row.requester_id, opts.credential_subject) : null;
             const r = await engine.execute(wf, row, input, { signal: controller.signal, logRequest, debugRaw: Boolean(config.debugRawLog && opts.debug), inputHash: row.input_hash, preferences,
+                // A developer app's run (ADR-014): the provider pool excludes a person's byok key, and the run is
+                // limited to free and local capacity when it is a sandbox run or when no tier budget governs its
+                // project (AI_GOVERN_TIERS off): metered capacity is only ever spent under a project budget.
+                appRun: Boolean(ctx.appRun), freeOnly: Boolean(ctx.appRun && (ctx.sandbox || !(tiers && tiers.enabled))),
                 ...(credential ? { credential, role: input && typeof input.role === 'string' ? input.role : null } : {}) });
             if (controller.signal.aborted) throw new AiError(409, 'run.cancelled', 'cancelled');
             // The status, its citations and the ai.run.succeeded event commit together.

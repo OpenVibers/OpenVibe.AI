@@ -159,6 +159,18 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
     function isFreeProvider(p) {
         return p.kind === 'stub' || isLocalProvider(p) || Boolean(p.metadata && p.metadata.paid === false) || isPrepaidProvider(p);
     }
+    /**
+     * May a developer app's run (ADR-014) use this provider? Never a person's byok key, and a free-only run
+     * (ctx.freeOnly: a sandbox run, or any app run no tier budget governs) is limited to free and local
+     * capacity: the stub, the local model, a free server or a pooled subscription. A provider that fails
+     * this is not offered to the planner at all.
+     */
+    function appOffered(ctx, p) {
+        if (!p) return true;   // an unknown provider keeps its place; skipReason reports it, as before
+        if (ctx.appRun && billingProfile(p) === 'byok') return false;
+        if (ctx.freeOnly && !isFreeProvider(p)) return false;
+        return true;
+    }
     const offerId = (provider, model) => (model ? `${provider}:${model}` : provider);
     const splitOfferId = (id) => {
         const i = String(id).indexOf(':');
@@ -182,7 +194,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
      * health (placement_state error rate + the breaker); hysteresis through the route's current placement.
      * The stub is never a placement candidate (synthetic output must not win on price) — it is appended last.
      */
-    async function poolCandidates(route, features, operation) {
+    async function poolCandidates(route, features, operation, ctx = {}) {
         const stats = await statsByProvider();
         const offers = [];
         const rateCards = [];
@@ -217,6 +229,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         const scope = route.constraints && route.constraints.provider_scope;
         for (const p of await registry.listProviders()) {
             if (p.key === 'stub' || !p.capabilities.some(f => features.includes(f))) continue;
+            if (!appOffered(ctx, p)) continue;
             if (scope === 'local' && !isLocalProvider(p)) continue;
             if (scope === 'paid' && isFreeProvider(p)) continue;
             if (operation === 'embed' || operation === 'transcribe') {
@@ -235,6 +248,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             if (!pin || !pin.provider || pin.provider === 'stub') continue;
             const p = await registry.getProvider(pin.provider);
             if (!p) continue;
+            if (!appOffered(ctx, p)) continue;
             if (scope === 'local' && !isLocalProvider(p)) continue;
             if (scope === 'paid' && isFreeProvider(p)) continue;
             const caps = route.capability && !p.capabilities.includes(route.capability) ? [...p.capabilities, route.capability] : p.capabilities;
@@ -284,23 +298,33 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         return { order: order.map(splitOfferId), explain, placement: result, rateCards, states };
     }
 
-    /** A pinned route: [primary, ...fallbacks], exactly as before. */
-    async function pinnedCandidates(route, features) {
+    /**
+     * A pinned route: [primary, ...fallbacks], exactly as before. A provider an app run may not use
+     * (a byok key, or anything metered for a free-only run) leaves the order with its
+     * reason in explain.candidates; every other candidate keeps its place, as before.
+     */
+    async function pinnedCandidates(route, features, ctx = {}) {
         const list = [route.primary, ...(route.fallbacks || [])].filter(c => c && c.provider);
         const explain = { objective: null, reasons: ['pinned route: the primary, then its fallbacks'], selected: null, candidates: [] };
+        const order = [];
         for (const c of list) {
             const entry = await adapter(c.provider);
             const p = entry && entry.record;
             const why = await skipReason(p, entry && entry.adapter, features);
-            explain.candidates.push({ provider: c.provider, model: c.model || (p && p.default_model) || null, eligible: !why, excluded_reason: why, cost: null, latency: null });
+            const offered = appOffered(ctx, p);
+            explain.candidates.push({
+                provider: c.provider, model: c.model || (p && p.default_model) || null, eligible: offered && !why,
+                excluded_reason: offered ? why : (p && billingProfile(p) === 'byok' ? 'byok' : 'free_only'), cost: null, latency: null,
+            });
+            if (offered) order.push({ provider: c.provider, model: c.model || null });
         }
-        return { order: list.map(c => ({ provider: c.provider, model: c.model || null })), explain };
+        return { order, explain };
     }
 
-    async function candidates(route, features, operation) {
+    async function candidates(route, features, operation, ctx = {}) {
         const { order, explain, placement: result = null, ...rest } = route.capability && operation
-            ? await poolCandidates(route, features, operation)
-            : await pinnedCandidates(route, features);
+            ? await poolCandidates(route, features, operation, ctx)
+            : await pinnedCandidates(route, features, ctx);
         if (config.stubFallback && !(route.constraints && route.constraints.provider_scope)
             && !order.some(c => c.provider === 'stub') && await registry.getProvider('stub')) {
             order.push({ provider: 'stub', model: null });
@@ -371,7 +395,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         if (req.image) features.push('vision');
         if (req.json) features.push('json');
         const tried = [];
-        const { order: list, explain } = await candidates(route, features, operation);
+        const { order: list, explain } = await candidates(route, features, operation, ctx);
         for (let i = 0; i < list.length; i++) {
             const c = list[i];
             const entry = await adapter(c.provider);

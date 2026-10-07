@@ -14,25 +14,49 @@
  *   POST /api/v1/{chat,generate,summarize,classify,extract,enrich,embed}
  *                                           direct operations: a run of workflow ai.<op>, waited for
  *
+ * Developer apps (ADR-014, ai.app.run): POST /api/v1/{chat,generate,summarize,classify,extract,embed}
+ * and GET /api/v1/runs/:id also take an app token; the run is the app's project's (see auth.appOrCap,
+ * server/apps.js). Every other route here is first-party only.
+ *
  * Responses: 201 when a new run finished (or was served from cache) within the wait, 202 while it
  * is still queued/running (poll GET /runs/:id), 200 for an idempotent replay. Errors are
  * problem+json; a quota refusal or a full run queue (queue.full) is 429 with Retry-After.
  */
 const express = require('express');
 const { AiError, sendError } = require('../util');
-const { CAPS, namespaceAllowed } = require('../auth');
+const { CAPS, namespaceAllowed, appOrCap } = require('../auth');
+const { appMayRun, appAttribution, DIRECT_OPS } = require('../apps');
 
 function runsRouter({ runs, registry, auth, config, log = console }) {
     const r = express.Router();
     const create = auth.requireCap(CAPS.runCreate);
     const read = auth.requireCap(CAPS.runRead, CAPS.runCreate, CAPS.usageRead);
+    // The routes a developer app may use: the six direct operations and GET /runs/:id.
+    const createApp = auth.appOrCap(CAPS.appRun, CAPS.runCreate);
+    const readApp = auth.appOrCap(CAPS.appRun, CAPS.runRead, CAPS.runCreate, CAPS.usageRead);
     const has = (req) => (id) => auth.principalHas(req, id);
 
     function checkNamespace(req, workflowKey) {
+        if (req.principal.kind === 'app') {
+            if (!appMayRun(req.principal, workflowKey)) throw new AiError(403, 'capability.namespace_denied', `an app may only run its own app.${req.principal.projectKey}.* namespace, not ${workflowKey}`);
+            return;
+        }
         if (!namespaceAllowed(req.principal, workflowKey)) throw new AiError(403, 'capability.namespace_denied', `this token may not run ${workflowKey}`);
     }
 
+    /**
+     * An app's run is its project's: the attribution is the project, and an on_behalf_of SubjectRef is
+     * refused. A person's own provider key is refused here (the direct operations read it off the raw
+     * body) and by the pool for every app run (server/providers), so ai.app.run never uses a BYO key.
+     */
+    function appBody(principal, body, raw) {
+        if (raw && raw.credential != null) throw new AiError(403, 'capability.denied', "an app run never uses a person's own provider key");
+        if (body.on_behalf_of != null) throw new AiError(403, 'capability.denied', 'an app run is attributed to its project, never to a person');
+        return { ...body, attribution: appAttribution(principal) };
+    }
+
     async function createAndRespond(req, res, body, waitMs) {
+        if (req.principal.kind === 'app') body = appBody(req.principal, body, req.body);
         checkNamespace(req, String(body.workflow || ''));
         const idem = body.idempotency_key || req.ov.idempotencyKey || undefined;
         const created = await runs.create({ ...body, idempotency_key: idem }, req.principal, { trace: req.ov.traceId, requestId: req.ov.requestId });
@@ -63,7 +87,7 @@ function runsRouter({ runs, registry, auth, config, log = console }) {
         return run;
     }
 
-    r.get('/api/v1/runs/:id', read, async (req, res) => {
+    r.get('/api/v1/runs/:id', readApp, async (req, res) => {
         try {
             const run = await runs.explained(await owned(req));
             res.json({ run, citations: await runs.citations(run.id), requests: await runs.requestsFor(run.id) });
@@ -105,8 +129,10 @@ function runsRouter({ runs, registry, auth, config, log = console }) {
     });
 
     // Direct operations — each is a run of workflow ai.<op>, waited for (default: the max wait).
+    // The six ai.app.run names (chat, generate, summarize, classify, extract, embed) take an app token;
+    // enrich is first-party only, like every other run route.
     for (const op of ['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich', 'embed']) {
-        r.post(`/api/v1/${op}`, create, async (req, res) => {
+        r.post(`/api/v1/${op}`, DIRECT_OPS.includes(`ai.${op}`) ? createApp : create, async (req, res) => {
             try {
                 const body = req.body || {};
                 const { idempotency_key: idem, target, attribution, on_behalf_of: obo, options, ...input } = body;

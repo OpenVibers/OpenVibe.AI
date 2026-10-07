@@ -207,7 +207,7 @@ function createQuotas(db, { clock = { now: () => Date.now() }, registry, freeAll
                             cost: Math.max(0, (Number(f.cost) || 0) - (Number(f.usd) || 0)), freeAllowanceUsed: Number(f.tokens) || 0 });
                     }
                 }
-                await usageSamples.record(db, { runId, workflowKey: ctx.workflowKey, requester: `${ctx.requesterType}:${ctx.requesterId}`, at, traceId, readings });
+                await usageSamples.record(db, { runId, workflowKey: ctx.workflowKey, requester: `${ctx.requesterType}:${ctx.requesterId}`, project: ctx.projectId || null, at, traceId, readings });
             }
             await recordStats(day, attempts);
         });

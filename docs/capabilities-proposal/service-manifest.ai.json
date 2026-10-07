@@ -20,6 +20,7 @@
     "note": "called by other services at 127.0.0.1:4700; ai.openvibe.network serves the OpenVibe.Sites placeholder page"
   },
   "capabilities": [
+    "ai.app.run",
     "ai.credential.manage",
     "ai.provider.manage",
     "ai.quota.attribution.manage",

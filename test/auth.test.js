@@ -79,8 +79,12 @@ t.test('namespaces fail closed: a token without ns runs nothing (C-22/C-23 retir
     denied(await run(live, 'ai.generate', { prompt: 'hi' }), 'svc:live -> ai.generate');
     denied(await run(live, 'network.other', {}), 'svc:live -> network.other');
     denied(await request(h.base, 'POST', '/api/v1/generate', { tok: live, body: { prompt: 'hi' } }), 'direct operations are ai.* runs');
+    // A developer app token is refused on every first-party route whatever ids it carries: POST /api/v1/runs
+    // is not one of ai.app.run's routes (the app routes are tested in app-access.test.js).
     const app = token('x', ['ai.run.create'], { ns: null, sub: 'app:app_01HZZZZZZZZZZZZZZZZZZZZZZZ', actorType: 'app', extra: { project_id: 'prj_01HZZZZZZZZZZZZZZZZZZZZZZZ', env: 'production' } });
-    denied(await run(app, 'ai.generate', { prompt: 'hi' }), 'app token without ns');
+    const appRuns = await run(app, 'ai.generate', { prompt: 'hi' });
+    assert.strictEqual(appRuns.status, 403, 'app token on POST /api/v1/runs');
+    assert.strictEqual(appRuns.body.code, 'capability.denied', 'app tokens are never first-party callers');
     const network = token('network', ['ai.run.create'], { ns: ['network.*'] });
     denied(await run(network, 'live.translate', { text: 'hola', from: 'es', to: 'en' }), 'svc:network ns network.* -> live.*');
     // The retired settings do nothing any more.

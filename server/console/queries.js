@@ -12,7 +12,8 @@
 
 const RUN_STATUSES = ['queued', 'running', 'succeeded', 'failed', 'cancelled', 'cached'];
 const KEY_RE = /^[a-z][a-z0-9_-]*(\.[a-z0-9_-]+)*$/;
-const REQUESTER_RE = /^(service|app|mod|user):[A-Za-z0-9_.:-]{1,120}$/;
+// project: a developer app's runs (ADR-014) are their project's, so that is how they are filtered.
+const REQUESTER_RE = /^(service|app|mod|user|project):[A-Za-z0-9_.:-]{1,120}$/;
 const SERVICE_RE = /^[a-z][a-z0-9-]{1,39}$/;
 const CODE_RE = /^[a-z][a-z0-9_.-]{1,80}$/;
 const RUN_ID_RE = /^run_[0-9A-HJKMNP-TV-Z]{26}$/;
