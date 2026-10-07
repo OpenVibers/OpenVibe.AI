@@ -30,7 +30,7 @@ const HOME_CSP = [
     "style-src 'self' 'unsafe-inline' https://openvibe.network https://fonts.googleapis.com https://cdnjs.cloudflare.com",
     "font-src 'self' data: https://fonts.gstatic.com https://cdnjs.cloudflare.com",
     "img-src 'self' data: https:",
-    "connect-src 'self' https://openvibe.network",
+    "connect-src 'self' https://openvibe.network https://openvibe.events",
     "frame-src 'self' https://openvibe.network",
     "frame-ancestors 'none'",
     "object-src 'none'",
