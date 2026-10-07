@@ -13,6 +13,8 @@ const { createOps } = require('./ops');
 const { consoleRouter } = require('./console');
 const views = require('./console/views');
 const cachePolicy = require('openvibe-shared/cache-policy');
+const ovServe = require('openvibe-shared/serve');
+const home = require('./home');
 const pkg = require('../package.json');
 
 function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, credentials = null }) {
@@ -63,6 +65,9 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
         res.setHeader('Cache-Control', 'no-store');
         next();
     });
+    // The product home's browser files (the OpenVibe Frame, openvibe-shared/serve) under content-addressed
+    // /shared/* URLs from this repo's pinned openvibe-shared; each answer sets its own asset cache policy.
+    app.use('/shared', ovServe.handler());
     // Inline images arrive as data URLs; the per-run input cap is enforced again in runs.create.
     app.use('/api', express.json({ limit: Math.ceil(config.runs.maxInputBytes * 1.5), type: ['application/json', 'application/*+json'] }));
 
@@ -113,12 +118,30 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
         } catch (e) { next(e); }
     });
 
-    // Crawlers: nothing here is for search engines, the console and sign-in least of all (no sitemap either).
+    // Discovery for the public home (ai.openvibe.services): the home and the price page are for search engines
+    // and assistants; the console, its sign-in and the API are not.
     app.get('/robots.txt', (_req, res) => {
-        res.type('text/plain').send('User-agent: *\nDisallow: /console\nDisallow: /auth/\nDisallow: /api/\n');
+        res.type('text/plain').send(`User-agent: *\nAllow: /$\nAllow: /stats\nDisallow: /console\nDisallow: /auth/\nDisallow: /api/\n\nSitemap: ${config.baseUrl}/sitemap.xml\n`);
+    });
+    app.get('/sitemap.xml', (_req, res) => {
+        res.type('application/xml').send(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${['/', '/stats'].map((p) => `  <url><loc>${config.baseUrl}${p}</loc></url>`).join('\n')}\n</urlset>\n`);
+    });
+    app.get('/llms.txt', (_req, res) => {
+        res.setHeader('Cache-Control', 'public, max-age=3600');
+        res.type('text/plain').send(home.llmsTxt({ siteUrl: config.baseUrl }));
     });
 
-    app.get('/', (_req, res) => {
+    // GET /: the home page for a browser (server/home.js), the API index for curl and API clients (`*/*`, no
+    // Accept, or any non-HTML Accept). Vary: Accept so a shared cache never serves one to the other; the home is
+    // private because Cloudflare caches by URL and ignores Vary: Accept. The home carries its own CSP.
+    app.get('/', (req, res) => {
+        res.vary('Accept');
+        if (req.accepts(['text/plain', 'text/html']) === 'text/html') {
+            return res.type('html')
+                .set('Content-Security-Policy', home.HOME_CSP)
+                .set('Cache-Control', 'private, max-age=300')
+                .send(home.renderHome({ siteUrl: config.baseUrl }));
+        }
         res.type('text/plain').send([
             'OpenVibe.AI: providers, models, routing, versioned prompt templates and workflows, runs, citations, scoped cache, quotas and audit.',
             '',
@@ -130,7 +153,9 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
             'GET  /stats      price and latency per provider and model (public)',
             'GET  /console    the operator console (OpenVibe.Network staff sign-in)',
             '',
-            'Callers authenticate with OpenVibe.Network service tokens (audience openvibe.ai).',
+            'Callers authenticate with OpenVibe.Network tokens (audience openvibe.ai): first-party service tokens, or a',
+            'developer app\'s token (ai.app.run) on the six direct operations and GET /api/v1/runs/:id.',
+            'Developer apps: https://openvibe.codes/projects',
             'AI output is a draft/evidence package attributed to a workflow, model and run, never to a person.',
             '',
             'Source: https://github.com/OpenVibers/OpenVibe.AI',

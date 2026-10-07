@@ -1,7 +1,7 @@
 'use strict';
 /**
  * The AI operator console (roadmap WS-O task 4): server-rendered, no JavaScript, on
- * ai.openvibe.network under /console, for OpenVibe.Network staff.
+ * ai.openvibe.services under /console, for OpenVibe.Network staff.
  *
  *   GET  /auth/login, /auth/callback     Network SSO (authorization code + PKCE S256, OAuth client `ai`)
  *   POST /auth/logout

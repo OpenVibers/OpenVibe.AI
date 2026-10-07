@@ -8,16 +8,17 @@
   "status": "alpha",
   "repository": "OpenVibers/OpenVibe.AI",
   "domains": [
+    "ai.openvibe.services",
     "ai.openvibe.network"
   ],
-  "publicOrigin": "https://ai.openvibe.network",
+  "publicOrigin": "https://ai.openvibe.services",
   "health": "/api/health",
   "ready": "/api/ready",
   "internalOrigin": "http://127.0.0.1:4700",
   "exposure": {
-    "state": "internal",
-    "publicSite": null,
-    "note": "called by other services at 127.0.0.1:4700; ai.openvibe.network serves the OpenVibe.Sites placeholder page"
+    "state": "live",
+    "publicSite": "service",
+    "note": "the public home, /stats and the developer-app API at ai.openvibe.services (2026-10-07); ai.openvibe.network answers 301 to it; services on the host call 127.0.0.1:4700"
   },
   "capabilities": [
     "ai.app.run",
@@ -76,14 +77,14 @@
       ],
       "window": "automatic only while ovhost waits for readiness after the restart (30 s in host.example.json); manual afterwards, as long as no blocker applies",
       "blockers": {
-        "none": "the schema code only adds (CREATE … IF NOT EXISTS, ADD COLUMN; no DROP, RENAME or table rebuild), which an older release ignores"
+        "none": "the schema code only adds (CREATE \u2026 IF NOT EXISTS, ADD COLUMN; no DROP, RENAME or table rebuild), which an older release ignores"
       }
     },
     "contracts": {
       "range": ">=0.6.0 <1.0.0"
     },
     "leases": {
-      "none": "no claims: one process owns ai.db (better-sqlite3, single writer); a run is taken with a compare-and-set on its status (queued → running)"
+      "none": "no claims: one process owns ai.db (better-sqlite3, single writer); a run is taken with a compare-and-set on its status (queued \u2192 running)"
     }
   },
   "notes": "Providers, models, routing profiles, versioned prompt templates and workflows, runs, request logs, citations, scoped cache, quotas and audit. Workflow output is a draft/evidence package attributed to workflow + model + run. ai.run.queued|succeeded|failed|cached have payload contracts (v0.30.0, status planned): AI publishes them once its Events client is wired in; it publishes none today. ai.run.create takes ai.run-request@1 and returns ai.run@1."

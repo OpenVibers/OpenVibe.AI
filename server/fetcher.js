@@ -119,7 +119,7 @@ function createFetcher(config, { transport = null } = {}) {
             const mod = url.protocol === 'https:' ? https : http;
             const req = mod.request(url, {
                 method: 'GET',
-                headers: { 'User-Agent': 'OpenVibe.AI/0.1 (+https://ai.openvibe.network)', Accept: '*/*' },
+                headers: { 'User-Agent': 'OpenVibe.AI/0.1 (+https://ai.openvibe.services)', Accept: '*/*' },
                 // Internal Media is operator-configured (usually loopback); everything else must be public.
                 lookup: internal ? undefined : safeLookup,
                 timeout: timeoutMs,
@@ -186,7 +186,7 @@ function createFetcher(config, { transport = null } = {}) {
                 const mod = url.protocol === 'https:' ? https : http;
                 const req = mod.request(url, {
                     method: method === 'HEAD' ? 'HEAD' : 'GET',
-                    headers: { 'User-Agent': 'OpenVibe.AI/0.1 (+https://ai.openvibe.network)', Accept: '*/*', ...(range ? { Range: range } : {}) },
+                    headers: { 'User-Agent': 'OpenVibe.AI/0.1 (+https://ai.openvibe.services)', Accept: '*/*', ...(range ? { Range: range } : {}) },
                     lookup: internal ? undefined : safeLookup,
                     timeout: timeoutMs,
                 });
