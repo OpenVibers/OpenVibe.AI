@@ -7,12 +7,8 @@
  * exponential backoff, and a rotation honoured on an unknown kid. OV_NETWORK_PUBLIC_KEY still pins a
  * PEM, which skips the fetch entirely.
  *
- * Capability ids are decided by openvibe-contracts when it knows them (the release named below);
- * until then allows() decides with the contracts' own grant rule (the exact id, or a `family.*`
- * grant), but only for the ids PROPOSED names — a proposal this service enforces ahead of the
- * release that registers it (docs/capabilities-proposal/, the pattern OpenVibe.Events used before
- * events.app.* shipped). ai.app.run (T6 step 10: developer apps, ADR-014) needs exactly that
- * fallback until openvibe-contracts knows the id.
+ * Capability ids are decided by openvibe-contracts: an id the pinned release does not know is refused,
+ * never silently allowed (ai.app.run, developer apps, is registered since openvibe-contracts 0.109.0).
  *
  * Namespaces fail closed: a service token may only run workflows inside the namespaces its `ns`
  * claim holds (the same matching as contracts' namespaceAllowed: 'live.*' allows 'live.translate').
@@ -40,9 +36,6 @@ const CAPS = Object.freeze({
     appRun: 'ai.app.run',
 });
 
-/** Ids enforced here before the pinned openvibe-contracts release knows them (docs/capabilities-proposal/). */
-const PROPOSED = Object.freeze(['ai.app.run']);
-
 /**
  * The Network signing keys, through the SDK's process-wide JWKS client (one per URL). A pinned
  * OV_NETWORK_PUBLIC_KEY PEM skips the fetch entirely; /api/ready reports either as ready.
@@ -64,12 +57,7 @@ function hasCap(claims, id) {
 
 function allows(claims, id) {
     if (!hasCap(claims, id)) return { allowed: false, code: 'capability.denied', reason: `${id} not granted` };
-    if (!capabilities.get(id)) {
-        // Not in the pinned contracts release yet: only a PROPOSED id is enforced (by the same exact-id-or-family
-        // grant rule hasCap applied); any other unknown id is refused, never silently allowed.
-        if (!PROPOSED.includes(id)) return { allowed: false, code: 'capability.denied', reason: `${id} is not a capability this release knows` };
-        return { allowed: true, code: null, reason: null };
-    }
+    if (!capabilities.get(id)) return { allowed: false, code: 'capability.denied', reason: `${id} is not a capability this release knows` };
     const c = capabilities.check(claims, id);
     return c;
 }
@@ -200,4 +188,4 @@ function createAuth({ config, log = console }) {
     return { verify, requireCap, appOrCap, principalHas };
 }
 
-module.exports = { CAPS, PROPOSED, createNetworkKeys, createAuth, hasCap, allows, isAppClaims, namespaceAllowed, effectiveNamespaces, principalSubject, bearer };
+module.exports = { CAPS, createNetworkKeys, createAuth, hasCap, allows, isAppClaims, namespaceAllowed, effectiveNamespaces, principalSubject, bearer };

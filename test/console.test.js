@@ -487,17 +487,18 @@ t.test('sign out revokes the session', async () => {
     for (const s of SECRETS) assert.ok(!JSON.stringify(await h.db.prepare('SELECT * FROM audit_log').all()).includes(s), 'no secret in the audit log');
 });
 
-t.test('robots.txt keeps crawlers out of the console and sign-in; there is no sitemap', async () => {
+t.test('robots.txt keeps crawlers out of the console and sign-in; the sitemap lists only public pages', async () => {
     const r = await request(h.base, 'GET', '/robots.txt');
     assert.strictEqual(r.status, 200);
     assert.ok(r.text.includes('Disallow: /console') && r.text.includes('Disallow: /auth/'));
-    assert.ok(!/sitemap/i.test(r.text));
-    assert.strictEqual((await request(h.base, 'GET', '/sitemap.xml')).status, 404);
+    const map = await request(h.base, 'GET', '/sitemap.xml');
+    assert.strictEqual(map.status, 200);
+    assert.ok(!/\/console|\/auth\//.test(map.text), 'the console and sign-in are never in the sitemap');
     assert.ok((await request(h.base, 'GET', '/')).text.includes('/console'));
 });
 
 t.test('the nginx vhost proxies /console, /auth/ and /robots.txt with the client address from $remote_addr only', () => {
-    const conf = fs.readFileSync(path.join(__dirname, '..', 'deploy', 'nginx', 'ai.openvibe.network.conf'), 'utf8');
+    const conf = fs.readFileSync(path.join(__dirname, '..', 'deploy', 'nginx', 'ai.openvibe.services.conf'), 'utf8');
     const active = conf.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
     for (const loc of ['location /console', 'location /auth/', 'location = /robots.txt']) {
         const i = active.indexOf(`${loc} {`);

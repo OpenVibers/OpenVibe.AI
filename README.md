@@ -2,11 +2,11 @@
 
 > Providers, models, routing, prompt templates, workflows, runs, citations, cache and quotas for every product.
 
-**Status:** alpha (roadmap Wave 13). Deployed on the host since 2026-09-23 on `127.0.0.1:4700`
-(loopback only) and in production use: OpenVibe.Live runs with `AI_SERVICE=remote` and Network's
-footer copy runs `network.site_copy` here. It is not a public product: the domain keeps its placeholder
-page until the launch rule below is met.
-**Domain:** `ai.openvibe.network` (target host `ai.openvibe.services`) · **Port:** 4700 · **Unit:** `openvibe-ai.service`
+**Status:** alpha (roadmap Wave 13). Deployed on the host since 2026-09-23 on `127.0.0.1:4700` and in
+production use: OpenVibe.Live runs with `AI_SERVICE=remote` and Network's footer copy runs
+`network.site_copy` here. Public since 2026-10-07 at [ai.openvibe.services](https://ai.openvibe.services):
+the home (`server/home.js`), `/stats` and the developer-app API (`ai.app.run`).
+**Domain:** `ai.openvibe.services` (`ai.openvibe.network` answers 301 to it) · **Port:** 4700 · **Unit:** `openvibe-ai.service`
 **Plan:** OpenVibe End-to-End Realignment & Implementation Plan, revision 3 (20 Sep 2026), §12.1, §12.13, §15.14, §33, §34.
 **License:** AGPL-3.0 (same as every OpenVibe service).
 
@@ -51,9 +51,8 @@ owns publication truth: Wiki, Blog, News, Live, … decide what to publish.
 Implemented here (the service manifest's `capabilities`, audience `openvibe.ai`; routes under
 [API](#api)): `ai.run.create`, `ai.run.read`, `ai.workflow.manage`, `ai.provider.manage`,
 `ai.usage.read`, `ai.credential.manage` (`/api/v1/credentials/:subject`),
-`ai.quota.attribution.manage` (per-streamer quotas) and `ai.app.run` (developer apps, ADR-014; a
-public capability proposed in `docs/capabilities-proposal/` until openvibe-contracts registers it —
-`server/auth.js` enforces it through its PROPOSED fallback until then). A service token's `ns`
+`ai.quota.attribution.manage` (per-streamer quotas) and `ai.app.run` (developer apps, ADR-014; public,
+registered since openvibe-contracts 0.109.0). A service token's `ns`
 claim limits which workflow namespaces it may run; an app token is fixed to its project's.
 
 Called elsewhere, as the service principal `ai`: `events.event.publish` (Events, the outbox relay)
@@ -145,10 +144,10 @@ and its rollback lever (`AI_NS_REQUIRED`) were retired on 2026-09-28 (shims C-22
 Roadmap Wave 20, ADR-014. A developer app gets a token from OpenVibe.Network (`POST /oauth/token`,
 `grant_type=client_credentials` with its `app_<ULID>` client, `audience=openvibe.ai`): `sub
 app:app_<ULID>`, `project_id prj_<ULID>`, `env sandbox|production`, ns `[project_id,
-app.<project_id>.*]`, five minutes. AI accepts one capability for it, `ai.app.run` (public;
-proposed in `docs/capabilities-proposal/ai.app.run.json` until openvibe-contracts registers it —
-until then `server/auth.js` enforces it through its PROPOSED fallback, as Events did before
-`events.app.*` shipped):
+app.<project_id>.*]`, five minutes. AI accepts one capability for it, `ai.app.run` (public). A
+sandbox app holds it without asking (Network's default sandbox allowance); a production app holds it
+once OpenVibe staff add it to the project's allowance. Create the project and its app at
+[openvibe.codes/projects](https://openvibe.codes/projects):
 
 | Route | What |
 |---|---|
@@ -178,7 +177,7 @@ project's runs and never uses a person's BYO provider key: the `byok` provider p
 offered to an app run, and `credential` on its request is refused.
 
 ```bash
-AI=https://ai.openvibe.network
+AI=https://ai.openvibe.services
 APP=app_01JAB…                      # the app's client id; SECRET is its client secret
 TOKEN=$(curl -s -X POST https://openvibe.network/oauth/token \
   -d grant_type=client_credentials -d client_id=$APP -d client_secret=$SECRET \
@@ -194,7 +193,7 @@ AI takes one on these routes alone, and every other route refuses `env: sandbox`
 
 ## Operator console
 
-`/console` on ai.openvibe.network (roadmap WS-O task 4) is a server-rendered staff console: no
+`/console` on ai.openvibe.services (roadmap WS-O task 4) is a server-rendered staff console: no
 JavaScript, one inline stylesheet allowed by its CSP hash, `noindex` (meta and `X-Robots-Tag`),
 `no-store`, disallowed in `robots.txt`, in no sitemap. It does not load the OpenVibe Frame (the Frame
 needs scripts and inline styles), like Billing's staff console. Code: `server/console/`.
@@ -440,19 +439,15 @@ runs as `openvibe-llm.service` on 127.0.0.1:8090 ([Local model](#local-model)).
 Rollback: ovhost puts the previous sha back by itself when `/api/ready` does not answer 2xx after the
 restart; afterwards `sudo ovhost rollback ai --to <sha>`. Migrations only add tables and columns.
 
-Deployed: `/opt/openvibe.ai`, env `/etc/openvibe/ai.env` (0600), unit `deploy/systemd/openvibe-ai.service`
-(`StateDirectory=openvibe-ai`; database `ov_ai` on the host's data role), principal `ai`. The nginx vhost
-`deploy/nginx/ai.openvibe.network.conf` (health/ready, `/`, `/robots.txt`, the operator console
-`/console` and its sign-in `/auth/` public; the API is host-local) is not installed:
-`ai.openvibe.network` still serves the Sites placeholder. `deploy/nginx/ai.openvibe.services.conf`
-mirrors that vhost for `ai.openvibe.services` (the same proxied locations to the same upstream,
-`/metrics` and the API still blocked, on the `*.openvibe.services` certificate the host already holds) and
-replaces the Sites placeholder for `ai.openvibe.services` when installed; it is not installed or live yet. The console also needs
-`AI_CONSOLE_SESSION_SECRET` (32+ random characters) and `OV_OAUTH_CLIENT_SECRET` in the env file
-(without them it answers 503 in production), and the Network must list
-`https://ai.openvibe.network/auth/callback` among client `ai`'s redirect URIs (and
-`https://ai.openvibe.services/auth/callback` once that vhost serves the console, since the callback is built from
-the base URL).
+Deployed: `/opt/openvibe.ai`, env `/etc/openvibe/ai.env` (0600; `BASE_URL=https://ai.openvibe.services`), unit
+`deploy/systemd/openvibe-ai.service` (`StateDirectory=openvibe-ai`; database `ov_ai` on the host's data role),
+principal `ai`. The vhost `deploy/nginx/ai.openvibe.services.conf` (on the `*.openvibe.services` certificate)
+serves the home, `/stats`, `/shared/*`, `/robots.txt`, `/sitemap.xml`, `/llms.txt`, health/ready, the operator
+console `/console` with its sign-in `/auth/`, and exactly the developer-app routes (the six operations by POST,
+`/api/v1/runs/:id` by GET, rate-limited per address); every other `/api/` path and `/metrics` stay host-local.
+`deploy/nginx/ai.openvibe.network.conf` answers 301 to the same path on ai.openvibe.services. The console needs
+`AI_CONSOLE_SESSION_SECRET` (32+ random characters) and `OV_OAUTH_CLIENT_SECRET` in the env file (without them it
+answers 503 in production); Network client `ai` lists `https://ai.openvibe.services/auth/callback`.
 
 ## Not done yet
 
@@ -460,9 +455,8 @@ the base URL).
   themselves; moving the remaining passthrough prompts into AI templates (most `live.*` workflows are
   versioned templates since 2026-09-27);
   removing Network's fallback to Live's `/internal/ai/site-copy`; a public server-rendered status page.
-- The operator console is built but not reachable yet: it needs the vhost below installed (which
-  replaces the Sites placeholder), `https://ai.openvibe.network/auth/callback` listed as a redirect URI
-  of Network OAuth client `ai`, and `AI_CONSOLE_SESSION_SECRET` in `/etc/openvibe/ai.env`.
+- Metered models for developer apps: production app runs use free and local capacity until a tier budget
+  governs their project (`AI_GOVERN_TIERS` is off in production) and OpenVibe.Billing charges project subjects.
 - Import holds from the 2026-09-23 run: a streamer's own provider key stays in Live, and 3,021 Live
   translations cannot become cache entries (they have no source text) and stay in Live.
 - Text routes now run a capability pool (`shared` plus a local model when one is configured) instead
@@ -473,23 +467,15 @@ the base URL).
 - The host has a backup of `ov_ai` but no restore drill has run for it; `/metrics` is built but not
   deployed yet.
 
-## Launch rule
+## Launch
 
-This repository does not make the product real, and the domain keeps its placeholder page on
-[OpenVibers/OpenVibe.Sites](https://github.com/OpenVibers/OpenVibe.Sites) until all of the
-following exist here (plan §12.12):
-
-1. an owning runtime with health/readiness endpoints and observability;
-2. canonical identity/auth integration (OpenVibe.Network subjects, scoped service principals);
-3. server-rendered or static public routes that are useful without JavaScript;
-4. real persistence and end-to-end workflows;
-5. capability and event registration against `OpenVibe.Contracts`;
-6. a migration/seed strategy, a security/threat review, and sitemap/robots/feed behaviour;
-7. acceptance tests proving the advertised functionality.
-
-The launch release removes the domain from `OpenVibe.Sites/sites.json`, switches routing and
-registers maturity in the ecosystem registry atomically. A placeholder is never counted as an
-implemented service.
+Launched 2026-10-07 under the launch rule (plan §12.12): the runtime with health, readiness and metrics; Network
+subjects and scoped service principals; server-rendered public routes useful without JavaScript (the home,
+`/stats`); PostgreSQL persistence and end-to-end workflows; capabilities and events registered in
+`OpenVibe.Contracts` (`ai.app.run` since 0.109.0, the service live since 0.110.0); migrations at boot,
+robots/sitemap/llms.txt; acceptance tests ([above](#acceptance-guarantees-and-where-they-are-tested), and
+`test/home.test.js` for the public routes and vhosts). The same release removed ai.openvibe.services and the
+ai.openvibe.network notice from OpenVibe.Sites.
 
 ---
 

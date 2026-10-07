@@ -39,7 +39,7 @@ function load(env = process.env) {
     if (env.AI_PRICING_JSON) {
         try { pricing = JSON.parse(env.AI_PRICING_JSON) || {}; } catch { throw new Error('AI_PRICING_JSON is not valid JSON'); }
     }
-    const baseUrl = trimUrl(env.BASE_URL || (isProduction ? 'https://ai.openvibe.network' : `http://localhost:${port}`));
+    const baseUrl = trimUrl(env.BASE_URL || (isProduction ? 'https://ai.openvibe.services' : `http://localhost:${port}`));
     return {
         port,
         host: env.HOST || '127.0.0.1',
