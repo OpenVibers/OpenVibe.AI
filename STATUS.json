@@ -7,8 +7,9 @@
   "runtime": "node 22, express, postgresql",
   "port": 4700,
   "domain": "ai.openvibe.network still serves the OpenVibe.Sites placeholder; the service runs on openvibe-ovh (/opt/openvibe.ai, unit openvibe-ai) on 127.0.0.1:4700, loopback only, used by OpenVibe.Live and OpenVibe.Network",
-  "contracts": "openvibe-contracts v0.86.0",
+  "contracts": "openvibe-contracts v0.112.0",
   "sdk": "openvibe-sdk v0.26.0",
+  "shared": "openvibe-shared v2.13.0",
   "capabilities": [
     "ai.run.create",
     "ai.run.read",
@@ -30,7 +31,6 @@
   ],
   "livePatch": "applied: Live fa22de5 runs AI_SERVICE=remote in production since 2026-09-23 ~15:34 UTC (309 runs by 18:30 UTC across 13 live.* workflows and 1 network.site_copy, 0 failed). As of 2026-09-23, not moved yet: VOD captions/whisper and streamers' own provider keys stayed in Live and most Live features were passthrough prompts built by Live (since 2026-09-27 AI has live.media.transcribe, stored provider keys and versioned templates for most live.* workflows); the deployed Network still falls back to Live's /internal/ai/site-copy; scripts/import-from-live.js ran on production at 2026-09-23 18:29 UTC (79,657 ledger rows: 79,647 live.ai_usage, 2 channel_ai_config, 8 site_settings; 11 holds: provider settings and the key stay env references, 1 streamer BYO key stays in Live, 3,021 translations are unrepresentable and stay in Live); text routes (live.<role>, default.chat, default.json) are capability pools placed by openvibe-sdk/placement; live.stt, default.embedding and media.paid are single-provider and answer 503 provider.unavailable when it fails; 0 citation rows; no /metrics",
   "deployed": true,
-  "updated": "2026-10-04",
   "features": [
     "versioned templates, workflows and routing profiles",
     "runs with idempotency, cancel, retry, async polling and restart recovery",
@@ -46,5 +46,6 @@
     "Live import",
     "platform.usage-sample@1 readings to Billing with a per-subject provider free allowance; each run's reading state in explain and the free allowance on the staff console",
     "tier budgets (free, paid, staff) per subject and per project on openvibe-sdk/govern in Valkey, behind AI_GOVERN_TIERS (off by default); readings from govern's onUsage"
-  ]
+  ],
+  "updated": "2026-10-07"
 }
