@@ -50,9 +50,11 @@ owns publication truth: Wiki, Blog, News, Live, … decide what to publish.
 
 Implemented here (the service manifest's `capabilities`, audience `openvibe.ai`; routes under
 [API](#api)): `ai.run.create`, `ai.run.read`, `ai.workflow.manage`, `ai.provider.manage`,
-`ai.usage.read`, `ai.credential.manage` (`/api/v1/credentials/:subject`) and
-`ai.quota.attribution.manage` (per-streamer quotas). A token's `ns` claim limits which workflow
-namespaces it may run.
+`ai.usage.read`, `ai.credential.manage` (`/api/v1/credentials/:subject`),
+`ai.quota.attribution.manage` (per-streamer quotas) and `ai.app.run` (developer apps, ADR-014; a
+public capability proposed in `docs/capabilities-proposal/` until openvibe-contracts registers it —
+`server/auth.js` enforces it through its PROPOSED fallback until then). A service token's `ns`
+claim limits which workflow namespaces it may run; an app token is fixed to its project's.
 
 Called elsewhere, as the service principal `ai`: `events.event.publish` (Events, the outbox relay)
 and `network.modules.read` / `network.modules.write` for `ai.preferences` and `ai.usage_summary`
@@ -99,6 +101,7 @@ idempotent replay):
 |---|---|
 | `POST /api/v1/runs` (`?wait=ms`, `Idempotency-Key`), `POST /runs/:id/cancel`, `POST /runs/:id/retry`, `POST /runs/:id/citations` | `ai.run.create` |
 | `POST /api/v1/{chat,generate,summarize,classify,extract,enrich,embed}` — each a run of workflow `ai.<op>` | `ai.run.create` |
+| `POST /api/v1/{chat,generate,summarize,classify,extract,embed}` (no `enrich`), `GET /runs/:id` (the app's own runs) | `ai.app.run` for a developer-app token ([Developer apps](#developer-apps)) |
 | `GET /api/v1/runs`, `GET /runs/:id` (+ citations, request-log metadata), `GET /runs/:id/citations` | `ai.run.read` (own runs) |
 | `GET /api/v1/workflows\|templates\|routes[/:key]` | `ai.run.create`, `ai.workflow.manage` or `ai.usage.read` |
 | `POST /api/v1/{templates,workflows,routes}/:key/versions`, `…/versions/:v/status` | `ai.workflow.manage` |
@@ -136,6 +139,58 @@ workflow namespaces it may run (`live.*`, `wiki.*`, …), and namespaces fail cl
 no `ns` runs nothing. Every caller's Network grant names its namespaces (Live: `live.*`,
 `network.site_copy`, `media.analyze`). The fallback for service tokens without `ns` (`AI_NS_FALLBACK`)
 and its rollback lever (`AI_NS_REQUIRED`) were retired on 2026-09-28 (shims C-22 and C-23).
+
+## Developer apps
+
+Roadmap Wave 20, ADR-014. A developer app gets a token from OpenVibe.Network (`POST /oauth/token`,
+`grant_type=client_credentials` with its `app_<ULID>` client, `audience=openvibe.ai`): `sub
+app:app_<ULID>`, `project_id prj_<ULID>`, `env sandbox|production`, ns `[project_id,
+app.<project_id>.*]`, five minutes. AI accepts one capability for it, `ai.app.run` (public;
+proposed in `docs/capabilities-proposal/ai.app.run.json` until openvibe-contracts registers it —
+until then `server/auth.js` enforces it through its PROPOSED fallback, as Events did before
+`events.app.*` shipped):
+
+| Route | What |
+|---|---|
+| `POST /api/v1/{chat,generate,summarize,classify,extract,embed}` | the direct operations; `enrich` is first-party only |
+| `GET /api/v1/runs/:id` | the app's own runs (404 for another project's) |
+
+Every other route refuses an app token (403 `capability.denied`), whatever its grant carries. An
+app's runs are its **project's**: the run's requester is `project:prj_<ULID>` and its attribution is
+the project EntityRef `{service: 'network', type: 'project', id: 'prj_<ULID>'}`, so two apps of one
+project share their runs, and the project is the budget unit — the free allowance's subject is the
+attribution (`network:project:prj_<ULID>`), the tier budgets ([Providers](#providers)) name the
+project (`project:prj_<ULID>`), and a quota can cap it on the service scope id `project:prj_<ULID>`.
+
+**Billing.** Every run's `platform.usage-sample@1` readings carry the app's `project`
+(`prj_<ULID>`) with subject `project:prj_<ULID>`, so Billing bills the project's use: the project's
+bounded free allowance is claimed first (`free_allowance_used` on the reading), the rest is priced
+under the project's tier budget (`AI_GOVERN_TIERS`, keyed `project:prj_<ULID>`). **Free and local
+capacity only** (the stub, the local model, a free server or a pooled subscription — never a metered
+provider) for every sandbox run, and for every app run while no tier budget governs its project
+(`AI_GOVERN_TIERS` off): metered capacity is only ever spent under a project budget.
+
+**Workflows.** An app runs the six direct operations (the fixed `ai.*` workflows) and nothing else:
+`POST /api/v1/runs`, which takes a workflow by key, stays first-party, and the workflow check refuses
+anything outside `ai.*` and the app's own `app.<project_key>.*` (`project_key` = `p` + the project's
+ULID in lowercase, Events' rule for `app.<project_key>.<name>` event types). An app never reads another
+project's runs and never uses a person's BYO provider key: the `byok` provider profile is never
+offered to an app run, and `credential` on its request is refused.
+
+```bash
+AI=https://ai.openvibe.network
+APP=app_01JAB…                      # the app's client id; SECRET is its client secret
+TOKEN=$(curl -s -X POST https://openvibe.network/oauth/token \
+  -d grant_type=client_credentials -d client_id=$APP -d client_secret=$SECRET \
+  -d audience=openvibe.ai | jq -r .access_token)
+curl -s -X POST "$AI/api/v1/chat" -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{ "messages": [ { "role": "user", "content": "hello" } ] }' | jq .run.provenance
+curl -s "$AI/api/v1/runs/$RUN" -H "Authorization: Bearer $TOKEN" | jq .run.status
+```
+
+A sandbox token is issued only for an audience that opted in (Network's `DEV_SANDBOX_AUDIENCES`);
+AI takes one on these routes alone, and every other route refuses `env: sandbox` with 401
+`token.sandbox_refused`, as before.
 
 ## Operator console
 
@@ -332,6 +387,7 @@ file beside it, change `--model`/`--alias` and `AI_LOCAL_LLM_MODEL`, and restart
 | Media fetched only from allow-listed https OpenVibe hosts; DNS answers and every redirect hop re-checked (a public hop never reaches internal Media); size caps | `test/ssrf.test.js` |
 | The shared compiled-schema cache (caller-supplied schemas) is an LRU bounded by count and bytes, in Ajv too | `test/schemas.test.js` |
 | Token and capability denial, namespaces, no secret values in any response, runs private to the requester | `test/auth.test.js` |
+| Developer apps: `ai.app.run` on the six direct operations and `GET /runs/:id`, 403 on every other route, project-scoped runs, readings and free allowance per project, govern tiers keyed by the project, sandbox and ungoverned runs free/local capacity only, a byok profile and `credential` never selected | `test/app-access.test.js` |
 | Operator console: SSO + PKCE, staff-only (anonymous → sign-in, non-staff 403), the staff → AI capability map, CSRF on every write, no script/secret on any page, noindex/robots, failed-run filters, audit rows from API and console changes | `test/console.test.js` |
 | Public price/latency page: 200 without auth, rows from seeded stats and rate cards, the empty state, no caller ids, own-key providers, URLs or secrets | `test/stats-page.test.js` |
 | The OpenAI Responses adapter (`kind: responses`) with a stubbed fetch: request shape, output and usage parsing, `text.format`, error mapping, the key never in an error | `test/provider-responses.test.js` |
@@ -346,7 +402,9 @@ Reporting a vulnerability: [SECURITY.md](SECURITY.md). The rules the code keeps:
 
 - **Auth.** Every API route needs a Network service token for audience `openvibe.ai`, with the route's
   capability and, for runs, a namespace its `ns` claim allows. Runs are private to their requester.
-  The operator console is Network staff only, signed in with SSO and PKCE, with CSRF on every write.
+  A developer-app token is accepted only on `ai.app.run`'s routes ([Developer apps](#developer-apps)),
+  where it acts as its project; every other route refuses it. The operator console is Network staff
+  only, signed in with SSO and PKCE, with CSRF on every write.
 - **Secrets.** Shared provider keys are `env:NAME` references, never values; a person's own key is
   AES-256-GCM encrypted with `AI_CREDENTIALS_KEY`, bound to its owner and subject, and never returned
   (a four-character hint only). No response, log or console page carries a secret value.

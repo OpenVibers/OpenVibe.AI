@@ -14,7 +14,8 @@
  * The relay (openvibe-sdk createPgOutbox) posts each row with AI's service token. If Billing is down, has no
  * grant yet, or is not deployed, the row waits and is retried with backoff, across restarts. Only Billing
  * refusing the reading itself (400, 409, 413, 422) marks a row rejected. A reading carries ids, the workflow,
- * the requester, tokens and cost. It never carries the input, the output or a prompt. Readings are queued once
+ * the requester, tokens and cost — and, for a developer app's run (ADR-014), the `project` (prj_<ULID>) its
+ * spend is billed to. It never carries the input, the output or a prompt. Readings are queued once
  * init() ran, unless USAGE_SAMPLES=off. The relay runs while OV_BILLING_INTERNAL_URL and OV_OAUTH_CLIENT_SECRET
  * are set. Runs on a person's own key, and runs that called no provider and were not a cache hit, are not
  * accounted and have no reading. free_allowance_used (§2.1.8) is the share the provider free allowance covered
@@ -37,11 +38,13 @@ let relay = null; let on = false; let pruneTimer = null; let lastError = null; l
 const keyOf = (runId, attempt, kind) => `ai:${runId}:${attempt}:${kind}`;
 const meter = createMeter();
 /** One reading: an attempt's tokens of one kind, under its rate-card metric and the metric's leading-word unit. */
-function sampleOf({ runId, attempt, kind, workflowKey, requester, provider = null, model = null, quantity = 0, cost = 0, freeAllowanceUsed = 0, at, traceId = null }) {
+function sampleOf({ runId, attempt, kind, workflowKey, requester, project = null, provider = null, model = null, quantity = 0, cost = 0, freeAllowanceUsed = 0, at, traceId = null }) {
   const key = keyOf(runId, attempt, kind);
   const s = { id: key, idempotency_key: key, service: 'ai', subject: requester, resource: rates.metricFor(kind, model || null), operation: workflowKey,
     quantity: Math.max(0, Number(quantity) || 0), unit: UNIT[kind], at: new Date(at).toISOString(),
     cost_estimate: Math.max(0, Number(cost) || 0), source: 'ai.runs' };
+  // A developer app's run (ADR-014): the reading names the project Billing bills it to.
+  if (project) s.project = project;
   if (provider && provider !== 'mixed') s.provider = provider;
   // §2.1.8: the tokens the provider free allowance covered of this reading's quantity (server/free-allowance.js); absent at 0.
   const free = Math.min(s.quantity, Math.max(0, Math.floor(Number(freeAllowanceUsed) || 0)));
@@ -58,12 +61,13 @@ function sampleFromUsage(e, fields) {
  * per-kind descriptors (quota.account builds them from the free allowance's byKind): { attempt, kind,
  * provider, model, quantity, cost, freeAllowanceUsed }. Writes them all, links their keys on the run, and
  * returns the keys. A second call for the same keys changes nothing (ON CONFLICT DO NOTHING).
+ * `project` (prj_<ULID>) names the developer app's project on every reading (ADR-014); null otherwise.
  */
-async function record(db, { runId, workflowKey, requester, at, traceId = null, readings = [] }) {
+async function record(db, { runId, workflowKey, requester, project = null, at, traceId = null, readings = [] }) {
   if (!on) return [];
   const ids = [];
   for (const r of readings) {
-    const fields = { runId, attempt: r.attempt, kind: r.kind, workflowKey, requester, provider: r.provider, model: r.model, quantity: r.quantity, cost: r.cost, freeAllowanceUsed: r.freeAllowanceUsed, at, traceId };
+    const fields = { runId, attempt: r.attempt, kind: r.kind, workflowKey, requester, project, provider: r.provider, model: r.model, quantity: r.quantity, cost: r.cost, freeAllowanceUsed: r.freeAllowanceUsed, at, traceId };
     const key = keyOf(runId, r.attempt, r.kind);
     const e = await meter({ subject: requester, quantity: Math.max(0, Number(r.quantity) || 0), key });
     const s = e ? sampleFromUsage(e, fields) : sampleOf(fields);
