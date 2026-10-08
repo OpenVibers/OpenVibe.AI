@@ -54,7 +54,7 @@ function sampleOf({ runId, attempt, kind, workflowKey, requester, project = null
 }
 /** The reading: govern's onUsage record (id, subject, quantity) on the attempt's own fields. */
 function sampleFromUsage(e, fields) {
-  return { ...sampleOf(fields), id: e.idempotency_key, idempotency_key: e.idempotency_key, subject: e.subject, quantity: e.amount };
+  return { ...sampleOf(fields), id: e.idempotency_key, idempotency_key: e.idempotency_key, subject: e.subject, quantity: e.quantity };
 }
 /**
  * MUST be awaited inside the transaction that accounts the run. `readings` are the run's per-attempt,

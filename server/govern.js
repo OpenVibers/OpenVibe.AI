@@ -80,7 +80,7 @@ function createTiers({ config, valkey = null, clock = { now: () => Date.now() },
     if (owned) valkey = createValkey({ url: g.valkeyUrl, prefix: g.valkeyPrefix, log });
     if (!valkey && config.isProduction) throw new Error('AI_GOVERN_TIERS=1 needs VALKEY_URL: the tier budgets are counted in Valkey');
     if (!valkey) log.warn('[govern] no VALKEY_URL: tier budgets are counted in this process only');
-    const gov = createGovernor({ policy: g.policy, valkey, now: () => clock.now() });
+    const gov = createGovernor({ service: 'ai', policy: g.policy, valkey, now: () => clock.now(), log });
     const free = freeCounters(valkey);
     const tierOf = (...keys) => { for (const k of keys) if (k && g.tiers[k]) return g.tiers[k]; return g.defaultTier; };
     let lastError = null;
@@ -160,7 +160,7 @@ function createTiers({ config, valkey = null, clock = { now: () => Date.now() },
  */
 function createMeter() {
     const seen = new Map();
-    const gov = createGovernor({ onUsage: (e) => { if (seen.has(e.idempotency_key)) seen.set(e.idempotency_key, e); } });
+    const gov = createGovernor({ service: 'ai', onUsage: (e) => { if (seen.has(e.idempotency_key)) seen.set(e.idempotency_key, e); } });
     return async function reading({ subject, quantity, key }) {
         if (seen.has(key)) return null;
         seen.set(key, null);
