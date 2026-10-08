@@ -17,8 +17,8 @@ const appIcon = require('openvibe-shared/app-icon');
 
 const SITE_NAME = 'OpenVibe.AI';
 const NETWORK_URL = 'https://openvibe.network';
-const PROJECTS_URL = 'https://openvibe.codes/projects';
-const API_DOCS_URL = 'https://openvibe.codes/docs/api';
+const PROJECTS_URL = 'https://openvibe.services/projects';
+const API_DOCS_URL = 'https://openvibe.services/docs/api';
 const SOURCE = 'https://github.com/OpenVibers/OpenVibe.AI';
 const GUIDE = `${SOURCE}#developer-apps`;
 const DESCRIPTION = 'One API for chat, generation, summaries, classification, extraction and embeddings across many models. '
@@ -87,7 +87,7 @@ function sections({ siteUrl }) {
     }) + showcase.steps({
         title: 'Start in four steps',
         items: [
-            { title: 'Create a project', text: 'Sign in at openvibe.codes/projects with your OpenVibe account and create a project.' },
+            { title: 'Create a project', text: 'Sign in at openvibe.services/projects with your OpenVibe account and create a project.' },
             { title: 'Add an app', text: 'Add an app to it. A confidential app gets a client id and a secret, shown once.' },
             { title: 'Get a token', text: 'Exchange them at OpenVibe.Network for a five-minute token with the audience openvibe.ai.' },
             { title: 'Call an operation', text: 'POST to /api/v1/chat or any of the other five, and keep the run id to read it later.' },
