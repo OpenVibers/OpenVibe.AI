@@ -93,6 +93,25 @@ t.test('ai.openvibe.network answers 301 to the same path on ai.openvibe.services
     assert.strictEqual((conf.match(/return 301 https:\/\/ai\.openvibe\.services\$request_uri;/g) || []).length, 2, 'HTTP and HTTPS');
 });
 
+t.test('the CSPs let Cloudflare Web Analytics load and report (it injects its beacon on this zone)', async () => {
+    assert.match(HOME_CSP, /script-src [^;]*https:\/\/static\.cloudflareinsights\.com/);
+    assert.match(HOME_CSP, /connect-src [^;]*https:\/\/cloudflareinsights\.com/);
+    const stats = await request(h.base, 'GET', '/stats', { headers: { Accept: BROWSER } });
+    assert.match(stats.headers.get('content-security-policy'), /script-src https:\/\/static\.cloudflareinsights\.com; connect-src https:\/\/cloudflareinsights\.com/);
+});
+
+t.test('a browser gets a page for a path nothing serves; an API client the problem document; /favicon.ico is the icon', async () => {
+    const page = await request(h.base, 'GET', '/no-such-page', { headers: { Accept: BROWSER } });
+    assert.strictEqual(page.status, 404);
+    assert.ok(page.text.includes('<html lang="en">') && page.text.includes('<title>Not found') && page.text.includes('rel="icon"'));
+    const api = await request(h.base, 'GET', '/api/v1/no-such-thing', { headers: { Accept: BROWSER } });
+    assert.strictEqual(api.status, 404);
+    assert.match(api.headers.get('content-type'), /json/);
+    const icon = await request(h.base, 'GET', '/favicon.ico');
+    assert.strictEqual(icon.status, 200);
+    assert.match(icon.headers.get('content-type'), /^image\/svg\+xml/);
+});
+
 t.test('shutdown', async () => { await h.stop(); });
 
 t.run();

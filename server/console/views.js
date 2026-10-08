@@ -67,7 +67,8 @@ details{margin:6px 0 12px}summary{cursor:pointer;color:var(--accent)}
 @media (max-width:600px){.who{margin-left:0}h1{font-size:20px}}
 `;
 const CSS_HASH = `sha256-${crypto.createHash('sha256').update(CSS).digest('base64')}`;
-const CSP = `default-src 'none'; style-src '${CSS_HASH}'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'`;
+// script-src/connect-src: only Cloudflare Web Analytics, whose beacon Cloudflare injects at the edge on this zone.
+const CSP = `default-src 'none'; style-src '${CSS_HASH}'; img-src 'self'; script-src https://static.cloudflareinsights.com; connect-src https://cloudflareinsights.com; form-action 'self'; frame-ancestors 'none'; base-uri 'none'`;
 
 // ── Formatting ───────────────────────────────────────────────
 const n = (v) => Number(v || 0).toLocaleString('en-US');
