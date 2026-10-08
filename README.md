@@ -147,7 +147,7 @@ app:app_<ULID>`, `project_id prj_<ULID>`, `env sandbox|production`, ns `[project
 app.<project_id>.*]`, five minutes. AI accepts one capability for it, `ai.app.run` (public). A
 sandbox app holds it without asking (Network's default sandbox allowance); a production app holds it
 once OpenVibe staff add it to the project's allowance. Create the project and its app at
-[openvibe.codes/projects](https://openvibe.codes/projects):
+[openvibe.services/projects](https://openvibe.services/projects):
 
 | Route | What |
 |---|---|

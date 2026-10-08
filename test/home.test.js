@@ -29,7 +29,7 @@ t.test('GET / as a browser: the home page, its CSP and a private cache', async (
     assert.ok(r.text.includes('Many models, one API.'), 'the hero');
     assert.ok(r.text.includes(`<link rel="canonical" href="${SITE}/">`), 'the canonical public origin');
     assert.ok(r.text.includes(`${SITE}/api/v1/chat`), 'the examples call the public origin');
-    assert.ok(r.text.includes('https://openvibe.codes/projects'), 'where a project and an app are made');
+    assert.ok(r.text.includes('https://openvibe.services/projects'), 'where a project and an app are made');
     assert.ok(!/ai\.openvibe\.network/.test(r.text), 'never the old name');
 });
 

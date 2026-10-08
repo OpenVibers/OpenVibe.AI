@@ -155,7 +155,7 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
             '',
             'Callers authenticate with OpenVibe.Network tokens (audience openvibe.ai): first-party service tokens, or a',
             'developer app\'s token (ai.app.run) on the six direct operations and GET /api/v1/runs/:id.',
-            'Developer apps: https://openvibe.codes/projects',
+            'Developer apps: https://openvibe.services/projects',
             'AI output is a draft/evidence package attributed to a workflow, model and run, never to a person.',
             '',
             'Source: https://github.com/OpenVibers/OpenVibe.AI',
