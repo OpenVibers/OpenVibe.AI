@@ -163,7 +163,16 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
         ].join('\n'));
     });
 
-    app.use((req, res) => http.sendProblem(res, 404, 'ai.not_found', { detail: `no route ${req.method} ${req.path}`, ctx: req.ov }));
+    // Browsers ask for /favicon.ico on their own: the app icon, as SVG.
+    app.get('/favicon.ico', (req, res) => res.type('image/svg+xml').set('Cache-Control', 'public, max-age=86400').send(require('openvibe-shared/app-icon').favicon({ site: 'ai' })));
+
+    // A browser asking for a page that is not here gets a page; an API client the problem document.
+    app.use((req, res) => {
+        if (req.method === 'GET' && !req.path.startsWith('/api/') && !req.path.startsWith('/v1/') && req.accepts(['application/json', 'text/html']) === 'text/html') {
+            return res.status(404).type('html').set('Content-Security-Policy', home.HOME_CSP).set('Cache-Control', 'no-store').send(home.renderNotFound());
+        }
+        return http.sendProblem(res, 404, 'ai.not_found', { detail: `no route ${req.method} ${req.path}`, ctx: req.ov });
+    });
 
     // AI's own codes for a miss and a bad body (openvibe-sdk/service jsonErrors() would answer not_found and
     // request.invalid_json); everything else goes through sendError (openvibe-sdk/service): 500 ai.internal.
