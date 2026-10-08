@@ -140,7 +140,7 @@ t.test('the meter: one onUsage record per idempotency key at once', async () => 
     const reading = createMeter();
     const got = await Promise.all([reading({ subject: 'service:live', quantity: 5, key: 'ai:run_m:tokens' }), reading({ subject: 'service:live', quantity: 5, key: 'ai:run_m:tokens' })]);
     assert.strictEqual(got.filter(Boolean).length, 1);
-    assert.deepStrictEqual([got.find(Boolean).idempotency_key, got.find(Boolean).amount, got.find(Boolean).subject], ['ai:run_m:tokens', 5, 'service:live']);
+    assert.deepStrictEqual([got.find(Boolean).idempotency_key, got.find(Boolean).quantity, got.find(Boolean).subject, got.find(Boolean).service], ['ai:run_m:tokens', 5, 'service:live', 'ai']);
 });
 
 // On the containers' Valkey (OV_TEST_VALKEY_URL, set by openvibe-sdk/scripts/test-services.sh): govern's Lua and the
