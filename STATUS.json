@@ -7,7 +7,7 @@
   "runtime": "node 22, express, postgresql",
   "port": 4700,
   "domain": "ai.openvibe.services (the old ai.openvibe.network address was retired on 2026-10-10); the service runs on openvibe-ovh (/opt/openvibe.ai, unit openvibe-ai) on 127.0.0.1:4700 behind nginx; OpenVibe.Live and OpenVibe.Network call it on loopback",
-  "contracts": "openvibe-contracts v0.126.0",
+  "contracts": "openvibe-contracts v0.127.0",
   "sdk": "openvibe-sdk v0.35.0",
   "shared": "openvibe-shared v2.20.3",
   "capabilities": [
