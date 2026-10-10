@@ -6,7 +6,7 @@
 production use: OpenVibe.Live runs with `AI_SERVICE=remote` and Network's footer copy runs
 `network.site_copy` here. Public since 2026-10-07 at [ai.openvibe.services](https://ai.openvibe.services):
 the home (`server/home.js`), `/stats` and the developer-app API (`ai.app.run`).
-**Domain:** `ai.openvibe.services` (`ai.openvibe.network` answers 301 to it) · **Port:** 4700 · **Unit:** `openvibe-ai.service`
+**Domain:** `ai.openvibe.services` · **Port:** 4700 · **Unit:** `openvibe-ai.service`
 **Plan:** OpenVibe End-to-End Realignment & Implementation Plan, revision 3 (20 Sep 2026), §12.1, §12.13, §15.14, §33, §34.
 **License:** AGPL-3.0 (same as every OpenVibe service).
 
@@ -445,7 +445,7 @@ principal `ai`. The vhost `deploy/nginx/ai.openvibe.services.conf` (on the `*.op
 serves the home, `/stats`, `/shared/*`, `/robots.txt`, `/sitemap.xml`, `/llms.txt`, health/ready, the operator
 console `/console` with its sign-in `/auth/`, and exactly the developer-app routes (the six operations by POST,
 `/api/v1/runs/:id` by GET, rate-limited per address); every other `/api/` path and `/metrics` stay host-local.
-`deploy/nginx/ai.openvibe.network.conf` answers 301 to the same path on ai.openvibe.services. The console needs
+The old `ai.openvibe.network` address was retired on 2026-10-10. The console needs
 `AI_CONSOLE_SESSION_SECRET` (32+ random characters) and `OV_OAUTH_CLIENT_SECRET` in the env file (without them it
 answers 503 in production); Network client `ai` lists `https://ai.openvibe.services/auth/callback`.
 
