@@ -2,7 +2,7 @@
 // The public home (plan T6: AI as a developer product). ai.openvibe.services renders server/home.js for a
 // browser and keeps the text/plain API index for curl and API clients, serves the pinned OpenVibe Frame at
 // /shared, and answers robots.txt, sitemap.xml and llms.txt. The vhosts: the developer-app routes are the only
-// API the public vhost proxies, and ai.openvibe.network is a 301 to the product origin.
+// API the public vhost proxies, and the old ai.openvibe.network address is retired (no vhost of its own).
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
@@ -87,10 +87,8 @@ t.test('the public vhost proxies the home, its files and exactly the developer-a
     assert.ok(!conf.includes('$proxy_add_x_forwarded_for'));
 });
 
-t.test('ai.openvibe.network answers 301 to the same path on ai.openvibe.services, and proxies nothing', () => {
-    const conf = active('ai.openvibe.network.conf');
-    assert.ok(!conf.includes('proxy_pass'), 'nothing is served under the old name');
-    assert.strictEqual((conf.match(/return 301 https:\/\/ai\.openvibe\.services\$request_uri;/g) || []).length, 2, 'HTTP and HTTPS');
+t.test('the retired ai.openvibe.network address has no vhost (plan T6, 2026-10-10)', () => {
+    assert.ok(!fs.existsSync(path.join(__dirname, '..', 'deploy', 'nginx', 'ai.openvibe.network.conf')));
 });
 
 t.test('the CSPs let Cloudflare Web Analytics load and report (it injects its beacon on this zone)', async () => {
