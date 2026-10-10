@@ -57,7 +57,7 @@ label{display:grid;gap:4px;font-size:14px}label.check{display:flex;gap:8px;align
 input[type=text],input[type=number],input[type=date],input[type=datetime-local],select{font:inherit;padding:6px 8px;border:1px solid var(--line);border-radius:7px;background:var(--bg);color:var(--fg);width:100%;min-width:0}
 form.inline select{width:auto}
 button{font:inherit;padding:6px 13px;border-radius:7px;border:1px solid var(--line);background:var(--card);color:var(--fg);cursor:pointer}
-button.primary{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}button.danger{border-color:var(--bad);color:var(--bad)}
+button.primary{background:var(--accent-strong, var(--accent, #3472d8));border-color:var(--accent-strong, var(--accent, #3472d8));color:var(--on-accent-strong, var(--on-accent))}button.danger{border-color:var(--bad);color:var(--bad)}
 button.link{border:0;background:none;padding:0;color:var(--accent);text-decoration:underline}
 fieldset{border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin:0;min-width:0}legend{padding:0 6px;font-weight:600}
 dl{display:grid;grid-template-columns:minmax(0,max-content) minmax(0,1fr);gap:6px 16px;margin:0}dt{color:var(--muted)}dd{margin:0;min-width:0}
