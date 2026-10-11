@@ -14,8 +14,10 @@
  *     public hop (an allow-listed host that redirects must not reach the loopback Media service)
  *   - a byte cap, a timeout and cancellation on every transfer
  * data: URLs (images a caller sends inline) are decoded locally with a size cap — never fetched.
- * A MediaRef resolves to the public Media URL for the legacy kinds; med_ ids are an explicit
- * `media.unresolvable` until the Wave 4 object API exists.
+ * A MediaRef (a Media object id, med_…) resolves to that object's public bytes URL, <Media>/o/<id>:
+ * Media serves a public, ready object there (redirecting to its storage copy) and answers 404 for a
+ * private one, so a MediaRef never reaches more than its URL would. The `legacy:<svc>:<kind>:<id>`
+ * form is refused since 2026-10-11 (compatibility register C-24: no run ever sent one).
  */
 const dns = require('dns');
 const net = require('net');
@@ -25,6 +27,9 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { AiError } = require('./util');
+
+/** A Media object id (contracts media/media-ref.v1: med_ + a ULID). */
+const MEDIA_OBJECT_ID = /^med_[0-9A-HJKMNP-TV-Z]{26}$/;
 
 const blocked = new net.BlockList();
 for (const [a, p] of [['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8], ['169.254.0.0', 16], ['172.16.0.0', 12], ['192.0.0.0', 24],
@@ -217,22 +222,11 @@ function createFetcher(config, { transport = null } = {}) {
         return url;
     }
 
-    /** A MediaRef -> the public URL of that object (legacy kinds only for now). */
+    /** A MediaRef -> the public bytes URL of that Media object. */
     function mediaRefUrl(ref) {
-        const id = ref && ref.media_id;
-        const mm = /^legacy:([a-z][a-z0-9-]{1,39}):(vod|clip|file|paste|thumbnail|avatar):([A-Za-z0-9._/-]{1,200})$/.exec(String(id || ''));
-        if (!mm) throw new AiError(422, 'media.unresolvable', `media ${id} cannot be resolved by this service yet`);
-        const [, , kind, key] = mm;
-        const base = m.publicUrl;
-        if (key.includes('..')) throw new AiError(422, 'media.unresolvable', 'bad media key');
-        switch (kind) {
-            case 'vod': return `${base}/v/${encodeURIComponent(key)}`;
-            case 'clip': return `${base}/c/${encodeURIComponent(key)}`;
-            case 'thumbnail': return `${base}/t/${encodeURIComponent(key)}`;
-            case 'paste': return `${base}/p/${encodeURIComponent(key)}/raw`;
-            case 'file': return `${base}/f/${key.split('/').map(encodeURIComponent).join('/')}`;
-            default: throw new AiError(422, 'media.unresolvable', `media kind ${kind} is not fetched`);
-        }
+        const id = String((ref && ref.media_id) || '');
+        if (!MEDIA_OBJECT_ID.test(id)) throw new AiError(422, 'media.unresolvable', `media ${id || '(none)'} is not a Media object id (med_…)`);
+        return `${m.publicUrl}/o/${id}`;
     }
 
     /** Image input { url } | { data_url } | { media: MediaRef } -> { mediaType, base64 }. */
