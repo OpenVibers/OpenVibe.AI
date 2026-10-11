@@ -53,8 +53,13 @@ t.test('URL rules: https + allow-listed host only', async () => {
     }
     assert.ok(f.judge('https://openvibe.media/v/1'));
     assert.ok(f.judge('https://ai.openvibe.network/x'), '*.openvibe.network');
-    assert.strictEqual(f.mediaRefUrl({ media_id: 'legacy:live:vod:42' }), 'https://openvibe.media/v/42');
-    assert.throws(() => f.mediaRefUrl({ media_id: 'med_01JAB2C3D4E5F6G7H8J9K0MNPA' }), e => e.code === 'media.unresolvable');
+    // A MediaRef is a Media object id and resolves to its public bytes URL (Media 404s a private one).
+    assert.strictEqual(f.mediaRefUrl({ media_id: 'med_01JAB2C3D4E5F6G7H8J9K0MNPA' }), 'https://openvibe.media/o/med_01JAB2C3D4E5F6G7H8J9K0MNPA');
+    assert.ok(f.judge(f.mediaRefUrl({ media_id: 'med_01JAB2C3D4E5F6G7H8J9K0MNPA' })), 'the resolved URL passes the same URL rules');
+    // The legacy:<svc>:<kind>:<id> form is refused (C-24), as is anything else that is not an object id.
+    for (const id of ['legacy:live:vod:42', 'med_01JAB2C3D4E5F6G7H8J9K0MNP', 'med_01JAB2C3D4E5F6G7H8J9K0MNPA/../x', '', null]) {
+        assert.throws(() => f.mediaRefUrl({ media_id: id }), e => e.code === 'media.unresolvable', String(id));
+    }
 });
 
 t.test('an allow-listed NAME that resolves to an internal address is refused at connect time', async () => {

@@ -4,7 +4,7 @@
 const MEDIA_REF = {
     type: 'object', additionalProperties: false, required: ['media_id'],
     properties: {
-        media_id: { type: 'string', pattern: '^(med_[0-9A-HJKMNP-TV-Z]{26}|legacy:[a-z][a-z0-9-]{1,39}:(vod|clip|file|paste|thumbnail|avatar):[A-Za-z0-9._/-]{1,200})$' },
+        media_id: { type: 'string', pattern: '^med_[0-9A-HJKMNP-TV-Z]{26}$' },
         role: { type: 'string' }, variant: { type: 'string' },
     },
 };
