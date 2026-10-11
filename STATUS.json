@@ -8,7 +8,7 @@
   "port": 4700,
   "domain": "ai.openvibe.services (the old ai.openvibe.network address was retired on 2026-10-10); the service runs on openvibe-ovh (/opt/openvibe.ai, unit openvibe-ai) on 127.0.0.1:4700 behind nginx; OpenVibe.Live and OpenVibe.Network call it on loopback",
   "contracts": "openvibe-contracts v0.129.0",
-  "sdk": "openvibe-sdk v0.42.0",
+  "sdk": "openvibe-sdk v0.43.0",
   "shared": "openvibe-shared v3.0.1",
   "capabilities": [
     "ai.run.create",
@@ -47,5 +47,5 @@
     "platform.usage-sample@1 readings to Billing with a per-subject provider free allowance; each run's reading state in explain and the free allowance on the staff console",
     "tier budgets (free, paid, staff) per subject and per project on openvibe-sdk/govern in Valkey, behind AI_GOVERN_TIERS (off by default); readings from govern's onUsage"
   ],
-  "updated": "2026-10-10"
+  "updated": "2026-10-11"
 }
