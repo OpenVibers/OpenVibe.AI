@@ -4,6 +4,17 @@
 // /shared, and answers robots.txt, sitemap.xml and llms.txt. The vhosts: the developer-app routes are the only
 // API the public vhost proxies, and the old ai.openvibe.network address is retired (no vhost of its own).
 const assert = require('assert');
+
+function assertSitemapLastmods(xml, tag = 'url') {
+    const entries = [...xml.matchAll(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`, 'g'))];
+    for (const [, body] of entries) {
+        const match = /<lastmod>(\d{4}-\d{2}-\d{2})<\/lastmod>/.exec(body);
+        assert.ok(match, body);
+        assert.strictEqual(new Date(match[1]).toISOString().slice(0, 10), match[1]);
+    }
+    return entries;
+}
+
 const fs = require('fs');
 const path = require('path');
 const { boot, request, suite } = require('./helpers');
@@ -61,6 +72,7 @@ t.test('robots.txt, sitemap.xml and llms.txt name the public origin', async () =
     assert.strictEqual(map.status, 200);
     assert.match(map.headers.get('content-type'), /xml/);
     assert.deepStrictEqual([...map.text.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => m[1]), [`${SITE}/`, `${SITE}/stats`]);
+    assert.strictEqual(assertSitemapLastmods(map.text).length, 2);
     const llms = await request(h.base, 'GET', '/llms.txt');
     assert.strictEqual(llms.status, 200);
     assert.match(llms.headers.get('content-type'), /^text\/plain/);
