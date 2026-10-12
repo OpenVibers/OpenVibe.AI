@@ -44,6 +44,7 @@ const EXAMPLES = {
     'codes.generate_docs': { project: 'demo', sources: [{ source_type: 'code.file', title: 'index.js', content: 'module.exports = 1;' }] },
     'games.generate_lore': { world: 'Hobo Quest', prompt: 'The origin of the tin-can knights', sources: SRC(1) },
     'moderation.classify': { text: 'you absolute potato, gg', context: 'arena chat' },
+    'food.suggest_recipes': { pantry: ['rice', 'onions', 'canned tomatoes'], people: 2, sources: [{ source_type: 'food.food', source_id: 'lentils', title: 'Lentils, dried', content: '{"id":"lentils","unit":"kg"}' }] },
     'tools.describe': { tool: 'img.convert', sources: [{ source_type: 'tools.tool', title: 'img.convert descriptor', content: '{"id":"img.convert","inputs":["file","format"]}' }] },
 };
 for (const k of new Set(Object.values(KIND_TO_WORKFLOW).concat('live.complete'))) EXAMPLES[k] = PASS;
@@ -87,11 +88,11 @@ t.test('boot seeds every required workflow key', async () => {
     h = await boot({ env: { OV_MEDIA_INTERNAL_URL: mediaBase } });
     const keys = (await h.registry.listWorkflows()).map(w => w.key);
     for (const k of ['wiki.generate_space', 'wiki.generate_page', 'blog.draft_post', 'news.summarize_story', 'news.compare_perspectives', 'reviews.summarize_entity', 'deals.enrich_deal',
-        'coupons.extract_coupon', 'trade.summarize_market_context', 'codes.generate_docs', 'games.generate_lore', 'moderation.classify', 'tools.describe',
+        'coupons.extract_coupon', 'trade.summarize_market_context', 'codes.generate_docs', 'games.generate_lore', 'moderation.classify', 'tools.describe', 'food.suggest_recipes',
         'live.translate', 'live.stream.describe_frame', 'live.stream.summarize', 'live.viewers.reply', 'live.chat.insight', 'live.hero.slogans', 'live.stream.recap', 'network.site_copy']) {
         assert.ok(keys.includes(k), `missing ${k}`);
     }
-    for (const k of ['default.chat', 'default.json', 'default.embedding', 'wiki.generate', 'blog.draft', 'news.summarize', 'reviews.summarize', 'deals.enrich', 'coupons.extract', 'trade.summarize', 'codes.generate_docs', 'games.generate_lore', 'tools.describe', 'moderation.classify']) {
+    for (const k of ['default.chat', 'default.json', 'default.embedding', 'wiki.generate', 'blog.draft', 'news.summarize', 'reviews.summarize', 'deals.enrich', 'coupons.extract', 'trade.summarize', 'codes.generate_docs', 'games.generate_lore', 'tools.describe', 'moderation.classify', 'food.suggest']) {
         assert.ok(await h.registry.getRoute(k), `missing historical route ${k}`);
     }
 });

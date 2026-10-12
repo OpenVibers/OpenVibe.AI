@@ -3,7 +3,7 @@
  * Seed workflows the publication products consume (plan §15.13). Every one returns a DRAFT /
  * EVIDENCE package — never publication truth — with citations that index into the numbered
  * input.sources, plus `gaps` for what the sources do not support. The owning product (Wiki,
- * Blog, News, Reviews, Deals, Coupons, Trade, Codes, Games, Tools) decides what to publish.
+ * Blog, News, Reviews, Deals, Coupons, Trade, Codes, Games, Tools, Food) decides what to publish.
  *
  * Hard rules carried into the prompts and the schemas:
  *   - no invented facts, prices, ratings, dates, quotes (Reviews has no rating field at all;
@@ -55,6 +55,8 @@ const templates = [
         'World: {{world}}\nRequest: {{prompt}}\n\n'),
     productTemplate('tools.describe', 'Tools: describe a tool', 'Describe one OpenVibe tool for the people who use it, from its descriptor (the numbered sources: its registry entry, inputs, outputs and limits): a one-line summary, what it does, how to use it step by step, what each input and output means, its limits, and a short FAQ. Cite the descriptor fields each statement rests on. Do not claim formats, sizes or features the descriptor does not list; say what is unknown in gaps.', 'tools.describe',
         'Tool: {{tool}}{{#audience}}\nAudience: {{audience}}{{/audience}}\n\n'),
+    productTemplate('food.suggest_recipes', 'Food: suggest recipes', 'Suggest up to three simple, low-cost recipes the person can cook, built first from their pantry. An ingredient from the pantry has from_pantry true and needs no citation. Every other ingredient must be one of the foods in the numbered sources (OpenVibe.Food\'s food list) and cite it; if a recipe needs something the sources do not list, leave that recipe out and name the missing food in gaps. State amounts in everyday units. Never state prices, calories, nutrition or health claims: the app works out costs from its own data. Keep steps short and safe (cook meat, poultry and eggs through).', 'food.suggest',
+        'Pantry: {{json pantry}}{{#people}}\nCooking for: {{people}}{{/people}}{{#ask}}\nRequest: {{ask}}{{/ask}}\n\n'),
     productTemplate('moderation.classify', 'Moderation: classify content', 'Classify the content under OpenVibe policy. Profanity, insults, crude jokes and trash talk are ALLOWED and are not violations. Flag only: credible threats of violence, any sexual content involving minors, doxxing (sharing private personal information), targeted harassment campaigns, spam/scams, sexual content where not allowed, and self-harm encouragement. Quote the exact spans you flag. When unsure, choose review, not block.', 'moderation.classify',
         '{{#context}}Context: {{context}}\n\n{{/context}}Content to classify:\n"""\n{{text}}\n"""\n\n'),
 ];
@@ -155,6 +157,19 @@ const workflows = [
             citations: CITES, gaps: GAPS,
         }),
         default_route: 'tools.describe',
+    },
+    {
+        key: 'food.suggest_recipes', name: 'Suggest recipes from a pantry', namespace: 'food',
+        input_schema: OBJ({ pantry: ARR(STR(120), 60), people: { type: 'integer', minimum: 1, maximum: 12 }, ask: STR(500), sources: SOURCES(1) }, ['pantry', 'sources']),
+        output_schema: OBJ({
+            recipes: ARR(OBJ({
+                title: STR(160), serves: { type: 'integer', minimum: 1, maximum: 12 }, minutes: { type: 'integer', minimum: 1, maximum: 600 },
+                ingredients: ARR(OBJ({ name: STR(120), amount: STR(80), from_pantry: { type: 'boolean' }, citations: CITES }), 25),
+                steps: ARR(STR(600), 20), notes: STR(600),
+            }), 3),
+            citations: CITES, gaps: GAPS,
+        }),
+        default_route: 'food.suggest',
     },
     {
         key: 'moderation.classify', name: 'Classify content for moderation', namespace: 'moderation',
