@@ -188,9 +188,10 @@ function load(env = process.env) {
             internalUrl: trimUrl(env.OV_MEDIA_INTERNAL_URL || ''),
             // https hostnames (exact, or *.suffix) that media/image URLs may point at.
             allowHosts: list(env.AI_FETCH_ALLOW_HOSTS, ['openvibe.media', 'openvibe.live', 'openvibe.network', '*.openvibe.network', 'openvibe.community', 'openvibe.tools', 'openvibe.games']),
-            // Object storage Media hands recordings off to (a 302 to a presigned URL): reachable ONLY as a redirect
-            // from Media itself (its public host or the internal origin), never as a URL a caller names.
-            storageHosts: list(env.AI_MEDIA_STORAGE_HOSTS, ['*.backblazeb2.com', '*.r2.cloudflarestorage.com']),
+            // Object storage Media hands recordings off to (a 302 to a presigned URL), and Media's origin shield
+            // edge.openvibe.media (where it sends a B2 copy's reads, through its slice cache): reachable ONLY as a
+            // redirect from Media itself (its public host or the internal origin), never as a URL a caller names.
+            storageHosts: list(env.AI_MEDIA_STORAGE_HOSTS, ['*.backblazeb2.com', '*.r2.cloudflarestorage.com', 'edge.openvibe.media']),
             maxBytes: int(env.AI_FETCH_MAX_BYTES, 512 * 1024 * 1024),
             maxImageBytes: int(env.AI_FETCH_MAX_IMAGE_BYTES, 12 * 1024 * 1024),
             timeoutMs: int(env.AI_FETCH_TIMEOUT_MS, 120000),
