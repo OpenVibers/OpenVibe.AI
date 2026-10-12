@@ -22,6 +22,7 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
     app.disable('x-powered-by');
     app.set('trust proxy', 'loopback');
     const release = createRelease({ service: 'ai', root: path.join(__dirname, '..') });
+    const releaseLastmod = release.full().released_at === release.full().booted_at ? undefined : release.full().released_at;
     // HTTP golden signals by route template, process metrics, release_info and the AI gauges;
     // GET /metrics answers direct loopback callers only (Track O).
     const metrics = instrument(app, { service: 'ai', release: release.release });
@@ -123,8 +124,14 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
     app.get('/robots.txt', (_req, res) => {
         res.type('text/plain').send(`User-agent: *\nAllow: /$\nAllow: /stats\nDisallow: /console\nDisallow: /auth/\nDisallow: /api/\n\nSitemap: ${config.baseUrl}/sitemap.xml\n`);
     });
-    app.get('/sitemap.xml', (_req, res) => {
-        res.type('application/xml').send(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${['/', '/stats'].map((p) => `  <url><loc>${config.baseUrl}${p}</loc></url>`).join('\n')}\n</urlset>\n`);
+    app.get('/sitemap.xml', async (_req, res, next) => {
+        try {
+            const from = new Date(clock.now() - STATS_DAYS * 86400000).toISOString().slice(0, 10);
+            const stats = await db.prepare('SELECT MAX(day) AS lastmod FROM provider_stats_daily WHERE day >= ?').get(from);
+            const statsLastmod = [stats && stats.lastmod ? new Date(stats.lastmod).toISOString() : null, releaseLastmod].filter(Boolean).sort().pop();
+            const entries = [['/', releaseLastmod], ['/stats', statsLastmod]];
+            res.type('application/xml').send(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${entries.map(([p, lastmod]) => `  <url><loc>${config.baseUrl}${p}</loc>${lastmod ? `<lastmod>${lastmod.slice(0, 10)}</lastmod>` : ''}</url>`).join('\n')}\n</urlset>\n`);
+        } catch (e) { next(e); }
     });
     app.get('/llms.txt', (_req, res) => {
         res.setHeader('Cache-Control', 'public, max-age=3600');

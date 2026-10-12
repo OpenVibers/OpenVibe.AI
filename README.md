@@ -449,6 +449,8 @@ The old `ai.openvibe.network` address was retired on 2026-10-10. The console nee
 `AI_CONSOLE_SESSION_SECRET` (32+ random characters) and `OV_OAUTH_CLIENT_SECRET` in the env file (without them it
 answers 503 in production); Network client `ai` lists `https://ai.openvibe.services/auth/callback`.
 
+Sitemap entries use the release commit for home and the newest recorded stats day for `/stats` when available.
+
 ## Not done yet
 
 - Live's VOD and clip overviews calling `media.analyze` instead of extracting frames and transcribing
