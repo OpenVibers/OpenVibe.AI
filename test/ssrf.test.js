@@ -36,6 +36,8 @@ t.test('object storage is followed only as a redirect from Media', async () => {
     const b2 = 'https://s3.us-west-004.backblazeb2.com/bucket/vod-1.mp4?X-Amz-Signature=abc';
     assert.strictEqual(f.follow(media, b2).url.hostname, 's3.us-west-004.backblazeb2.com', 'Media -> B2');
     assert.strictEqual(f.follow(internal, 'https://acct.r2.cloudflarestorage.com/b/x').internal, false, 'internal Media -> R2, as a public target');
+    assert.strictEqual(f.follow(media, 'https://edge.openvibe.media/v/1').url.hostname, 'edge.openvibe.media', 'Media -> its shield (a B2 copy)');
+    await (async () => { try { f.judge('https://edge.openvibe.media/v/1'); assert.fail('named'); } catch (e) { assert.strictEqual(e.code, 'fetch.refused', 'the shield is never a URL a caller names'); } })();
     const refused = (fn, why) => { try { fn(); assert.fail(why); } catch (e) { assert.strictEqual(e.code, 'fetch.refused', why); } };
     await refused(() => f.follow(other, b2), 'another host may not send it to storage');
     await refused(() => f.judge(b2), 'storage is never a URL a caller names');
