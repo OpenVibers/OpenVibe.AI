@@ -116,7 +116,7 @@ index 0000000..9b0ef43
 + * ai-service.js — Live as a CONSUMER of OpenVibe.AI (roadmap Wave 13).
 + *
 + * With AI_SERVICE=remote, Live stops calling model providers itself: every shared-key AI call
-+ * becomes a workflow run on OpenVibe.AI (ai.openvibe.network, internal OV_AI_INTERNAL_URL),
++ * becomes a workflow run on OpenVibe.AI (ai.openvibe.services, internal OV_AI_INTERNAL_URL),
 + * authenticated with Live's Network service token for audience openvibe.ai (network-principal).
 + * Unset (the default), nothing here is used and Live behaves exactly as before.
 + *

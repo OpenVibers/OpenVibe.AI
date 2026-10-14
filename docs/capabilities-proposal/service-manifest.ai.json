@@ -17,7 +17,7 @@
   "exposure": {
     "state": "live",
     "publicSite": "service",
-    "note": "the public home, /stats and the developer-app API at ai.openvibe.services (2026-10-07); ai.openvibe.network answers 301 to it; services on the host call 127.0.0.1:4700"
+    "note": "the public home, /stats and the developer-app API at ai.openvibe.services (2026-10-07); the old ai.openvibe.network address was retired on 2026-10-10 (no vhost); services on the host call 127.0.0.1:4700"
   },
   "capabilities": [
     "ai.app.run",
