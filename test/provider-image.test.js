@@ -59,13 +59,15 @@ t.test('(a) the Images API answers: output.images, a request log with operation 
         assert.deepStrictEqual({ resource: s.resource, unit: s.unit, quantity: s.quantity, operation: s.operation, provider: s.provider },
             { resource: 'output-images:gpt-image-1', unit: 'image', quantity: 1, operation: 'ai.image', provider: 'shared' });
 
-        // dall-e-* is asked for b64_json; n is clamped to 1..4.
+        // dall-e-* is asked for b64_json; n is clamped to 1..4, and to 1 for dall-e-3 (which refuses more).
         await h.registry.upsertModel({ provider_key: 'shared', model_key: 'dall-e-3', type: 'image' });
         const a = (await h.pool.adapter('shared')).adapter;
         const r = await a.image({ model: 'dall-e-3', prompt: 'x', n: 9, timeoutMs: 3000 });
         assert.strictEqual(up.last.response_format, 'b64_json');
-        assert.strictEqual(up.last.n, 4);
+        assert.strictEqual(up.last.n, 1);
         assert.strictEqual(r.usage.output, 1);
+        await a.image({ model: 'gpt-image-1', prompt: 'x', n: 9, timeoutMs: 3000 });
+        assert.strictEqual(up.last.n, 4);
         // A missing prompt is the caller's: 422 input.invalid.
         const bad = await request(h.base, 'POST', '/api/v1/image?wait=10000', { tok, body: {} });
         assert.strictEqual(bad.status, 422, bad.text);
@@ -92,6 +94,24 @@ t.test('(b) the first image provider answers 500: the pool falls back, with expl
         assert.strictEqual(dead.calls, 1);
         assert.strictEqual(run.usage.tokens_out, 2, 'metered per image returned');
     } finally { await h.stop(); await dead.close(); await ok.close(); }
+});
+
+t.test('(b2) the route timeout outlasts AI_PROVIDER_TIMEOUT_MS, and a timed-out image is never retried', async () => {
+    let delay = 1500;
+    const up = await imagesServer(async () => { await new Promise(r => setTimeout(r, delay)); return { data: [{ b64_json: PNG }] }; });
+    const h = await boot({ env: { ...ENV, AI_BASE_URL: `${up.url}/v1`, AI_PROVIDER_TIMEOUT_MS: '1000', AI_PROVIDER_RETRIES: '1' } });
+    try {
+        assert.strictEqual((await h.registry.getProvider('shared')).timeout_ms, 1000);
+        const route = await h.registry.resolveRoute('default.image');
+        const ok = await h.pool.execute(route, 'image', { prompt: 'x', n: 1 }, { routeKey: route.key });
+        assert.strictEqual(ok.result.images.length, 1, 'the 120 s route timeout, not the provider\'s 1 s');
+        assert.strictEqual(up.calls, 1);
+        delay = 2500;
+        let err = null;
+        try { await h.pool.execute(route, 'image', { prompt: 'x', n: 1, timeoutMs: 1000 }, { routeKey: route.key }); } catch (e) { err = e; }
+        assert.ok(err, 'timed out');
+        assert.strictEqual(up.calls, 2, 'one attempt: a retry would be a second paid generation');
+    } finally { await h.stop(); await up.close(); }
 });
 
 t.test('(c) no image provider answers: 503 provider.unavailable, never synthetic', async () => {

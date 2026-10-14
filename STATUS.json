@@ -52,7 +52,7 @@
     "owner: a provider key that serves the OpenAI Images API, then AI_IMAGE_MODEL (and AI_IMAGE_SIZE) in /etc/openvibe/ai.env — image generation stays off until then",
     "owner/T5: a per-image rate card (metric output-images:<model>, per provider) — none is written by AI; until it exists an image run costs 0 in AI's usage and quotas (max_requests still bounds it)",
     "owner/T5: Billing unitFits() to accept unit image (OpenVibe.Billing server/ops/rating.js) — until then Billing stores image readings unrated (billing.no_card / billing.unit_mismatch)",
-    "Contracts: list POST /api/v1/image under ai.run.create and ai.app.run implementedBy (manifests/capabilities)"
+    "Contracts: list POST /api/v1/image under ai.run.create and ai.app.run implementedBy (manifests/capabilities); add image to provider.v1 and provider-manage-request.v1 capabilities, model.v1 and provider-manage-request.v1 model type, definition-version-request.v1 step kind (media_analysis lags the same way)"
   ],
   "updated": "2026-10-13"
 }

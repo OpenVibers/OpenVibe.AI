@@ -89,7 +89,8 @@ const workflows = [
         key: 'ai.image', name: 'Generate an image', namespace: 'ai',
         input_schema: OBJ({ prompt: STR(4000), size: { type: 'string', pattern: '^[0-9]{3,4}x[0-9]{3,4}$' }, n: { type: 'integer', minimum: 1, maximum: 4 } }, ['prompt']),
         output_schema: OBJ({ images: { type: 'array', minItems: 1, items: OBJ({ b64: { type: ['string', 'null'] }, url: { type: ['string', 'null'] } }) }, count: { type: 'integer', minimum: 1 } }, ['images', 'count']),
-        steps: [{ kind: 'image', route: 'default.image' }], cache_mode: 'private',
+        // No cache: several MB of base64 per run, and a fresh image is what a caller asks for.
+        steps: [{ kind: 'image', route: 'default.image' }], cache_mode: 'none',
     },
 ];
 

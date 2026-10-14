@@ -110,11 +110,11 @@ function createOpenAiProvider(record, { apiKey = '', fetchImpl = globalThis.fetc
     }
 
     // OpenAI Images API: metered per image (usage.output = images returned), never per token.
-    // dall-e-* answers a URL unless asked for b64_json; gpt-image-1 answers base64 already.
+    // dall-e-* answers a URL unless asked for b64_json; gpt-image-1 answers base64 already; dall-e-3 takes only n=1.
     async function images(req) {
         const model = req.model;
         if (!model) throw new ProviderError('image model is not configured', { code: 'provider.model' });
-        const body = { model, prompt: String(req.prompt || ''), n: Math.max(1, Math.min(Number(req.n) || 1, 4)) };
+        const body = { model, prompt: String(req.prompt || ''), n: Math.max(1, Math.min(Number(req.n) || 1, /^dall-e-3/i.test(model) ? 1 : 4)) };
         if (req.size) body.size = String(req.size);
         if (!/^gpt-image-1/i.test(model)) body.response_format = 'b64_json';
         const j = await postJson(`${baseUrl}/images/generations`, headers(), body, { signal: req.signal, timeoutMs: req.timeoutMs, fetchImpl });

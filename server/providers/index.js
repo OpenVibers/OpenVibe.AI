@@ -415,7 +415,9 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                 if (ctx.logRequest) ctx.logRequest({ ...base, status: 'skipped', skip_reason: why });
                 continue;
             }
-            const timeoutMs = Math.max(1000, Math.min(req.timeoutMs || route.timeout_ms || p.timeout_ms || 30000, p.timeout_ms || 600000));
+            // An image generation outlasts the shared provider's chat timeout (AI_PROVIDER_TIMEOUT_MS): the route's wins.
+            const cap = operation === 'image' ? 600000 : (p.timeout_ms || 600000);
+            const timeoutMs = Math.max(1000, Math.min(req.timeoutMs || route.timeout_ms || p.timeout_ms || 30000, cap));
             const retries = config.providerRetries;
             let lastErr = null;
             for (let attempt = 0; attempt <= retries; attempt++) {
@@ -456,7 +458,8 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                     }
                     statFor(c.provider).failures++;
                     if (ctx.logRequest) ctx.logRequest({ ...base, status: err && err.code === 'provider.timeout' ? 'timeout' : 'error', latency_ms: Date.now() - t0, error: String(err && err.message || err).slice(0, 500) });
-                    if (attempt < retries && retryable(err)) { await sleep(config.retryDelayMs + Math.floor(Math.random() * Math.min(700, config.retryDelayMs)), ctx.signal).catch(() => {}); continue; }
+                    // A timed-out image may still be generated and billed upstream: never pay for it twice.
+                    if (attempt < retries && retryable(err) && !(operation === 'image' && err.code === 'provider.timeout')) { await sleep(config.retryDelayMs + Math.floor(Math.random() * Math.min(700, config.retryDelayMs)), ctx.signal).catch(() => {}); continue; }
                     break;
                 }
             }

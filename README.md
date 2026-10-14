@@ -362,10 +362,10 @@ the service boots without Valkey; with it on, production refuses to boot without
 Off unless `AI_IMAGE_MODEL` names the shared provider's image model (`dall-e-3`, `gpt-image-1`; OpenAI-shaped
 providers only). Then boot gives `shared` the `image` capability, registers the model as type `image` and seeds
 route `default.image` (a capability pool of registered `image` models, objective `correctness`,
-`provider_scope: paid`, timeout 120 s). Without it no route is seeded and `POST /api/v1/image` answers
+`provider_scope: paid`, timeout 120 s, above `AI_PROVIDER_TIMEOUT_MS`; a timed-out image is not retried, so it is never paid for twice). Without it no route is seeded and `POST /api/v1/image` answers
 `503 route.unavailable`, like any operation whose route is not configured.
 
-`POST /api/v1/image` (`ai.run.create`, or `ai.app.run` for an app) takes `{ prompt, size?, n? }` (`n` 1–4;
+`POST /api/v1/image` (`ai.run.create`, or `ai.app.run` for an app) takes `{ prompt, size?, n? }` (`n` 1–4, 1 for `dall-e-3`;
 `size` defaults to `AI_IMAGE_SIZE`, `1024x1024`) and answers `output: { images: [{ b64, url }], count }`
 (`dall-e-*` is asked for `b64_json`; `gpt-image-1` answers base64 already). A missing prompt is
 `422 input.invalid`, a provider that returns no image `502 output.invalid`, no provider `503 provider.unavailable`.
