@@ -53,8 +53,8 @@ function providerRecords(config, env) {
     ];
     if (config.localLlm && config.localLlm.url) {
         // A local model server (llama.cpp, Ollama) speaking the OpenAI API: no key, never paid (WS-O task 5).
-        // JSON goes through the adapter's json_schema -> json_object -> prose step-down; embed only with an embedding model.
-        const localCaps = ['chat', 'generate', 'summarize', 'classify', 'extract', 'json'];
+        // No json: the small local model must not be offered the product JSON routes. Embed only with an embedding model.
+        const localCaps = ['chat', 'generate', 'summarize', 'classify', 'extract'];
         if (config.localLlm.embedModel) localCaps.push('embed');
         out.push({ key: 'local', display_name: 'Local model (OpenAI-compatible server on this host)', kind: 'openai', status: 'active', base_url: config.localLlm.url, auth_mode: 'none', secret_ref: null, default_model: config.localLlm.model || 'local', capabilities: localCaps, timeout_ms: config.localLlm.timeoutMs, priority: 5, metadata: { configured_by: 'AI_LOCAL_LLM_URL', local: true, paid: false, billing_profile: 'free' } });
     }
@@ -84,7 +84,13 @@ async function seed({ registry, quotas, config, env = process.env, db }) {
     if (!await registry.getModel('shared', embeddingModel)) await registry.upsertModel({ provider_key: 'shared', model_key: embeddingModel, type: 'embedding' }, { actor: 'seed' });
     // The local embedding model joins default.embedding as its free member (vectors differ per upstream).
     const localEmbed = config.localLlm && config.localLlm.url && config.localLlm.embedModel;
-    if (localEmbed && !await registry.getModel('local', localEmbed)) await registry.upsertModel({ provider_key: 'local', model_key: localEmbed, type: 'embedding' }, { actor: 'seed' });
+    if (localEmbed && !await registry.getModel('local', localEmbed)) await registry.upsertModel({ provider_key: 'local', model_key: localEmbed, type: 'embedding', metadata: { seeded: true } }, { actor: 'seed' });
+    // Never mix vectors: a seeded local embedding model that is no longer the configured one is retired.
+    if (await registry.getProvider('local')) {
+        for (const m of await registry.listModels({ provider: 'local' })) {
+            if (m.type === 'embedding' && m.status === 'active' && m.metadata && m.metadata.seeded && m.model_key !== localEmbed) await registry.upsertModel({ provider_key: 'local', model_key: m.model_key, status: 'disabled' }, { actor: 'seed' });
+        }
+    }
 
     // Routes. A capability pool covers every provider that can serve the capability, ordered by
     // openvibe-sdk/placement (brief §4/§5): no static primary/fallbacks and no AI_MODEL_<ROLE> pins.

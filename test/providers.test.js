@@ -114,14 +114,14 @@ t.test('templates render values, JSON and sections; loose JSON repair works', ()
     assert.deepStrictEqual(parseJsonLoose('{“a”: 1,}'), { a: 1 });
 });
 
-t.test('local provider: json always, embed only with AI_LOCAL_EMBED_MODEL', () => {
+t.test('local provider: never json, embed only with AI_LOCAL_EMBED_MODEL', () => {
     const caps = (env) => {
         const p = providerRecords(load(env), env).find(x => x.key === 'local');
         return p && p.capabilities;
     };
     assert.strictEqual(caps({}), undefined, 'no local provider without AI_LOCAL_LLM_URL');
     const plain = caps({ AI_LOCAL_LLM_URL: 'http://127.0.0.1:8090/v1' });
-    assert.deepStrictEqual(plain, ['chat', 'generate', 'summarize', 'classify', 'extract', 'json']);
+    assert.deepStrictEqual(plain, ['chat', 'generate', 'summarize', 'classify', 'extract']);
     const withEmbed = caps({ AI_LOCAL_LLM_URL: 'http://127.0.0.1:8090/v1', AI_LOCAL_EMBED_MODEL: ' nomic-embed-text ' });
     assert.deepStrictEqual(withEmbed, [...plain, 'embed']);
     assert.strictEqual(load({ AI_LOCAL_EMBED_MODEL: ' nomic-embed-text ' }).localLlm.embedModel, 'nomic-embed-text');
