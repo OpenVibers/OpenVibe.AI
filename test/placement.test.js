@@ -79,4 +79,15 @@ t.test('a candidate that is no longer eligible fails over immediately (no minGai
     assert.ok(r.reasons.some((x) => /no longer eligible/.test(x)));
 });
 
+t.test('embeddings: cheapest picks the free local model over the metered shared one', () => {
+    // As the router builds them: a free provider is offered as prepaid with no rate card, a metered one on its card.
+    const offers = [
+        offer('shared:text-embedding-3-small', { capabilities: ['ai:embed'], pricing: { model: 'per-operation', rate_card: 'shared:text-embedding-3-small' } }),
+        offer('local:nomic-embed-text', { capabilities: ['ai:embed'], trust: 'community', pricing: { model: 'prepaid' } }),
+    ];
+    const r = plan(req({ objective: 'cheapest', capabilities: ['ai:embed'] }), offers, { rateCards: [card('shared:text-embedding-3-small', 'shared', 0.02)] });
+    assert.strictEqual(r.selected, 'local:nomic-embed-text', r.reasons.join('; '));
+    assert.ok(r.candidates.every((c) => c.eligible), 'both stay eligible: the shared one remains the fallback');
+});
+
 t.run();

@@ -102,8 +102,9 @@ function load(env = process.env) {
         // Configurable local HTTP seam: POST {operation, request} JSON to this URL.
         httpSeamUrl: trimUrl(env.AI_HTTP_SEAM_URL),
         // A local model server speaking the OpenAI API (llama.cpp's llama-server, Ollama's /v1): the provider `local`,
-        // route media.local (roadmap WS-O task 5). No key; never a paid provider.
-        localLlm: { url: trimUrl(env.AI_LOCAL_LLM_URL), model: String(env.AI_LOCAL_LLM_MODEL || '').trim(), timeoutMs: int(env.AI_LOCAL_LLM_TIMEOUT_MS, 180000) },
+        // route media.local (roadmap WS-O task 5). No key; never a paid provider. embedModel (an embedding GGUF the
+        // server serves at /embeddings) makes `local` a member of the default.embedding pool.
+        localLlm: { url: trimUrl(env.AI_LOCAL_LLM_URL), model: String(env.AI_LOCAL_LLM_MODEL || '').trim(), embedModel: String(env.AI_LOCAL_EMBED_MODEL || '').trim(), timeoutMs: int(env.AI_LOCAL_LLM_TIMEOUT_MS, 180000) },
         // media.analyze (server/workflows/media-analysis.js): the file cap (also bounded by free disk minus a reserve),
         // the download timeout, the scene-change threshold (scdet, 0-100) and the tools.
         mediaAnalysis: {

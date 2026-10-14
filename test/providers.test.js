@@ -13,6 +13,8 @@ const { cleanSegments } = require('../server/providers/whisper');
 const { render } = require('../server/templates');
 const { parseJsonLoose } = require('../server/util');
 const schemas = require('../server/schemas');
+const { load } = require('../server/config');
+const { providerRecords } = require('../server/workflows/seed');
 
 const t = suite('providers');
 const req = (extra = {}) => ({ system: [{ text: 'sys', cache: true }], messages: [{ role: 'user', content: 'hi' }], maxTokens: 50, temperature: 0.5, timeoutMs: 3000, model: 'gpt-4o-mini', ...extra });
@@ -110,6 +112,19 @@ t.test('templates render values, JSON and sections; loose JSON repair works', ()
     assert.strictEqual(render('{{#e}}hidden{{/e}}{{a.b}}', { e: [], a: { b: 'deep' } }), 'deep');
     assert.deepStrictEqual(parseJsonLoose('Sure! {"tags":["a","b"}'), { tags: ['a', 'b'] });
     assert.deepStrictEqual(parseJsonLoose('{“a”: 1,}'), { a: 1 });
+});
+
+t.test('local provider: never json, embed only with AI_LOCAL_EMBED_MODEL', () => {
+    const caps = (env) => {
+        const p = providerRecords(load(env), env).find(x => x.key === 'local');
+        return p && p.capabilities;
+    };
+    assert.strictEqual(caps({}), undefined, 'no local provider without AI_LOCAL_LLM_URL');
+    const plain = caps({ AI_LOCAL_LLM_URL: 'http://127.0.0.1:8090/v1' });
+    assert.deepStrictEqual(plain, ['chat', 'generate', 'summarize', 'classify', 'extract']);
+    const withEmbed = caps({ AI_LOCAL_LLM_URL: 'http://127.0.0.1:8090/v1', AI_LOCAL_EMBED_MODEL: ' nomic-embed-text ' });
+    assert.deepStrictEqual(withEmbed, [...plain, 'embed']);
+    assert.strictEqual(load({ AI_LOCAL_EMBED_MODEL: ' nomic-embed-text ' }).localLlm.embedModel, 'nomic-embed-text');
 });
 
 t.run();

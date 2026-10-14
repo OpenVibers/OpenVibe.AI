@@ -368,6 +368,17 @@ streams always win: 2 threads, at most 1.5 CPUs, nice 19, 3 GB. It uses about 0.
 28 tokens/s. Without it, `media.analyze` writes an extractive overview and says so. To swap the model, put the
 file beside it, change `--model`/`--alias` and `AI_LOCAL_LLM_MODEL`, and restart both units.
 
+Local embeddings are off unless `AI_LOCAL_EMBED_MODEL` names an embedding model the server at `AI_LOCAL_LLM_URL`
+answers at `/embeddings`. Then `local` advertises `embed`, the model is registered as an `embedding` model, and
+`default.embedding` (a capability pool) offers it beside the shared provider's `AI_EMBEDDING_MODEL`; `local` is
+billing profile `free`, so its readings carry no cost. llama.cpp's `llama-server` answers `/embeddings` only when
+started with `--embedding` and a GGUF that supports embeddings (a chat-only model answers 400, and every embedding
+call then fails over to the shared provider with an error in the request log). That flag restricts llama-server
+to embeddings, so the Qwen chat unit above runs without it: embeddings need a server that serves both on one URL
+(Ollama's `/v1`, for example), or `AI_LOCAL_LLM_URL` given over to an embedding-only server. **Vector dimensions
+differ per upstream**: a run says which provider and model made its vectors, and a consumer must never compare or
+mix vectors from different providers (re-embed when the provider changes).
+
 ## Acceptance: guarantees and where they are tested
 
 `npm test` runs every `test/*.test.js` with the stub provider, temp databases and local servers only.

@@ -53,7 +53,10 @@ function providerRecords(config, env) {
     ];
     if (config.localLlm && config.localLlm.url) {
         // A local model server (llama.cpp, Ollama) speaking the OpenAI API: no key, never paid (WS-O task 5).
-        out.push({ key: 'local', display_name: 'Local model (OpenAI-compatible server on this host)', kind: 'openai', status: 'active', base_url: config.localLlm.url, auth_mode: 'none', secret_ref: null, default_model: config.localLlm.model || 'local', capabilities: ['chat', 'generate', 'summarize', 'classify', 'extract'], timeout_ms: config.localLlm.timeoutMs, priority: 5, metadata: { configured_by: 'AI_LOCAL_LLM_URL', local: true, paid: false, billing_profile: 'free' } });
+        // No json: the small local model must not be offered the product JSON routes. Embed only with an embedding model.
+        const localCaps = ['chat', 'generate', 'summarize', 'classify', 'extract'];
+        if (config.localLlm.embedModel) localCaps.push('embed');
+        out.push({ key: 'local', display_name: 'Local model (OpenAI-compatible server on this host)', kind: 'openai', status: 'active', base_url: config.localLlm.url, auth_mode: 'none', secret_ref: null, default_model: config.localLlm.model || 'local', capabilities: localCaps, timeout_ms: config.localLlm.timeoutMs, priority: 5, metadata: { configured_by: 'AI_LOCAL_LLM_URL', local: true, paid: false, billing_profile: 'free' } });
     }
     if (config.httpSeamUrl) {
         out.push({ key: 'http-seam', display_name: 'Local HTTP seam', kind: 'http', status: 'active', base_url: config.httpSeamUrl, auth_mode: 'none', default_model: null, capabilities: [], timeout_ms: 30000, priority: 60, metadata: { configured_by: 'AI_HTTP_SEAM_URL', billing_profile: 'metered' } });
@@ -79,6 +82,15 @@ async function seed({ registry, quotas, config, env = process.env, db }) {
     if (!await registry.getModel('whisper', 'whisper.cpp')) await registry.upsertModel({ provider_key: 'whisper', model_key: 'whisper.cpp', type: 'stt', supports: { json: false } }, { actor: 'seed' });
     const embeddingModel = env.AI_EMBEDDING_MODEL || 'text-embedding-3-small';
     if (!await registry.getModel('shared', embeddingModel)) await registry.upsertModel({ provider_key: 'shared', model_key: embeddingModel, type: 'embedding' }, { actor: 'seed' });
+    // The local embedding model joins default.embedding as its free member (vectors differ per upstream).
+    const localEmbed = config.localLlm && config.localLlm.url && config.localLlm.embedModel;
+    if (localEmbed && !await registry.getModel('local', localEmbed)) await registry.upsertModel({ provider_key: 'local', model_key: localEmbed, type: 'embedding', metadata: { seeded: true } }, { actor: 'seed' });
+    // Never mix vectors: a seeded local embedding model that is no longer the configured one is retired.
+    if (await registry.getProvider('local')) {
+        for (const m of await registry.listModels({ provider: 'local' })) {
+            if (m.type === 'embedding' && m.status === 'active' && m.metadata && m.metadata.seeded && m.model_key !== localEmbed) await registry.upsertModel({ provider_key: 'local', model_key: m.model_key, status: 'disabled' }, { actor: 'seed' });
+        }
+    }
 
     // Routes. A capability pool covers every provider that can serve the capability, ordered by
     // openvibe-sdk/placement (brief §4/§5): no static primary/fallbacks and no AI_MODEL_<ROLE> pins.
@@ -92,8 +104,9 @@ async function seed({ registry, quotas, config, env = process.env, db }) {
     for (const role of live.ROLES) {
         await registry.seedVersioned('route', `live.${role}`, pool(ROLE_TIMEOUT[role]));
     }
-    // Speech and embeddings only admit registered models of the matching type. Until O9 adds another
-    // upstream, an unavailable sole provider still answers the explicit 503.
+    // Speech and embeddings only admit registered models of the matching type. Embeddings fall over to the local
+    // embedding model when AI_LOCAL_EMBED_MODEL registers one; until O9 adds another speech upstream (and for
+    // embeddings without a local model), an unavailable sole provider still answers the explicit 503.
     await registry.seedVersioned('route', 'live.stt', pool(600000, { 'capability': 'transcribe', constraints: { objective: 'balanced' } }));
     await registry.seedVersioned('route', 'default.chat', pool(30000, { max_output_tokens: 800 }));
     await registry.seedVersioned('route', 'default.json', pool(60000, { options: { temperature: 0.3 }, max_output_tokens: 2400, response_format: 'json' }));
