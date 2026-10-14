@@ -101,6 +101,9 @@ function textFor(op, req, rnd) {
     }
 }
 
+/** A transparent 1x1 PNG, base64: the stub's image for every prompt. */
+const STUB_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+
 function createStubProvider(record = { key: 'stub', metadata: {} }, { stats = null } = {}) {
     const fail = record.metadata && record.metadata.fail;
 
@@ -122,6 +125,12 @@ function createStubProvider(record = { key: 'stub', metadata: {} }, { stats = nu
                 return v.map(x => Math.round((x / norm) * 1e6) / 1e6);
             });
             return { vectors, model, synthetic: true, usage: { input: inputs.reduce((n, t) => n + approxTokens(t), 0), output: 0, cached: 0, estimated: true } };
+        }
+        if (op === 'image') {
+            // One fixed 1x1 PNG per requested image: deterministic, and metered per image like a real provider.
+            const n = Math.max(1, Math.min(Number(req.n) || 1, 4));
+            const images = Array.from({ length: n }, () => ({ b64: STUB_PNG, url: null, revised_prompt: null }));
+            return { images, model, synthetic: true, usage: { input: 0, output: n, cached: 0, estimated: true } };
         }
         if (op === 'transcribe') {
             const n = 2 + Math.floor(rnd() * 3);
@@ -148,9 +157,10 @@ function createStubProvider(record = { key: 'stub', metadata: {} }, { stats = nu
         supports: () => true,
         transcribe: async (req) => await run('transcribe', req),
         embed: async (req) => await run('embed', req),
+        image: async (req) => await run('image', req),
     };
     for (const op of ['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich']) adapter[op] = async (req) => await run(op, req);
     return adapter;
 }
 
-module.exports = { createStubProvider, synthesize, seeded };
+module.exports = { createStubProvider, synthesize, seeded, STUB_PNG };

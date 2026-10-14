@@ -45,7 +45,14 @@
     "server-rendered operator console for Network staff",
     "Live import",
     "platform.usage-sample@1 readings to Billing with a per-subject provider free allowance; each run's reading state in explain and the free allowance on the staff console",
-    "tier budgets (free, paid, staff) per subject and per project on openvibe-sdk/govern in Valkey, behind AI_GOVERN_TIERS (off by default); readings from govern's onUsage"
+    "tier budgets (free, paid, staff) per subject and per project on openvibe-sdk/govern in Valkey, behind AI_GOVERN_TIERS (off by default); readings from govern's onUsage",
+    "image generation (POST /api/v1/image, workflow ai.image, app op ai.image, route default.image over the OpenAI Images API), off unless AI_IMAGE_MODEL is set; metered per image (one platform.usage-sample@1 per attempt, resource output-images:<model>, unit image)"
   ],
-  "updated": "2026-10-12"
+  "todo": [
+    "owner: a provider key that serves the OpenAI Images API, then AI_IMAGE_MODEL (and AI_IMAGE_SIZE) in /etc/openvibe/ai.env — image generation stays off until then",
+    "owner/T5: a per-image rate card (metric output-images:<model>, per provider) — none is written by AI; until it exists an image run costs 0 in AI's usage and quotas (max_requests still bounds it)",
+    "owner/T5: Billing unitFits() to accept unit image (OpenVibe.Billing server/ops/rating.js) — until then Billing stores image readings unrated (billing.no_card / billing.unit_mismatch)",
+    "Contracts: list POST /api/v1/image under ai.run.create and ai.app.run implementedBy (manifests/capabilities)"
+  ],
+  "updated": "2026-10-13"
 }

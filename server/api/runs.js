@@ -129,9 +129,9 @@ function runsRouter({ runs, registry, auth, config, log = console }) {
     });
 
     // Direct operations — each is a run of workflow ai.<op>, waited for (default: the max wait).
-    // The six ai.app.run names (chat, generate, summarize, classify, extract, embed) take an app token;
+    // The ai.app.run names (chat, generate, summarize, classify, extract, embed, image) take an app token;
     // enrich is first-party only, like every other run route.
-    for (const op of ['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich', 'embed']) {
+    for (const op of ['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich', 'embed', 'image']) {
         r.post(`/api/v1/${op}`, DIRECT_OPS.includes(`ai.${op}`) ? createApp : create, async (req, res) => {
             try {
                 const body = req.body || {};

@@ -46,6 +46,7 @@ t.test('forced failure on every route: a logged fallback, or an explicit 503 (ne
         if (rr && !rr.disabled) routes.set(rr.key, rr);
     }
     assert.ok(routes.size >= 8, `routes discovered: ${[...routes.keys()].join(', ')}`);
+    assert.ok(!routes.has('default.image'), 'no image route without AI_IMAGE_MODEL: the walk is unchanged');
 
     const failed = [];
     for (const rr of routes.values()) {

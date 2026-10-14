@@ -15,7 +15,7 @@ const { provenance } = require('./providers/rate-cards');
 
 const PROVIDER_KINDS = ['stub', 'openai', 'responses', 'anthropic', 'http', 'whisper'];
 const BILLING_PROFILES = ['metered', 'subscription', 'payg', 'free', 'byok'];
-const FEATURES = ['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich', 'embed', 'vision', 'json', 'transcribe'];
+const FEATURES = ['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich', 'embed', 'vision', 'json', 'transcribe', 'image'];
 const LIFECYCLE = ['draft', 'active', 'deprecated', 'archived'];
 const KEY_RE = /^[a-z][a-z0-9_-]*(\.[a-z0-9_-]+)*$/;
 
@@ -137,7 +137,7 @@ function createRegistry(db, { clock = { now: () => Date.now() }, env = process.e
         if (!input.model_key || String(input.model_key).length > 200) throw new AiError(422, 'ai.invalid', 'model_key required');
         const prev = await getModel(input.provider_key, input.model_key);
         const type = input.type || (prev && prev.type) || 'chat';
-        if (!['chat', 'vision', 'embedding', 'stt'].includes(type)) throw new AiError(422, 'ai.invalid', 'model type must be chat, vision, embedding or stt');
+        if (!['chat', 'vision', 'embedding', 'stt', 'image'].includes(type)) throw new AiError(422, 'ai.invalid', 'model type must be chat, vision, embedding, stt or image');
         const status = input.status || (prev && prev.status) || 'active';
         if (!['active', 'disabled'].includes(status)) throw new AiError(422, 'ai.invalid', 'model status must be active or disabled');
         // A new cost replaces the old one whole: new prices never inherit the old ones' source or verification date.
@@ -340,7 +340,7 @@ function createRegistry(db, { clock = { now: () => Date.now() }, env = process.e
         schemas.assertSchema(w.output_schema, 'output_schema');
         if (!Array.isArray(w.steps) || !w.steps.length) throw new AiError(422, 'ai.invalid', 'workflow needs at least one step');
         for (const s of w.steps) {
-            if (!s || !['llm', 'passthrough', 'transcribe', 'embed', 'media_analysis'].includes(s.kind)) throw new AiError(422, 'ai.invalid', 'step kind must be llm, passthrough, transcribe, embed or media_analysis');
+            if (!s || !['llm', 'passthrough', 'transcribe', 'embed', 'image', 'media_analysis'].includes(s.kind)) throw new AiError(422, 'ai.invalid', 'step kind must be llm, passthrough, transcribe, embed, image or media_analysis');
             if ((s.kind === 'llm' || (s.kind === 'media_analysis' && s.template)) && !(s.template && await latestAny('templates', s.template))) throw new AiError(422, 'ai.invalid', `step references unknown template ${s.template}`);
         }
         if (!['none', 'private', 'service'].includes(w.cache_mode)) throw new AiError(422, 'ai.invalid', 'cache_mode must be none, private or service');

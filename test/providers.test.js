@@ -127,4 +127,33 @@ t.test('local provider: never json, embed only with AI_LOCAL_EMBED_MODEL', () =>
     assert.strictEqual(load({ AI_LOCAL_EMBED_MODEL: ' nomic-embed-text ' }).localLlm.embedModel, 'nomic-embed-text');
 });
 
+t.test('image: off without AI_IMAGE_MODEL; the Images API body, per-image usage and the stub PNG', async () => {
+    const shared = (env) => providerRecords(load(env), env).find(x => x.key === 'shared');
+    assert.ok(!shared({}).capabilities.includes('image'), 'no image capability without AI_IMAGE_MODEL');
+    assert.ok(shared({ AI_IMAGE_MODEL: 'gpt-image-1' }).capabilities.includes('image'));
+    assert.ok(!shared({ AI_PROVIDER: 'anthropic', AI_IMAGE_MODEL: 'gpt-image-1' }).capabilities.includes('image'), 'never on Anthropic');
+    assert.deepStrictEqual(load({}).image, { model: '', size: '1024x1024' });
+    assert.deepStrictEqual(load({ AI_IMAGE_MODEL: ' dall-e-3 ', AI_IMAGE_SIZE: '1792x1024' }).image, { model: 'dall-e-3', size: '1792x1024' });
+
+    const seen = [];
+    const s = await seamServer((body, r) => { seen.push([r.url, body]); return { data: [{ url: 'https://img.example/1.png', revised_prompt: 'a goose' }], model: body.model }; });
+    const a = createOpenAiProvider({ key: 'o', base_url: s.url }, { apiKey: 'k' });
+    assert.ok(a.supports('image'));
+    const r = await a.image({ model: 'dall-e-3', prompt: 'goose', n: 0, size: '1024x1024', timeoutMs: 3000 });
+    assert.deepStrictEqual(seen[0], ['/images/generations', { model: 'dall-e-3', prompt: 'goose', n: 1, size: '1024x1024', response_format: 'b64_json' }]);
+    assert.deepStrictEqual(r.images, [{ b64: null, url: 'https://img.example/1.png', revised_prompt: 'a goose' }]);
+    assert.deepStrictEqual(r.usage, { input: 0, output: 1, cached: 0 }, 'metered per image, never per token');
+    s.handler = () => ({ data: [] });
+    await assert.rejects(a.image({ model: 'gpt-image-1', prompt: 'goose', timeoutMs: 3000 }), (e) => e.code === 'provider.output');
+    await s.close();
+
+    const stub = createStubProvider();
+    const one = await stub.image({ prompt: 'goose', n: 3 });
+    assert.strictEqual(one.images.length, 3);
+    assert.deepStrictEqual(one, await stub.image({ prompt: 'another prompt', n: 3 }), 'the same PNG for every prompt');
+    assert.strictEqual(Buffer.from(one.images[0].b64, 'base64').subarray(1, 4).toString(), 'PNG');
+    assert.strictEqual(one.usage.output, 3);
+    assert.strictEqual((await stub.image({ prompt: 'goose', n: 99 })).images.length, 4, 'n is clamped to 4');
+});
+
 t.run();

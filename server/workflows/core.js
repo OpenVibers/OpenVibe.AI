@@ -1,6 +1,6 @@
 'use strict';
 /**
- * The direct operations (POST /api/v1/{chat,generate,summarize,classify,extract,enrich,embed}).
+ * The direct operations (POST /api/v1/{chat,generate,summarize,classify,extract,enrich,embed,image}).
  * Each one IS a workflow (ai.<op>) so a direct call gets the same run record, quota, cache, audit
  * and attribution as any product workflow — the convenience routes are thin, not a second engine.
  */
@@ -83,6 +83,13 @@ const workflows = [
         input_schema: OBJ({ input: { anyOf: [STR(32000), { type: 'array', minItems: 1, maxItems: 64, items: STR(32000) }] } }, ['input']),
         output_schema: OBJ({ vectors: { type: 'array', items: { type: 'array', items: { type: 'number' } } }, dimensions: { type: 'integer' } }, ['vectors', 'dimensions']),
         steps: [{ kind: 'embed', route: 'default.embedding' }], cache_mode: 'private',
+    },
+    {
+        // Off until AI_IMAGE_MODEL seeds route default.image: without it a run answers 503 route.unavailable.
+        key: 'ai.image', name: 'Generate an image', namespace: 'ai',
+        input_schema: OBJ({ prompt: STR(4000), size: { type: 'string', pattern: '^[0-9]{3,4}x[0-9]{3,4}$' }, n: { type: 'integer', minimum: 1, maximum: 4 } }, ['prompt']),
+        output_schema: OBJ({ images: { type: 'array', minItems: 1, items: OBJ({ b64: { type: ['string', 'null'] }, url: { type: ['string', 'null'] } }) }, count: { type: 'integer', minimum: 1 } }, ['images', 'count']),
+        steps: [{ kind: 'image', route: 'default.image' }], cache_mode: 'private',
     },
 ];
 

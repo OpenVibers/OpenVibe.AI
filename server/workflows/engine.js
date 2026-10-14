@@ -215,7 +215,18 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
         return { output: { vectors, dimensions: vectors[0] ? vectors[0].length : 0 }, exec, route };
     }
 
-    const STEP = { llm: llmStep, passthrough: passthroughStep, transcribe: transcribeStep, embed: embedStep, media_analysis: mediaAnalysis.step };
+    async function imageStep(step, input, wf, run, ctx) {
+        const route = await routeFor(step.route || 'default.image');
+        const prompt = String(input.prompt || '').trim();
+        if (!prompt) throw new AiError(422, 'input.invalid', 'image needs a prompt');
+        const req = { prompt, size: input.size || (step.params && step.params.size) || (config.image && config.image.size) || null, n: Math.max(1, Math.min(Number(input.n) || 1, 4)), timeoutMs: route.timeout_ms || 120000 };
+        const exec = await pool.execute(route, 'image', req, { ...ctx, routeKey: route.key, routeVersion: route.version, promptHash: sha256({ p: prompt }) });
+        const images = (exec.result.images || []).filter(i => i && (i.b64 || i.url));
+        if (!images.length) throw new AiError(502, 'output.invalid', 'no image was returned');
+        return { output: { images: images.map(i => ({ b64: i.b64 || null, url: i.url || null })), count: images.length }, exec, route };
+    }
+
+    const STEP = { llm: llmStep, passthrough: passthroughStep, transcribe: transcribeStep, embed: embedStep, image: imageStep, media_analysis: mediaAnalysis.step };
 
     /**
      * Run a workflow. ctx: { signal, logRequest, debugRaw, inputHash }

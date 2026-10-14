@@ -32,7 +32,11 @@ const TABLE = 'usage_sample_outbox'; const SCHEMA = 'platform.usage-sample@1';
 // Billing's unitFits() accepts the card metric's leading word ("GiB" fits gib-delivered; a trailing plural s
 // is dropped from the unit, so the full `<kind>-tokens` would not). The metric is `<KINDS[kind]>-tokens[:model]`.
 const KINDS = ['in', 'cached', 'out'];
-const UNIT = { in: 'input', cached: 'cached-input', out: 'output' };
+// An image attempt is one reading of kind `images`: quantity = images returned, resource `output-images[:model]`,
+// unit `image`. Billing stores it; until a per-image card exists and unitFits() takes `image` (owner/T5) it waits unrated.
+const IMAGE_KIND = 'images';
+const UNIT = { in: 'input', cached: 'cached-input', out: 'output', [IMAGE_KIND]: 'image' };
+const resourceOf = (kind, model) => (kind === IMAGE_KIND ? (model ? `output-images:${model}` : 'output-images') : rates.metricFor(kind, model));
 const REFUSED = new Set([400, 409, 413, 422]); const PRUNE_EVERY_MS = 6 * 60 * 60 * 1000;
 let relay = null; let on = false; let pruneTimer = null; let lastError = null; let queued = 0;
 const keyOf = (runId, attempt, kind) => `ai:${runId}:${attempt}:${kind}`;
@@ -40,7 +44,7 @@ const meter = createMeter();
 /** One reading: an attempt's tokens of one kind, under its rate-card metric and the metric's leading-word unit. */
 function sampleOf({ runId, attempt, kind, workflowKey, requester, project = null, provider = null, model = null, quantity = 0, cost = 0, freeAllowanceUsed = 0, at, traceId = null }) {
   const key = keyOf(runId, attempt, kind);
-  const s = { id: key, idempotency_key: key, service: 'ai', subject: requester, resource: rates.metricFor(kind, model || null), operation: workflowKey,
+  const s = { id: key, idempotency_key: key, service: 'ai', subject: requester, resource: resourceOf(kind, model || null), operation: workflowKey,
     quantity: Math.max(0, Number(quantity) || 0), unit: UNIT[kind], at: new Date(at).toISOString(),
     cost_estimate: Math.max(0, Number(cost) || 0), source: 'ai.runs' };
   // A developer app's run (ADR-014): the reading names the project Billing bills it to.
@@ -147,4 +151,4 @@ async function stop({ drainMs = 3000 } = {}) {
   if (r) { let timer; await Promise.race([r.flush().catch(() => {}), new Promise((res) => { timer = setTimeout(res, drainMs); if (timer.unref) timer.unref(); })]); clearTimeout(timer); await r.stop(); }
 }
 function _reset() { if (pruneTimer) clearInterval(pruneTimer); pruneTimer = null; if (relay) relay.stop(); relay = null; on = false; queued = 0; lastError = null; }
-module.exports = { init, record, sampleOf, sampleFromUsage, keyOf, runIdOf, readingsFor, deliveryReport, status, stop, _reset, TABLE, KINDS, UNIT };
+module.exports = { IMAGE_KIND, init, record, sampleOf, sampleFromUsage, keyOf, runIdOf, readingsFor, deliveryReport, status, stop, _reset, TABLE, KINDS, UNIT };
