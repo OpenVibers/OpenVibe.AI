@@ -197,6 +197,11 @@ function createQuotas(db, { clock = { now: () => Date.now() }, registry, freeAll
                     const a = list[attempt];
                     if (!a || !a.provider_key || a.status === 'skipped') continue;   // a skipped attempt never touched a provider
                     const attemptModel = a.model_key || null;
+                    if (a.operation === 'image') {
+                        // Metered per image (tokens_out is the image count); no token card or free allowance applies.
+                        readings.push({ attempt, kind: usageSamples.IMAGE_KIND, provider: a.provider_key, model: attemptModel, quantity: Math.max(0, Number(a.tokens_out) || 0), cost: Math.max(0, Number(a.cost_usd) || 0), freeAllowanceUsed: 0 });
+                        continue;
+                    }
                     const qty = { in: Math.max(0, (Number(a.tokens_in) || 0) - (Number(a.tokens_cached) || 0)), cached: Math.max(0, Number(a.tokens_cached) || 0), out: Math.max(0, Number(a.tokens_out) || 0) };
                     const free = freeAllowance ? await freeAllowance.claim(subjectOf(ctx), a.provider_key, attemptModel, qty, at) : null;
                     const byKind = (free && free.byKind) || {};

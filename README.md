@@ -99,8 +99,8 @@ idempotent replay):
 | Route | Capability |
 |---|---|
 | `POST /api/v1/runs` (`?wait=ms`, `Idempotency-Key`), `POST /runs/:id/cancel`, `POST /runs/:id/retry`, `POST /runs/:id/citations` | `ai.run.create` |
-| `POST /api/v1/{chat,generate,summarize,classify,extract,enrich,embed}` — each a run of workflow `ai.<op>` | `ai.run.create` |
-| `POST /api/v1/{chat,generate,summarize,classify,extract,embed}` (no `enrich`), `GET /runs/:id` (the app's own runs) | `ai.app.run` for a developer-app token ([Developer apps](#developer-apps)) |
+| `POST /api/v1/{chat,generate,summarize,classify,extract,enrich,embed,image}` — each a run of workflow `ai.<op>` | `ai.run.create` |
+| `POST /api/v1/{chat,generate,summarize,classify,extract,embed,image}` (no `enrich`), `GET /runs/:id` (the app's own runs) | `ai.app.run` for a developer-app token ([Developer apps](#developer-apps)) |
 | `GET /api/v1/runs`, `GET /runs/:id` (+ citations, request-log metadata), `GET /runs/:id/citations` | `ai.run.read` (own runs) |
 | `GET /api/v1/workflows\|templates\|routes[/:key]` | `ai.run.create`, `ai.workflow.manage` or `ai.usage.read` |
 | `POST /api/v1/{templates,workflows,routes}/:key/versions`, `…/versions/:v/status` | `ai.workflow.manage` |
@@ -151,7 +151,7 @@ once OpenVibe staff add it to the project's allowance. Create the project and it
 
 | Route | What |
 |---|---|
-| `POST /api/v1/{chat,generate,summarize,classify,extract,embed}` | the direct operations; `enrich` is first-party only |
+| `POST /api/v1/{chat,generate,summarize,classify,extract,embed,image}` | the direct operations; `enrich` is first-party only |
 | `GET /api/v1/runs/:id` | the app's own runs (404 for another project's) |
 
 Every other route refuses an app token (403 `capability.denied`), whatever its grant carries. An
@@ -257,7 +257,7 @@ definition, but never over an admin's version.
 | Kind | What | Configured by |
 |---|---|---|
 | `stub` | Deterministic, no key, realistically shaped output (schema-shaped JSON, sentences, unit-vector embeddings, timed transcript segments), clearly marked synthetic (`(synthetic)` text, `synthetic: true` on the run). Never cached. | always present |
-| `openai` | Any OpenAI-compatible API (OpenAI, OpenRouter, Groq, Together, Ollama, LM Studio, llama.cpp): chat with structured-output step-down, embeddings, Whisper-style transcription. Ported from Live's `llm.js` / `ai-provider.js`. | `AI_PROVIDER`, `AI_BASE_URL`, `AI_API_KEY`, `AI_MODEL` — Live's setting names |
+| `openai` | Any OpenAI-compatible API (OpenAI, OpenRouter, Groq, Together, Ollama, LM Studio, llama.cpp): chat with structured-output step-down, embeddings, Whisper-style transcription, image generation (`POST {base}/images/generations`). Ported from Live's `llm.js` / `ai-provider.js`. | `AI_PROVIDER`, `AI_BASE_URL`, `AI_API_KEY`, `AI_MODEL` — Live's setting names |
 | `responses` | The OpenAI Responses API (`POST {base}/responses`) for GPT-family models that only speak it, at any OpenAI-compatible `base_url` (default `https://api.openai.com/v1`): chat and every text operation, structured output through `text.format` with the same step-down, vision; no embeddings or transcription. | the admin API (`kind: "responses"`, `base_url`, `secret_ref`) |
 | `anthropic` | Messages API with cached system blocks and forced-tool JSON. Ported from Live's `llm.js`. | same, with `AI_PROVIDER=anthropic` |
 | `http` | The local HTTP seam: `POST {operation, …}` → `{text, json, usage}` | `AI_HTTP_SEAM_URL` or the admin API |
@@ -355,7 +355,27 @@ the service boots without Valkey; with it on, production refuses to boot without
   `overview.source` says which (`local_model`, `paid`, `extractive`), and `gaps` lists what is missing (no local
   model, no speech-to-text, no budget). The output is not cached: callers keep it. Live's grant names
   `media.analyze`.
-- **Direct operations** — `ai.chat|generate|summarize|classify|extract|enrich|embed`.
+- **Direct operations** — `ai.chat|generate|summarize|classify|extract|enrich|embed|image`.
+
+## Image generation
+
+Off unless `AI_IMAGE_MODEL` names the shared provider's image model (`dall-e-3`, `gpt-image-1`; OpenAI-shaped
+providers only). Then boot gives `shared` the `image` capability, registers the model as type `image` and seeds
+route `default.image` (a capability pool of registered `image` models, objective `correctness`,
+`provider_scope: paid`, timeout 120 s, above `AI_PROVIDER_TIMEOUT_MS`; a timed-out image is not retried, so it is never paid for twice). Without it no route is seeded and `POST /api/v1/image` answers
+`503 route.unavailable`, like any operation whose route is not configured.
+
+`POST /api/v1/image` (`ai.run.create`, or `ai.app.run` for an app) takes `{ prompt, size?, n? }` (`n` 1–4, 1 for `dall-e-3`;
+`size` defaults to `AI_IMAGE_SIZE`, `1024x1024`) and answers `output: { images: [{ b64, url }], count }`
+(`dall-e-*` is asked for `b64_json`; `gpt-image-1` answers base64 already). A missing prompt is
+`422 input.invalid`, a provider that returns no image `502 output.invalid`, no provider `503 provider.unavailable`.
+Outside production the stub answers a 1×1 PNG as the last resort (`AI_STUB_FALLBACK`).
+
+Images are metered per image, never per token: the request log's `operation` is `image` and `tokens_out` the
+image count, and each attempt is one `platform.usage-sample@1` reading (`resource` `output-images:<model>`,
+`unit` `image`, `quantity` the images returned), queued like every other reading. No rate card prices an image
+yet (an owner/T5 item, never AI-written), so an image costs 0 in AI's usage and cost quotas; Billing stores the
+reading unrated until a per-image card exists and its `unitFits()` accepts `image`.
 
 ## Local model
 

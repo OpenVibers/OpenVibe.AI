@@ -14,7 +14,7 @@
  * workflows are `app.<project_key>.*` beside its event types `app.<project_key>.<name>`.
  *
  * The direct operations ai.app.run names (ai.chat | ai.generate | ai.summarize | ai.classify |
- * ai.extract | ai.embed) are fixed workflows, not namespace lookups: they are the operations the
+ * ai.extract | ai.embed | ai.image) are fixed workflows, not namespace lookups: they are the operations the
  * capability grants by route. Everything else an app runs must be inside its own namespace.
  */
 const capabilities = require('openvibe-contracts').capabilities;
@@ -24,7 +24,7 @@ const APP_SUB_RE = new RegExp(`^app:app_(${ULID})$`);
 const PROJECT_RE = new RegExp(`^prj_(${ULID})$`);
 const ENVS = ['sandbox', 'production'];
 /** The operations ai.app.run grants by route, as workflow keys (POST /api/v1/<op> is a run of ai.<op>). */
-const DIRECT_OPS = Object.freeze(['chat', 'generate', 'summarize', 'classify', 'extract', 'embed'].map((op) => `ai.${op}`));
+const DIRECT_OPS = Object.freeze(['chat', 'generate', 'summarize', 'classify', 'extract', 'embed', 'image'].map((op) => `ai.${op}`));
 
 /** 'prj_01JAB…' -> 'p01jab…' (null for anything that is not a project id). */
 function projectKey(projectId) {

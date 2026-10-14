@@ -7,6 +7,7 @@
  *   chat and every text operation   POST {base}/chat/completions
  *   embed                           POST {base}/embeddings
  *   transcribe                      POST {base}/audio/transcriptions   (Whisper-style)
+ *   image                           POST {base}/images/generations     (dall-e-*, gpt-image-1)
  *
  * Structured output steps down json_schema -> json_object -> prose for gateways that lack it
  * (Live's behaviour); prose JSON is repaired by the engine.
@@ -48,7 +49,7 @@ function buildBody({ model, system, messages, image, json, maxTokens, temperatur
 function createOpenAiProvider(record, { apiKey = '', fetchImpl = globalThis.fetch } = {}) {
     const baseUrl = String(record.base_url || DEFAULT_BASE_URL).replace(/\/+$/, '');
     const headers = () => (apiKey ? { Authorization: `Bearer ${apiKey}` } : {});
-    const caps = new Set(record.capabilities && record.capabilities.length ? record.capabilities : [...TEXT_OPS, 'json', 'vision', 'embed', 'transcribe']);
+    const caps = new Set(record.capabilities && record.capabilities.length ? record.capabilities : [...TEXT_OPS, 'json', 'vision', 'embed', 'transcribe', 'image']);
 
     async function chat(req) {
         let jsonMode = req.json ? 'schema' : null;
@@ -108,6 +109,21 @@ function createOpenAiProvider(record, { apiKey = '', fetchImpl = globalThis.fetc
         }
     }
 
+    // OpenAI Images API: metered per image (usage.output = images returned), never per token.
+    // dall-e-* answers a URL unless asked for b64_json; gpt-image-1 answers base64 already; dall-e-3 takes only n=1.
+    async function images(req) {
+        const model = req.model;
+        if (!model) throw new ProviderError('image model is not configured', { code: 'provider.model' });
+        const body = { model, prompt: String(req.prompt || ''), n: Math.max(1, Math.min(Number(req.n) || 1, /^dall-e-3/i.test(model) ? 1 : 4)) };
+        if (req.size) body.size = String(req.size);
+        if (!/^gpt-image-1/i.test(model)) body.response_format = 'b64_json';
+        const j = await postJson(`${baseUrl}/images/generations`, headers(), body, { signal: req.signal, timeoutMs: req.timeoutMs, fetchImpl });
+        const list = (Array.isArray(j.data) ? j.data : []).filter(d => d && (d.b64_json || d.url))
+            .map(d => ({ b64: d.b64_json || null, url: d.url || null, revised_prompt: d.revised_prompt || null }));
+        if (!list.length) throw new ProviderError('image response has no data', { code: 'provider.output' });
+        return { images: list, model: j.model || model, usage: { input: 0, output: list.length, cached: 0 } };
+    }
+
     const adapter = {
         key: record.key,
         kind: 'openai',
@@ -115,6 +131,7 @@ function createOpenAiProvider(record, { apiKey = '', fetchImpl = globalThis.fetc
         chat,
         embed,
         transcribe,
+        image: images,
     };
     for (const op of TEXT_OPS) if (op !== 'chat') adapter[op] = chat;   // the engine shapes the prompt per operation
     return adapter;

@@ -40,7 +40,8 @@ function sharedProviderRecord(config, env) {
         default_model: s.model || (kind === 'anthropic' ? 'claude-sonnet-5' : 'gpt-4o-mini'),
         capabilities: kind === 'anthropic'
             ? ['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich', 'json', 'vision']
-            : ['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich', 'json', 'vision', 'embed', 'transcribe'],
+            // image only with AI_IMAGE_MODEL: the Images API is OpenAI-shaped, and image generation is off without it.
+            : ['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich', 'json', 'vision', 'embed', 'transcribe', ...(config.image && config.image.model ? ['image'] : [])],
         timeout_ms: s.timeoutMs, priority: 10, metadata: { configured_by: 'AI_PROVIDER/AI_BASE_URL/AI_API_KEY/AI_MODEL', provider_name: s.provider || 'openai-compatible', billing_profile: 'metered' },
     };
 }
@@ -82,6 +83,9 @@ async function seed({ registry, quotas, config, env = process.env, db }) {
     if (!await registry.getModel('whisper', 'whisper.cpp')) await registry.upsertModel({ provider_key: 'whisper', model_key: 'whisper.cpp', type: 'stt', supports: { json: false } }, { actor: 'seed' });
     const embeddingModel = env.AI_EMBEDDING_MODEL || 'text-embedding-3-small';
     if (!await registry.getModel('shared', embeddingModel)) await registry.upsertModel({ provider_key: 'shared', model_key: embeddingModel, type: 'embedding' }, { actor: 'seed' });
+    // The image model (AI_IMAGE_MODEL) on the shared provider: the only member of default.image until another is added.
+    const imageModel = shared && shared.kind === 'openai' && config.image && config.image.model;
+    if (imageModel && !await registry.getModel('shared', imageModel)) await registry.upsertModel({ provider_key: 'shared', model_key: imageModel, type: 'image' }, { actor: 'seed' });
     // The local embedding model joins default.embedding as its free member (vectors differ per upstream).
     const localEmbed = config.localLlm && config.localLlm.url && config.localLlm.embedModel;
     if (localEmbed && !await registry.getModel('local', localEmbed)) await registry.upsertModel({ provider_key: 'local', model_key: localEmbed, type: 'embedding', metadata: { seeded: true } }, { actor: 'seed' });
@@ -114,6 +118,8 @@ async function seed({ registry, quotas, config, env = process.env, db }) {
     // media.analyze (WS-O task 5): the local model when there is one; the paid route is used only under a media.paid budget.
     if (config.localLlm && config.localLlm.url) await registry.seedVersioned('route', 'media.local', pool(config.localLlm.timeoutMs, { 'capability': 'summarize', constraints: { objective: 'balanced', provider_scope: 'local' }, options: { temperature: 0.3 }, max_output_tokens: 350 }));
     await registry.seedVersioned('route', 'media.paid', pool(60000, { 'capability': 'summarize', constraints: { objective: 'correctness', provider_scope: 'paid', ...(authority ? { authority } : {}) }, options: { temperature: 0.3 }, max_output_tokens: 350 }));
+    // Images (metered per image) only with AI_IMAGE_MODEL: paid providers' registered image models, the shared one first.
+    if (imageModel) await registry.seedVersioned('route', 'default.image', pool(120000, { 'capability': 'image', constraints: { objective: 'correctness', provider_scope: 'paid', authority: `shared:${imageModel}` } }));
     for (const key of HISTORICAL_ROUTES) await registry.seedVersioned('route', key, { primary: { provider: 'shared', model: null }, fallbacks: [], options: {}, max_output_tokens: null, response_format: 'json', timeout_ms: null, alias_of: 'default.json' });
 
     // Templates, then workflows (workflows reference templates)

@@ -171,6 +171,8 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         if (ctx.freeOnly && !isFreeProvider(p)) return false;
         return true;
     }
+    /** Operations served only by registered models of one type (never a provider's default chat model). */
+    const MODEL_TYPE = { embed: 'embedding', transcribe: 'stt', image: 'image' };
     const offerId = (provider, model) => (model ? `${provider}:${model}` : provider);
     const splitOfferId = (id) => {
         const i = String(id).indexOf(':');
@@ -232,9 +234,9 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             if (!appOffered(ctx, p)) continue;
             if (scope === 'local' && !isLocalProvider(p)) continue;
             if (scope === 'paid' && isFreeProvider(p)) continue;
-            if (operation === 'embed' || operation === 'transcribe') {
-                // A chat model advertised by an OpenAI-shaped provider is not an embedding or STT model.
-                const type = operation === 'embed' ? 'embedding' : 'stt';
+            if (MODEL_TYPE[operation]) {
+                // A chat model advertised by an OpenAI-shaped provider is not an embedding, STT or image model.
+                const type = MODEL_TYPE[operation];
                 for (const m of await registry.listModels({ provider: p.key })) {
                     if (m.type === type && m.status === 'active') await addOffer(p, m.model_key, p.capabilities);
                 }
@@ -325,7 +327,9 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         const { order, explain, placement: result = null, ...rest } = route.capability && operation
             ? await poolCandidates(route, features, operation, ctx)
             : await pinnedCandidates(route, features, ctx);
-        if (config.stubFallback && !(route.constraints && route.constraints.provider_scope)
+        // A scoped route never ends on synthetic text (media.paid falls back to its extractive overview); an image
+        // has no such fallback, so the dev/test stub PNG (AI_STUB_FALLBACK, off in production) still closes it.
+        if (config.stubFallback && (!(route.constraints && route.constraints.provider_scope) || operation === 'image')
             && !order.some(c => c.provider === 'stub') && await registry.getProvider('stub')) {
             order.push({ provider: 'stub', model: null });
             explain.candidates.push({ provider: 'stub', model: null, eligible: true, excluded_reason: null, cost: 0, latency: null });
@@ -411,7 +415,9 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                 if (ctx.logRequest) ctx.logRequest({ ...base, status: 'skipped', skip_reason: why });
                 continue;
             }
-            const timeoutMs = Math.max(1000, Math.min(req.timeoutMs || route.timeout_ms || p.timeout_ms || 30000, p.timeout_ms || 600000));
+            // An image generation outlasts the shared provider's chat timeout (AI_PROVIDER_TIMEOUT_MS): the route's wins.
+            const cap = operation === 'image' ? 600000 : (p.timeout_ms || 600000);
+            const timeoutMs = Math.max(1000, Math.min(req.timeoutMs || route.timeout_ms || p.timeout_ms || 30000, cap));
             const retries = config.providerRetries;
             let lastErr = null;
             for (let attempt = 0; attempt <= retries; attempt++) {
@@ -428,12 +434,14 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                         throw new ProviderError('embedding response has invalid vectors', { code: 'provider.output' });
                     const latency = Date.now() - t0;
                     const usage = result.usage || { input: 0, output: 0, cached: 0 };
-                    const cost = await costOf(c.provider, result.model || model, usage);
+                    // An image is metered per image (usage.output = images), and no rate card prices one yet (an owner/T5
+                    // item): its cost is 0 rather than the image count read as output tokens on the token cards.
+                    const cost = operation === 'image' ? 0 : await costOf(c.provider, result.model || model, usage);
                     statFor(c.provider).ok++;
                     await recordSuccess(c.provider);
                     if (ctx.logRequest) {
                         ctx.logRequest({
-                            ...base, model_key: result.model || model, status: 'ok', output_hash: sha256(result.json || result.text || result.vectors || result.segments || ''),
+                            ...base, model_key: result.model || model, status: 'ok', output_hash: sha256(result.json || result.text || result.vectors || result.segments || result.images || ''),
                             tokens_in: usage.input || 0, tokens_out: usage.output || 0, tokens_cached: usage.cached || 0, tokens_estimated: usage.estimated ? 1 : 0,
                             cost_usd: cost, latency_ms: latency,
                             debug_prompt: ctx.debugRaw ? JSON.stringify({ system: req.system, messages: req.messages }).slice(0, 200000) : null,
@@ -450,7 +458,8 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                     }
                     statFor(c.provider).failures++;
                     if (ctx.logRequest) ctx.logRequest({ ...base, status: err && err.code === 'provider.timeout' ? 'timeout' : 'error', latency_ms: Date.now() - t0, error: String(err && err.message || err).slice(0, 500) });
-                    if (attempt < retries && retryable(err)) { await sleep(config.retryDelayMs + Math.floor(Math.random() * Math.min(700, config.retryDelayMs)), ctx.signal).catch(() => {}); continue; }
+                    // A timed-out image may still be generated and billed upstream: never pay for it twice.
+                    if (attempt < retries && retryable(err) && !(operation === 'image' && err.code === 'provider.timeout')) { await sleep(config.retryDelayMs + Math.floor(Math.random() * Math.min(700, config.retryDelayMs)), ctx.signal).catch(() => {}); continue; }
                     break;
                 }
             }
