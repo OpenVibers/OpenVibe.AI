@@ -78,6 +78,46 @@ t.test('forced failure on every route: a logged fallback, or an explicit 503 (ne
     await h.stop(); await ok.close();
 });
 
+t.test('a local embedding model makes default.embedding a pool: the failing paid upstream falls to the free local one', async () => {
+    // Both upstreams speak the OpenAI API; the shared one is paid (metered), the local one free.
+    const paid = await seamServer(() => ({ status: 500, body: { error: { message: 'upstream down' } } }));
+    const local = await seamServer((body, req) => (req.url.endsWith('/embeddings')
+        ? { data: [{ index: 0, embedding: [0.3, 0.4, 0.5] }], model: body.model, usage: { prompt_tokens: 2, total_tokens: 2 } }
+        : { status: 404, body: { error: { message: 'not here' } } }));
+    h = await boot({ env: {
+        AI_STUB_FALLBACK: 'false', AI_PROVIDER_RETRIES: '0', AI_BREAKER_FAILURES: '50',
+        AI_PROVIDER: 'openai', AI_BASE_URL: `${paid.url}/v1`, AI_LOCAL_LLM_URL: `${local.url}/v1`, AI_LOCAL_EMBED_MODEL: 'nomic-embed-text',
+    } });
+    const lp = await h.registry.getProvider('local');
+    assert.ok(lp.capabilities.includes('embed'), 'local advertises embed with an embedding model configured');
+    const lm = await h.registry.getModel('local', 'nomic-embed-text');
+    assert.strictEqual(lm && lm.type, 'embedding', 'the local embedding model is registered');
+
+    // The seeded pool (objective balanced): the free local model answers, so default.embedding no longer 503s.
+    const embed = async (rr, logs) => h.pool.execute(rr, 'embed', { input: ['x'], timeoutMs: 2000 }, { routeKey: rr.key, routeVersion: rr.version, logRequest: (e) => logs.push(e) });
+    const seeded = await h.registry.resolveRoute('default.embedding');
+    const direct = await embed(seeded, []);
+    assert.strictEqual(direct.provider, 'local');
+    assert.deepStrictEqual(direct.result.vectors, [[0.3, 0.4, 0.5]]);
+    const placed = await h.pool.candidates(seeded, ['embed'], 'embed');
+    assert.strictEqual(placed.placement.selected, 'local:nomic-embed-text', JSON.stringify(placed.explain));
+    assert.deepStrictEqual(placed.explain.candidates.map((c) => `${c.provider}:${c.model}`).sort(), ['local:nomic-embed-text', 'shared:text-embedding-3-small']);
+
+    // With the paid upstream as the authority, it is tried first; it fails and the run falls to local.
+    const rr = await route('default.embedding', { capability: 'embed', constraints: { objective: 'correctness', authority: 'shared:text-embedding-3-small' }, timeout_ms: 3000 });
+    const logs = [];
+    const exec = await embed(rr, logs);
+    assert.ok(!exec.synthetic, 'never a synthetic answer');
+    assert.strictEqual(exec.provider, 'local');
+    assert.strictEqual(exec.model, 'nomic-embed-text');
+    assert.strictEqual(exec.explain.selected, 'local', JSON.stringify(exec.explain));
+    assert.strictEqual(exec.explain.candidates.find((c) => c.provider === 'local').model, 'nomic-embed-text');
+    assert.ok(paid.calls >= 1, 'the paid upstream was tried first');
+    assert.ok(logs.some((e) => e.provider_key === 'shared' && e.status !== 'ok'), 'the paid failure is logged');
+    assert.ok(logs.some((e) => e.provider_key === 'local' && e.model_key === 'nomic-embed-text' && e.status === 'ok' && e.fallback === 1), 'the fallback to local is logged');
+    await h.stop(); await paid.close(); await local.close();
+});
+
 t.test('two providers on one capability: the cheaper is chosen; a circuit-open one is excluded', async () => {
     const ok = await seam();
     const flaky = await seamServer(() => ({ status: 500, body: { error: { message: 'boom' } } }));

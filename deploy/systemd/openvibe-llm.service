@@ -5,6 +5,9 @@ Description=OpenVibe local model server — llama.cpp llama-server, OpenAI API o
 # 3 GB of memory. A stream's RTMP ingest and the web services always win.
 # Install (README "Local model"): llama.cpp's CPU build under /opt/llama.cpp/<build> with /opt/llama.cpp/current,
 # the model in /var/lib/openvibe-llm/models, both checked against their published sha256.
+# Embeddings (AI_LOCAL_EMBED_MODEL, README "Local model") need llama-server started with --embedding and a GGUF that
+# supports embeddings (a chat-only model answers 400 and AI falls over to the shared provider, noisily). --embedding
+# restricts the server to embeddings, so this chat unit runs without it.
 After=network.target
 
 [Service]
