@@ -383,6 +383,11 @@ the service boots without Valkey; with it on, production refuses to boot without
   never invent facts: Reviews has no rating field, a Deals price is null unless cited, a Coupons
   expiry stays unknown unless stated, Trade carries its informational-only disclaimer. The
   historical route keys (`wiki.generate`, `news.summarize`, …) are explicit aliases of `default.json`.
+  `blog.write_digest` writes an OpenVibe.Blog desk's digest from its sources' items, every section cited.
+- **Satire** — `blog.write_satire` (Blog's "Is This Real?" desk) is invented on purpose and takes no sources: absurd
+  mock-explainers that never name or quote a real person or put words in a real organisation's mouth, never joke about
+  tragedies, minors or groups of people, and never give steps for anything dangerous. Blog labels each post as satire
+  written by AI.
 - **Live's features** — `live.translate`, `live.paste.describe_image`, `live.paste.summarize_text`,
   `live.stream.describe_frame`, `live.stream.summarize`, `live.streamer.overview`,
   `live.media.overview`, `live.stream.recap`, `live.media.transcribe`, `network.site_copy`

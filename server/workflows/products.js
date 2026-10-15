@@ -37,6 +37,8 @@ const templates = [
         'Page title: {{title}}{{#space}}\nSpace: {{space}}{{/space}}{{#outline}}\nRequested outline: {{json outline}}{{/outline}}\n\n'),
     productTemplate('blog.draft_post', 'Blog: draft a post', 'Draft a blog post in Markdown for the brief. Claims of fact must cite sources; opinion and framing need none. If there are no sources, write only what needs no facts and list the facts you would need in gaps.', 'blog.draft',
         'Topic: {{topic}}{{#brief}}\nBrief: {{brief}}{{/brief}}{{#tone}}\nTone: {{tone}}{{/tone}}{{#audience}}\nAudience: {{audience}}{{/audience}}\n\n'),
+    productTemplate('blog.write_digest', 'Blog: write a desk digest', 'Write one digest post for an OpenVibe.Blog desk from the numbered sources (the items its sources published in the period). Group related items into a few sections, most important first, and say plainly what each item is and why a reader of this desk would care, as the sources state it. Every sentence of fact cites the sources it rests on (each section\'s `citations`); connecting words and section headings need none. Neutral and readable: no opinion stated as fact, no hype, no advice, no predictions. Name prices, dates and numbers only as the sources give them. Skip items that say nothing a reader could use, and list what you skipped or could not tell in gaps. title: what the period was about, not "Digest". dek: one sentence. body of each section: plain sentences, Markdown links not needed (the page links the sources).', 'blog.draft',
+        'Desk: {{desk}}{{#about}}\nThe desk covers: {{about}}{{/about}}\nPeriod: {{period}}\n\n'),
     productTemplate('news.summarize_story', 'News: summarize a story', 'Write a neutral, factual summary of the story the sources report: a headline, a summary, key points and a timeline, all cited. Attribute contested claims to their source. The tone, when given, changes the length and the explaining, never the facts or the neutrality: brief is two or three sentences and at most three key points; explained also says, from the sources, what the subject is and why it matters, for someone new to it.', 'news.summarize',
         '{{#topic}}Topic: {{topic}}\n\n{{/topic}}{{#tone}}Tone: {{tone}}\n\n{{/tone}}'),
     productTemplate('news.compare_perspectives', 'News: compare perspectives', 'Group the sources into distinct perspectives on the question, summarize each fairly in its own terms, and list where they agree and disagree. Do not pick a winner.', 'news.summarize',
@@ -80,6 +82,13 @@ const workflows = [
         key: 'blog.draft_post', name: 'Draft a blog post', namespace: 'blog',
         input_schema: OBJ({ topic: STR(300), brief: STR(4000), tone: STR(200), audience: STR(300), sources: SOURCES(0) }, ['topic']),
         output_schema: OBJ({ title: STR(200), dek: STR(400), body_markdown: STR(40000), tags: ARR(STR(40), 10), citations: CITES, gaps: GAPS }),
+        default_route: 'blog.draft',
+    },
+    {
+        // OpenVibe.Blog's AI desks (server/desks.js): a digest of what a desk's sources published, each section cited.
+        key: 'blog.write_digest', name: 'Write a desk digest', namespace: 'blog',
+        input_schema: OBJ({ desk: STR(120), about: STR(400), period: STR(120), sources: SOURCES(2) }, ['desk', 'period', 'sources']),
+        output_schema: OBJ({ title: STR(200), dek: STR(400), sections: ARR(OBJ({ heading: STR(160), body: STR(4000), citations: CITES }), 12), citations: CITES, gaps: GAPS }),
         default_route: 'blog.draft',
     },
     {
@@ -231,6 +240,26 @@ workflows.push({
     default_route: 'food.vision',
     // A person's photo: never shared between callers (the stored run keeps only the image's hash, server/runs.js).
     cache_mode: 'none',
+    metadata: { seed: true },
+});
+
+// OpenVibe.Blog's satire desk ("Is This Real?"): invented on purpose, so it is not a sourced evidence package and has its
+// own rules. The page labels every post as satire written by AI; the rules keep the jokes away from real people.
+templates.push({
+    key: 'blog.write_satire', name: 'Blog: write a satire post',
+    description: 'An absurd, plainly fictional mock-explainer for OpenVibe.Blog\'s satire desk.',
+    input_schema: { type: 'object' }, output_schema: { type: 'object' },
+    system_prompt: 'You write for "Is This Real?", OpenVibe.Blog\'s satire desk: absurd, deadpan mock-explainers that treat a ridiculous question as if it were a serious public-health or consumer issue, in the style of an earnest internet explainer that has completely lost the plot. Escalate the absurdity section by section; invented studies, invented institutes and invented experts with obviously silly names are the joke. Rules you never break: the piece must be plainly fiction to any reader; never name, quote or describe a real living person, and never put words in the mouth of a real company, brand, government body or organisation; no jokes about real tragedies, victims, illness, minors, or any group of people by race, religion, gender, sexuality or disability; never give steps, amounts or methods for anything dangerous (drugs, weapons, self-harm, dangerous stunts), even as a joke, and when the topic brushes against one, the punchline is that nobody should try it; no slurs. Profanity is allowed but use it sparingly. title: the question, as a headline. dek: one deadpan sentence. body_markdown: 350 to 700 words in Markdown with two to four ## sections; no title heading. tags: up to five lower-case words. Output only JSON matching the schema.',
+    user_prompt: 'Question: {{topic}}{{#angle}}\nAngle: {{angle}}{{/angle}}',
+    default_route: 'blog.draft', owner: 'blog', metadata: { json_name: 'blog_write_satire' },
+});
+workflows.push({
+    key: 'blog.write_satire', name: 'Write a satire post', namespace: 'blog',
+    input_schema: OBJ({ topic: STR(300), angle: STR(300) }, ['topic']),
+    output_schema: OBJ({ title: STR(200), dek: STR(300), body_markdown: STR(12000), tags: ARR(STR(40), 5) }),
+    steps: [{ kind: 'llm', template: 'blog.write_satire', operation: 'generate', output: 'json', params: { max_tokens: 2400, temperature: 0.9 } }],
+    default_route: 'blog.draft',
+    cache_mode: 'private',
     metadata: { seed: true },
 });
 
