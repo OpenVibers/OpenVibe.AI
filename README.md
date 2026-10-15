@@ -563,5 +563,5 @@ Part of the [OpenVibe network](https://openvibe.network). Built in the open by [
 <!-- versions:start -->
 - openvibe-contracts: v0.186.0
 - openvibe-sdk: v0.44.0
-- openvibe-shared: v4.2.0
+- openvibe-shared: v4.2.1
 <!-- versions:end -->
