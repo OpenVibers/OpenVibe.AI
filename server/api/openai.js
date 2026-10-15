@@ -13,6 +13,11 @@
  *                                              (tools need a provider that declares them); the answer names the
  *                                              model that ran
  *
+ *   x_openvibe.provider                        an app's own provider instead of the router: { base_url (https, an
+ *                                              OpenAI-format API), model, secret (the name of a project secret granted
+ *                                              to ai for reveal to that origin, ADR-056) }; the key is revealed for
+ *                                              that one run, and the project pays its provider directly
+ *
  * Each request is a run of workflow ai.complete, so it has the run's quota, free allowance, cost, audit and explain
  * (x_openvibe in the answer); the prompt is not kept. stream: true answers server-sent events in the Chat Completions
  * chunk format, emulated: the whole answer arrives as one delta, then finish_reason, then [DONE]. Errors are OpenAI's
@@ -25,8 +30,9 @@ const { appAttribution } = require('../apps');
 const FIELDS = ['messages', 'tools', 'tool_choice', 'parallel_tool_calls', 'response_format', 'stop', 'seed', 'top_p', 'presence_penalty', 'frequency_penalty', 'temperature'];
 
 // Cloudflare answers a 502 or 504 from the origin with its own HTML page, so an OpenAI client would get no JSON error:
-// an upstream that failed or could not be reached is 503 (OpenAI's own "unavailable, retry"), the body kept.
-const gatewaySafe = (status) => (status === 502 || status === 504 ? 503 : status);
+// an upstream that failed or could not be reached is 503 (OpenAI's own "unavailable, retry"), the body kept. An invalid
+// request is OpenAI's 400, not 422.
+const gatewaySafe = (status) => (status === 502 || status === 504 ? 503 : status === 422 ? 400 : status);
 
 function openaiError(res, status, message, code, type) {
     res.status(status).json({ error: { message: String(message || 'error').slice(0, 1000), type: type || (status === 401 || status === 403 ? 'authentication_error' : status === 429 ? 'rate_limit_error' : status >= 500 ? 'api_error' : 'invalid_request_error'), code: code || null, param: null } });
@@ -68,6 +74,8 @@ function openaiRouter({ runs, auth, config, log = console }) {
         if (maxTokens != null) input.max_tokens = Math.max(1, Math.min(Number(maxTokens) || 1, 16000));
         let body = { workflow: 'ai.complete', input };
         if (req.principal.kind === 'app') body = { ...body, attribution: appAttribution(req.principal) };
+        const own = b.x_openvibe && typeof b.x_openvibe === 'object' ? b.x_openvibe.provider : undefined;
+        if (own !== undefined) body = { ...body, project_provider: own };
         let run;
         try {
             const created = await runs.create(body, req.principal, { trace: req.ov && req.ov.traceId, requestId: req.ov && req.ov.requestId });
@@ -80,7 +88,8 @@ function openaiRouter({ runs, auth, config, log = console }) {
         }
         if (run.status === 'failed' || run.status === 'cancelled') {
             const code = (run.error && run.error.code) || 'run.failed';
-            const status = /^(input|validation)\./.test(code) ? 400 : /quota|allowance|budget/.test(code) ? 429 : 503;
+            const status = /^(input|validation)\./.test(code) ? 400 : /quota|allowance|budget/.test(code) ? 429
+                : code === 'project_secret.refused' ? 403 : code === 'credential.endpoint_refused' ? 422 : 503;
             return openaiError(res, status, (run.error && run.error.detail) || code, code);
         }
         if (!['succeeded', 'cached'].includes(run.status) || !run.output || !Array.isArray(run.output.choices)) {
