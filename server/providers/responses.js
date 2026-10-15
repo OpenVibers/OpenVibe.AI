@@ -12,7 +12,7 @@
  * step-down json_schema -> json_object -> prose for gateways that lack it. No embeddings or
  * transcription: those stay with the `openai` kind.
  */
-const { ProviderError, postJson } = require('./common');
+const { ProviderError, postJson, schemaInstruction } = require('./common');
 
 const DEFAULT_BASE_URL = 'https://api.openai.com/v1';
 const TEXT_OPS = ['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich'];
@@ -35,7 +35,9 @@ function buildBody({ model, system, messages, image, json, maxTokens, temperatur
         return { role: m.role, content: inputContent(m.content) };
     });
     const body = { model, input };
-    const sysText = (system || []).map(x => x.text).join('\n\n');
+    // Stepped down from json_schema: the schema travels in the instructions instead.
+    const hint = json && jsonMode !== 'schema' ? schemaInstruction(json) : '';
+    const sysText = [...(system || []).map(x => x.text), hint].filter(Boolean).join('\n\n');
     if (sysText) body.instructions = sysText;
     if (isReasoningModel(model)) {
         body.max_output_tokens = Math.max(maxTokens, 256) + 512;
