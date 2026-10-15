@@ -57,6 +57,8 @@ const templates = [
         'Tool: {{tool}}{{#audience}}\nAudience: {{audience}}{{/audience}}\n\n'),
     productTemplate('food.suggest_recipes', 'Food: suggest recipes', 'Suggest up to three simple, low-cost recipes the person can cook, built first from their pantry. An ingredient from the pantry has from_pantry true and needs no citation. Every other ingredient must be one of the foods in the numbered sources (OpenVibe.Food\'s food list) and cite it; if a recipe needs something the sources do not list, leave that recipe out and name the missing food in gaps. State amounts in everyday units. Never state prices, calories, nutrition or health claims: the app works out costs from its own data. Keep steps short and safe (cook meat, poultry and eggs through).', 'food.suggest',
         'Pantry: {{json pantry}}{{#people}}\nCooking for: {{people}}{{/people}}{{#ask}}\nRequest: {{ask}}{{/ask}}\n\n'),
+    productTemplate('rent.screen_listing', 'Rent: screen a listing for scam signs', 'Read one rental listing a person posted and say whether a member of staff should look at it for the signs of a rental scam. The signs: asking for a deposit, rent or any payment before the place can be viewed (payment_before_viewing); asking to pay by wire transfer, gift cards, cryptocurrency or a payment app sent to a stranger (unusual_payment); an owner who is abroad or otherwise cannot show the place in person (owner_unavailable); pressure to decide or pay at once, such as many other applicants or today only (pressure); asking for identity documents, a social security number or bank details before any viewing (personal_data_request); moving the conversation to a private email or messaging app while refusing calls or visits (off_platform_only). A low price alone is not a sign: you cannot know the area. Ordinary rules (no pets, references, a deposit paid at signing, proof of income at application) are not signs. Quote the exact words behind each sign you name. When no sign is clearly present, answer allow with signals none; choose review only when the words show at least one sign.', 'rent.screen',
+        'Listing:\n"""\n{{json listing}}\n"""\n\n'),
     productTemplate('moderation.classify', 'Moderation: classify content', 'Classify the content under OpenVibe policy. Profanity, insults, crude jokes and trash talk are ALLOWED and are not violations. Flag only: credible threats of violence, any sexual content involving minors, doxxing (sharing private personal information), targeted harassment campaigns, spam/scams, sexual content where not allowed, and self-harm encouragement. Quote the exact spans you flag. When unsure, choose review, not block.', 'moderation.classify',
         '{{#context}}Context: {{context}}\n\n{{/context}}Content to classify:\n"""\n{{text}}\n"""\n\n'),
 ];
@@ -172,6 +174,21 @@ const workflows = [
         default_route: 'food.suggest',
     },
     {
+        key: 'rent.screen_listing', name: 'Screen a rental listing for scam signs', namespace: 'rent',
+        input_schema: OBJ({
+            listing: OBJ({ title: STR(200), kind: STR(40), price: { type: 'number' }, currency: STR(8), period: STR(20), city: STR(120), country: STR(8), description: STR(5000) }, ['title']),
+            sources: SOURCES(0),
+        }, ['listing']),
+        output_schema: OBJ({
+            signals: { type: 'array', maxItems: 7, items: { enum: ['payment_before_viewing', 'unusual_payment', 'owner_unavailable', 'pressure', 'personal_data_request', 'off_platform_only', 'none'] } },
+            action: { enum: ['allow', 'review'] },
+            rationale: STR(1000),
+            spans: ARR(OBJ({ quote: STR(500), signal: STR(40) }), 20),
+            citations: CITES,
+        }),
+        default_route: 'rent.screen', cache_mode: 'private',
+    },
+    {
         key: 'moderation.classify', name: 'Classify content for moderation', namespace: 'moderation',
         input_schema: OBJ({ text: STR(8000), context: STR(1000), sources: SOURCES(0) }, ['text']),
         output_schema: OBJ({
@@ -187,7 +204,7 @@ const workflows = [
 ].map(w => ({
     cache_mode: 'private',
     ...w,
-    steps: [{ kind: 'llm', template: w.key, operation: w.key === 'moderation.classify' ? 'classify' : 'generate', output: 'json', prepare: 'sources', cite: true, params: { max_tokens: 2400, temperature: 0.3 } }],
+    steps: [{ kind: 'llm', template: w.key, operation: w.key === 'moderation.classify' || w.key === 'rent.screen_listing' ? 'classify' : 'generate', output: 'json', prepare: 'sources', cite: true, params: { max_tokens: 2400, temperature: 0.3 } }],
     metadata: { draft: true, seed: true },
 }));
 
