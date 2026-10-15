@@ -37,8 +37,8 @@ const templates = [
         'Page title: {{title}}{{#space}}\nSpace: {{space}}{{/space}}{{#outline}}\nRequested outline: {{json outline}}{{/outline}}\n\n'),
     productTemplate('blog.draft_post', 'Blog: draft a post', 'Draft a blog post in Markdown for the brief. Claims of fact must cite sources; opinion and framing need none. If there are no sources, write only what needs no facts and list the facts you would need in gaps.', 'blog.draft',
         'Topic: {{topic}}{{#brief}}\nBrief: {{brief}}{{/brief}}{{#tone}}\nTone: {{tone}}{{/tone}}{{#audience}}\nAudience: {{audience}}{{/audience}}\n\n'),
-    productTemplate('news.summarize_story', 'News: summarize a story', 'Write a neutral, factual summary of the story the sources report: a headline, a summary, key points and a timeline, all cited. Attribute contested claims to their source.', 'news.summarize',
-        '{{#topic}}Topic: {{topic}}\n\n{{/topic}}'),
+    productTemplate('news.summarize_story', 'News: summarize a story', 'Write a neutral, factual summary of the story the sources report: a headline, a summary, key points and a timeline, all cited. Attribute contested claims to their source. The tone, when given, changes the length and the explaining, never the facts or the neutrality: brief is two or three sentences and at most three key points; explained also says, from the sources, what the subject is and why it matters, for someone new to it.', 'news.summarize',
+        '{{#topic}}Topic: {{topic}}\n\n{{/topic}}{{#tone}}Tone: {{tone}}\n\n{{/tone}}'),
     productTemplate('news.compare_perspectives', 'News: compare perspectives', 'Group the sources into distinct perspectives on the question, summarize each fairly in its own terms, and list where they agree and disagree. Do not pick a winner.', 'news.summarize',
         'Question or topic: {{topic}}\n\n'),
     productTemplate('reviews.summarize_entity', 'Reviews: summarize an entity', 'Summarize what the review signals say about the entity: themes, pros and cons, each cited, and how strong the coverage is. Never produce or imply a star rating or aggregate score.', 'reviews.summarize',
@@ -84,7 +84,9 @@ const workflows = [
     },
     {
         key: 'news.summarize_story', name: 'Summarize a news story', namespace: 'news',
-        input_schema: OBJ({ topic: STR(300), sources: SOURCES(1) }, ['sources']),
+        // tone (OpenVibe.News' reader control): brief (two or three sentences), neutral (the default), explained (for
+        // someone new to the subject: what it is and why it matters, still only from the sources).
+        input_schema: OBJ({ topic: STR(300), tone: { enum: ['brief', 'neutral', 'explained'] }, sources: SOURCES(1) }, ['sources']),
         output_schema: OBJ({ headline: STR(200), summary: STR(3000), key_points: ARR(CLAIM, 20), timeline: ARR(OBJ({ when: STR(60), what: STR(500), citations: CITES }), 30), citations: CITES, gaps: GAPS }),
         default_route: 'news.summarize',
     },
