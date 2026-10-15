@@ -15,7 +15,7 @@ const { provenance } = require('./providers/rate-cards');
 
 const PROVIDER_KINDS = ['stub', 'openai', 'responses', 'anthropic', 'http', 'whisper'];
 const BILLING_PROFILES = ['metered', 'subscription', 'payg', 'free', 'byok'];
-const FEATURES = ['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich', 'embed', 'vision', 'json', 'transcribe', 'image'];
+const FEATURES = ['chat', 'complete', 'generate', 'summarize', 'classify', 'extract', 'enrich', 'embed', 'vision', 'json', 'tools', 'transcribe', 'image'];
 const LIFECYCLE = ['draft', 'active', 'deprecated', 'archived'];
 const KEY_RE = /^[a-z][a-z0-9_-]*(\.[a-z0-9_-]+)*$/;
 

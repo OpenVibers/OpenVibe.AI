@@ -83,6 +83,13 @@ t.test('errors come in OpenAI\'s shape: no token, no messages, n > 1', async () 
     assert.strictEqual((await post({ model: 'openvibe', n: 2, messages: [{ role: 'user', content: 'x' }] })).status, 400);
 });
 
+t.test('a provider may declare tools (and complete) in its capabilities', async () => {
+    const r = await request(h.base, 'POST', '/api/v1/providers', { tok: service, body: { key: 'toolsup', kind: 'openai', base_url: 'https://upstream.example/v1', auth_mode: 'none', capabilities: ['chat', 'complete', 'tools'], default_model: 'm' } });
+    assert.strictEqual(r.status, 201, r.text);
+    assert.deepStrictEqual(r.body.provider.capabilities, ['chat', 'complete', 'tools']);
+    assert.strictEqual((await request(h.base, 'POST', '/api/v1/providers/toolsup/disable', { tok: service, body: {} })).status, 200, 'and is kept out of the way of the other checks');
+});
+
 t.test('GET /v1/models lists the router model', async () => {
     const r = await request(h.base, 'GET', '/v1/models', { tok: service });
     assert.strictEqual(r.status, 200, r.text);
