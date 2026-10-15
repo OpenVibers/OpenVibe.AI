@@ -124,14 +124,14 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
     // Discovery for the public home (ai.openvibe.services): the home and the price page are for search engines
     // and assistants; the console, its sign-in and the API are not.
     app.get('/robots.txt', (_req, res) => {
-        res.type('text/plain').send(`User-agent: *\nAllow: /$\nAllow: /stats\nDisallow: /console\nDisallow: /auth/\nDisallow: /api/\n\nSitemap: ${config.baseUrl}/sitemap.xml\n`);
+        res.type('text/plain').send(`User-agent: *\nAllow: /$\nAllow: /stats\nAllow: /updates\nDisallow: /console\nDisallow: /auth/\nDisallow: /api/\n\nSitemap: ${config.baseUrl}/sitemap.xml\n`);
     });
     app.get('/sitemap.xml', async (_req, res, next) => {
         try {
             const from = new Date(clock.now() - STATS_DAYS * 86400000).toISOString().slice(0, 10);
             const stats = await db.prepare('SELECT MAX(day) AS lastmod FROM provider_stats_daily WHERE day >= ?').get(from);
             const statsLastmod = [stats && stats.lastmod ? new Date(stats.lastmod).toISOString() : null, releaseLastmod].filter(Boolean).sort().pop();
-            const entries = [['/', releaseLastmod], ['/stats', statsLastmod]];
+            const entries = [['/', releaseLastmod], ['/stats', statsLastmod], ['/updates', releaseLastmod]];
             res.type('application/xml').send(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${entries.map(([p, lastmod]) => `  <url><loc>${config.baseUrl}${p}</loc>${lastmod ? `<lastmod>${lastmod.slice(0, 10)}</lastmod>` : ''}</url>`).join('\n')}\n</urlset>\n`);
         } catch (e) { next(e); }
     });
@@ -143,6 +143,12 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
     // GET /: the home page for a browser (server/home.js), the API index for curl and API clients (`*/*`, no
     // Accept, or any non-HTML Accept). Vary: Accept so a shared cache never serves one to the other; the home is
     // private because Cloudflare caches by URL and ignores Vary: Accept. The home carries its own CSP.
+    // GET /updates: what shipped on this site (the shared update log).
+    app.get('/updates', (req, res) => {
+        res.type('html').set('Content-Security-Policy', home.HOME_CSP).set('Cache-Control', 'public, max-age=300')
+            .send(home.renderUpdates({ siteUrl: config.baseUrl }));
+    });
+
     app.get('/', (req, res) => {
         res.vary('Accept');
         if (req.accepts(['text/plain', 'text/html']) === 'text/html') {

@@ -11,6 +11,7 @@
  *   llmsTxt({ siteUrl })      /llms.txt, the same facts as plain text
  */
 const shell = require('openvibe-shared/shell');
+const frame = require('openvibe-shared/frame');
 const showcase = require('openvibe-shared/showcase');
 const ovServe = require('openvibe-shared/serve');
 const appIcon = require('openvibe-shared/app-icon');
@@ -115,10 +116,33 @@ function sections({ siteUrl }) {
     });
 }
 
+const NAV_LINKS = [{ label: 'Prices', href: '/stats' }, { label: 'Guide', href: GUIDE }];
+const FOOTER = { service: 'ai', variant: 'full', mount: '#ov-footer', brandName: SITE_NAME, updates: '/updates' };
+
+/** /updates: what shipped on this site (the network's shared update log, openvibe-shared/frame updatesBody). */
+function renderUpdates({ siteUrl }) {
+    return shell.page({
+        name: SITE_NAME, service: 'ai', lang: 'en',
+        title: `What shipped on ${SITE_NAME}`,
+        siteName: SITE_NAME,
+        description: `Every change deployed to ${SITE_NAME}, newest first.`,
+        canonical: `${siteUrl}/updates`,
+        robots: 'index, follow',
+        navbar: { service: 'ai', apiBase: NETWORK_URL, links: NAV_LINKS, history: { type: 'page', title: SITE_NAME } },
+        footer: FOOTER, home: '/', navLinks: NAV_LINKS,
+        head: appIcon.headTags({ site: 'ai' }),
+        body: `<div id="navbar-mount"></div>
+<main id="main" class="page">
+${frame.updatesBody({ service: 'ai', siteName: SITE_NAME })}
+</main>
+<script src="${ovServe.url('shipped.js')}" defer></script>`,
+    });
+}
+
 function renderHome({ siteUrl }) {
-    const navLinks = [{ label: 'Prices', href: '/stats' }, { label: 'Guide', href: GUIDE }];
+    const navLinks = NAV_LINKS;
     const nav = { service: 'ai', apiBase: NETWORK_URL, links: navLinks, history: { type: 'page', title: SITE_NAME } };
-    const footer = { service: 'ai', variant: 'full', mount: '#ov-footer', brandName: SITE_NAME };
+    const footer = FOOTER;
     return shell.page({
         name: SITE_NAME, service: 'ai', lang: 'en',
         title: `${SITE_NAME}: many models, one API, every answer explained`,
@@ -172,4 +196,4 @@ function renderNotFound() {
         '<h1>Not found</h1>', `<p>Nothing is here. <a href="/">${SITE_NAME}</a> · <a href="/stats">Prices and latency</a> · <a href="${NETWORK_URL}">OpenVibe</a></p>`, '</body>', '</html>'].join('\n');
 }
 
-module.exports = { renderHome, llmsTxt, HOME_CSP, SITE_NAME, renderNotFound };
+module.exports = { renderHome, renderUpdates, llmsTxt, HOME_CSP, SITE_NAME, renderNotFound };
