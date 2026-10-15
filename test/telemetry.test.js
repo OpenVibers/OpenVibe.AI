@@ -3,7 +3,7 @@
  * Request telemetry (openvibe-sdk/service, plan T1 step 10): app.js mounts the process-wide telemetryMiddleware (a no-op
  * until init), server/index.js calls telemetry.init() for service 'ai' with a PostgreSQL sink, starts the 30-day
  * retention and flushes on stop. Five hits on one route flush as ONE aggregated http.request sample; /metrics and
- * /shared make none; the retention deletes only rows older than 30 days.
+ * /shared make none; the retention deletes only rows older than 14 days.
  */
 const assert = require('assert');
 const fs = require('fs');
@@ -38,9 +38,9 @@ const { boot, request } = require('./helpers');
         const db = t.db;
         await db.query('DELETE FROM telemetry_samples');
         const insert = (days) => db.query("INSERT INTO telemetry_samples (at, service, operation) VALUES (now() - make_interval(days => $1), 'ai', 'http.request')", [days]);
-        await insert(45);
+        await insert(20);
         await insert(1);
-        assert.strictEqual(await pruneTelemetry({ db }), 1);
+        assert.strictEqual(await pruneTelemetry({ db, olderThanDays: 14 }), 1);
         assert.strictEqual((await db.query('SELECT count(*)::int AS n FROM telemetry_samples')).rows[0].n, 1);
         console.log('telemetry ok');
     } finally {
