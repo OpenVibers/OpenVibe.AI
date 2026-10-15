@@ -5,6 +5,7 @@
 // adapter's complete() passes tools, tool_choice and the tool messages through as written, mapping max_tokens to
 // max_completion_tokens (and dropping sampling knobs) for a reasoning model.
 const assert = require('assert');
+const http = require('http');
 const { boot, request, token, suite, ALL } = require('./helpers');
 const { createOpenAiProvider } = require('../server/providers/openai');
 
@@ -114,6 +115,39 @@ t.test('the OpenAI-format adapter passes the request through as written', async 
     assert.deepStrictEqual(seen[1].body, { model: 'gpt-5-nano', messages, max_completion_tokens: 300 }, 'a reasoning model: max_completion_tokens, no sampling knobs');
     const plain = createOpenAiProvider({ key: 'local', capabilities: ['chat'] }, { fetchImpl });
     assert.strictEqual(plain.supports('tools'), false, 'tools are declared, never assumed');
+});
+
+t.test('production\'s shape: an OpenAI-format provider declaring chat (not complete) answers it, no stub behind it', async () => {
+    const calls = [];
+    const upstream = http.createServer((req, res) => {
+        let b = '';
+        req.on('data', (d) => { b += d; });
+        req.on('end', () => {
+            calls.push({ path: req.url, body: JSON.parse(b) });
+            res.writeHead(200, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({ id: 'chatcmpl-up', object: 'chat.completion', created: 1, model: 'gpt-up', choices: [{ index: 0, message: { role: 'assistant', content: 'from upstream' }, finish_reason: 'stop' }], usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 } }));
+        });
+    });
+    await new Promise((r) => upstream.listen(0, '127.0.0.1', r));
+    const h2 = await boot({ env: { AI_STUB_FALLBACK: 'false' } });
+    try {
+        const made = await request(h2.base, 'POST', '/api/v1/providers', { tok: service, body: { key: 'up', kind: 'openai', base_url: `http://127.0.0.1:${upstream.address().port}/v1`, auth_mode: 'none', default_model: 'gpt-up', capabilities: ['chat'] } });
+        assert.ok(made.status < 300, made.text);
+        const r = await request(h2.base, 'POST', '/v1/chat/completions', { tok: service, body: { model: 'anything', messages: [{ role: 'user', content: 'hi' }] } });
+        assert.strictEqual(r.status, 200, r.text);
+        assert.strictEqual(r.body.choices[0].message.content, 'from upstream');
+        assert.strictEqual(r.body.x_openvibe.provider, 'up');
+        assert.deepStrictEqual([calls.length, calls[0].path, calls[0].body.model], [1, '/v1/chat/completions', 'gpt-up']);
+        // Tools need a provider that declares them: none does here, so the answer is OpenAI's JSON error with 503 (never a
+        // 502, which Cloudflare would replace with its own page).
+        const tools = await request(h2.base, 'POST', '/v1/chat/completions', { tok: service, body: { messages: [{ role: 'user', content: 'Weather?' }], tools: [WEATHER] } });
+        assert.strictEqual(tools.status, 503, tools.text);
+        assert.strictEqual(tools.body.error.code, 'provider.unavailable');
+        assert.strictEqual(calls.length, 1, 'the provider without tools was not asked');
+    } finally {
+        await h2.stop();
+        await new Promise((r) => upstream.close(r));
+    }
 });
 
 t.test('close', async () => { await h.stop(); });
