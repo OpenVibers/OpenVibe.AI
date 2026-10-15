@@ -70,7 +70,7 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
     // /shared/* URLs from this repo's pinned openvibe-shared; each answer sets its own asset cache policy.
     app.use('/shared', ovServe.handler());
     // Inline images arrive as data URLs; the per-run input cap is enforced again in runs.create.
-    app.use('/api', express.json({ limit: Math.ceil(config.runs.maxInputBytes * 1.5), type: ['application/json', 'application/*+json'] }));
+    app.use(['/api', '/v1'], express.json({ limit: Math.ceil(config.runs.maxInputBytes * 1.5), type: ['application/json', 'application/*+json'] }));
 
     app.get('/api/health', (_req, res) => {
         res.json({ status: 'ok', service: 'openvibe-ai', version: pkg.version });
@@ -86,6 +86,8 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
     // Operator actions shared by the admin API and the operator console (one implementation, one audit row).
     const ops = createOps({ db, registry, pool, quotas, cache, runs });
     app.use(runsRouter({ runs, registry, auth, config, log }));
+    // The OpenAI-compatible endpoint (POST /v1/chat/completions, GET /v1/models): runs of ai.complete.
+    app.use(require('./api/openai').openaiRouter({ runs, auth, config, log }));
     app.use(require('./api/attribution-quotas').attributionQuotasRouter({ db, quotas, auth, clock, sendError: (res, err, ctx) => sendError(res, err, ctx, log) }));
     if (credentials) app.use(require('./credentials').credentialsRouter({ credentials, auth, registry, sendError: (res, err, ctx) => sendError(res, err, ctx, log) }));
     app.use(adminRouter({ db, registry, pool, quotas, cache, runs, auth, ops, log }));

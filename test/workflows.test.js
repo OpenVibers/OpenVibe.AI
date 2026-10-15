@@ -26,6 +26,7 @@ const EXAMPLES = {
     'media.analyze': { media_url: '__MEDIA__/fixture.mp4', language: 'en' },
     'network.site_copy': { sites: [{ id: 'live', name: 'OpenVibe.Live', what: 'live streaming' }], links: [{ id: 'tools', name: 'Tools', about: 'online tools' }] },
     'ai.chat': { messages: [{ role: 'user', content: 'hello' }] },
+    'ai.complete': { messages: [{ role: 'user', content: 'hello' }], tools: [{ type: 'function', function: { name: 'lookup', parameters: { type: 'object', properties: { q: { type: 'string' } } } } }] },
     'ai.generate': { prompt: 'Write a haiku about SQLite.' },
     'ai.summarize': { text: 'SQLite is an embedded database engine. It is small and fast.', max_words: 20 },
     'ai.classify': { text: 'I love this!', labels: ['positive', 'negative', 'neutral'] },

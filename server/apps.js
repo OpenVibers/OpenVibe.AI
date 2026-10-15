@@ -24,7 +24,7 @@ const APP_SUB_RE = new RegExp(`^app:app_(${ULID})$`);
 const PROJECT_RE = new RegExp(`^prj_(${ULID})$`);
 const ENVS = ['sandbox', 'production'];
 /** The operations ai.app.run grants by route, as workflow keys (POST /api/v1/<op> is a run of ai.<op>). */
-const DIRECT_OPS = Object.freeze(['chat', 'generate', 'summarize', 'classify', 'extract', 'embed', 'image'].map((op) => `ai.${op}`));
+const DIRECT_OPS = Object.freeze(['chat', 'complete', 'generate', 'summarize', 'classify', 'extract', 'embed', 'image'].map((op) => `ai.${op}`));
 
 /** 'prj_01JAB…' -> 'p01jab…' (null for anything that is not a project id). */
 function projectKey(projectId) {

@@ -187,6 +187,25 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
         return { output: { text: exec.result.text || '', json }, exec, route };
     }
 
+    /** complete: the OpenAI Chat Completions request as the caller wrote it (ai.complete), to an upstream that speaks it. */
+    async function completeStep(step, input, wf, run, ctx) {
+        const route = await routeFor(step.route || 'default.chat');
+        const openai = {};
+        for (const k of ['messages', 'tools', 'tool_choice', 'parallel_tool_calls', 'response_format', 'stop', 'seed', 'top_p', 'presence_penalty', 'frequency_penalty']) {
+            if (input[k] !== undefined) openai[k] = input[k];
+        }
+        const req = {
+            openai,
+            maxTokens: Math.max(1, Math.round(input.max_tokens || route.max_output_tokens || 1024)),
+            temperature: input.temperature == null ? null : input.temperature,
+            timeoutMs: Math.max(route.timeout_ms || 0, 120000),
+        };
+        const exec = await pool.execute(route, 'complete', req, { ...ctx, routeKey: route.key, routeVersion: route.version, promptHash: sha256({ m: openai.messages, t: openai.tools || null }) });
+        const c = exec.result.completion;
+        if (!c || !Array.isArray(c.choices) || !c.choices.length) throw new AiError(502, 'output.empty', 'the provider answered, but with no choices');
+        return { output: { choices: c.choices, system_fingerprint: c.system_fingerprint || null, model: exec.model }, exec, route };
+    }
+
     async function transcribeStep(step, input, wf, run, ctx) {
         const route = await routeFor(step.route || 'live.stt');
         // Read where it lies (the loopback reader), one window at a time: start_sec seeks with a range request, and
@@ -226,7 +245,7 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
         return { output: { images: images.map(i => ({ b64: i.b64 || null, url: i.url || null })), count: images.length }, exec, route };
     }
 
-    const STEP = { llm: llmStep, passthrough: passthroughStep, transcribe: transcribeStep, embed: embedStep, image: imageStep, media_analysis: mediaAnalysis.step };
+    const STEP = { llm: llmStep, passthrough: passthroughStep, complete: completeStep, transcribe: transcribeStep, embed: embedStep, image: imageStep, media_analysis: mediaAnalysis.step };
 
     /**
      * Run a workflow. ctx: { signal, logRequest, debugRaw, inputHash }

@@ -124,11 +124,44 @@ function createOpenAiProvider(record, { apiKey = '', fetchImpl = globalThis.fetc
         return { images: list, model: j.model || model, usage: { input: 0, output: list.length, cached: 0 } };
     }
 
+    /**
+     * complete (the OpenAI-compatible endpoint, /v1/chat/completions): the caller's Chat Completions request as they
+     * wrote it (messages with tool calls and tool results, tools, tool_choice, response_format, stop, seed), sent to
+     * this upstream with the routed model. A reasoning model takes max_completion_tokens and its default temperature.
+     * → { completion, text, model, usage }
+     */
+    async function complete(req) {
+        const o = req.openai || {};
+        const body = { model: req.model, messages: o.messages };
+        for (const k of ['tools', 'tool_choice', 'parallel_tool_calls', 'response_format', 'stop', 'seed', 'top_p', 'presence_penalty', 'frequency_penalty']) {
+            if (o[k] !== undefined && o[k] !== null) body[k] = o[k];
+        }
+        if (isReasoningModel(req.model)) {
+            if (req.maxTokens) body.max_completion_tokens = req.maxTokens;
+            for (const k of ['top_p', 'presence_penalty', 'frequency_penalty']) delete body[k];
+        } else {
+            if (req.maxTokens) body.max_tokens = req.maxTokens;
+            if (req.temperature != null) body.temperature = req.temperature;
+        }
+        const j = await postJson(`${baseUrl}/chat/completions`, headers(), body, { signal: req.signal, timeoutMs: req.timeoutMs, fetchImpl });
+        if (!Array.isArray(j.choices) || !j.choices.length) throw new ProviderError('completion has no choices', { code: 'provider.output' });
+        const msg = j.choices[0].message || {};
+        const u = j.usage || {};
+        return {
+            completion: { choices: j.choices, system_fingerprint: j.system_fingerprint || null },
+            text: typeof msg.content === 'string' ? msg.content : '',
+            model: j.model || req.model,
+            usage: { input: u.prompt_tokens || 0, output: u.completion_tokens || 0, cached: (u.prompt_tokens_details && u.prompt_tokens_details.cached_tokens) || 0 },
+        };
+    }
+
     const adapter = {
         key: record.key,
         kind: 'openai',
-        supports: (feature) => caps.has(feature),
+        // complete is the chat endpoint as the caller wrote it: any upstream that chats completes; tools are declared.
+        supports: (feature) => caps.has(feature) || (feature === 'complete' && caps.has('chat')),
         chat,
+        complete,
         embed,
         transcribe,
         image: images,
