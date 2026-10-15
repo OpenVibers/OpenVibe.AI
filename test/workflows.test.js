@@ -37,6 +37,8 @@ const EXAMPLES = {
     'wiki.generate_space': { topic: 'SQLite', sources: SRC(2) },
     'wiki.generate_page': { title: 'WAL mode', sources: SRC(3) },
     'blog.draft_post': { topic: 'Why we self-host', sources: SRC(1) },
+    'blog.write_digest': { desk: 'News digest', about: 'Government and space agency announcements', period: '14 October 2026', sources: SRC(3) },
+    'blog.write_satire': { topic: 'Is it safe to let your air fryer vote?', angle: 'a consumer safety explainer' },
     'news.summarize_story': { topic: 'Example', sources: SRC(3) },
     'news.compare_perspectives': { topic: 'Example', sources: SRC(2) },
     'reviews.summarize_entity': { entity: { name: 'Widget', type: 'product' }, sources: SRC(2) },
@@ -93,7 +95,7 @@ t.test('boot seeds every required workflow key', async () => {
     // AI_IMAGE_MODEL seeds default.image, so ai.image runs end to end on the stub's PNG like every other workflow.
     h = await boot({ env: { OV_MEDIA_INTERNAL_URL: mediaBase, AI_IMAGE_MODEL: 'gpt-image-1' } });
     const keys = (await h.registry.listWorkflows()).map(w => w.key);
-    for (const k of ['wiki.generate_space', 'wiki.generate_page', 'blog.draft_post', 'news.summarize_story', 'news.compare_perspectives', 'reviews.summarize_entity', 'deals.enrich_deal',
+    for (const k of ['wiki.generate_space', 'wiki.generate_page', 'blog.draft_post', 'blog.write_digest', 'blog.write_satire', 'news.summarize_story', 'news.compare_perspectives', 'reviews.summarize_entity', 'deals.enrich_deal',
         'coupons.extract_coupon', 'trade.summarize_market_context', 'codes.generate_docs', 'games.generate_lore', 'moderation.classify', 'tools.describe', 'food.suggest_recipes', 'food.read_pantry_photo', 'rent.screen_listing', 'chat.member.reply',
         'live.translate', 'live.stream.describe_frame', 'live.stream.summarize', 'live.viewers.reply', 'live.chat.insight', 'live.hero.slogans', 'live.stream.recap', 'network.site_copy']) {
         assert.ok(keys.includes(k), `missing ${k}`);
