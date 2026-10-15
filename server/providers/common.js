@@ -72,4 +72,17 @@ function sleep(ms, signal) {
     });
 }
 
-module.exports = { ProviderError, deadline, describeAbort, postJson, retryable, approxTokens, estimateUsage, sleep };
+/**
+ * The output schema as an instruction, for a request that cannot carry it as structured output (a gateway or a schema
+ * that refuses json_schema steps down to json_object or prose, and the model would otherwise guess the shape).
+ */
+function schemaInstruction(json) {
+    if (!json || !json.schema) return '';
+    let text;
+    try { text = JSON.stringify(json.schema); } catch { return ''; }
+    if (text.length > 12000) text = text.slice(0, 12000);
+    return `Answer with one JSON object that matches this JSON Schema exactly: every required property present, no other properties, and the types and limits it gives.\n${text}`;
+}
+
+module.exports = {
+    schemaInstruction, ProviderError, deadline, describeAbort, postJson, retryable, approxTokens, estimateUsage, sleep };

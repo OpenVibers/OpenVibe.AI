@@ -14,7 +14,7 @@
  */
 const fs = require('fs');
 const path = require('path');
-const { ProviderError, postJson, deadline, describeAbort, approxTokens } = require('./common');
+const { ProviderError, postJson, deadline, describeAbort, approxTokens, schemaInstruction } = require('./common');
 const { sseEvents, createAccumulator } = require('./stream');
 
 const DEFAULT_BASE_URL = 'https://api.openai.com/v1';
@@ -24,7 +24,9 @@ function isReasoningModel(m) { return /^(gpt-5|o\d)/i.test(m || ''); }
 
 function buildBody({ model, system, messages, image, json, maxTokens, temperature, cacheKey, baseUrl }, jsonMode) {
     const msgs = [];
-    const sysText = (system || []).map(x => x.text).join('\n\n');
+    // Stepped down from json_schema: the schema travels in the instructions instead.
+    const hint = json && jsonMode !== 'schema' ? schemaInstruction(json) : '';
+    const sysText = [...(system || []).map(x => x.text), hint].filter(Boolean).join('\n\n');
     if (sysText) msgs.push({ role: 'system', content: sysText });
     messages.forEach((m, i) => {
         const last = i === messages.length - 1;

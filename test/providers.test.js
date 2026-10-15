@@ -41,14 +41,19 @@ t.test('Anthropic body: cached system blocks, image block, forced tool for JSON'
 
 t.test('OpenAI adapter steps down json_schema -> json_object on a gateway that refuses it', async () => {
     const seen = [];
+    const systems = [];
     const srv = await seamServer((body) => {
         seen.push(body.response_format && body.response_format.type);
+        systems.push((body.messages.find((m) => m.role === 'system') || {}).content || '');
         if (body.response_format && body.response_format.type === 'json_schema') return { status: 400, body: { error: { message: 'response_format json_schema is not supported' } } };
         return { choices: [{ message: { content: '{"a":1}' } }], usage: { prompt_tokens: 7, completion_tokens: 3, prompt_tokens_details: { cached_tokens: 2 } }, model: 'm' };
     });
     const a = createOpenAiProvider({ key: 'o', base_url: srv.url, capabilities: [] }, { apiKey: 'k' });
     const r = await a.chat(req({ json: { name: 'r', schema: { type: 'object' } } }));
     assert.deepStrictEqual(seen, ['json_schema', 'json_object']);
+    // The schema the gateway refused travels in the instructions of the json_object request, not before.
+    assert.ok(!systems[0].includes('JSON Schema'), 'not while structured output carries it');
+    assert.ok(systems[1].includes('matches this JSON Schema exactly') && systems[1].includes('{"type":"object"}'), systems[1]);
     assert.strictEqual(r.text, '{"a":1}');
     assert.deepStrictEqual(r.usage, { input: 7, output: 3, cached: 2 });
     assert.ok(a.supports('embed') && a.supports('vision'));
