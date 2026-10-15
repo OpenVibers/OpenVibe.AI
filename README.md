@@ -405,6 +405,12 @@ the service boots without Valkey; with it on, production refuses to boot without
      `workflow_prefix` `media.paid` and `max_cost_usd` > 0, while today's `media.*` spend is under it. That quota
      gates only this call, never whole runs.
 
+- **Chat's AI members** ([server/workflows/chat.js](server/workflows/chat.js)): `chat.member.reply` (namespace `chat`, route
+  `chat.member`, an alias of `default.chat`, text out). A room on OpenVibe.Chat adds an AI member with a name and how
+  it should be; when someone names it, Chat sends the recent messages, the room's notes and any shared context a linked
+  service gave the room (Food: a household's pantry and plan), and posts the reply. The prompt forbids inventing facts
+  about the people or their things and claiming actions beyond writing in the chat.
+
   `overview.source` says which (`local_model`, `paid`, `extractive`), and `gaps` lists what is missing (no local
   model, no speech-to-text, no budget). The output is not cached: callers keep it. Live's grant names
   `media.analyze`.
