@@ -24,6 +24,10 @@ const { appAttribution } = require('../apps');
 
 const FIELDS = ['messages', 'tools', 'tool_choice', 'parallel_tool_calls', 'response_format', 'stop', 'seed', 'top_p', 'presence_penalty', 'frequency_penalty', 'temperature'];
 
+// Cloudflare answers a 502 or 504 from the origin with its own HTML page, so an OpenAI client would get no JSON error:
+// an upstream that failed or could not be reached is 503 (OpenAI's own "unavailable, retry"), the body kept.
+const gatewaySafe = (status) => (status === 502 || status === 504 ? 503 : status);
+
 function openaiError(res, status, message, code, type) {
     res.status(status).json({ error: { message: String(message || 'error').slice(0, 1000), type: type || (status === 401 || status === 403 ? 'authentication_error' : status === 429 ? 'rate_limit_error' : status >= 500 ? 'api_error' : 'invalid_request_error'), code: code || null, param: null } });
 }
@@ -69,14 +73,14 @@ function openaiRouter({ runs, auth, config, log = console }) {
             const created = await runs.create(body, req.principal, { trace: req.ov && req.ov.traceId, requestId: req.ov && req.ov.requestId });
             run = await runs.explained(await runs.wait(created, Math.max(config.runs.maxWaitMs, 120000)));
         } catch (err) {
-            const status = (err && err.status) || 500;
+            const status = gatewaySafe((err && err.status) || 500);
             if (status === 429 && err.retryAfter) res.setHeader('Retry-After', String(err.retryAfter));
             if (status >= 500) log.warn(`[ai] /v1/chat/completions: ${err && err.message}`);
             return openaiError(res, status, err && (err.detail || err.message), err && err.code);
         }
         if (run.status === 'failed' || run.status === 'cancelled') {
             const code = (run.error && run.error.code) || 'run.failed';
-            const status = /^(input|validation)\./.test(code) ? 400 : /quota|allowance|budget/.test(code) ? 429 : 502;
+            const status = /^(input|validation)\./.test(code) ? 400 : /quota|allowance|budget/.test(code) ? 429 : 503;
             return openaiError(res, status, (run.error && run.error.detail) || code, code);
         }
         if (!['succeeded', 'cached'].includes(run.status) || !run.output || !Array.isArray(run.output.choices)) {

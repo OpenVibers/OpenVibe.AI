@@ -230,7 +230,8 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         };
         const scope = route.constraints && route.constraints.provider_scope;
         for (const p of await registry.listProviders()) {
-            if (p.key === 'stub' || !p.capabilities.some(f => features.includes(f))) continue;
+            const caps = await offeredCapabilities(p);
+            if (p.key === 'stub' || !caps.some(f => features.includes(f))) continue;
             if (!appOffered(ctx, p)) continue;
             if (scope === 'local' && !isLocalProvider(p)) continue;
             if (scope === 'paid' && isFreeProvider(p)) continue;
@@ -238,10 +239,10 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                 // A chat model advertised by an OpenAI-shaped provider is not an embedding, STT or image model.
                 const type = MODEL_TYPE[operation];
                 for (const m of await registry.listModels({ provider: p.key })) {
-                    if (m.type === type && m.status === 'active') await addOffer(p, m.model_key, p.capabilities);
+                    if (m.type === type && m.status === 'active') await addOffer(p, m.model_key, caps);
                 }
             } else {
-                await addOffer(p, (route.constraints && route.constraints.model) || p.default_model || null, p.capabilities);
+                await addOffer(p, (route.constraints && route.constraints.model) || p.default_model || null, caps);
             }
         }
         // A pinned candidate stays in the pool even when the provider's capability list is incomplete (migration):
@@ -253,7 +254,8 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             if (!appOffered(ctx, p)) continue;
             if (scope === 'local' && !isLocalProvider(p)) continue;
             if (scope === 'paid' && isFreeProvider(p)) continue;
-            const caps = route.capability && !p.capabilities.includes(route.capability) ? [...p.capabilities, route.capability] : p.capabilities;
+            const declared = await offeredCapabilities(p);
+            const caps = route.capability && !declared.includes(route.capability) ? [...declared, route.capability] : declared;
             await addOffer(p, pin.model || p.default_model || null, caps);
         }
         const c = route.constraints || {};
@@ -321,6 +323,17 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             if (offered) order.push({ provider: c.provider, model: c.model || null });
         }
         return { order, explain };
+    }
+
+    /**
+     * What a provider offers the pool: its declared capabilities, plus `complete` (a Chat Completions request passed
+     * through, ai.complete) when it declares chat and its adapter passes one through (the OpenAI format). No provider
+     * declares `complete`, so without this the pool had no offer for /v1/chat/completions (2026-10-15).
+     */
+    async function offeredCapabilities(p) {
+        if (!p.capabilities.includes('chat') || p.capabilities.includes('complete')) return p.capabilities;
+        const entry = await adapter(p.key);
+        return entry && entry.adapter && entry.adapter.supports('complete') ? [...p.capabilities, 'complete'] : p.capabilities;
     }
 
     async function candidates(route, features, operation, ctx = {}) {
