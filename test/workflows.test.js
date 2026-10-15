@@ -46,6 +46,7 @@ const EXAMPLES = {
     'codes.generate_docs': { project: 'demo', sources: [{ source_type: 'code.file', title: 'index.js', content: 'module.exports = 1;' }] },
     'games.generate_lore': { world: 'Hobo Quest', prompt: 'The origin of the tin-can knights', sources: SRC(1) },
     'moderation.classify': { text: 'you absolute potato, gg', context: 'arena chat' },
+    'rent.screen_listing': { listing: { title: 'Bright room near the river', kind: 'room', price: 650, currency: 'EUR', period: 'month', city: 'Porto', country: 'PT', description: 'I am abroad for work; send the deposit by wire and I will mail the keys.' } },
     'food.suggest_recipes': { pantry: ['rice', 'onions', 'canned tomatoes'], people: 2, sources: [{ source_type: 'food.food', source_id: 'lentils', title: 'Lentils, dried', content: '{"id":"lentils","unit":"kg"}' }] },
     'tools.describe': { tool: 'img.convert', sources: [{ source_type: 'tools.tool', title: 'img.convert descriptor', content: '{"id":"img.convert","inputs":["file","format"]}' }] },
 };
@@ -91,11 +92,11 @@ t.test('boot seeds every required workflow key', async () => {
     h = await boot({ env: { OV_MEDIA_INTERNAL_URL: mediaBase, AI_IMAGE_MODEL: 'gpt-image-1' } });
     const keys = (await h.registry.listWorkflows()).map(w => w.key);
     for (const k of ['wiki.generate_space', 'wiki.generate_page', 'blog.draft_post', 'news.summarize_story', 'news.compare_perspectives', 'reviews.summarize_entity', 'deals.enrich_deal',
-        'coupons.extract_coupon', 'trade.summarize_market_context', 'codes.generate_docs', 'games.generate_lore', 'moderation.classify', 'tools.describe', 'food.suggest_recipes',
+        'coupons.extract_coupon', 'trade.summarize_market_context', 'codes.generate_docs', 'games.generate_lore', 'moderation.classify', 'tools.describe', 'food.suggest_recipes', 'rent.screen_listing',
         'live.translate', 'live.stream.describe_frame', 'live.stream.summarize', 'live.viewers.reply', 'live.chat.insight', 'live.hero.slogans', 'live.stream.recap', 'network.site_copy']) {
         assert.ok(keys.includes(k), `missing ${k}`);
     }
-    for (const k of ['default.chat', 'default.json', 'default.embedding', 'default.image', 'wiki.generate', 'blog.draft', 'news.summarize', 'reviews.summarize', 'deals.enrich', 'coupons.extract', 'trade.summarize', 'codes.generate_docs', 'games.generate_lore', 'tools.describe', 'moderation.classify', 'food.suggest']) {
+    for (const k of ['default.chat', 'default.json', 'default.embedding', 'default.image', 'wiki.generate', 'blog.draft', 'news.summarize', 'reviews.summarize', 'deals.enrich', 'coupons.extract', 'trade.summarize', 'codes.generate_docs', 'games.generate_lore', 'tools.describe', 'moderation.classify', 'food.suggest', 'rent.screen']) {
         assert.ok(await h.registry.getRoute(k), `missing historical route ${k}`);
     }
 });

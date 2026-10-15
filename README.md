@@ -368,7 +368,8 @@ the service boots without Valkey; with it on, production refuses to boot without
 - **Seed product workflows** — `wiki.generate_space`, `wiki.generate_page`, `blog.draft_post`,
   `news.summarize_story`, `news.compare_perspectives`, `reviews.summarize_entity`,
   `deals.enrich_deal`, `coupons.extract_coupon`, `trade.summarize_market_context`,
-  `codes.generate_docs`, `games.generate_lore`, `moderation.classify`. They take numbered
+  `codes.generate_docs`, `games.generate_lore`, `moderation.classify`, `food.suggest_recipes`,
+  `rent.screen_listing` (a rental listing's scam signs for Rent's staff: `allow` or `review`, quoting the words). They take numbered
   `sources`, return `citations` (indices the engine bounds to the sources given) and `gaps`, and
   never invent facts: Reviews has no rating field, a Deals price is null unless cited, a Coupons
   expiry stays unknown unless stated, Trade carries its informational-only disclaimer. The
