@@ -9,7 +9,7 @@
  *   routes     live.<role> for Live's roles, live.stt, default.chat|json|embedding and media.local|paid
  *              as capability pools ordered by openvibe-sdk/placement; and the historical
  *              product route keys as explicit aliases of default.json
- *   templates, workflows   from server/workflows/{live,core,products}.js — a code change becomes a
+ *   templates, workflows   from server/workflows/{live,core,products,media,chat}.js — a code change becomes a
  *              new version unless an admin has versioned that key since (admin edits win)
  *   quotas     AI_MAX_COST_USD_PER_DAY (global/day, Live's ai_max_cost_usd_per_day) and a per-service
  *              request rate for every service
@@ -18,6 +18,7 @@ const live = require('./live');
 const media = require('./media');
 const core = require('./core');
 const products = require('./products');
+const chat = require('./chat');
 const { resolveSecret } = require('../util');
 
 const ROLE_TIMEOUT = { chat: 20000, vision: 30000, director: 25000, summary: 30000, legacy: 30000 };
@@ -121,13 +122,15 @@ async function seed({ registry, quotas, config, env = process.env, db }) {
     // Images (metered per image) only with AI_IMAGE_MODEL: paid providers' registered image models, the shared one first.
     if (imageModel) await registry.seedVersioned('route', 'default.image', pool(120000, { 'capability': 'image', constraints: { objective: 'correctness', provider_scope: 'paid', authority: `shared:${imageModel}` } }));
     for (const key of HISTORICAL_ROUTES) await registry.seedVersioned('route', key, { primary: { provider: 'shared', model: null }, fallbacks: [], options: {}, max_output_tokens: null, response_format: 'json', timeout_ms: null, alias_of: 'default.json' });
+    // Chat's AI members (server/workflows/chat.js): conversation text, so an alias of the chat pool.
+    await registry.seedVersioned('route', 'chat.member', { primary: { provider: 'shared', model: null }, fallbacks: [], options: {}, max_output_tokens: 600, response_format: 'text', timeout_ms: null, alias_of: 'default.chat' });
 
     // Templates, then workflows (workflows reference templates)
-    for (const t of [...live.templates, ...core.templates, ...products.templates, ...media.templates]) {
+    for (const t of [...live.templates, ...core.templates, ...products.templates, ...media.templates, ...chat.templates]) {
         const { key, ...def } = t;
         await registry.seedVersioned('template', key, { description: null, default_route: null, owner: 'ai', visibility: 'internal', metadata: {}, ...def });
     }
-    for (const w of [...live.workflows, ...core.workflows, ...products.workflows, ...media.workflows]) {
+    for (const w of [...live.workflows, ...core.workflows, ...products.workflows, ...media.workflows, ...chat.workflows]) {
         const { key, ...def } = w;
         await registry.seedVersioned('workflow', key, { description: null, default_route: null, cache_ttl_sec: null, metadata: {}, ...def });
     }
