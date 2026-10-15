@@ -14,7 +14,8 @@
  */
 const fs = require('fs');
 const path = require('path');
-const { ProviderError, postJson, deadline, describeAbort } = require('./common');
+const { ProviderError, postJson, deadline, describeAbort, approxTokens } = require('./common');
+const { sseEvents, createAccumulator } = require('./stream');
 
 const DEFAULT_BASE_URL = 'https://api.openai.com/v1';
 const TEXT_OPS = ['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich'];
@@ -143,6 +144,7 @@ function createOpenAiProvider(record, { apiKey = '', fetchImpl = globalThis.fetc
             if (req.maxTokens) body.max_tokens = req.maxTokens;
             if (req.temperature != null) body.temperature = req.temperature;
         }
+        if (typeof req.onDelta === 'function') return await completeStreaming(body, req);
         const j = await postJson(`${baseUrl}/chat/completions`, headers(), body, { signal: req.signal, timeoutMs: req.timeoutMs, fetchImpl });
         if (!Array.isArray(j.choices) || !j.choices.length) throw new ProviderError('completion has no choices', { code: 'provider.output' });
         const msg = j.choices[0].message || {};
@@ -152,6 +154,64 @@ function createOpenAiProvider(record, { apiKey = '', fetchImpl = globalThis.fetc
             text: typeof msg.content === 'string' ? msg.content : '',
             model: j.model || req.model,
             usage: { input: u.prompt_tokens || 0, output: u.completion_tokens || 0, cached: (u.prompt_tokens_details && u.prompt_tokens_details.cached_tokens) || 0 },
+        };
+    }
+
+    /**
+     * complete with stream: true: each upstream chunk's choices go to req.onDelta as they arrive, and the answer is put
+     * back together (content joined, tool calls assembled) so the run ends with the same completion as without
+     * streaming. Usage comes from the final chunk (stream_options.include_usage); an upstream that sends none is
+     * estimated from the text.
+     */
+    async function completeStreaming(body, req) {
+        let res;
+        try {
+            res = await fetchImpl(`${baseUrl}/chat/completions`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream', ...headers() },
+                body: JSON.stringify({ ...body, stream: true, stream_options: { include_usage: true } }),
+                signal: deadline(req.signal, req.timeoutMs), stream: true,
+            });
+        } catch (err) {
+            throw describeAbort(err, req.signal, req.timeoutMs) || new ProviderError(`connection failed: ${err.message}`, { code: 'provider.unreachable' });
+        }
+        if (!res.ok) {
+            const text = await res.text().catch(() => '');
+            let j = {};
+            try { j = JSON.parse(text); } catch { /* not JSON */ }
+            const msg = (j.error && (j.error.message || j.error)) || `HTTP ${res.status}: ${String(text).slice(0, 200)}`;
+            throw new ProviderError(typeof msg === 'string' ? msg : JSON.stringify(msg), { status: res.status, code: res.status === 401 || res.status === 403 ? 'provider.auth' : 'provider.http', body: j });
+        }
+        const acc = createAccumulator();
+        let usage = null;
+        let model = req.model;
+        let fingerprint = null;
+        try {
+            for await (const chunk of sseEvents(res.body)) {
+                if (chunk.error) throw new ProviderError(String(chunk.error.message || chunk.error).slice(0, 300), { code: 'provider.http' });
+                if (chunk.model) model = chunk.model;
+                if (chunk.system_fingerprint) fingerprint = chunk.system_fingerprint;
+                if (chunk.usage) usage = chunk.usage;
+                for (const c of chunk.choices || []) {
+                    acc.add(c);
+                    req.onDelta({ index: Number(c.index) || 0, delta: c.delta || {}, finish_reason: c.finish_reason || null, model });
+                }
+            }
+        } catch (err) {
+            if (err instanceof ProviderError) throw err;
+            throw describeAbort(err, req.signal, req.timeoutMs) || new ProviderError(`the stream broke: ${err.message}`, { code: 'provider.unreachable' });
+        }
+        const choices = acc.result();
+        if (!choices.length) throw new ProviderError('completion has no choices', { code: 'provider.output' });
+        const first = choices[0].message;
+        const u = usage || {};
+        const estimated = !usage;
+        const inTok = estimated ? (body.messages || []).reduce((n, m) => n + approxTokens(typeof m.content === 'string' ? m.content : JSON.stringify(m.content || '')), 0) : (u.prompt_tokens || 0);
+        const outTok = estimated ? approxTokens(`${first.content || ''}${JSON.stringify(first.tool_calls || '')}`) : (u.completion_tokens || 0);
+        return {
+            completion: { choices, system_fingerprint: fingerprint },
+            text: typeof first.content === 'string' ? first.content : '',
+            model,
+            usage: { input: inTok, output: outTok, cached: (u.prompt_tokens_details && u.prompt_tokens_details.cached_tokens) || 0, ...(estimated ? { estimated: true } : {}) },
         };
     }
 

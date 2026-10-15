@@ -158,12 +158,24 @@ function createStubProvider(record = { key: 'stub', metadata: {} }, { stats = nu
         const rnd = seeded(`complete:${JSON.stringify(msgs).slice(-2000)}`);
         const inTok = msgs.reduce((n, m) => n + approxTokens(typeof m.content === 'string' ? m.content : JSON.stringify(m.content || '')), 0);
         const tool = Array.isArray(o.tools) && o.tools.length && last.role !== 'tool' && o.tool_choice !== 'none' ? o.tools[0] : null;
+        const stream = typeof req.onDelta === 'function' ? req.onDelta : null;
         if (tool && tool.function) {
             const args = tool.function.parameters ? synthesize(tool.function.parameters, rnd, 0, 'arguments') : {};
             const call = { id: `call_${crypto.createHash('sha256').update(JSON.stringify(msgs)).digest('hex').slice(0, 24)}`, type: 'function', function: { name: tool.function.name, arguments: JSON.stringify(args) } };
+            if (stream) {
+                // As OpenAI streams a call: the id and name first, then the arguments in pieces, then the finish.
+                stream({ index: 0, delta: { role: 'assistant', content: null, tool_calls: [{ index: 0, id: call.id, type: 'function', function: { name: call.function.name, arguments: '' } }] }, finish_reason: null, model: req.model || 'stub-1' });
+                for (const piece of call.function.arguments.match(/.{1,8}/gs) || []) stream({ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: piece } }] }, finish_reason: null, model: req.model || 'stub-1' });
+                stream({ index: 0, delta: {}, finish_reason: 'tool_calls', model: req.model || 'stub-1' });
+            }
             return { completion: { choices: [{ index: 0, message: { role: 'assistant', content: null, tool_calls: [call] }, finish_reason: 'tool_calls' }] }, text: '', model: req.model || 'stub-1', synthetic: true, usage: { input: inTok, output: 20, cached: 0, estimated: true } };
         }
         const text = last.role === 'tool' ? `(synthetic) the tool answered: ${String(last.content || '').slice(0, 80)}` : `(synthetic) ${phrase(rnd, 8)}`;
+        if (stream) {
+            const words = text.split(/(?<= )/);
+            words.forEach((w, i) => stream({ index: 0, delta: i === 0 ? { role: 'assistant', content: w } : { content: w }, finish_reason: null, model: req.model || 'stub-1' }));
+            stream({ index: 0, delta: {}, finish_reason: 'stop', model: req.model || 'stub-1' });
+        }
         return { completion: { choices: [{ index: 0, message: { role: 'assistant', content: text }, finish_reason: 'stop' }] }, text, model: req.model || 'stub-1', synthetic: true, usage: { input: inTok, output: approxTokens(text), cached: 0, estimated: true } };
     }
 

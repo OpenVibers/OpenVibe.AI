@@ -156,7 +156,7 @@ function llmsTxt({ siteUrl }) {
         '',
         '- Token: POST https://openvibe.network/oauth/token with grant_type=client_credentials, your app\'s client id and secret, audience=openvibe.ai (five minutes).',
         `- Operations: POST ${siteUrl}/api/v1/chat, /generate, /summarize, /classify, /extract, /embed; GET ${siteUrl}/api/v1/runs/:id for your own runs.`,
-        `- OpenAI-compatible: POST ${siteUrl}/v1/chat/completions (Chat Completions with tools; stream is emulated) and GET ${siteUrl}/v1/models, with the same token. Point an OpenAI client's base URL at ${siteUrl}/v1.`,
+        `- OpenAI-compatible: POST ${siteUrl}/v1/chat/completions (Chat Completions with tools; stream: true streams the upstream's deltas) and GET ${siteUrl}/v1/models, with the same token. Point an OpenAI client's base URL at ${siteUrl}/v1.`,
         `- An app's own provider: add x_openvibe.provider { base_url, model, secret } to name the project's own OpenAI-format API; secret is a project secret granted to ai for reveal to that origin (ADR-056), revealed per run and never stored.`,
         '- Every run response carries explain: the objective, the model selected and every candidate with its estimated cost, latency and excluded reason.',
         '- Sandbox apps run on free and local capacity only; runs, usage and the free allowance are per project; a person\'s own provider key is never used for an app.',

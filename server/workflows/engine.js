@@ -199,6 +199,7 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
             maxTokens: Math.max(1, Math.round(input.max_tokens || route.max_output_tokens || 1024)),
             temperature: input.temperature == null ? null : input.temperature,
             timeoutMs: Math.max(route.timeout_ms || 0, 120000),
+            ...(typeof ctx.onDelta === 'function' ? { onDelta: ctx.onDelta } : {}),
         };
         const exec = await pool.execute(route, 'complete', req, { ...ctx, routeKey: route.key, routeVersion: route.version, promptHash: sha256({ m: openai.messages, t: openai.tools || null }) });
         const c = exec.result.completion;

@@ -383,12 +383,14 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         const base = { operation, provider_key: cred.providerKey, model_key: model, route_key: ctx.routeKey || null, route_version: ctx.routeVersion || null, fallback: 0, prompt_hash: ctx.promptHash || null };
         const timeoutMs = Math.max(1000, Math.min(req.timeoutMs || 60000, 120000));
         const call = completing ? a.complete : a.chat;
+        let streamed = false;
+        const onDelta = completing && typeof req.onDelta === 'function' ? (d) => { streamed = true; req.onDelta(d); } : null;
         let lastErr = null;
         for (let attempt = 0; attempt <= config.providerRetries; attempt++) {
             if (ctx.signal && ctx.signal.aborted) throw new AiError(409, 'run.cancelled', 'run was cancelled');
             const t0 = Date.now();
             try {
-                const result = await call({ ...req, model, signal: ctx.signal, timeoutMs });
+                const result = await call({ ...req, ...(onDelta ? { onDelta } : {}), model, signal: ctx.signal, timeoutMs });
                 const usage = result.usage || { input: 0, output: 0, cached: 0 };
                 const cost = rates.costOfUsage(rates.buildCards({ providerKey: cred.providerKey, model: result.model || model, pricing: config.pricing, flat: false }), usage);
                 const latency = Date.now() - t0;
@@ -403,6 +405,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                 if (ctx.signal && ctx.signal.aborted) throw new AiError(409, 'run.cancelled', 'run was cancelled');
                 if (ctx.logRequest) ctx.logRequest({ ...base, status: err && err.code === 'provider.timeout' ? 'timeout' : 'error', latency_ms: Date.now() - t0, error: String(err && err.message || err).slice(0, 500) });
                 if (err && err.code === 'EADDRNOTPUBLIC') throw new AiError(422, 'credential.endpoint_refused', err.message);
+                if (streamed) throw new AiError(502, 'provider.stream_broken', `the answer broke off after it began streaming: ${String(err && err.message || err).slice(0, 200)}`);
                 if (attempt < config.providerRetries && retryable(err)) { await sleep(config.retryDelayMs, ctx.signal).catch(() => {}); continue; }
                 break;
             }
@@ -418,6 +421,10 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         if (req.openai && Array.isArray(req.openai.tools) && req.openai.tools.length) features.push('tools');
         const tried = [];
         let unreadable = null;   // a candidate could not read the caller's media (whisper's ffmpeg): no other will either
+        // A streamed answer (/v1/chat/completions, stream: true) is the caller's once a delta has gone out: a failure
+        // after that is final, never retried or handed to a fallback whose words would follow the first one's.
+        let streamed = false;
+        const onDelta = typeof req.onDelta === 'function' ? (d) => { streamed = true; req.onDelta(d); } : null;
         const { order: list, explain } = await candidates(route, features, operation, ctx);
         for (let i = 0; i < list.length; i++) {
             const c = list[i];
@@ -447,7 +454,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                     const fn = a[operation];
                     if (typeof fn !== 'function') throw new ProviderError(`${operation} not implemented`, { code: 'provider.unsupported' });
                     statFor(c.provider).calls += p.kind === 'stub' ? 0 : 1;   // stub counts its own calls
-                    const result = await fn({ ...req, model, signal: ctx.signal, timeoutMs });
+                    const result = await fn({ ...req, ...(onDelta ? { onDelta } : {}), model, signal: ctx.signal, timeoutMs });
                     if (operation === 'embed' && (!Array.isArray(result.vectors) || result.vectors.length !== req.input.length
                         || result.vectors.some(v => !Array.isArray(v) || !v.length || v.some(n => typeof n !== 'number' || !Number.isFinite(n)))))
                         throw new ProviderError('embedding response has invalid vectors', { code: 'provider.output' });
@@ -477,6 +484,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                     }
                     statFor(c.provider).failures++;
                     if (ctx.logRequest) ctx.logRequest({ ...base, status: err && err.code === 'provider.timeout' ? 'timeout' : 'error', latency_ms: Date.now() - t0, error: String(err && err.message || err).slice(0, 500) });
+                    if (streamed) throw new AiError(502, 'provider.stream_broken', `the answer broke off after it began streaming: ${String(err && err.message || err).slice(0, 200)}`, { tried: [...tried, { provider: c.provider, error: String(err && err.message || err).slice(0, 200) }], explain });
                     // A timed-out image may still be generated and billed upstream: never pay for it twice.
                     if (attempt < retries && retryable(err) && !(operation === 'image' && err.code === 'provider.timeout')) { await sleep(config.retryDelayMs + Math.floor(Math.random() * Math.min(700, config.retryDelayMs)), ctx.signal).catch(() => {}); continue; }
                     break;

@@ -33,6 +33,22 @@ function guardedFetch(input, init = {}) {
         if (signal) { if (signal.aborted) return onAbort(); signal.addEventListener('abort', onAbort, { once: true }); }
         req.on('error', (err) => { if (signal) signal.removeEventListener('abort', onAbort); reject(err); });
         req.on('response', (res) => {
+            if (init.stream === true && res.statusCode >= 200 && res.statusCode < 300) {
+                // A streamed answer: hand the body over as it arrives, still capped at MAX_BYTES.
+                if (signal) signal.removeEventListener('abort', onAbort);
+                let seen = 0;
+                const body = new ReadableStream({
+                    start(controller) {
+                        res.on('data', (c) => { seen += c.length; if (seen > MAX_BYTES) { res.destroy(); controller.error(new Error('response too large')); } else controller.enqueue(new Uint8Array(c)); });
+                        res.on('end', () => { try { controller.close(); } catch { /* already errored */ } });
+                        res.on('error', (e) => { try { controller.error(e); } catch { /* already closed */ } });
+                    },
+                    cancel() { res.destroy(); req.destroy(); },
+                });
+                const h = new Headers();
+                for (const [k, v] of Object.entries(res.headers)) if (v != null) h.set(k, Array.isArray(v) ? v.join(', ') : String(v));
+                return resolve(new Response(body, { status: res.statusCode, headers: h }));
+            }
             const chunks = []; let bytes = 0;
             res.on('data', (c) => { bytes += c.length; if (bytes > MAX_BYTES) { res.destroy(); req.destroy(); reject(new Error('response too large')); } else chunks.push(c); });
             res.on('error', reject);
