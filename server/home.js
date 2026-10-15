@@ -61,14 +61,15 @@ function sections({ siteUrl }) {
     return showcase.hero({
         eyebrow: 'OpenVibe.AI · alpha',
         title: 'Many models, one API.', accent: 'Every answer explained.',
-        lede: 'Chat, generate, summarize, classify, extract and embed through one API. OpenVibe.AI picks a model by price, measured latency '
-            + 'and health, falls back when a provider fails, and tells you on every run which model answered, why it was chosen and what it cost.',
+        lede: 'Chat, generate, summarize, classify, extract and embed through one API, or point any OpenAI client at it. OpenVibe.AI picks a '
+            + 'model by price, measured latency and health, falls back when a provider fails, and tells you on every run which model answered, '
+            + 'why it was chosen and what it cost.',
         actions: [{ label: 'Start building', href: PROJECTS_URL, primary: true }, { label: 'See prices and latency', href: '/stats' }],
         note: 'Alpha. OpenVibe.Live and OpenVibe.Network already run their AI here in production; developer apps start in the sandbox, on free and local capacity.',
     }) + showcase.features({
         title: 'What you get',
         items: [
-            { icon: 'ov:text', title: 'Six operations', text: 'Chat, generate, summarize, classify, extract and embed, with structured JSON output when you ask for a schema.' },
+            { icon: 'ov:text', title: 'Six operations, and OpenAI\'s API', text: 'Chat, generate, summarize, classify, extract and embed, with JSON output on a schema. Any OpenAI client works too: point it at /v1 for Chat Completions with tools.' },
             { icon: 'ov:map', title: 'Routing you can read', text: 'Every run carries an explanation: what it optimised for, the model it picked, and every other candidate with its estimated cost and latency.' },
             { icon: 'ov:history', title: 'Fallbacks on the record', text: 'A provider that is down, out of credentials or too slow is skipped and logged. When a fallback answers, the run says so.' },
             { icon: 'ov:host', title: 'Free and local first', text: 'A small open model runs on OpenVibe\'s own server, beside free providers. Sandbox apps use only that capacity, so trying it costs nothing.' },
@@ -98,7 +99,8 @@ function sections({ siteUrl }) {
         columns: ['Sandbox', 'Production'],
         rows: [
             { label: 'Access to ai.app.run', values: ['Every sandbox app, without asking', 'Once OpenVibe staff add it to the project'] },
-            { label: 'Models', values: ['Free and local capacity only', 'Free and local capacity; metered models under a project budget'] },
+            { label: 'Models', values: ['Free and local capacity only', 'Free and local capacity; metered models open with project budgets'] },
+            { label: 'Your project\'s own provider', values: ['On /v1/chat/completions, keyed by a project secret granted to ai', 'The same'] },
             { label: 'Free allowance', values: ['Per project, per provider', 'Per project, per provider'] },
             { label: 'Who can read a run', values: ['The project that made it', 'The project that made it'] },
             { label: 'A person\'s own provider key', values: ['Never used', 'Never used'] },
