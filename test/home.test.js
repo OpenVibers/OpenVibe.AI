@@ -87,8 +87,12 @@ t.test('the public vhost proxies the home, its files and exactly the developer-a
     for (const loc of ['location = / {', 'location = /stats', 'location = /sitemap.xml', 'location = /llms.txt', 'location /shared/']) assert.ok(conf.includes(loc), loc);
     const ops = conf.indexOf('location ~ ^/api/v1/(chat|generate|summarize|classify|extract|embed)$ {');
     const run = conf.indexOf('location ~ ^/api/v1/runs/[A-Za-z0-9_-]+$ {');
+    const completions = conf.indexOf('location = /v1/chat/completions {');
+    const models = conf.indexOf('location = /v1/models {');
     assert.ok(ops >= 0 && run >= 0, 'the six operations and the run read');
-    for (const [i, verb] of [[ops, 'POST'], [run, 'GET']]) {
+    assert.ok(completions >= 0 && models >= 0, 'the OpenAI-compatible endpoint and its model list');
+    assert.ok(conf.slice(completions, conf.indexOf('\n    }', completions)).includes('proxy_buffering off;'), 'streamed answers are not buffered');
+    for (const [i, verb] of [[ops, 'POST'], [run, 'GET'], [completions, 'POST'], [models, 'GET']]) {
         const block = conf.slice(i, conf.indexOf('\n    }', i));
         assert.ok(block.includes(`limit_except ${verb} { deny all; }`), verb);
         assert.ok(block.includes('limit_req zone=ovai_apps'), 'rate-limited per address');
