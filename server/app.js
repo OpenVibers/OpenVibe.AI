@@ -26,6 +26,7 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
     // HTTP golden signals by route template, process metrics, release_info and the AI gauges;
     // GET /metrics answers direct loopback callers only (Track O).
     const metrics = instrument(app, { service: 'ai', release: release.release });
+    app.use(require('openvibe-sdk/service').telemetryMiddleware);   // request telemetry: a no-op until server/index.js calls telemetry.init()
     registerAiGauges(metrics.registry, { runs, registry, pool });
     app.use(http.middleware());
     // Browser reads of the two public GETs (/stats, /release.json) only: an exact origin from
