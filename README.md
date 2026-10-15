@@ -122,6 +122,15 @@ key fail; provider configuration (an active provider without its credentials, or
 circuit) degrades it. `/metrics` (openvibe-shared/metrics) carries golden signals by route template,
 `ai_runs{state="queued"|"running"}` and `ai_provider_circuit{provider,state}`.
 
+Each HTTP request is aggregated by route template, method and status class, never by raw URL; `/shared`
+files, static assets, health, readiness and `/metrics` are not counted. Once a minute one `http.request`
+sample per key, plus the active-requests, p95 latency and event-loop-lag gauges, is written to this
+service's own `telemetry_samples` table (openvibe-sdk 0.46 telemetry, the `platform.telemetry-sample@1`
+shape); rows older than 14 days are deleted daily. `server/app.js` mounts openvibe-sdk's
+`telemetryMiddleware` (a no-op until init) and `server/index.js` calls `telemetry.init()` at production
+start, runs the 14-day retention and flushes on stop. The table is created by migration
+`migrations/0009_telemetry.sql`.
+
 Errors are `application/problem+json` (openvibe-contracts `http.problem`): `input.invalid` (with the
 schema errors), `workflow.not_found`, `idempotency.conflict`, `quota.exceeded` (429 +
 `Retry-After`), `govern.exceeded` (429 + `Retry-After`: a tier budget) and `govern.unavailable` (503: Valkey
