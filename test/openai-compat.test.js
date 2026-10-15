@@ -52,19 +52,42 @@ t.test('tools: the model calls one; the tool result goes back and it answers', a
     assert.match(second.body.choices[0].message.content, /19 C and sunny/);
 });
 
-t.test('stream: chunks with the delta, then finish_reason, usage on request, then [DONE]', async () => {
-    const res = await fetch(`${h.base}/v1/chat/completions`, { method: 'POST', headers: { Authorization: `Bearer ${service}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: 'openvibe', stream: true, stream_options: { include_usage: true }, messages: [{ role: 'user', content: 'Stream please' }] }) });
+const sse = async (res) => {
+    const lines = (await res.text()).split('\n').filter((l) => l.startsWith('data: ')).map((l) => l.slice(6));
+    return { done: lines[lines.length - 1] === '[DONE]', chunks: lines.filter((l) => l !== '[DONE]').map((l) => JSON.parse(l)) };
+};
+const streamPost = (body, tok = service) => fetch(`${h.base}/v1/chat/completions`, { method: 'POST', headers: { Authorization: `Bearer ${tok}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ stream: true, ...body }) });
+
+t.test('stream: the deltas as they come, joined they are the answer; then finish, usage on request, x_openvibe, [DONE]', async () => {
+    const res = await streamPost({ model: 'openvibe', stream_options: { include_usage: true }, messages: [{ role: 'user', content: 'Stream please' }] });
     assert.strictEqual(res.status, 200);
     assert.match(res.headers.get('content-type'), /^text\/event-stream/);
-    const lines = (await res.text()).split('\n').filter((l) => l.startsWith('data: ')).map((l) => l.slice(6));
-    assert.strictEqual(lines[lines.length - 1], '[DONE]');
-    const chunks = lines.slice(0, -1).map((l) => JSON.parse(l));
-    assert.ok(chunks.every((c) => c.object === 'chat.completion.chunk'));
-    assert.strictEqual(chunks[0].choices[0].delta.role, 'assistant');
-    assert.strictEqual(typeof chunks[0].choices[0].delta.content, 'string');
-    assert.strictEqual(chunks[1].choices[0].finish_reason, 'stop');
+    const runId = res.headers.get('x-openvibe-run-id');
+    assert.match(String(runId), /^run_/);
+    const { done, chunks } = await sse(res);
+    assert.ok(done, '[DONE] last');
+    assert.ok(chunks.every((c) => c.object === 'chat.completion.chunk' && c.id === `chatcmpl-${runId}`));
+    const deltas = chunks.filter((c) => c.choices.length && c.choices[0].delta && typeof c.choices[0].delta.content === 'string');
+    assert.ok(deltas.length > 2, `streamed in pieces (${deltas.length})`);
+    assert.strictEqual(deltas[0].choices[0].delta.role, 'assistant');
+    const joined = deltas.map((c) => c.choices[0].delta.content).join('');
+    const finish = chunks.findIndex((c) => c.choices.length && c.choices[0].finish_reason);
+    assert.strictEqual(chunks[finish].choices[0].finish_reason, 'stop');
+    assert.ok(finish > chunks.indexOf(deltas[deltas.length - 1]), 'the finish comes after the last delta');
     assert.ok(chunks.some((c) => c.usage && c.usage.total_tokens > 0), 'usage when asked');
+    assert.strictEqual(chunks.find((c) => c.x_openvibe).x_openvibe.run_id, runId);
+    const run = await request(h.base, 'GET', `/api/v1/runs/${runId}`, { tok: service });
+    assert.strictEqual(run.body.run.output.choices[0].message.content, joined, 'the run kept the whole answer the stream sent');
+});
+
+t.test('stream: a tool call arrives as its id and name, then its arguments in pieces, and they join into valid JSON', async () => {
+    const { chunks } = await sse(await streamPost({ messages: [{ role: 'user', content: 'Weather in Lisbon?' }], tools: [WEATHER] }));
+    const calls = chunks.flatMap((c) => (c.choices[0] && c.choices[0].delta && c.choices[0].delta.tool_calls) || []);
+    assert.ok(calls.length > 2, 'in pieces');
+    assert.strictEqual(calls[0].function.name, 'get_weather');
+    assert.match(calls[0].id, /^call_/);
+    assert.ok(JSON.parse(calls.map((t) => (t.function && t.function.arguments) || '').join('')), 'the arguments join into JSON');
+    assert.strictEqual(chunks.find((c) => c.choices[0] && c.choices[0].finish_reason).choices[0].finish_reason, 'tool_calls');
 });
 
 t.test('an app token works, and its run is its project\'s', async () => {
@@ -124,6 +147,17 @@ t.test('production\'s shape: an OpenAI-format provider declaring chat (not compl
         req.on('data', (d) => { b += d; });
         req.on('end', () => {
             calls.push({ path: req.url, body: JSON.parse(b) });
+            const body = JSON.parse(b);
+            if (body.stream) {
+                res.writeHead(200, { 'content-type': 'text/event-stream' });
+                const chunk = (o) => res.write(`data: ${JSON.stringify({ id: 'chatcmpl-up', object: 'chat.completion.chunk', model: 'gpt-up', ...o })}\n\n`);
+                if (body.messages[0].content === 'break') { chunk({ choices: [{ index: 0, delta: { role: 'assistant', content: 'half ' }, finish_reason: null }] }); return setTimeout(() => res.destroy(), 50); }
+                ['from ', 'the ', 'stream'].forEach((w, i) => chunk({ choices: [{ index: 0, delta: i ? { content: w } : { role: 'assistant', content: w }, finish_reason: null }] }));
+                chunk({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] });
+                chunk({ choices: [], usage: { prompt_tokens: 9, completion_tokens: 3, total_tokens: 12 } });
+                res.write('data: [DONE]\n\n');
+                return res.end();
+            }
             res.writeHead(200, { 'content-type': 'application/json' });
             res.end(JSON.stringify({ id: 'chatcmpl-up', object: 'chat.completion', created: 1, model: 'gpt-up', choices: [{ index: 0, message: { role: 'assistant', content: 'from upstream' }, finish_reason: 'stop' }], usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 } }));
         });
@@ -140,10 +174,27 @@ t.test('production\'s shape: an OpenAI-format provider declaring chat (not compl
         assert.deepStrictEqual([calls.length, calls[0].path, calls[0].body.model], [1, '/v1/chat/completions', 'gpt-up']);
         // Tools need a provider that declares them: none does here, so the answer is OpenAI's JSON error with 503 (never a
         // 502, which Cloudflare would replace with its own page).
+        // stream: true reaches the upstream as stream: true (include_usage asked), and its deltas are passed on in order.
+        const streamed = await fetch(`${h2.base}/v1/chat/completions`, { method: 'POST', headers: { Authorization: `Bearer ${service}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ stream: true, messages: [{ role: 'user', content: 'stream it' }] }) });
+        const sent = await sse(streamed);
+        assert.ok(sent.done);
+        assert.deepStrictEqual(sent.chunks.filter((c) => c.choices.length && c.choices[0].delta.content).map((c) => c.choices[0].delta.content), ['from ', 'the ', 'stream'], 'the upstream deltas, in order');
+        assert.deepStrictEqual([calls[calls.length - 1].body.stream, calls[calls.length - 1].body.stream_options], [true, { include_usage: true }]);
+        const srun = await request(h2.base, 'GET', `/api/v1/runs/${sent.chunks.find((c) => c.x_openvibe).x_openvibe.run_id}`, { tok: service });
+        assert.deepStrictEqual([srun.body.run.output.choices[0].message.content, srun.body.run.usage.tokens_in, srun.body.run.usage.tokens_out], ['from the stream', 9, 3], 'the run kept the joined answer and the upstream usage');
+        // An upstream that breaks off after a delta: an error event, then [DONE]; nothing is retried or handed on.
+        const before = calls.length;
+        const broken = await sse(await fetch(`${h2.base}/v1/chat/completions`, { method: 'POST', headers: { Authorization: `Bearer ${service}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ stream: true, messages: [{ role: 'user', content: 'break' }] }) }));
+        assert.ok(broken.done);
+        assert.strictEqual(broken.chunks[0].choices[0].delta.content, 'half ');
+        const err = broken.chunks.find((c) => c.error);
+        assert.ok(err && err.error.code === 'provider.stream_broken', JSON.stringify(broken.chunks).slice(0, 300));
+        assert.strictEqual(calls.length, before + 1, 'not retried');
+        const beforeTools = calls.length;
         const tools = await request(h2.base, 'POST', '/v1/chat/completions', { tok: service, body: { messages: [{ role: 'user', content: 'Weather?' }], tools: [WEATHER] } });
         assert.strictEqual(tools.status, 503, tools.text);
         assert.strictEqual(tools.body.error.code, 'provider.unavailable');
-        assert.strictEqual(calls.length, 1, 'the provider without tools was not asked');
+        assert.strictEqual(calls.length, beforeTools, 'the provider without tools was not asked');
     } finally {
         await h2.stop();
         await new Promise((r) => upstream.close(r));

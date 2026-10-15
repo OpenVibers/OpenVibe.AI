@@ -20,7 +20,10 @@
  *
  * Each request is a run of workflow ai.complete, so it has the run's quota, free allowance, cost, audit and explain
  * (x_openvibe in the answer); the prompt is not kept. stream: true answers server-sent events in the Chat Completions
- * chunk format, emulated: the whole answer arrives as one delta, then finish_reason, then [DONE]. Errors are OpenAI's
+ * chunk format as the upstream streams them (an OpenAI-format upstream, the router's or the project's own): each delta
+ * goes out when it arrives, then usage (stream_options.include_usage), x_openvibe and [DONE]. The run still ends with
+ * the whole answer, its usage and cost. An answer that came back in one piece (a replayed idempotent run, an upstream
+ * that cannot stream) is sent as one delta. A failure after the stream began is an `error` event, then [DONE]. Errors are OpenAI's
  * shape ({ error: { message, type, code } }) with the HTTP status the run's problem had.
  */
 const express = require('express');
@@ -33,6 +36,54 @@ const FIELDS = ['messages', 'tools', 'tool_choice', 'parallel_tool_calls', 'resp
 // an upstream that failed or could not be reached is 503 (OpenAI's own "unavailable, retry"), the body kept. An invalid
 // request is OpenAI's 400, not 422.
 const gatewaySafe = (status) => (status === 502 || status === 504 ? 503 : status === 422 ? 400 : status);
+
+/**
+ * The event stream of one streamed completion. delta(d) sends a chunk as it arrives (or keeps it until open(run) has
+ * sent the headers, which happens once the run exists); write(o) sends any chunk; fail() sends OpenAI's error object as
+ * an event; done() ends with [DONE]. A closed connection drops what is left, quietly.
+ */
+function createLiveStream(res) {
+    let run = null;
+    let opened = false;
+    let any = false;
+    const waiting = [];
+    const finishedIdx = new Set();
+    const created = Math.floor(Date.now() / 1000);
+    const alive = () => !res.writableEnded && !res.destroyed;
+    const write = (o) => { if (alive()) res.write(`data: ${JSON.stringify(o)}\n\n`); };
+    const chunk = (d) => ({ id: `chatcmpl-${run.id}`, object: 'chat.completion.chunk', created, model: d.model || 'openvibe', system_fingerprint: null,
+        choices: [{ index: d.index || 0, delta: d.delta || {}, finish_reason: d.finish_reason || null }] });
+    const out = {
+        get opened() { return opened; },
+        delta(d) {
+            any = true;
+            if (d.finish_reason) finishedIdx.add(d.index || 0);
+            if (!opened) { waiting.push(d); return; }
+            write(chunk(d));
+        },
+        open(r) {
+            run = r;
+            res.status(200);
+            res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+            res.setHeader('Cache-Control', 'no-store');
+            res.setHeader('X-Accel-Buffering', 'no');
+            res.setHeader('X-OpenVibe-Run-Id', r.id);
+            if (typeof res.flushHeaders === 'function') res.flushHeaders();
+            opened = true;
+            for (const d of waiting.splice(0)) write(chunk(d));
+        },
+        write,
+        sentAny: () => any,
+        finished: (i) => finishedIdx.has(i),
+        fail(message, code) {
+            const status = /^(input|validation)\./.test(code || '') ? 400 : /quota|allowance|budget/.test(code || '') ? 429 : 503;
+            write({ error: { message: String(message || 'error').slice(0, 1000), type: status === 400 ? 'invalid_request_error' : status === 429 ? 'rate_limit_error' : 'api_error', code: code || null, param: null } });
+            return out.done();
+        },
+        done() { if (alive()) { res.write('data: [DONE]\n\n'); res.end(); } },
+    };
+    return out;
+}
 
 function openaiError(res, status, message, code, type) {
     res.status(status).json({ error: { message: String(message || 'error').slice(0, 1000), type: type || (status === 401 || status === 403 ? 'authentication_error' : status === 429 ? 'rate_limit_error' : status >= 500 ? 'api_error' : 'invalid_request_error'), code: code || null, param: null } });
@@ -77,14 +128,23 @@ function openaiRouter({ runs, auth, config, log = console }) {
         const own = b.x_openvibe && typeof b.x_openvibe === 'object' ? b.x_openvibe.provider : undefined;
         if (own !== undefined) body = { ...body, project_provider: own };
         let run;
+        // stream: true. The run is made first (a refused one keeps its status code); then the event stream opens and every
+        // delta the upstream sends goes out as it arrives. A delta that came before the stream opened waits for it.
+        const live = b.stream === true ? createLiveStream(res) : null;
         try {
-            const created = await runs.create(body, req.principal, { trace: req.ov && req.ov.traceId, requestId: req.ov && req.ov.requestId });
+            const created = await runs.create(body, req.principal, { trace: req.ov && req.ov.traceId, requestId: req.ov && req.ov.requestId, ...(live ? { onDelta: live.delta } : {}) });
+            if (live) live.open(created.run);
             run = await runs.explained(await runs.wait(created, Math.max(config.runs.maxWaitMs, 120000)));
         } catch (err) {
+            if (live && live.opened) return live.fail(err && (err.detail || err.message), err && err.code);
             const status = gatewaySafe((err && err.status) || 500);
             if (status === 429 && err.retryAfter) res.setHeader('Retry-After', String(err.retryAfter));
             if (status >= 500) log.warn(`[ai] /v1/chat/completions: ${err && err.message}`);
             return openaiError(res, status, err && (err.detail || err.message), err && err.code);
+        }
+        if (live && (run.status === 'failed' || run.status === 'cancelled' || !run.output || !Array.isArray(run.output.choices))) {
+            const code = (run.error && run.error.code) || (['failed', 'cancelled'].includes(run.status) ? 'run.failed' : 'run.timeout');
+            return live.fail((run.error && run.error.detail) || (code === 'run.timeout' ? `the completion is still running; GET /api/v1/runs/${run.id}` : code), code);
         }
         if (run.status === 'failed' || run.status === 'cancelled') {
             const code = (run.error && run.error.code) || 'run.failed';
@@ -100,14 +160,14 @@ function openaiRouter({ runs, auth, config, log = console }) {
         const model = run.output.model || (run.provenance && run.provenance.model) || 'openvibe';
         const usage = { prompt_tokens: run.usage.tokens_in || 0, completion_tokens: run.usage.tokens_out || 0, total_tokens: (run.usage.tokens_in || 0) + (run.usage.tokens_out || 0) };
         const x = { run_id: run.id, provider: run.provenance && run.provenance.provider, fallback_used: Boolean(run.provenance && run.provenance.fallback_used), cost_usd: run.usage.cost_usd, synthetic: Boolean(run.synthetic) };
-        res.setHeader('X-OpenVibe-Run-Id', run.id);
-        if (b.stream === true) {
-            res.status(200);
-            res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
-            res.setHeader('Cache-Control', 'no-store');
-            const send = (o) => res.write(`data: ${JSON.stringify(o)}\n\n`);
+        if (!live) res.setHeader('X-OpenVibe-Run-Id', run.id);   // a stream sent it with its headers
+        if (live) {
+            const send = (o) => live.write(o);
             const base = { id, object: 'chat.completion.chunk', created, model, system_fingerprint: run.output.system_fingerprint || null };
-            for (const c of run.output.choices) {
+            // The deltas already went out as they arrived; close any choice whose finish the upstream did not stream.
+            if (live.sentAny()) {
+                for (const c of run.output.choices) if (!live.finished(c.index || 0)) send({ ...base, choices: [{ index: c.index || 0, delta: {}, finish_reason: c.finish_reason || 'stop' }] });
+            } else for (const c of run.output.choices) {
                 const m = c.message || {};
                 const delta = { role: 'assistant', content: m.content == null ? null : m.content };
                 if (Array.isArray(m.tool_calls) && m.tool_calls.length) delta.tool_calls = m.tool_calls.map((t, i) => ({ index: i, ...t }));
@@ -116,8 +176,7 @@ function openaiRouter({ runs, auth, config, log = console }) {
             }
             if (b.stream_options && b.stream_options.include_usage) send({ ...base, choices: [], usage });
             send({ ...base, choices: [], x_openvibe: x });
-            res.write('data: [DONE]\n\n');
-            return res.end();
+            return live.done();
         }
         return res.status(200).json({ id, object: 'chat.completion', created, model, choices: run.output.choices, usage, system_fingerprint: run.output.system_fingerprint || null, x_openvibe: x });
     });

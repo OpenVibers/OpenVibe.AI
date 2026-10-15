@@ -153,9 +153,17 @@ coding agents, Codes' harnesses) points its base URL at `https://ai.openvibe.ser
   upstream for `default.chat` by price and health, and a request with `tools` goes only to a provider that declares
   `tools`. The answer's `model` names the model that ran.
 - **Answer:** `chat.completion` with the upstream's `choices` and `usage`, plus `x_openvibe` (`run_id`, `provider`,
-  `fallback_used`, `cost_usd`) and the `X-OpenVibe-Run-Id` header. `stream: true` answers server-sent events in the chunk
-  format, **emulated**: the whole answer arrives as one delta, then the finish reason (and `usage` with
-  `stream_options.include_usage`), then `[DONE]`.
+  `fallback_used`, `cost_usd`) and the `X-OpenVibe-Run-Id` header.
+- **Streaming:** `stream: true` answers server-sent events in the chunk format **as the upstream streams them**.
+  - An OpenAI-format upstream (the router's, or the project's own) is asked with `stream: true` and
+    `stream_options.include_usage`, and each delta goes out when it arrives: text, and a tool call's id, name and
+    argument pieces.
+  - Then come the finish reason, `usage` (with `stream_options.include_usage`), `x_openvibe`, and `[DONE]`.
+  - The run itself ends with the whole answer put back together, the upstream's usage (estimated when it sends none)
+    and its cost, as without streaming.
+  - Once a delta has gone out, a failure is final: an `error` event, then `[DONE]`. It is never retried or handed to a
+    fallback whose words would follow the first one's.
+  - An answer that came back in one piece (a replayed idempotent run) is sent as one delta.
 - **Each request is a run** of workflow `ai.complete` (step kind `complete`): the run's quota, free allowance, cost,
   audit and explain apply, and the prompt is not kept. Errors are OpenAI's shape (`{ error: { message, type, code } }`).
 - **Upstreams:** OpenAI-format providers (`kind: openai`) pass the request through (`complete()`; a reasoning model

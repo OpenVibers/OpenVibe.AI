@@ -154,7 +154,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
      * principal: { sub, subject: {type, id} }
      * Returns { run, created, promise? }.
      */
-    async function create(body, principal, { trace = null, requestId = null, retryOf = null } = {}) {
+    async function create(body, principal, { trace = null, requestId = null, retryOf = null, onDelta = null } = {}) {
         if (!body || typeof body !== 'object') throw new AiError(400, 'input.invalid', 'JSON body required');
         const wfKey = String(body.workflow || '');
         const wf = body.version ? await registry.getWorkflow(wfKey, Number(body.version)) : await registry.activeWorkflow(wfKey);
@@ -206,6 +206,8 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             requesterType: requester.type, requesterId: requester.id,
             actorKey: subjectKey(body.on_behalf_of), targetKey: entityKey(body.target), attributionKey: entityKey(body.attribution), workflowKey: wf.key,
             ...(app ? { appRun: true, projectId: app.projectId, sandbox: app.sandbox } : {}),
+            // POST /v1/chat/completions with stream: true: the upstream's deltas, as they arrive (kept in memory only).
+            ...(typeof onDelta === 'function' ? { onDelta } : {}),
         };
         const now = iso(clock.now());
         const id = newRunId();
@@ -356,7 +358,8 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                 // limited to free and local capacity when it is a sandbox run or when no tier budget governs its
                 // project (AI_GOVERN_TIERS off): metered capacity is only ever spent under a project budget.
                 appRun: Boolean(ctx.appRun), freeOnly: Boolean(ctx.appRun && (ctx.sandbox || !(tiers && tiers.enabled))),
-                ...(credential ? { credential, role: input && typeof input.role === 'string' ? input.role : null } : {}) });
+                ...(credential ? { credential, role: input && typeof input.role === 'string' ? input.role : null } : {}),
+                ...(typeof ctx.onDelta === 'function' ? { onDelta: ctx.onDelta } : {}) });
             if (controller.signal.aborted) throw new AiError(409, 'run.cancelled', 'cancelled');
             // The status, its citations and the ai.run.succeeded event commit together.
             const done = await db.tx(async () => {
