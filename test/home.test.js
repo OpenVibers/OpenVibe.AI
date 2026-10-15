@@ -67,15 +67,26 @@ t.test('the home links the pinned Frame stylesheet, and /shared serves it', asyn
     assert.match(css.headers.get('cache-control'), /immutable/);
 });
 
+t.test('/updates: what shipped on this site, the shared update log, with one heading and the footer link', async () => {
+    const r = await request(h.base, 'GET', '/updates', { headers: { Accept: 'text/html' } });
+    assert.strictEqual(r.status, 200);
+    assert.match(r.headers.get('content-type'), /^text\/html/);
+    assert.ok(r.text.includes('<h1>What shipped on OpenVibe.AI</h1>') && r.text.includes('data-ov-shipped="log" data-service="ai"'));
+    assert.strictEqual((r.text.match(/<h1[\s>]/g) || []).length, 1);
+    assert.match(r.text, /<script src="\/shared\/shipped\.js\?v=[0-9a-f]+" defer><\/script>/);
+    assert.match(r.text, new RegExp(`<link rel="canonical" href="${SITE.replace(/[.]/g, '\\.')}/updates">`));
+    assert.ok(r.headers.get('content-security-policy').includes("connect-src 'self' https://openvibe.network"), 'the log reads the network changelog');
+});
+
 t.test('robots.txt, sitemap.xml and llms.txt name the public origin', async () => {
     const robots = await request(h.base, 'GET', '/robots.txt');
     assert.strictEqual(robots.status, 200);
-    for (const line of ['Allow: /$', 'Allow: /stats', 'Disallow: /console', 'Disallow: /auth/', 'Disallow: /api/', `Sitemap: ${SITE}/sitemap.xml`]) assert.ok(robots.text.includes(line), line);
+    for (const line of ['Allow: /$', 'Allow: /stats', 'Allow: /updates', 'Disallow: /console', 'Disallow: /auth/', 'Disallow: /api/', `Sitemap: ${SITE}/sitemap.xml`]) assert.ok(robots.text.includes(line), line);
     const map = await request(h.base, 'GET', '/sitemap.xml');
     assert.strictEqual(map.status, 200);
     assert.match(map.headers.get('content-type'), /xml/);
-    assert.deepStrictEqual([...map.text.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => m[1]), [`${SITE}/`, `${SITE}/stats`]);
-    assert.strictEqual(assertSitemapLastmods(map.text).length, 2);
+    assert.deepStrictEqual([...map.text.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => m[1]), [`${SITE}/`, `${SITE}/stats`, `${SITE}/updates`]);
+    assert.strictEqual(assertSitemapLastmods(map.text).length, 3);
     const llms = await request(h.base, 'GET', '/llms.txt');
     assert.strictEqual(llms.status, 200);
     assert.match(llms.headers.get('content-type'), /^text\/plain/);
@@ -87,7 +98,7 @@ const active = (file) => fs.readFileSync(path.join(__dirname, '..', 'deploy', 'n
 
 t.test('the public vhost proxies the home, its files and exactly the developer-app API routes', () => {
     const conf = active('ai.openvibe.services.conf');
-    for (const loc of ['location = / {', 'location = /stats', 'location = /sitemap.xml', 'location = /llms.txt', 'location /shared/']) assert.ok(conf.includes(loc), loc);
+    for (const loc of ['location = / {', 'location = /stats', 'location = /updates', 'location = /sitemap.xml', 'location = /llms.txt', 'location /shared/']) assert.ok(conf.includes(loc), loc);
     const ops = conf.indexOf('location ~ ^/api/v1/(chat|generate|summarize|classify|extract|embed)$ {');
     const run = conf.indexOf('location ~ ^/api/v1/runs/[A-Za-z0-9_-]+$ {');
     const completions = conf.indexOf('location = /v1/chat/completions {');
