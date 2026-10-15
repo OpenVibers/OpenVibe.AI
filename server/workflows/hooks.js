@@ -268,6 +268,10 @@ const PREPARE = {
     sources(input) {
         return { vars: { ...input, sources_block: sourcesBlock(input.sources), source_count: (input.sources || []).length } };
     },
+    'food.read_pantry_photo'(input) {
+        const foods = (Array.isArray(input.foods) ? input.foods : []).slice(0, 80);
+        return { vars: { kind: input.kind === 'receipt' ? 'grocery receipt' : 'cupboard, fridge or shelf', foods_block: foods.map((f, i) => `${i}: ${clean(f, 120)}`).join('\n') } };
+    },
     // ── Direct operations ──
     'ai.summarize'(input) {
         return { vars: { ...input, max_words: input.max_words || 120 } };
