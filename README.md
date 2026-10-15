@@ -505,6 +505,11 @@ runs as `openvibe-llm.service` on 127.0.0.1:8090 ([Local model](#local-model)).
 Rollback: ovhost puts the previous sha back by itself when `/api/ready` does not answer 2xx after the
 restart; afterwards `sudo ovhost rollback ai --to <sha>`. Migrations only add tables and columns.
 
+Backups and drills: `ov_ai` is in the host's nightly backup (pgBackRest to B2, plus a weekly logical dump), and a
+restore drill (`sudo ovhost drill ai`) restored a fresh dump and passed on 2026-10-15: models, routes, templates,
+workflows, quotas and citations counted equal, and `/api/health` matched production. `/metrics` is scraped by the
+host's Prometheus on 127.0.0.1:4700 and refused on the public vhost.
+
 Deployed: `/opt/openvibe.ai`, env `/etc/openvibe/ai.env` (0600; `BASE_URL=https://ai.openvibe.services`), unit
 `deploy/systemd/openvibe-ai.service` (`StateDirectory=openvibe-ai`; database `ov_ai` on the host's data role),
 principal `ai`. The vhost `deploy/nginx/ai.openvibe.services.conf` (on the `*.openvibe.services` certificate)
@@ -532,8 +537,6 @@ Sitemap entries use the release commit for home and the newest recorded stats da
   fails that feature until O9 adds a second provider. On 2026-09-23 `live.*` and `network.site_copy`
   outputs carried no citations or gaps
   (0 citation rows); runs record grounding (cited sources and named gaps) since 2026-09-25.
-- The host has a backup of `ov_ai` but no restore drill has run for it; `/metrics` is built but not
-  deployed yet.
 
 ## Launch
 
