@@ -49,6 +49,7 @@ const EXAMPLES = {
     'rent.screen_listing': { listing: { title: 'Bright room near the river', kind: 'room', price: 650, currency: 'EUR', period: 'month', city: 'Porto', country: 'PT', description: 'I am abroad for work; send the deposit by wire and I will mail the keys.' } },
     'food.suggest_recipes': { pantry: ['rice', 'onions', 'canned tomatoes'], people: 2, sources: [{ source_type: 'food.food', source_id: 'lentils', title: 'Lentils, dried', content: '{"id":"lentils","unit":"kg"}' }] },
     'chat.member.reply': { ai_name: 'Pantry', persona: 'A cheerful cook who keeps it cheap.', room: 'Kim and Lee\'s kitchen', memory: 'Lee is vegetarian.', context: 'Pantry: rice, onions, canned tomatoes, lentils.', context_source: 'OpenVibe.Food household', transcript: 'kim: home late tonight\nlee: same', asked_by: 'kim', message: '@Pantry what can we cook in 20 minutes?' },
+    'food.read_pantry_photo': { image: { data_url: PNG }, kind: 'receipt', foods: ['Large Eggs (1 dozen)', 'Whole Milk (1 gallon)'] },
     'tools.describe': { tool: 'img.convert', sources: [{ source_type: 'tools.tool', title: 'img.convert descriptor', content: '{"id":"img.convert","inputs":["file","format"]}' }] },
 };
 for (const k of new Set(Object.values(KIND_TO_WORKFLOW).concat('live.complete'))) EXAMPLES[k] = PASS;
@@ -93,11 +94,11 @@ t.test('boot seeds every required workflow key', async () => {
     h = await boot({ env: { OV_MEDIA_INTERNAL_URL: mediaBase, AI_IMAGE_MODEL: 'gpt-image-1' } });
     const keys = (await h.registry.listWorkflows()).map(w => w.key);
     for (const k of ['wiki.generate_space', 'wiki.generate_page', 'blog.draft_post', 'news.summarize_story', 'news.compare_perspectives', 'reviews.summarize_entity', 'deals.enrich_deal',
-        'coupons.extract_coupon', 'trade.summarize_market_context', 'codes.generate_docs', 'games.generate_lore', 'moderation.classify', 'tools.describe', 'food.suggest_recipes', 'rent.screen_listing', 'chat.member.reply',
+        'coupons.extract_coupon', 'trade.summarize_market_context', 'codes.generate_docs', 'games.generate_lore', 'moderation.classify', 'tools.describe', 'food.suggest_recipes', 'food.read_pantry_photo', 'rent.screen_listing', 'chat.member.reply',
         'live.translate', 'live.stream.describe_frame', 'live.stream.summarize', 'live.viewers.reply', 'live.chat.insight', 'live.hero.slogans', 'live.stream.recap', 'network.site_copy']) {
         assert.ok(keys.includes(k), `missing ${k}`);
     }
-    for (const k of ['default.chat', 'default.json', 'default.embedding', 'default.image', 'wiki.generate', 'blog.draft', 'news.summarize', 'reviews.summarize', 'deals.enrich', 'coupons.extract', 'trade.summarize', 'codes.generate_docs', 'games.generate_lore', 'tools.describe', 'moderation.classify', 'food.suggest', 'rent.screen', 'chat.member']) {
+    for (const k of ['default.chat', 'default.json', 'default.embedding', 'default.image', 'wiki.generate', 'blog.draft', 'news.summarize', 'reviews.summarize', 'deals.enrich', 'coupons.extract', 'trade.summarize', 'codes.generate_docs', 'games.generate_lore', 'tools.describe', 'moderation.classify', 'food.suggest', 'food.vision', 'rent.screen', 'chat.member']) {
         assert.ok(await h.registry.getRoute(k), `missing historical route ${k}`);
     }
 });

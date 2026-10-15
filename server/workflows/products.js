@@ -11,7 +11,7 @@
  *   - Trade is informational only (fixed disclaimer, observation timestamps, stale sources flagged)
  *   - moderation follows OpenVibe policy: profanity is allowed; threats, minors and doxxing are not
  */
-const { SOURCES, CITES, GAPS } = require('./common-schemas');
+const { SOURCES, CITES, GAPS, IMAGE } = require('./common-schemas');
 
 const STR = (n) => ({ type: 'string', maxLength: n });
 const OBJ = (props, required) => ({ type: 'object', additionalProperties: false, required: required || Object.keys(props), properties: props });
@@ -209,5 +209,29 @@ const workflows = [
     steps: [{ kind: 'llm', template: w.key, operation: w.key === 'moderation.classify' || w.key === 'rent.screen_listing' ? 'classify' : 'generate', output: 'json', prepare: 'sources', cite: true, params: { max_tokens: 2400, temperature: 0.3 } }],
     metadata: { draft: true, seed: true },
 }));
+
+// Food's cupboard by photo or receipt (OpenVibe.Food /pantry/photo): a picture, not sources, so it has its own step.
+templates.push({
+    key: 'food.read_pantry_photo', name: 'Food: read a cupboard photo or a grocery receipt',
+    description: 'Which foods from OpenVibe.Food\'s list one photo clearly shows: a cupboard, fridge or shelf, or a grocery receipt.',
+    input_schema: { type: 'object' }, output_schema: { type: 'object' },
+    system_prompt: 'You read one photo for OpenVibe.Food: a cupboard, fridge or shelf, or a grocery receipt. Say which foods from the numbered list it clearly shows, by their numbers in `items` (each number once). On a receipt a line names a food when its words or a usual receipt abbreviation do ("BNLS CHKN BRST" is chicken breasts, "LG EGGS 12CT" is eggs). Never guess at something you cannot see or read. Put foods you do see that are not on the list in `unlisted` (short names). `seen` says what you saw for that item, in a few words ("a carton of 12 eggs", "receipt line: GV WHL MILK"). confidence: high when the label or the receipt line is plain, medium when it is likely, low otherwise. Never write out prices, totals, card numbers, store names or addresses, loyalty numbers, names or anything else personal on a receipt. Output only JSON matching the schema.',
+    user_prompt: 'This photo is a {{kind}}.\n\nThe list (number: food):\n{{foods_block}}',
+    default_route: 'food.vision', owner: 'food', metadata: { json_name: 'food_read_pantry_photo' },
+});
+workflows.push({
+    key: 'food.read_pantry_photo', name: 'Read a cupboard photo or a receipt', namespace: 'food',
+    input_schema: OBJ({ image: IMAGE, kind: { enum: ['shelf', 'receipt'] }, foods: ARR(STR(120), 80) }, ['image', 'foods']),
+    output_schema: OBJ({
+        items: ARR(OBJ({ food: { type: 'integer', minimum: 0, maximum: 79 }, seen: STR(160), confidence: { enum: ['high', 'medium', 'low'] } }), 60),
+        unlisted: ARR(STR(120), 30),
+        gaps: GAPS,
+    }),
+    steps: [{ kind: 'llm', template: 'food.read_pantry_photo', operation: 'generate', output: 'json', image: 'image', image_max_width: 1280, prepare: 'food.read_pantry_photo', params: { max_tokens: 1200, temperature: 0.1 } }],
+    default_route: 'food.vision',
+    // A person's photo: never shared between callers (the stored run keeps only the image's hash, server/runs.js).
+    cache_mode: 'none',
+    metadata: { seed: true },
+});
 
 module.exports = { templates, workflows };
