@@ -370,22 +370,25 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
      */
     async function executeWithCredential(cred, operation, req, ctx = {}) {
         // Text operations are all chat completions on the person's provider (templated workflows use generate).
-        if (!['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich'].includes(operation)) throw new AiError(422, 'credential.unsupported', `a person's own key is used for text only, not ${operation}`);
+        // A project's own provider (ADR-056 secret, ai.complete) passes a Chat Completions request through as written.
+        const completing = operation === 'complete' && cred.provider === 'openai';
+        if (!completing && !['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich'].includes(operation)) throw new AiError(422, 'credential.unsupported', `a person's own key is used for text only, not ${operation}`);
         const guardedFetch = credentialFetch || require('./guarded-fetch').guardedFetch;
         // The person's model for this role: the run's input.role, else the Live role its route names (live.director).
         const wanted = ctx.role || ((/^live\.(chat|vision|director|summary|legacy)$/.exec(ctx.routeKey || '') || [])[1]) || null;
         const role = wanted && cred.models[wanted] ? wanted : null;
         const model = (req.image && cred.models.vision) || (role && cred.models[role]) || cred.models.chat || (cred.provider === 'anthropic' ? 'claude-haiku-4-5-20251001' : 'gpt-4o-mini');
-        const record = { key: cred.providerKey, kind: cred.provider, base_url: cred.base_url, capabilities: ['chat', 'json', 'vision'], timeout_ms: 60000 };
+        const record = { key: cred.providerKey, kind: cred.provider, base_url: cred.base_url, capabilities: cred.capabilities || ['chat', 'json', 'vision'], timeout_ms: 60000 };
         const a = cred.provider === 'anthropic' ? createAnthropicProvider(record, { apiKey: cred.apiKey, fetchImpl: guardedFetch }) : createOpenAiProvider(record, { apiKey: cred.apiKey, fetchImpl: guardedFetch });
         const base = { operation, provider_key: cred.providerKey, model_key: model, route_key: ctx.routeKey || null, route_version: ctx.routeVersion || null, fallback: 0, prompt_hash: ctx.promptHash || null };
         const timeoutMs = Math.max(1000, Math.min(req.timeoutMs || 60000, 120000));
+        const call = completing ? a.complete : a.chat;
         let lastErr = null;
         for (let attempt = 0; attempt <= config.providerRetries; attempt++) {
             if (ctx.signal && ctx.signal.aborted) throw new AiError(409, 'run.cancelled', 'run was cancelled');
             const t0 = Date.now();
             try {
-                const result = await a.chat({ ...req, model, signal: ctx.signal, timeoutMs });
+                const result = await call({ ...req, model, signal: ctx.signal, timeoutMs });
                 const usage = result.usage || { input: 0, output: 0, cached: 0 };
                 const cost = rates.costOfUsage(rates.buildCards({ providerKey: cred.providerKey, model: result.model || model, pricing: config.pricing, flat: false }), usage);
                 const latency = Date.now() - t0;
@@ -393,7 +396,8 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                     ctx.logRequest({ ...base, model_key: result.model || model, status: 'ok', output_hash: sha256(result.json || result.text || ''), tokens_in: usage.input || 0, tokens_out: usage.output || 0,
                         tokens_cached: usage.cached || 0, tokens_estimated: usage.estimated ? 1 : 0, cost_usd: cost, latency_ms: latency });
                 }
-                return { result, provider: cred.providerKey, providerKind: cred.provider, model: result.model || model, fallbackUsed: false, usage, cost, latencyMs: latency, synthetic: false, tried: [], startedAt: t0 };
+                return { result, provider: cred.providerKey, providerKind: cred.provider, model: result.model || model, fallbackUsed: false, usage, cost, latencyMs: latency, synthetic: false, tried: [], startedAt: t0,
+                    ...(cred.explain ? { explain: cred.explain } : {}) };
             } catch (err) {
                 lastErr = err;
                 if (ctx.signal && ctx.signal.aborted) throw new AiError(409, 'run.cancelled', 'run was cancelled');

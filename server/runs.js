@@ -59,7 +59,21 @@ function retainedInput(input, wf, debugRaw) {
     return { value, full: !redacted };
 }
 
-function createRuns({ db, registry, engine, cache, quotas, config, clock = { now: () => Date.now() }, log = console, userModules = null, credentials = null, tiers = null }) {
+// An app's own provider for ai.complete (POST /v1/chat/completions, x_openvibe.provider): an OpenAI-format API at an
+// https base URL, its model, and the name of the project secret that holds its key (ADR-056 names).
+const SECRET_NAME_RE = /^[a-z][a-z0-9_-]{0,63}$/;
+const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}$/;
+function projectProviderOf(spec) {
+    if (!spec || typeof spec !== 'object' || Array.isArray(spec)) throw new AiError(422, 'input.invalid', 'provider must be { base_url, model, secret }');
+    let u;
+    try { u = new URL(String(spec.base_url || '')); } catch { throw new AiError(422, 'input.invalid', 'provider.base_url must be a URL'); }
+    if (u.protocol !== 'https:' || u.username || u.password || u.search || u.hash) throw new AiError(422, 'input.invalid', 'provider.base_url must be https, without credentials, query or fragment');
+    if (!MODEL_RE.test(String(spec.model || ''))) throw new AiError(422, 'input.invalid', 'provider.model must name the model (letters, digits and . _ : / @ + -, at most 200)');
+    if (!SECRET_NAME_RE.test(String(spec.secret || ''))) throw new AiError(422, 'input.invalid', 'provider.secret must be the name of a project secret (lower case, at most 64)');
+    return { base_url: `${u.origin}${u.pathname.replace(/\/+$/, '')}`, model: String(spec.model), secret: String(spec.secret) };
+}
+
+function createRuns({ db, registry, engine, cache, quotas, config, clock = { now: () => Date.now() }, log = console, userModules = null, credentials = null, tiers = null, projectSecrets = null }) {
     const inflight = new Map();     // run id -> { controller, promise, release, caller }
     const queue = [];               // run ids waiting for the worker
     let active = 0;
@@ -180,6 +194,14 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             if (requester.type !== 'service') throw new AiError(403, 'capability.denied', 'only the service that stored a credential runs with it');
             await credentials.admit(requester.id, credentialSubject);
         }
+        // An app's own provider (ADR-056 project secret): only on ai.complete, only for an app; its key spends the
+        // project's money at its provider, so no tier budget holds it (the app's quotas still count it).
+        const projectProvider = body.project_provider == null ? null : projectProviderOf(body.project_provider);
+        if (projectProvider) {
+            if (!app) throw new AiError(403, 'capability.denied', 'only a developer app names its project\'s own provider');
+            if (wf.key !== 'ai.complete') throw new AiError(422, 'input.invalid', 'a project provider is used for ai.complete only');
+            if (!projectSecrets || !projectSecrets.available()) throw new AiError(503, 'project_secret.unavailable', 'project secrets are not configured on this service');
+        }
         const ctx = {
             requesterType: requester.type, requesterId: requester.id,
             actorKey: subjectKey(body.on_behalf_of), targetKey: entityKey(body.target), attributionKey: entityKey(body.attribution), workflowKey: wf.key,
@@ -197,12 +219,13 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             source_service: requester.type === 'service' ? requester.id : null,
             target: body.target ? JSON.stringify(body.target) : null, target_key: ctx.targetKey,
             input: null, input_hash: inputHash, idempotency_key: idem, trace_id: trace, request_id: requestId, retry_of: retryOf,
-            options: JSON.stringify({ cache: options.cache !== false && credentialSubject === null, debug: Boolean(options.debug), input_retained: kept.full, ...(credentialSubject !== null ? { credential_subject: credentialSubject } : {}) }), created_at: now,
+            options: JSON.stringify({ cache: options.cache !== false && credentialSubject === null && !projectProvider, debug: Boolean(options.debug), input_retained: kept.full,
+                ...(credentialSubject !== null ? { credential_subject: credentialSubject } : {}), ...(projectProvider ? { project_provider: projectProvider } : {}) }), created_at: now,
         };
         base.input = stableStringify(kept.value);
 
         // Cache (scoped; never crosses requester/actor/target/attribution)
-        const scope = options.cache === false || credentialSubject !== null ? null : cache.scopeFor(wf.cache_mode, ctx);
+        const scope = options.cache === false || credentialSubject !== null || projectProvider ? null : cache.scopeFor(wf.cache_mode, ctx);
         let cacheKey = null;
         if (scope) {
             cacheKey = cache.keyFor({ scope, workflowKey: wf.key, workflowVersion: wf.version, templateVersion: base.template_version, routeKey: base.route_key, routeVersion: base.route_version, inputHash });
@@ -234,7 +257,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         admit(caller);
         // A run with a person's own key spends their money, not the shared quotas (its own budget was checked above).
         // The tier budgets (server/govern.js, AI_GOVERN_TIERS) hold first, so a run they refuse is not counted by reserve().
-        const hold = credentialSubject !== null || !tiers ? null : await tiers.admit(ctx, id);
+        const hold = credentialSubject !== null || projectProvider || !tiers ? null : await tiers.admit(ctx, id);
         let reserved;
         try {
             reserved = credentialSubject !== null ? null : await quotas.reserve(ctx);
@@ -284,6 +307,20 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         }
     }
 
+    /**
+     * The project's own provider as a run credential: the key is revealed by OpenVibe.Network for this one run, to the
+     * provider's origin only (the project's grant of the secret to ai decides), and is never stored.
+     */
+    async function projectCredential(spec, ctx) {
+        const environment = ctx.sandbox ? 'sandbox' : 'production';
+        const { value } = await projectSecrets.reveal({ project_id: ctx.projectId, environment, name: spec.secret, origin: new URL(spec.base_url).origin });
+        return {
+            providerKey: `project:${ctx.projectId}`, provider: 'openai', base_url: spec.base_url, apiKey: value, models: { chat: spec.model },
+            capabilities: ['chat', 'json', 'vision', 'tools'],
+            explain: { objective: null, reasons: [`the project's own provider at ${new URL(spec.base_url).origin} (project secret ${spec.secret}, ${environment})`], selected: `project:${ctx.projectId}`, candidates: [] },
+        };
+    }
+
     async function execute(id, { controller, reserved, scope, ctx, input, hold = null }) {
         const row = await getRow(id);
         if (!row || row.status !== 'queued') { inflight.delete(id); return; }
@@ -312,7 +349,8 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             if (preferences.history === false) {
                 await db.prepare("UPDATE runs SET input = 'null', cache_key = NULL, options = (COALESCE(options, '{}')::jsonb || jsonb_build_object('input_retained', false, 'history', false))::text WHERE id = ?").run(id);
             }
-            const credential = opts.credential_subject ? await credentials.forRun(row.requester_id, opts.credential_subject) : null;
+            const credential = opts.credential_subject ? await credentials.forRun(row.requester_id, opts.credential_subject)
+                : opts.project_provider ? await projectCredential(opts.project_provider, ctx) : null;
             const r = await engine.execute(wf, row, input, { signal: controller.signal, logRequest, debugRaw: Boolean(config.debugRawLog && opts.debug), inputHash: row.input_hash, preferences,
                 // A developer app's run (ADR-014): the provider pool excludes a person's byok key, and the run is
                 // limited to free and local capacity when it is a sandbox run or when no tier budget governs its

@@ -160,6 +160,19 @@ coding agents, Codes' harnesses) points its base URL at `https://ai.openvibe.ser
   audit and explain apply, and the prompt is not kept. Errors are OpenAI's shape (`{ error: { message, type, code } }`).
 - **Upstreams:** OpenAI-format providers (`kind: openai`) pass the request through (`complete()`; a reasoning model
   takes `max_completion_tokens` and its default sampling). Anthropic is not used for it yet.
+- **An app's own provider** (`x_openvibe.provider`, ADR-056). An app may name its project's own OpenAI-format API
+  instead of the router: `{ "base_url": "https://api.openai.com/v1", "model": "gpt-5-mini", "secret": "openai-key" }`.
+  - `secret` is the name of a project secret (OpenVibe.Services → project → Secrets) that the project granted to `ai`
+    for reveal to that base URL's origin.
+  - OpenVibe.Network reveals the key for that one run, from the app's environment (sandbox or production). The key is
+    sent to that origin only, through the public-address guard, and is never stored, cached or logged. The run keeps
+    the secret's name.
+  - The project pays its provider directly, so no tier budget holds the run (the app's quotas still count it). Tools,
+    tool results and every other field pass through.
+  - Refusals: a secret that does not exist or is not granted answers 403 `project_secret.refused`, a base URL that is
+    not https answers 400, and a first-party service token naming a provider answers 403.
+  - Production app runs that use the router are limited to free and local capacity (see Developer apps). Today that is
+    a small local model without tools, so a coding agent's loop needs its project's own provider.
 
 ## Developer apps
 
