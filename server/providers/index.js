@@ -399,6 +399,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         if (req.image) features.push('vision');
         if (req.json) features.push('json');
         const tried = [];
+        let unreadable = null;   // a candidate could not read the caller's media (whisper's ffmpeg): no other will either
         const { order: list, explain } = await candidates(route, features, operation, ctx);
         for (let i = 0; i < list.length; i++) {
             const c = list[i];
@@ -466,11 +467,18 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             // A request the provider rejected as malformed is the caller's fault, not a sign the
             // provider is unhealthy; a 429 is capacity, not health either, and moves on without
             // opening the circuit. Neither must take a shared provider away from other callers.
+            if (lastErr && lastErr.code === 'media.unreadable') unreadable = lastErr;
             if (!callerFault(lastErr) && !rateLimited(lastErr)) await recordFailure(c.provider, lastErr);
             tried.push({ provider: c.provider, error: String(lastErr && lastErr.message || lastErr).slice(0, 200) });
             log.warn(`[ai] ${operation} via ${c.provider}/${model || '-'} failed: ${lastErr && lastErr.message}`);
         }
         explain.selected = null;
+        // The media itself could not be read: no provider will do better, and the caller should hear why (and not
+        // retry as if a provider were down).
+        if (unreadable) {
+            explain.reasons = [...(explain.reasons || []), 'the media could not be read'];
+            throw new AiError(422, 'media.unreadable', String(unreadable.message || 'the media could not be read').slice(0, 300), { tried, explain });
+        }
         explain.reasons = [...(explain.reasons || []), 'no provider on this route could answer'];
         throw new AiError(503, 'provider.unavailable', 'no provider on this route could answer', { tried, explain });
     }

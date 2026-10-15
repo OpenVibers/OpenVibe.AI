@@ -19,6 +19,10 @@ const path = require('path');
 const { spawn } = require('child_process');
 const { ProviderError } = require('./common');
 
+// ffmpeg's own words for an input it cannot read: the media's fault (gone, not media, no audio), not the decoder's.
+const UNREADABLE = /Server returned 4\d\d|HTTP error 4\d\d|Invalid data found when processing input|No such file or directory|does not contain any stream|Output file does not contain any stream|Stream map .* matches no streams|moov atom not found|could not find codec parameters|End of file/i;
+const lastLine = (t) => String(t || '').trim().split('\n').filter(Boolean).pop().slice(0, 200) || '';
+
 const HALLUCINATIONS = new Set([
     'thank you', 'thank you.', 'thanks for watching', 'thanks for watching!', 'thanks for watching.', 'please subscribe', 'subscribe',
     'like and subscribe', 'thank you for watching', 'thank you very much', 'thank you so much', 'silence', 'music', 'applause',
@@ -73,8 +77,8 @@ function createWhisperProvider(record, { config }) {
     const release = (lane) => { const L = lanes[lane]; const n = L.waiters.shift(); if (n) n(); else L.running = Math.max(0, L.running - 1); };
     const active = new Set();
 
-    function spawnTracked(cmd, args) {
-        const ch = spawn(cmd, args, { stdio: 'ignore' });
+    function spawnTracked(cmd, args, { stderr = false } = {}) {
+        const ch = spawn(cmd, args, { stdio: ['ignore', 'ignore', stderr ? 'pipe' : 'ignore'] });
         active.add(ch);
         const drop = () => active.delete(ch);
         ch.on('close', drop); ch.on('error', drop);
@@ -92,14 +96,22 @@ function createWhisperProvider(record, { config }) {
             if (normalize) args.push('-af', 'loudnorm=I=-16:TP=-1.5:LRA=11');
             args.push('-f', 'wav', wav);
             let ff;
-            try { ff = spawnTracked('ffmpeg', args); } catch (e) { return reject(new ProviderError(`ffmpeg: ${e.message}`, { code: 'provider.unavailable' })); }
+            try { ff = spawnTracked('ffmpeg', args, { stderr: true }); } catch (e) { return reject(new ProviderError(`ffmpeg: ${e.message}`, { code: 'provider.unavailable' })); }
+            let errTail = '';
+            if (ff.stderr) ff.stderr.on('data', (c) => { errTail = (errTail + c).slice(-4000); });
             const kill = () => { try { ff.kill('SIGKILL'); } catch { /* */ } };
             const timer = setTimeout(kill, timeoutMs);
             if (signal) signal.addEventListener('abort', kill, { once: true });
             ff.on('close', (code) => {
                 clearTimeout(timer);
                 if (signal && signal.aborted) { try { fs.unlinkSync(wav); } catch { /* */ } return reject(new ProviderError('cancelled', { code: 'provider.cancelled' })); }
-                if (code !== 0) { try { fs.unlinkSync(wav); } catch { /* */ } return reject(new ProviderError(`ffmpeg exited ${code}`, { code: 'provider.error' })); }
+                if (code !== 0) {
+                    try { fs.unlinkSync(wav); } catch { /* */ }
+                    // The input itself could not be read (a 4xx from Media, not media, no audio): the caller's media, not
+                    // whisper's health, so it is a 422 media.unreadable and does not open the circuit for everyone.
+                    if (UNREADABLE.test(errTail)) return reject(new ProviderError(`ffmpeg could not read the media (exit ${code}): ${lastLine(errTail)}`, { status: 422, code: 'media.unreadable' }));
+                    return reject(new ProviderError(`ffmpeg exited ${code}`, { code: 'provider.error' }));
+                }
                 resolve(wav);
             });
             ff.on('error', (e) => { clearTimeout(timer); reject(new ProviderError(`ffmpeg: ${e.message}`, { code: 'provider.unavailable' })); });
