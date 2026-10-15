@@ -44,7 +44,10 @@ function createMediaProxy({ fetcher, log = console, clock = { now: () => Date.no
             }, (err) => {
                 if (ac.signal.aborted) return;
                 log.warn && log.warn(`[media-proxy] ${err.code || 'error'}: ${String(err.detail || err.message).slice(0, 200)}`);
-                if (!res.headersSent) res.writeHead(err.status === 422 ? 403 : 502).end();
+                // Media's 4xx (the recording gone, not allowed) is passed on as it was: ffmpeg then says the media cannot be
+                // read, which is the caller's media and not whisper's health. Everything else (Media down) stays a 502.
+                const gone = err.upstreamStatus >= 400 && err.upstreamStatus < 500 ? err.upstreamStatus : null;
+                if (!res.headersSent) res.writeHead(gone || (err.status === 422 ? 403 : 502)).end();
                 else res.destroy();
             });
         });

@@ -208,7 +208,12 @@ function createFetcher(config, { transport = null } = {}) {
                 target = follow(target, new URL(res.headers.location, target.url).toString());
                 continue;
             }
-            if (![200, 206, 416].includes(res.statusCode)) { res.resume(); throw new AiError(502, 'source.unavailable', `source answered HTTP ${res.statusCode}`); }
+            if (![200, 206, 416].includes(res.statusCode)) {
+                res.resume();
+                const err = new AiError(502, 'source.unavailable', `source answered HTTP ${res.statusCode}`);
+                err.upstreamStatus = res.statusCode;   // the loopback reader passes a 4xx on, so ffmpeg reads "gone", not "down"
+                throw err;
+            }
             return { res };
         }
         throw new AiError(502, 'source.unavailable', 'too many redirects');
