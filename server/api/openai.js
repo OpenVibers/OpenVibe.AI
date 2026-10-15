@@ -1,0 +1,120 @@
+'use strict';
+/**
+ * The OpenAI-compatible endpoint: POST /v1/chat/completions on ai.openvibe.services, so a client built for OpenAI's API
+ * (the SDKs, coding agents, Codes' harnesses) points its base URL at https://ai.openvibe.services/v1 and works.
+ *
+ *   Authorization: Bearer <a Network token>   an app's token (ai.app.run, its project pays) or a first-party service's
+ *                                              (ai.run.create), exactly as POST /api/v1/chat takes them
+ *   body                                       OpenAI Chat Completions: messages (with tool calls and tool results),
+ *                                              tools, tool_choice, parallel_tool_calls, response_format, stop, seed,
+ *                                              temperature, top_p, max_tokens / max_completion_tokens, stream
+ *   model                                      "openvibe" (or anything else): AI's router picks the upstream for
+ *                                              route default.chat by price, health and what the request needs
+ *                                              (tools need a provider that declares them); the answer names the
+ *                                              model that ran
+ *
+ * Each request is a run of workflow ai.complete, so it has the run's quota, free allowance, cost, audit and explain
+ * (x_openvibe in the answer); the prompt is not kept. stream: true answers server-sent events in the Chat Completions
+ * chunk format, emulated: the whole answer arrives as one delta, then finish_reason, then [DONE]. Errors are OpenAI's
+ * shape ({ error: { message, type, code } }) with the HTTP status the run's problem had.
+ */
+const express = require('express');
+const { CAPS } = require('../auth');
+const { appAttribution } = require('../apps');
+
+const FIELDS = ['messages', 'tools', 'tool_choice', 'parallel_tool_calls', 'response_format', 'stop', 'seed', 'top_p', 'presence_penalty', 'frequency_penalty', 'temperature'];
+
+function openaiError(res, status, message, code, type) {
+    res.status(status).json({ error: { message: String(message || 'error').slice(0, 1000), type: type || (status === 401 || status === 403 ? 'authentication_error' : status === 429 ? 'rate_limit_error' : status >= 500 ? 'api_error' : 'invalid_request_error'), code: code || null, param: null } });
+}
+
+function openaiRouter({ runs, auth, config, log = console }) {
+    const r = express.Router();
+    const allow = auth.appOrCap(CAPS.appRun, CAPS.runCreate);
+
+    // A problem from the auth layer arrives as problem+json; a client built for OpenAI reads { error }: convert it as
+    // it is written, whichever way the layer writes it.
+    const typeFor = (status) => (status === 401 || status === 403 ? 'authentication_error' : status === 429 ? 'rate_limit_error' : status >= 500 ? 'api_error' : 'invalid_request_error');
+    const asOpenAiErrors = (req, res, next) => {
+        const end = res.end.bind(res);
+        res.end = (chunk, ...rest) => {
+            const ct = String(res.getHeader('Content-Type') || '');
+            if (res.statusCode >= 400 && /problem\+json/.test(ct) && chunk) {
+                let p = null;
+                try { p = JSON.parse(Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk)); } catch { p = null; }
+                if (p && (p.error == null || typeof p.error !== 'object')) {
+                    const body = JSON.stringify({ error: { message: String(p.detail || p.title || p.code || 'error'), type: typeFor(res.statusCode), code: p.code || null, param: null } });
+                    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+                    res.setHeader('Content-Length', Buffer.byteLength(body));
+                    return end(body);
+                }
+            }
+            return end(chunk, ...rest);
+        };
+        next();
+    };
+
+    r.post('/v1/chat/completions', asOpenAiErrors, allow, async (req, res) => {
+        const b = req.body && typeof req.body === 'object' ? req.body : {};
+        if (!Array.isArray(b.messages) || !b.messages.length) return openaiError(res, 400, 'messages must be a non-empty array', 'input.invalid');
+        if (b.n != null && Number(b.n) !== 1) return openaiError(res, 400, 'n must be 1', 'input.invalid');
+        const input = {};
+        for (const k of FIELDS) if (b[k] !== undefined && b[k] !== null) input[k] = b[k];
+        const maxTokens = b.max_completion_tokens != null ? b.max_completion_tokens : b.max_tokens;
+        if (maxTokens != null) input.max_tokens = Math.max(1, Math.min(Number(maxTokens) || 1, 16000));
+        let body = { workflow: 'ai.complete', input };
+        if (req.principal.kind === 'app') body = { ...body, attribution: appAttribution(req.principal) };
+        let run;
+        try {
+            const created = await runs.create(body, req.principal, { trace: req.ov && req.ov.traceId, requestId: req.ov && req.ov.requestId });
+            run = await runs.explained(await runs.wait(created, Math.max(config.runs.maxWaitMs, 120000)));
+        } catch (err) {
+            const status = (err && err.status) || 500;
+            if (status === 429 && err.retryAfter) res.setHeader('Retry-After', String(err.retryAfter));
+            if (status >= 500) log.warn(`[ai] /v1/chat/completions: ${err && err.message}`);
+            return openaiError(res, status, err && (err.detail || err.message), err && err.code);
+        }
+        if (run.status === 'failed' || run.status === 'cancelled') {
+            const code = (run.error && run.error.code) || 'run.failed';
+            const status = /^(input|validation)\./.test(code) ? 400 : /quota|allowance|budget/.test(code) ? 429 : 502;
+            return openaiError(res, status, (run.error && run.error.detail) || code, code);
+        }
+        if (!['succeeded', 'cached'].includes(run.status) || !run.output || !Array.isArray(run.output.choices)) {
+            return openaiError(res, 504, `the completion is still running; GET /api/v1/runs/${run.id}`, 'run.timeout');
+        }
+        const created = Math.floor(Date.parse(run.created_at || new Date().toISOString()) / 1000) || Math.floor(Date.now() / 1000);
+        const id = `chatcmpl-${run.id}`;
+        const model = run.output.model || (run.provenance && run.provenance.model) || 'openvibe';
+        const usage = { prompt_tokens: run.usage.tokens_in || 0, completion_tokens: run.usage.tokens_out || 0, total_tokens: (run.usage.tokens_in || 0) + (run.usage.tokens_out || 0) };
+        const x = { run_id: run.id, provider: run.provenance && run.provenance.provider, fallback_used: Boolean(run.provenance && run.provenance.fallback_used), cost_usd: run.usage.cost_usd, synthetic: Boolean(run.synthetic) };
+        res.setHeader('X-OpenVibe-Run-Id', run.id);
+        if (b.stream === true) {
+            res.status(200);
+            res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+            res.setHeader('Cache-Control', 'no-store');
+            const send = (o) => res.write(`data: ${JSON.stringify(o)}\n\n`);
+            const base = { id, object: 'chat.completion.chunk', created, model, system_fingerprint: run.output.system_fingerprint || null };
+            for (const c of run.output.choices) {
+                const m = c.message || {};
+                const delta = { role: 'assistant', content: m.content == null ? null : m.content };
+                if (Array.isArray(m.tool_calls) && m.tool_calls.length) delta.tool_calls = m.tool_calls.map((t, i) => ({ index: i, ...t }));
+                send({ ...base, choices: [{ index: c.index || 0, delta, finish_reason: null }] });
+                send({ ...base, choices: [{ index: c.index || 0, delta: {}, finish_reason: c.finish_reason || 'stop' }] });
+            }
+            if (b.stream_options && b.stream_options.include_usage) send({ ...base, choices: [], usage });
+            send({ ...base, choices: [], x_openvibe: x });
+            res.write('data: [DONE]\n\n');
+            return res.end();
+        }
+        return res.status(200).json({ id, object: 'chat.completion', created, model, choices: run.output.choices, usage, system_fingerprint: run.output.system_fingerprint || null, x_openvibe: x });
+    });
+
+    // The model list a client asks for first: one router model, the upstreams are AI's choice.
+    r.get('/v1/models', asOpenAiErrors, allow, (req, res) => {
+        res.json({ object: 'list', data: [{ id: 'openvibe', object: 'model', created: 1760486400, owned_by: 'openvibe' }] });
+    });
+
+    return r;
+}
+
+module.exports = { openaiRouter };

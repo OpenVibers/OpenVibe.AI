@@ -150,11 +150,29 @@ function createStubProvider(record = { key: 'stub', metadata: {} }, { stats = nu
         return { text, json, model, synthetic: true, usage: { input: inTok, output: approxTokens(text), cached: 0, estimated: true } };
     }
 
+    /** complete: an OpenAI-shaped answer. With tools and no tool result yet it calls the first tool; else it answers. */
+    async function complete(req) {
+        const o = req.openai || {};
+        const msgs = Array.isArray(o.messages) ? o.messages : [];
+        const last = msgs[msgs.length - 1] || {};
+        const rnd = seeded(`complete:${JSON.stringify(msgs).slice(-2000)}`);
+        const inTok = msgs.reduce((n, m) => n + approxTokens(typeof m.content === 'string' ? m.content : JSON.stringify(m.content || '')), 0);
+        const tool = Array.isArray(o.tools) && o.tools.length && last.role !== 'tool' && o.tool_choice !== 'none' ? o.tools[0] : null;
+        if (tool && tool.function) {
+            const args = tool.function.parameters ? synthesize(tool.function.parameters, rnd, 0, 'arguments') : {};
+            const call = { id: `call_${crypto.createHash('sha256').update(JSON.stringify(msgs)).digest('hex').slice(0, 24)}`, type: 'function', function: { name: tool.function.name, arguments: JSON.stringify(args) } };
+            return { completion: { choices: [{ index: 0, message: { role: 'assistant', content: null, tool_calls: [call] }, finish_reason: 'tool_calls' }] }, text: '', model: req.model || 'stub-1', synthetic: true, usage: { input: inTok, output: 20, cached: 0, estimated: true } };
+        }
+        const text = last.role === 'tool' ? `(synthetic) the tool answered: ${String(last.content || '').slice(0, 80)}` : `(synthetic) ${phrase(rnd, 8)}`;
+        return { completion: { choices: [{ index: 0, message: { role: 'assistant', content: text }, finish_reason: 'stop' }] }, text, model: req.model || 'stub-1', synthetic: true, usage: { input: inTok, output: approxTokens(text), cached: 0, estimated: true } };
+    }
+
     const adapter = {
         key: record.key,
         kind: 'stub',
         synthetic: true,
         supports: () => true,
+        complete,
         transcribe: async (req) => await run('transcribe', req),
         embed: async (req) => await run('embed', req),
         image: async (req) => await run('image', req),

@@ -85,6 +85,32 @@ const workflows = [
         steps: [{ kind: 'embed', route: 'default.embedding' }], cache_mode: 'private',
     },
     {
+        // The OpenAI-compatible endpoint (POST /v1/chat/completions, server/api/openai.js): the caller's Chat Completions
+        // request, tools included, passed to an upstream that speaks it; the run keeps its usage, cost and explain but not
+        // the prompt (passthrough). The output is the completion's choices.
+        key: 'ai.complete', name: 'Chat completion (OpenAI-compatible)', namespace: 'ai',
+        input_schema: OBJ({
+            messages: { type: 'array', minItems: 1, maxItems: 500, items: { type: 'object', required: ['role'], properties: {
+                role: { enum: ['system', 'developer', 'user', 'assistant', 'tool'] },
+                content: { anyOf: [{ type: 'string', maxLength: 400000 }, { type: 'array', maxItems: 100 }, { type: 'null' }] },
+                name: STR(64), tool_calls: { type: 'array', maxItems: 64 }, tool_call_id: STR(128),
+            } } },
+            tools: { type: 'array', maxItems: 128, items: { type: 'object', required: ['type', 'function'], properties: { type: { const: 'function' }, function: { type: 'object', required: ['name'], properties: { name: { type: 'string', pattern: '^[a-zA-Z0-9_-]{1,64}$' }, description: STR(4000), parameters: { type: 'object' }, strict: { type: 'boolean' } } } } } },
+            tool_choice: { anyOf: [{ enum: ['none', 'auto', 'required'] }, { type: 'object' }] },
+            parallel_tool_calls: { type: 'boolean' },
+            response_format: { type: 'object' },
+            stop: { anyOf: [STR(200), { type: 'array', maxItems: 4, items: STR(200) }, { type: 'null' }] },
+            seed: { type: ['integer', 'null'] },
+            top_p: { type: ['number', 'null'], minimum: 0, maximum: 1 },
+            presence_penalty: { type: ['number', 'null'], minimum: -2, maximum: 2 },
+            frequency_penalty: { type: ['number', 'null'], minimum: -2, maximum: 2 },
+            ...COMMON,
+        }, ['messages']),
+        output_schema: OBJ({ choices: { type: 'array', minItems: 1, maxItems: 8, items: { type: 'object' } }, system_fingerprint: { type: ['string', 'null'] }, model: { type: ['string', 'null'] } }, ['choices']),
+        metadata: { passthrough: true },
+        steps: [{ kind: 'complete', route: 'default.chat' }], cache_mode: 'none',
+    },
+    {
         // Off until AI_IMAGE_MODEL seeds route default.image: without it a run answers 503 route.unavailable.
         key: 'ai.image', name: 'Generate an image', namespace: 'ai',
         input_schema: OBJ({ prompt: STR(4000), size: { type: 'string', pattern: '^[0-9]{3,4}x[0-9]{3,4}$' }, n: { type: 'integer', minimum: 1, maximum: 4 } }, ['prompt']),

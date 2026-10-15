@@ -139,6 +139,28 @@ no `ns` runs nothing. Every caller's Network grant names its namespaces (Live: `
 `network.site_copy`, `media.analyze`). The fallback for service tokens without `ns` (`AI_NS_FALLBACK`)
 and its rollback lever (`AI_NS_REQUIRED`) were retired on 2026-09-28 (shims C-22 and C-23).
 
+## OpenAI-compatible endpoint
+
+`POST /v1/chat/completions` and `GET /v1/models` (`server/api/openai.js`), so a client built for OpenAI's API (the SDKs,
+coding agents, Codes' harnesses) points its base URL at `https://ai.openvibe.services/v1`.
+
+- **Tokens:** the same as the direct operations: an app's Network token (`ai.app.run`; its project pays and owns the
+  run) or a first-party service's (`ai.run.create`). Network tokens last five minutes: a client refreshes it with the
+  client-credentials grant (the SDKs take a token function).
+- **Request:** Chat Completions, as written: `messages` (system, developer, user, assistant with `tool_calls`, and `tool`
+  results), `tools`, `tool_choice`, `parallel_tool_calls`, `response_format`, `stop`, `seed`, `temperature`, `top_p`,
+  `max_tokens` or `max_completion_tokens`, `stream`. `n` must be 1. `model` may be anything: AI's router picks the
+  upstream for `default.chat` by price and health, and a request with `tools` goes only to a provider that declares
+  `tools`. The answer's `model` names the model that ran.
+- **Answer:** `chat.completion` with the upstream's `choices` and `usage`, plus `x_openvibe` (`run_id`, `provider`,
+  `fallback_used`, `cost_usd`) and the `X-OpenVibe-Run-Id` header. `stream: true` answers server-sent events in the chunk
+  format, **emulated**: the whole answer arrives as one delta, then the finish reason (and `usage` with
+  `stream_options.include_usage`), then `[DONE]`.
+- **Each request is a run** of workflow `ai.complete` (step kind `complete`): the run's quota, free allowance, cost,
+  audit and explain apply, and the prompt is not kept. Errors are OpenAI's shape (`{ error: { message, type, code } }`).
+- **Upstreams:** OpenAI-format providers (`kind: openai`) pass the request through (`complete()`; a reasoning model
+  takes `max_completion_tokens` and its default sampling). Anthropic is not used for it yet.
+
 ## Developer apps
 
 Roadmap Wave 20, ADR-014. A developer app gets a token from OpenVibe.Network (`POST /oauth/token`,

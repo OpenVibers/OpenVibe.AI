@@ -398,6 +398,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         const features = [operation];
         if (req.image) features.push('vision');
         if (req.json) features.push('json');
+        if (req.openai && Array.isArray(req.openai.tools) && req.openai.tools.length) features.push('tools');
         const tried = [];
         let unreadable = null;   // a candidate could not read the caller's media (whisper's ffmpeg): no other will either
         const { order: list, explain } = await candidates(route, features, operation, ctx);
