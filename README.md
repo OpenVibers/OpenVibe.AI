@@ -415,6 +415,10 @@ the service boots without Valkey; with it on, production refuses to boot without
   it should be; when someone names it, Chat sends the recent messages, the room's notes and any shared context a linked
   service gave the room (Food: a household's pantry and plan), and posts the reply. The prompt forbids inventing facts
   about the people or their things and claiming actions beyond writing in the chat.
+  `chat.member.turn` is the same member with tools: a Chat Completions request (Chat's system message, the transcript,
+  the tools Chat runs) passed through like `ai.complete` (the prompt is not kept) on route `chat.member`, so Chat's grant
+  and quota apply and a person's own key reaches only their provider; the choices come back with any tool calls, and
+  Chat sends the results in its next turn.
 
   `overview.source` says which (`local_model`, `paid`, `extractive`), and `gaps` lists what is missing (no local
   model, no speech-to-text, no budget). The output is not cached: callers keep it. Live's grant names
