@@ -243,6 +243,26 @@ workflows.push({
     metadata: { seed: true },
 });
 
+// OpenVibe.Pics: alt text, a caption and tags for one picture (accessibility, embeds and finding your own pictures).
+templates.push({
+    key: 'pics.describe_image', name: 'Pics: describe a picture',
+    description: 'Alt text, a short caption and tags for one picture on OpenVibe.Pics.',
+    input_schema: { type: 'object' }, output_schema: { type: 'object' },
+    system_prompt: 'You describe one picture for OpenVibe.Pics so people who cannot see it know what it shows. alt: one plain sentence of at most 140 characters saying what the picture shows (never "image of" or "picture of"). caption: one or two sentences with the detail a sighted person would notice first. tags: up to six short lowercase words for what is in it. Describe only what is visible. Never name or guess who a real person is, and never read out personal details shown in it (names, addresses, number plates, phone numbers, faces of children described by age or appearance beyond "a child"). If it shows text, say what kind of text it is rather than quoting personal parts. Output only JSON matching the schema.',
+    user_prompt: '{{#title}}The uploader titled it: {{title}}\n{{/title}}Describe the picture.',
+    default_route: 'pics.vision', owner: 'media-hub', metadata: { json_name: 'pics_describe_image' },
+});
+workflows.push({
+    key: 'pics.describe_image', name: 'Describe a picture', namespace: 'pics',
+    input_schema: OBJ({ image: IMAGE, title: STR(120) }, ['image']),
+    output_schema: OBJ({ alt: STR(160), caption: STR(400), tags: ARR(STR(30), 6), gaps: GAPS }),
+    steps: [{ kind: 'llm', template: 'pics.describe_image', operation: 'generate', output: 'json', image: 'image', image_max_width: 1024, prepare: 'pics.describe_image', params: { max_tokens: 400, temperature: 0.2 } }],
+    default_route: 'pics.vision',
+    // A person's picture: never shared between callers (the stored run keeps only the image's hash).
+    cache_mode: 'none',
+    metadata: { seed: true },
+});
+
 // OpenVibe.Blog's satire desk ("Is This Real?"): invented on purpose, so it is not a sourced evidence package and has its
 // own rules. The page labels every post as satire written by AI; the rules keep the jokes away from real people.
 templates.push({
