@@ -277,7 +277,9 @@ t.test('seeded text pools keep the shared provider as authority: a free local mo
         if (!rr || rr.disabled || rr.capability !== 'chat' || rr.created_by !== 'seed' || !/^(live\.|default\.(chat|json)$)/.test(rr.key)) continue;
         checked++;
         assert.strictEqual(rr.constraints.objective, 'correctness', `${rr.key}: correctness keeps the authority`);
-        assert.strictEqual(rr.constraints.authority, authority, `${rr.key}: the shared provider is the authority`);
+        // live.creative names a stronger model of the same shared provider (AI_CREATIVE_MODEL).
+        if (rr.key === 'live.creative') assert.match(rr.constraints.authority, /^shared:/, 'live.creative: the shared provider is the authority');
+        else assert.strictEqual(rr.constraints.authority, authority, `${rr.key}: the shared provider is the authority`);
     }
     assert.ok(checked >= 5, `seeded text pools checked: ${checked}`);
     // The planner under those constraints: the paid shared offer beats the free local one while it is up, and

@@ -6,7 +6,7 @@
  *              AI_MODEL), http-seam (AI_HTTP_SEAM_URL), whisper (WHISPER_*), local (AI_LOCAL_LLM_URL)
  *              — records whose origin is 'seed' follow the environment; admin-edited ones are left alone
  *   models     the configured default model
- *   routes     live.<role> for Live's roles, live.stt, default.chat|json|embedding and media.local|paid
+ *   routes     live.<role> for Live's roles, live.stt, live.creative (AI_CREATIVE_MODEL), default.chat|json|embedding and media.local|paid
  *              as capability pools ordered by openvibe-sdk/placement; and the historical
  *              product route keys as explicit aliases of default.json
  *   templates, workflows   from server/workflows/{live,core,products,media,chat}.js — a code change becomes a
@@ -126,6 +126,12 @@ async function seed({ registry, quotas, config, env = process.env, db }) {
     await registry.seedVersioned('route', 'food.vision', { primary: { provider: 'shared', model: null }, fallbacks: [], options: {}, max_output_tokens: 1200, response_format: 'json', timeout_ms: 60000, alias_of: 'default.json' });
     // OpenVibe.Pics' alt text (pics.describe_image): JSON from an image, on the JSON pool like food.vision.
     await registry.seedVersioned('route', 'pics.vision', { primary: { provider: 'shared', model: null }, fallbacks: [], options: {}, max_output_tokens: 400, response_format: 'json', timeout_ms: 60000, alias_of: 'default.json' });
+    // Writing people read for fun (the Arena's drama desk, live.arena.drama): the chat pool with a stronger model as its
+    // authority (AI_CREATIVE_MODEL, gpt-5-mini on OpenAI's API by default; the shared default elsewhere). The nano default
+    // misspelled names and wrote flat copy (2026-10-16); the desk makes at most ~20 short calls an hour.
+    const creativeModel = env.AI_CREATIVE_MODEL || (shared && shared.kind === 'openai' && /api\.openai\.com/i.test(shared.base_url || '') ? 'gpt-5-mini' : null);
+    if (creativeModel && !await registry.getModel('shared', creativeModel)) await registry.upsertModel({ provider_key: 'shared', model_key: creativeModel, type: 'chat', supports: { json: true, vision: true } }, { actor: 'seed' });
+    await registry.seedVersioned('route', 'live.creative', pool(ROLE_TIMEOUT.chat, creativeModel ? { constraints: { objective: 'correctness', latency_class: 'interactive', authority: `shared:${creativeModel}` } } : {}));
     // Chat's AI members (server/workflows/chat.js): conversation text, so an alias of the chat pool.
     await registry.seedVersioned('route', 'chat.member', { primary: { provider: 'shared', model: null }, fallbacks: [], options: {}, max_output_tokens: 600, response_format: 'text', timeout_ms: null, alias_of: 'default.chat' });
 
