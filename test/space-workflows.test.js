@@ -18,7 +18,9 @@ t.test('the builder\'s prompt: the SDK reference, and the current files when cha
     assert.match(sys, /<script src="\/_openvibe\/sdk\.js"><\/script>/);
     assert.match(sys, /OV\.items\.set\(collection, value\)/);
     assert.match(sys, /never ask for passwords, payment details/);
-    const fresh = render(tpl('space.app.build').user_prompt, PREPARE['space.app.build']({ prompt: 'a poll about pizza' }).vars);
+    const prep = PREPARE['space.app.build']({ prompt: 'a poll about pizza' });
+    assert.ok(prep.jsonSchema && prep.jsonSchema.properties.files && !/maxLength|maxItems/.test(JSON.stringify(prep.jsonSchema)), 'the model answers in the uncapped, non-strict schema');
+    const fresh = render(tpl('space.app.build').user_prompt, prep.vars);
     assert.strictEqual(fresh, 'What to build: a poll about pizza');
     const change = render(tpl('space.app.build').user_prompt, PREPARE['space.app.build']({ prompt: 'make it blue', name: 'Pizza poll', current: [{ path: 'index.html', content: INDEX }] }).vars);
     assert.match(change, /^The space's current files:\n--- index\.html ---\n<!doctype html>/);
