@@ -486,4 +486,7 @@ const POSTPROCESS = {
     },
 };
 
+// Space's builder keeps its hooks beside its templates (server/workflows/space.js).
+{ const space = require('./space'); Object.assign(PREPARE, space.PREPARE); Object.assign(POSTPROCESS, space.POSTPROCESS); }
+
 module.exports = { PREPARE, POSTPROCESS, CATEGORIES, normalizeCategory, translatable, sourcesBlock, LANG_NAMES };

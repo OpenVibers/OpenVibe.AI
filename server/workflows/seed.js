@@ -15,6 +15,7 @@
  *              request rate for every service
  */
 const live = require('./live');
+const space = require('./space');
 const media = require('./media');
 const core = require('./core');
 const products = require('./products');
@@ -133,14 +134,18 @@ async function seed({ registry, quotas, config, env = process.env, db }) {
     if (creativeModel && !await registry.getModel('shared', creativeModel)) await registry.upsertModel({ provider_key: 'shared', model_key: creativeModel, type: 'chat', supports: { json: true, vision: true } }, { actor: 'seed' });
     await registry.seedVersioned('route', 'live.creative', pool(ROLE_TIMEOUT.chat, creativeModel ? { constraints: { objective: 'correctness', latency_class: 'interactive', model: creativeModel, authority: `shared:${creativeModel}` } } : {}));
     // Chat's AI members (server/workflows/chat.js): conversation text, so an alias of the chat pool.
+    // Space's spaces (server/workflows/space.js): the builder writes whole apps, so it gets the creative model and room to
+    // finish; a space's own AI is conversation text, an alias of the chat pool.
+    await registry.seedVersioned('route', 'space.build', pool(180000, { max_output_tokens: 16000, ...(creativeModel ? { constraints: { objective: 'correctness', latency_class: 'interactive', model: creativeModel, authority: `shared:${creativeModel}` } } : {}) }));
+    await registry.seedVersioned('route', 'space.ask', { primary: { provider: 'shared', model: null }, fallbacks: [], options: {}, max_output_tokens: 800, response_format: 'text', timeout_ms: null, alias_of: 'default.chat' });
     await registry.seedVersioned('route', 'chat.member', { primary: { provider: 'shared', model: null }, fallbacks: [], options: {}, max_output_tokens: 600, response_format: 'text', timeout_ms: null, alias_of: 'default.chat' });
 
     // Templates, then workflows (workflows reference templates)
-    for (const t of [...live.templates, ...core.templates, ...products.templates, ...media.templates, ...chat.templates]) {
+    for (const t of [...live.templates, ...core.templates, ...products.templates, ...media.templates, ...chat.templates, ...space.templates]) {
         const { key, ...def } = t;
         await registry.seedVersioned('template', key, { description: null, default_route: null, owner: 'ai', visibility: 'internal', metadata: {}, ...def });
     }
-    for (const w of [...live.workflows, ...core.workflows, ...products.workflows, ...media.workflows, ...chat.workflows]) {
+    for (const w of [...live.workflows, ...core.workflows, ...products.workflows, ...media.workflows, ...chat.workflows, ...space.workflows]) {
         const { key, ...def } = w;
         await registry.seedVersioned('workflow', key, { description: null, default_route: null, cache_ttl_sec: null, metadata: {}, ...def });
     }
