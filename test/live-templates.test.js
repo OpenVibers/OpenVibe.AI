@@ -138,6 +138,7 @@ t.test("a channel description is public prose: never about looks, no lists or la
     const prompt = tp('live.streamer.overview').user_prompt;
     assert.match(prompt, /public description/);
     assert.match(prompt, /Never describe anyone's appearance, body, clothing, age/);
+    assert.match(prompt, /never guess pronouns/);
     assert.ok(!/moderation\.?$|notable for moderation/m.test(prompt), 'no staff-only moderation notes');
     assert.match(tp('live.media.overview').user_prompt, /Never describe anyone's appearance/);
     const out = POSTPROCESS['live.streamer.overview']({ text: '## Overview\n- Streamer handle: finditfixit (@finditfixit).\n- **Content:** repairs old TVs and radios\n- Tone: calm, patient\n\nAnn streams games: mostly Rust.' });
