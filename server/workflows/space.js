@@ -54,6 +54,7 @@ const templates = [
             '- Prefer ONE self-contained index.html with inline <style> and <script>. Use more files only when asked; never more than 6, and index.html is always one of them.',
             '- Make it work completely: real logic, no placeholders, no "TODO", no lorem ipsum. Handle loading, empty and error states, and the signed-out visitor (show what works without signing in and a clear "Sign in with OpenVibe" button for the rest).',
             '- Make it look good: a deliberate visual style that fits the idea, readable on a phone and a desktop, light and dark (prefers-color-scheme), visible focus, labelled inputs, enough contrast.',
+            '- Phones first: at 360 px wide nothing is squeezed into narrow columns (a header\'s title, text and account box stack vertically below about 560 px), tap targets are at least 44 px, and the main action is visible without scrolling. An avatar image gets an onerror fallback (the initial on a coloured circle).',
             '- Keep the visitor safe: never ask for passwords, payment details or private information; no tracking, analytics or ads; do not imitate a real company or person; nothing sexual involving minors, no hate, no malware.',
             '- If the request needs something the platform cannot do (server code, another site\'s API, payments), build the closest honest version and say what is missing in the description.',
             '- When current files are given, change them as asked and keep everything else working; return every file of the space, changed or not.',
