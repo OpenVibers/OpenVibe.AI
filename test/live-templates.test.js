@@ -133,4 +133,17 @@ t.test('the AI viewers render as Live rendered them', () => {
     assert.deepStrictEqual([p.skip, p.lines.length, p.lines[0].target, p.lines[0].delay_ms, p.threads_close], [false, 1, 'ambient', 45000, ['3']]);
 });
 
+t.test("a channel description is public prose: never about looks, no lists or labels reach the page", () => {
+    const tp = (key) => live.templates.find((x) => x.key === key);
+    const prompt = tp('live.streamer.overview').user_prompt;
+    assert.match(prompt, /public description/);
+    assert.match(prompt, /Never describe anyone's appearance, body, clothing, age/);
+    assert.ok(!/moderation\.?$|notable for moderation/m.test(prompt), 'no staff-only moderation notes');
+    assert.match(tp('live.media.overview').user_prompt, /Never describe anyone's appearance/);
+    const out = POSTPROCESS['live.streamer.overview']({ text: '## Overview\n- Streamer handle: finditfixit (@finditfixit).\n- **Content:** repairs old TVs and radios\n- Tone: calm, patient\n\nAnn streams games: mostly Rust.' });
+    assert.deepStrictEqual(out, { overview: 'finditfixit (@finditfixit). repairs old TVs and radios. calm, patient. Ann streams games: mostly Rust.' });
+    assert.strictEqual(POSTPROCESS['live.streamer.overview']({ text: '## Overview\n' }), null, 'nothing but a heading is no overview');
+    assert.deepStrictEqual(POSTPROCESS['live.media.overview']({ text: 'They build a PC.\nThen they test it' }), { overview: 'They build a PC. Then they test it.' });
+});
+
 t.run();

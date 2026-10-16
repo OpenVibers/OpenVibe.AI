@@ -64,11 +64,11 @@ const templates = [
         default_route: 'live.legacy', owner: 'live',
     },
     {
-        key: 'live.streamer.overview', name: 'Live: internal streamer profile for staff',
+        key: 'live.streamer.overview', name: 'Live: public channel description',
         description: 'From ai-analysis.generateStreamerOverview.',
         input_schema: { type: 'object' }, output_schema: { type: 'object' },
         system_prompt: '',
-        user_prompt: 'You are building an internal profile of a livestreamer for site staff, using aggregated signals across their streams, VODs, and pastes. Write a concise overview (4-8 sentences) covering: what they stream / their content niche, recurring themes or activities, tone/vibe, and anything notable for moderation. Be factual and neutral; do NOT invent specifics that aren\'t supported by the signals below.\n\n{{ctx}}',
+        user_prompt: 'You are writing the public description of a livestreamer\'s channel. It is shown on their channel page, in search results and on the home page\'s cards, so the first sentence must stand alone as a one-line summary of what they stream. Using only the signals below (aggregated across their streams, VODs and pastes), write 2-4 sentences of plain prose: what they stream (games, topics, activities), what keeps coming back, and the tone of the streams. Start with the streamer\'s name.\n\nRules:\n- Plain text only: no lists, bullets, headings, markdown, labels ("Handle:", "Overview:") or @handles.\n- Never describe anyone\'s appearance, body, clothing, age, ethnicity or perceived gender, and never guess at their private life, health or location.\n- No moderation notes, warnings or ratings.\n- Do not invent specifics the signals do not support; when the signals are thin, one or two short sentences are enough.\n\n{{ctx}}',
         default_route: 'live.legacy', owner: 'live',
     },
     {
@@ -76,7 +76,7 @@ const templates = [
         description: 'From media-analysis.analyzeMedia (media_overview).',
         input_schema: { type: 'object' }, output_schema: { type: 'object' },
         system_prompt: '',
-        user_prompt: 'You are writing an AI overview of a recorded video. Using ONLY the signals below (be concrete, don\'t invent), summarize what the video is about in 2-5 sentences — the main activities, topics, and vibe.\n\n{{parts}}',
+        user_prompt: 'You are writing an AI overview of a recorded video. Using ONLY the signals below (be concrete, don\'t invent), summarize what the video is about in 2-5 sentences — the main activities, topics, and vibe. Plain prose, no lists or markdown. Never describe anyone\'s appearance, body, clothing, age, ethnicity or perceived gender.\n\n{{parts}}',
         default_route: 'live.legacy', owner: 'live',
     },
     {
@@ -343,7 +343,7 @@ const structured = [
         cache_mode: 'private',
     },
     {
-        key: 'live.streamer.overview', name: 'Internal streamer overview for staff', namespace: 'live',
+        key: 'live.streamer.overview', name: 'Public channel description', namespace: 'live',
         input_schema: TEXT_OUT({
             streamer: { type: 'object', required: ['username'], properties: { username: STR(80), display_name: STR(120), bio: STR(2000), category: STR(40), category_inferred: { type: 'boolean' } } },
             memories: { type: 'array', items: STR(1000), maxItems: 100 },

@@ -74,6 +74,18 @@ const MOMENT_FLAVOR = {
     clip: 'This moment becomes a 25-SECOND VIDEO CLIP: pick a beat that plays out over time — a line that lands, a reaction, a sound, chat exploding, something HAPPENING — not a static pretty frame.',
 };
 const oneLine = (t, max) => String(t || '').replace(/\s+/g, ' ').trim().slice(0, max);
+// Text shown to the public as a description: one paragraph of prose. A model that answers with a list, headings or
+// bold labels ("- Streamer handle: x (@x).") has its markup and labels dropped, line by line, and headings left out,
+// before the lines are joined.
+const PROSE_LABEL = /^(?:streamer(?: handle)?|handle|(?:profile )?overview|summary|profile|content(?: niche)?|niche|tone(?:\/vibe)?|vibe|(?:recurring )?themes|activities|moderation(?: notes)?|notes?|bio|category)\s*:\s*/i;
+function plainProse(text, max) {
+    const lines = String(text || '').split(/\r?\n/)
+        .filter((l) => !/^\s*#{1,6}\s/.test(l))
+        .map((l) => l.replace(/^\s*(?:[-*•]\s+|\d+[.)]\s+|>\s*)/, '').replace(/\*\*|__/g, '').trim().replace(PROSE_LABEL, '').trim())
+        .filter(Boolean)
+        .map((l) => (/[.!?…"')\]]$/.test(l) ? l : `${l}.`));
+    return lines.join(' ').replace(/\s+/g, ' ').trim().slice(0, max);
+}
 
 /** Chat messages as Live formatted them: "[Xm ago] [#channel] author: (kind) text", the freshest 9000 characters. */
 function chatLines(messages, withWhere) {
@@ -448,8 +460,8 @@ const POSTPROCESS = {
         const overview = j && j.overview ? String(j.overview).slice(0, 2000) : (extractDescription(r.text, 2000) || r.text.slice(0, 2000));
         return { overview, category: normalizeCategory(j && j.category), tags: j && Array.isArray(j.tags) ? j.tags.map(String).slice(0, 6) : [] };
     },
-    'live.streamer.overview'(r) { return r.text ? { overview: r.text.slice(0, 4000) } : null; },
-    'live.media.overview'(r) { return r.text ? { overview: r.text.slice(0, 2000) } : null; },
+    'live.streamer.overview'(r) { const overview = plainProse(r.text, 4000); return overview ? { overview } : null; },
+    'live.media.overview'(r) { const overview = plainProse(r.text, 2000); return overview ? { overview } : null; },
     'live.stream.recap'(r) {
         const out = r.json || parseJsonLoose(r.text);
         if (!out || !out.headline || !out.summary) return null;
