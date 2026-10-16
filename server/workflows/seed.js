@@ -124,6 +124,8 @@ async function seed({ registry, quotas, config, env = process.env, db }) {
     for (const key of HISTORICAL_ROUTES) await registry.seedVersioned('route', key, { primary: { provider: 'shared', model: null }, fallbacks: [], options: {}, max_output_tokens: null, response_format: 'json', timeout_ms: null, alias_of: 'default.json' });
     // Food's cupboard photos and receipts (food.read_pantry_photo): JSON from an image, on the JSON pool (its models read images).
     await registry.seedVersioned('route', 'food.vision', { primary: { provider: 'shared', model: null }, fallbacks: [], options: {}, max_output_tokens: 1200, response_format: 'json', timeout_ms: 60000, alias_of: 'default.json' });
+    // OpenVibe.Pics' alt text (pics.describe_image): JSON from an image, on the JSON pool like food.vision.
+    await registry.seedVersioned('route', 'pics.vision', { primary: { provider: 'shared', model: null }, fallbacks: [], options: {}, max_output_tokens: 400, response_format: 'json', timeout_ms: 60000, alias_of: 'default.json' });
     // Chat's AI members (server/workflows/chat.js): conversation text, so an alias of the chat pool.
     await registry.seedVersioned('route', 'chat.member', { primary: { provider: 'shared', model: null }, fallbacks: [], options: {}, max_output_tokens: 600, response_format: 'text', timeout_ms: null, alias_of: 'default.chat' });
 
