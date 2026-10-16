@@ -141,6 +141,11 @@ t.test("a channel description is public prose: never about looks, no lists or la
     assert.match(prompt, /never guess pronouns/);
     assert.ok(!/moderation\.?$|notable for moderation/m.test(prompt), 'no staff-only moderation notes');
     assert.match(tp('live.media.overview').user_prompt, /Never describe anyone's appearance/);
+    // Frame notes are public (a VOD page's timeline) and feed every summary: none describes how people look.
+    assert.match(tp('live.stream.describe_frame').user_prompt, /never mention anyone's body, clothing, age/);
+    assert.match(tp('live.stream.summarize').user_prompt, /never about what people look like/);
+    assert.match(tp('live.moments.pick').user_prompt, /never about what people look like/);
+    assert.match(tp('live.stream.recap').system_prompt, /Never describe anyone's looks/);
     const out = POSTPROCESS['live.streamer.overview']({ text: '## Overview\n- Streamer handle: finditfixit (@finditfixit).\n- **Content:** repairs old TVs and radios\n- Tone: calm, patient\n\nAnn streams games: mostly Rust.' });
     assert.deepStrictEqual(out, { overview: 'finditfixit (@finditfixit). repairs old TVs and radios. calm, patient. Ann streams games: mostly Rust.' });
     assert.strictEqual(POSTPROCESS['live.streamer.overview']({ text: '## Overview\n' }), null, 'nothing but a heading is no overview');

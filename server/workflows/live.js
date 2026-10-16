@@ -52,7 +52,7 @@ const templates = [
         description: 'From ai-analysis.analyzeStreamFrame (stream_memory): memory description, tags, and a screenshot-worthiness verdict + caption for live pastes, in one vision call.',
         input_schema: { type: 'object' }, output_schema: { type: 'object' },
         system_prompt: '',
-        user_prompt: 'This is a frame from a live stream. Reply ONLY with compact JSON: {"description":"one concise sentence describing what is happening on screen right now","tags":["2-5","short","tags"],"worthy":<true only if this exact frame is genuinely screenshot-worthy on its own: a face/reaction, a visual gag, something unusual or funny on screen — false for ordinary gameplay/desktop/chat/talking-head frames>,"title":"<if worthy: a punchy, funny 3-7 word caption for it, else empty>"}.',
+        user_prompt: 'This is a frame from a live stream. Describe what is happening (the game, the activity, the scene, text on screen), not what people look like: never mention anyone\'s body, clothing, age, ethnicity or perceived gender, and call a person "the streamer". Reply ONLY with compact JSON: {"description":"one concise sentence describing what is happening on screen right now","tags":["2-5","short","tags"],"worthy":<true only if this exact frame is genuinely screenshot-worthy on its own: a face/reaction, a visual gag, something unusual or funny on screen — false for ordinary gameplay/desktop/chat/talking-head frames>,"title":"<if worthy: a punchy, funny 3-7 word caption for it, else empty>"}.',
         default_route: 'live.vision', owner: 'live',
     },
     {
@@ -60,7 +60,7 @@ const templates = [
         description: 'From ai-analysis.summarizeStreamMemories: whole-session overview from timestamped observations and the audio timeline; category is inferred, never defaulted.',
         input_schema: { type: 'object' }, output_schema: { type: 'object' },
         system_prompt: '',
-        user_prompt: 'These are timestamped observations from a live stream, in order since it started. Reply ONLY with compact JSON: {"overview":"a thorough overview (2-6 sentences) of what this stream has been about overall — the main activities, topics, and vibe across the whole session (not just the latest moment)","category":"<exactly one of: {{categories}} — what this stream mostly IS, judged from the observations; desktop = screen/software/coding, gaming = playing games, irl = camera on a person talking/doing things indoors, outdoors/travel = out in the world>","tags":["3-6","short","lowercase","tags"]}\n{{lines}}{{audio_block}}',
+        user_prompt: 'These are timestamped observations from a live stream, in order since it started. Write about the activities, topics and vibe, never about what people look like (body, clothing, age, ethnicity or perceived gender); call a person "the streamer". Reply ONLY with compact JSON: {"overview":"a thorough overview (2-6 sentences) of what this stream has been about overall — the main activities, topics, and vibe across the whole session (not just the latest moment)","category":"<exactly one of: {{categories}} — what this stream mostly IS, judged from the observations; desktop = screen/software/coding, gaming = playing games, irl = camera on a person talking/doing things indoors, outdoors/travel = out in the world>","tags":["3-6","short","lowercase","tags"]}\n{{lines}}{{audio_block}}',
         default_route: 'live.legacy', owner: 'live',
     },
     {
@@ -184,7 +184,7 @@ const templates = [
         input_schema: { type: 'object' },
         output_schema: {"type": "object", "additionalProperties": false, "required": ["overview"], "properties": {"overview": {"type": "string"}}},
         system_prompt: "",
-        user_prompt: "You are describing a person on a streaming site by fusing two AI summaries about them into ONE cohesive 2-4 sentence overview of who they are overall — both as a STREAMER and as a CHATTER. Be natural, specific, and not repetitive. Output ONLY the overview prose with no label or prefix.\n\nAS A STREAMER:\n{{as_streamer}}\n\nAS A CHATTER:\n{{as_chatter}}",
+        user_prompt: "You are describing a person on a streaming site by fusing two AI summaries about them into ONE cohesive 2-4 sentence overview of who they are overall — both as a STREAMER and as a CHATTER. Be natural, specific, and not repetitive. Never describe their looks, body, clothing or age, and use their name or \"they\", never a guessed pronoun. Output ONLY the overview prose with no label or prefix.\n\nAS A STREAMER:\n{{as_streamer}}\n\nAS A CHATTER:\n{{as_chatter}}",
         default_route: 'live.legacy', owner: 'live', metadata: { json_name: 'person_overview' },
     },
     {
@@ -262,7 +262,7 @@ const templates = [
             },
         },
         system_prompt: '',
-        user_prompt: 'Below is a single livestream VOD titled "{{title}}", described by its on-screen TIMELINE (visual scene notes) and its AUDIO TRANSCRIPT, each line timestamped [m:ss].\n\nTIMELINE:\n{{timeline}}\n\nTRANSCRIPT:\n{{transcript}}\n\nSOUNDS HEARD (non-speech audio events):\n{{sounds}}\n\nViewers CLIPPED these timestamps (very strong "this was a highlight" signal): {{clipped}}\nChat activity SPIKED around: {{spikes}}\n\n{{flavor_hint}}\n{{#avoid}}ALREADY USED (a paste or clip exists there) — do NOT pick these or anything within 2 minutes of them: {{avoid}}. Find a DIFFERENT moment.{{/avoid}}\n\nFind the SINGLE most interesting/funny/dramatic/surprising/striking moment in this VOD with something clearly VISIBLE happening. Prefer moments backed by the clip/chat signals when they line up with something notable. NEVER pick a black/dark/loading/blank screen, an intro/BRB card, or a moment with no visible content or activity. Return STRICT JSON only, nothing else: {"t": <seconds into the vod>, "title": "<specific punchy 3-8 word title, not the stream name, funny, never generic>", "desc": "<one vivid sentence describing the moment>"}',
+        user_prompt: 'Below is a single livestream VOD titled "{{title}}", described by its on-screen TIMELINE (visual scene notes) and its AUDIO TRANSCRIPT, each line timestamped [m:ss]. Titles and descriptions are about what happens, never about what people look like (body, clothing, age, ethnicity or perceived gender).\n\nTIMELINE:\n{{timeline}}\n\nTRANSCRIPT:\n{{transcript}}\n\nSOUNDS HEARD (non-speech audio events):\n{{sounds}}\n\nViewers CLIPPED these timestamps (very strong "this was a highlight" signal): {{clipped}}\nChat activity SPIKED around: {{spikes}}\n\n{{flavor_hint}}\n{{#avoid}}ALREADY USED (a paste or clip exists there) — do NOT pick these or anything within 2 minutes of them: {{avoid}}. Find a DIFFERENT moment.{{/avoid}}\n\nFind the SINGLE most interesting/funny/dramatic/surprising/striking moment in this VOD with something clearly VISIBLE happening. Prefer moments backed by the clip/chat signals when they line up with something notable. NEVER pick a black/dark/loading/blank screen, an intro/BRB card, or a moment with no visible content or activity. Return STRICT JSON only, nothing else: {"t": <seconds into the vod>, "title": "<specific punchy 3-8 word title, not the stream name, funny, never generic>", "desc": "<one vivid sentence describing the moment>"}',
         default_route: 'live.legacy', owner: 'live', metadata: { json_name: 'moment_pick' },
     },
     {
@@ -278,7 +278,7 @@ const templates = [
                 grade: { type: 'string', enum: ['S', 'A', 'B', 'C'], description: 'S = legendary night, A = great, B = solid, C = quiet' },
             },
         },
-        system_prompt: 'You write the "after-show report" for a live stream on OpenVibe.Live (a scrappy, open-source, community-run streaming site). Voice: sports-page energy, warm, specific, a little funny, never mocking the streamer or the viewers. Use the REAL numbers and names given. Small streams are fine — a 4-viewer night can still be an A if it was fun. Output only JSON.',
+        system_prompt: 'You write the "after-show report" for a live stream on OpenVibe.Live (a scrappy, open-source, community-run streaming site). Voice: sports-page energy, warm, specific, a little funny, never mocking the streamer or the viewers. Never describe anyone\'s looks, body, clothing or age. Use the REAL numbers and names given. Small streams are fine — a 4-viewer night can still be an A if it was fun. Output only JSON.',
         user_prompt: '{{json facts}}',
         default_route: 'live.summary', owner: 'live', metadata: { json_name: 'stream_recap' },
     },
