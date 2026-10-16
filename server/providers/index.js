@@ -441,9 +441,11 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                 if (ctx.logRequest) ctx.logRequest({ ...base, status: 'skipped', skip_reason: why });
                 continue;
             }
-            // An image generation outlasts the shared provider's chat timeout (AI_PROVIDER_TIMEOUT_MS): the route's wins. So does
-            // a route that asks for longer than the provider's default (space.build: a whole app takes a minute or two).
-            const cap = operation === 'image' ? 600000 : Math.max(p.timeout_ms || 600000, Number(route.timeout_ms) || 0);
+            // An image generation outlasts the shared provider's chat timeout (AI_PROVIDER_TIMEOUT_MS): the route's wins. So does a
+            // route that says so (options.outlast_provider_timeout: space.build writes a whole app, a minute or two). Otherwise
+            // the provider's timeout stays strict, so a slow provider fails over quickly.
+            const outlast = operation === 'image' || Boolean(route.options && route.options.outlast_provider_timeout);
+            const cap = outlast ? Math.max(p.timeout_ms || 0, Number(route.timeout_ms) || 0, operation === 'image' ? 600000 : 0) : (p.timeout_ms || 600000);
             const timeoutMs = Math.max(1000, Math.min(req.timeoutMs || route.timeout_ms || p.timeout_ms || 30000, cap));
             const retries = config.providerRetries;
             let lastErr = null;

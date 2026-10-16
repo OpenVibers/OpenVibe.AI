@@ -136,7 +136,7 @@ async function seed({ registry, quotas, config, env = process.env, db }) {
     // Chat's AI members (server/workflows/chat.js): conversation text, so an alias of the chat pool.
     // Space's spaces (server/workflows/space.js): the builder writes whole apps, so it gets the creative model and room to
     // finish; a space's own AI is conversation text, an alias of the chat pool.
-    await registry.seedVersioned('route', 'space.build', pool(180000, { max_output_tokens: 16000, ...(creativeModel ? { constraints: { objective: 'correctness', latency_class: 'interactive', model: creativeModel, authority: `shared:${creativeModel}` } } : {}) }));
+    await registry.seedVersioned('route', 'space.build', pool(180000, { max_output_tokens: 16000, options: { outlast_provider_timeout: true }, ...(creativeModel ? { constraints: { objective: 'correctness', latency_class: 'interactive', model: creativeModel, authority: `shared:${creativeModel}` } } : {}) }));
     await registry.seedVersioned('route', 'space.ask', { primary: { provider: 'shared', model: null }, fallbacks: [], options: {}, max_output_tokens: 800, response_format: 'text', timeout_ms: null, alias_of: 'default.chat' });
     await registry.seedVersioned('route', 'chat.member', { primary: { provider: 'shared', model: null }, fallbacks: [], options: {}, max_output_tokens: 600, response_format: 'text', timeout_ms: null, alias_of: 'default.chat' });
 
