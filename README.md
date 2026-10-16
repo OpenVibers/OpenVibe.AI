@@ -313,7 +313,7 @@ definition, but never over an admin's version.
 | `responses` | The OpenAI Responses API (`POST {base}/responses`) for GPT-family models that only speak it, at any OpenAI-compatible `base_url` (default `https://api.openai.com/v1`): chat and every text operation, structured output through `text.format` with the same step-down, vision; no embeddings or transcription. | the admin API (`kind: "responses"`, `base_url`, `secret_ref`) |
 | `anthropic` | Messages API with cached system blocks and forced-tool JSON. Ported from Live's `llm.js`. | same, with `AI_PROVIDER=anthropic` |
 | `http` | The local HTTP seam: `POST {operation, …}` → `{text, json, usage}` | `AI_HTTP_SEAM_URL` or the admin API |
-| `whisper` | whisper.cpp on this host, with Live's VAD, hallucination filter, multilingual model and live/batch lanes | `WHISPER_*` — Live's names |
+| `whisper` | whisper.cpp on this host, with Live's VAD, hallucination filter, multilingual model and live/batch lanes; NVIDIA Parakeet TDT 0.6B v3 (`parakeet-cli`) for English and 24 European languages when `PARAKEET_MODEL` is set, falling back to whisper | `WHISPER_*`, `PARAKEET_*`, `ASR_ENGINE` — Live's names |
 | `openai`, key `local` | A model server on this host speaking the OpenAI API (llama.cpp's `llama-server`, Ollama's `/v1`): no key, never paid; route `media.local` | `AI_LOCAL_LLM_URL`, `AI_LOCAL_LLM_MODEL`, `AI_LOCAL_LLM_TIMEOUT_MS` |
 
 Routing: a route either names a `capability` and the router builds its pool from every provider that
@@ -490,6 +490,7 @@ mix vectors from different providers (re-embed when the provider changes).
 | Public price/latency page: 200 without auth, rows from seeded stats and rate cards, the empty state, no caller ids, own-key providers, URLs or secrets | `test/stats-page.test.js` |
 | The OpenAI Responses adapter (`kind: responses`) with a stubbed fetch: request shape, output and usage parsing, `text.format`, error mapping, the key never in an error | `test/provider-responses.test.js` |
 | Ported adapters against fake OpenAI/Anthropic servers, stub determinism, whisper filter, templates | `test/providers.test.js` |
+| Parakeet: engine by language, 30 s pieces past 45 s, fallback to whisper, `ASR_ENGINE=whisper` | `test/parakeet.test.js` |
 | `media.analyze` on a real 28 s fixture: signals, scenes and loud moments measured, highlights with evidence, the local model's overview from the facts only; the local model down → extractive and said; paid only with `allow_paid` and a `media.paid` budget, never past it; too little disk refused before downloading | `test/media-analysis.test.js` |
 | Import from a Live snapshot: dry run, holds, idempotent re-run | `test/import.test.js` |
 | Capability proposals are valid contracts documents matching what is enforced | `test/proposals.test.js` |

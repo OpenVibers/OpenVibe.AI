@@ -8,6 +8,11 @@
  *     filler words when there is no VAD) and collapsing of looped repeats
  *   - a multilingual model (WHISPER_MODEL_MULTI) for non-English audio, a faster live model
  *     (WHISPER_MODEL_LIVE), two independent lanes (live never waits on batch), nice -n 15
+ *   - NVIDIA Parakeet TDT 0.6B v3 (parakeet-cli from the same build) for English and 24 European
+ *     languages when PARAKEET_MODEL is set, as Live does since 10-16: on a 2-minute stream sample it
+ *     heard more words than large-v3-turbo (394 vs 369, punctuated) in a quarter of the time (31 s vs
+ *     121 s). Audio over 45 s goes in 30 s pieces (a 300 s window needed 3.1 GB in one run). Any
+ *     Parakeet failure falls back to whisper on the same audio; ASR_ENGINE=whisper forces whisper.
  * Same environment names as Live, so the same install works on either host.
  *
  * Input is a local media file the engine already fetched through the SSRF-safe fetcher; ffmpeg
@@ -58,6 +63,42 @@ function cleanSegments(segsRaw, hasVad) {
     return out;
 }
 
+// ── Parakeet output → timed sentences (Live's parseParakeet) ──
+// `parakeet-cli -ps` prints every token on stderr with its start and end in centiseconds and whether it starts a word
+// ("▁For"). A sentence ends at . ? or !, at a pause of 1.5 s, or after 20 s. Fillers ("uh", "um") are dropped.
+const PARAKEET_LANGS = new Set(['bg', 'hr', 'cs', 'da', 'nl', 'en', 'et', 'fi', 'fr', 'de', 'el', 'hu', 'it', 'lv', 'lt', 'mt', 'pl', 'pt', 'ro', 'sk', 'sl', 'es', 'sv', 'ru', 'uk']);
+const TOKEN_LINE = /t0=\s*(-?\d+)\s+t1=\s*(-?\d+)\s+word_start=(true|false)\s+"(.*)"\s*$/;
+const FILLER_RE = /(^|[\s,])(?:uh+|um+|uhm|erm|mm+)(?=[\s,.!?]|$)[,]?/gi;
+function parseParakeet(stderr, offsetSec = 0) {
+    const out = [];
+    let cur = null;
+    const close = () => {
+        if (!cur) return;
+        const text = cur.text.replace(FILLER_RE, '$1').replace(/\s+([,.!?])/g, '$1').replace(/\s+/g, ' ').replace(/^[,\s]+/, '').trim();
+        if (text) out.push({ start: offsetSec + cur.t0 / 100, end: offsetSec + cur.t1 / 100, text });
+        cur = null;
+    };
+    for (const line of String(stderr || '').split('\n')) {
+        const m = TOKEN_LINE.exec(line);
+        if (!m) continue;
+        const t0 = Number(m[1]), t1 = Number(m[2]);
+        const wordStart = m[3] === 'true';
+        const raw = m[4];
+        if (/^<.*>$/.test(raw)) continue;                      // <unk>, <|…|> control tokens
+        const piece = raw.replace(/\u2581/g, ' ');
+        if (cur && wordStart && (t0 - cur.t1 > 150 || t0 - cur.t0 > 2000)) close();
+        if (!cur) cur = { t0, t1, text: '' };
+        cur.text += wordStart && !piece.startsWith(' ') ? ` ${piece}` : piece;
+        cur.t1 = Math.max(cur.t1, t1);
+        if (/[.!?]["')\]]?$/.test(piece.trim())) close();
+    }
+    close();
+    return out;
+}
+const CHUNK_SEC = 30;
+const CHUNK_MAX_SEC = 45;
+const wavSeconds = (p) => { try { return Math.max(0, (fs.statSync(p).size - 44) / 32000); } catch { return 0; } };   // 16 kHz mono s16le
+
 function createWhisperProvider(record, { config }) {
     const HOME = os.homedir();
     const w = config.whisper;
@@ -71,6 +112,9 @@ function createWhisperProvider(record, { config }) {
     const vadModel = () => (w.vad && exists(VAD_MODEL) ? VAD_MODEL : null);
     const multi = () => (exists(MODEL_MULTI) ? MODEL_MULTI : null);
     const available = () => Boolean(bin()) && exists(MODEL);
+    const parakeetBin = () => [w.parakeetBin, bin() && path.join(path.dirname(bin()), 'parakeet-cli')].find(exists) || null;
+    const parakeetOn = () => w.engine !== 'whisper' && exists(w.parakeetModel) && Boolean(parakeetBin());
+    const engineFor = (language) => (parakeetOn() && PARAKEET_LANGS.has(String(language || 'en').slice(0, 2).toLowerCase()) ? 'parakeet' : 'whisper');
 
     const lanes = { live: { max: 1, running: 0, waiters: [] }, batch: { max: w.maxConcurrent, running: 0, waiters: [] } };
     const acquire = (lane) => { const L = lanes[lane]; if (L.running < L.max) { L.running++; return Promise.resolve(); } return new Promise(r => L.waiters.push(r)); };
@@ -155,6 +199,53 @@ function createWhisperProvider(record, { config }) {
         });
     }
 
+    // One parakeet-cli run on a short WAV: the tokens on stderr become timed sentences.
+    function parakeetOnce(wavPath, { threads, offsetSec, signal, deadline }) {
+        return new Promise((resolve, reject) => {
+            let ch;
+            try { ch = spawnTracked('nice', ['-n', '15', parakeetBin(), '-t', String(threads), '-ps', '-np', '-m', w.parakeetModel, '-f', wavPath], { stderr: true }); }
+            catch (e) { return reject(new ProviderError(e.message, { code: 'provider.unavailable' })); }
+            const chunks = []; let size = 0;
+            if (ch.stderr) ch.stderr.on('data', (d) => { if (size < 64 * 1024 * 1024) { chunks.push(d); size += d.length; } });
+            const kill = () => { try { ch.kill('SIGKILL'); } catch { /* */ } };
+            const timer = setTimeout(kill, Math.max(1000, deadline - Date.now()));
+            if (signal) signal.addEventListener('abort', kill, { once: true });
+            ch.on('close', (code) => {
+                clearTimeout(timer);
+                if (signal && signal.aborted) return reject(new ProviderError('cancelled', { code: 'provider.cancelled' }));
+                if (code !== 0) return reject(new ProviderError(`parakeet exited ${code}`, { code: 'provider.error' }));
+                resolve(parseParakeet(Buffer.concat(chunks).toString('utf8'), offsetSec));
+            });
+            ch.on('error', (e) => { clearTimeout(timer); reject(new ProviderError(e.message, { code: 'provider.unavailable' })); });
+        });
+    }
+    // Parakeet on a whole WAV: in 30 s pieces past 45 s (PCM cut exactly, so a piece's times shift only by its start).
+    async function decodeParakeet(wavPath, { language = 'en', live = false, lowPower = false, offsetSec = 0, signal, timeoutMs }) {
+        const threads = live || lowPower ? Math.max(1, Math.min(2, w.threads)) : w.threads;
+        const deadline = Date.now() + timeoutMs;
+        let pieces = [wavPath], dir = null;
+        if (wavSeconds(wavPath) > CHUNK_MAX_SEC) {
+            dir = fs.mkdtempSync(path.join(os.tmpdir(), 'openvibe-ai-pk-'));
+            await new Promise((resolve, reject) => {
+                const ff = spawnTracked('nice', ['-n', '15', 'ffmpeg', '-nostdin', '-loglevel', 'error', '-y', '-i', wavPath, '-f', 'segment', '-segment_time', String(CHUNK_SEC), '-c', 'copy', path.join(dir, 'p%04d.wav')]);
+                ff.on('close', (code) => (code === 0 ? resolve() : reject(new ProviderError(`ffmpeg split exited ${code}`, { code: 'provider.error' }))));
+                ff.on('error', (e) => reject(new ProviderError(e.message, { code: 'provider.unavailable' })));
+            });
+            pieces = fs.readdirSync(dir).filter((n) => /^p\d{4}\.wav$/.test(n)).sort().map((n) => path.join(dir, n));
+        }
+        try {
+            const raw = [];
+            for (let i = 0; i < pieces.length; i++) {
+                if (Date.now() >= deadline) throw new ProviderError('parakeet timed out', { code: 'provider.error' });
+                raw.push(...await parakeetOnce(pieces[i], { threads, offsetSec: offsetSec + i * CHUNK_SEC, signal, deadline }));
+            }
+            const segments = cleanSegments(raw, true);
+            return { text: segments.map(s => s.text).join(' ').replace(/\s+/g, ' ').trim(), segments, language: String(language || 'en'), model: path.basename(w.parakeetModel) };
+        } finally {
+            if (dir) { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* */ } }
+        }
+    }
+
     async function transcribe(req) {
         if (!available()) throw new ProviderError('whisper.cpp is not installed on this host', { code: 'provider.unavailable' });
         const lane = req.live ? 'live' : 'batch';
@@ -163,7 +254,17 @@ function createWhisperProvider(record, { config }) {
         try {
             await acquire(lane);
             try {
-                const r = await decode(wav, { language: req.language, live: req.live, lowPower: req.lowPower === true, offsetSec: req.offsetSec || 0, signal: req.signal, timeoutMs });
+                const opts = { language: req.language, live: req.live, lowPower: req.lowPower === true, offsetSec: req.offsetSec || 0, signal: req.signal, timeoutMs };
+                let r = null;
+                if (engineFor(req.language) === 'parakeet') {
+                    try { r = await decodeParakeet(wav, opts); }
+                    catch (e) {
+                        if (e && e.code === 'provider.cancelled') throw e;
+                        // A Parakeet failure (a crash, a bad model file) must not leave a hole: whisper takes the same audio.
+                        console.warn(`[whisper] parakeet failed (${e.message}); whisper takes this audio`);
+                    }
+                }
+                if (!r) r = await decode(wav, opts);
                 return { ...r, usage: { input: 0, output: 0, cached: 0 } };
             } finally { release(lane); }
         } finally { try { fs.unlinkSync(wav); } catch { /* */ } }
@@ -174,9 +275,9 @@ function createWhisperProvider(record, { config }) {
         kind: 'whisper',
         supports: (f) => f === 'transcribe' && available(),
         transcribe,
-        describe: () => ({ available: available(), model: path.basename(MODEL), multilingual: Boolean(multi()), vad: Boolean(vadModel()), lanes: Object.fromEntries(Object.entries(lanes).map(([k, L]) => [k, { running: L.running, queued: L.waiters.length }])) }),
+        describe: () => ({ available: available(), model: path.basename(MODEL), parakeet: parakeetOn() ? path.basename(w.parakeetModel) : null, multilingual: Boolean(multi()), vad: Boolean(vadModel()), lanes: Object.fromEntries(Object.entries(lanes).map(([k, L]) => [k, { running: L.running, queued: L.waiters.length }])) }),
         killActive() { for (const ch of active) { try { ch.kill('SIGKILL'); } catch { /* */ } } active.clear(); },
     };
 }
 
-module.exports = { createWhisperProvider, cleanSegments, isNoise };
+module.exports = { createWhisperProvider, cleanSegments, isNoise, parseParakeet };
