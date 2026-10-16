@@ -131,7 +131,7 @@ async function seed({ registry, quotas, config, env = process.env, db }) {
     // misspelled names and wrote flat copy (2026-10-16); the desk makes at most ~20 short calls an hour.
     const creativeModel = env.AI_CREATIVE_MODEL || (shared && shared.kind === 'openai' && /api\.openai\.com/i.test(shared.base_url || '') ? 'gpt-5-mini' : null);
     if (creativeModel && !await registry.getModel('shared', creativeModel)) await registry.upsertModel({ provider_key: 'shared', model_key: creativeModel, type: 'chat', supports: { json: true, vision: true } }, { actor: 'seed' });
-    await registry.seedVersioned('route', 'live.creative', pool(ROLE_TIMEOUT.chat, creativeModel ? { constraints: { objective: 'correctness', latency_class: 'interactive', authority: `shared:${creativeModel}` } } : {}));
+    await registry.seedVersioned('route', 'live.creative', pool(ROLE_TIMEOUT.chat, creativeModel ? { constraints: { objective: 'correctness', latency_class: 'interactive', model: creativeModel, authority: `shared:${creativeModel}` } } : {}));
     // Chat's AI members (server/workflows/chat.js): conversation text, so an alias of the chat pool.
     await registry.seedVersioned('route', 'chat.member', { primary: { provider: 'shared', model: null }, fallbacks: [], options: {}, max_output_tokens: 600, response_format: 'text', timeout_ms: null, alias_of: 'default.chat' });
 
