@@ -19,6 +19,9 @@ t.test('the builder\'s prompt: the SDK reference, and the current files when cha
     assert.match(sys, /OV\.items\.set\(collection, value\)/);
     assert.match(sys, /never ask for passwords, payment details/);
     assert.match(sys, /Phones first: at 360 px wide nothing is squeezed/);
+    assert.match(sys, /functions\/<name>\.js \(name: a-z, 0-9 and "-"\) defines async function handle\(request, ov\)/, 'server functions');
+    assert.match(sys, /OV\.fn\(name, body\)/);
+    assert.ok(!/There is no server code/.test(sys));
     const prep = PREPARE['space.app.build']({ prompt: 'a poll about pizza' });
     assert.ok(prep.jsonSchema && prep.jsonSchema.properties.files && !/maxLength|maxItems/.test(JSON.stringify(prep.jsonSchema)), 'the model answers in the uncapped, non-strict schema');
     const fresh = render(tpl('space.app.build').user_prompt, prep.vars);
@@ -38,6 +41,8 @@ t.test('an answer becomes a space only with a real index.html and safe paths', (
         ],
     });
     assert.deepStrictEqual(out.files.map((f) => f.path), ['index.html', 'style.css', 'abs.js']);
+    const withFn = post({ name: 'Quiz', description: 'x', files: [{ path: 'index.html', content: INDEX }, { path: 'functions/check.js', content: 'async function handle() { return 1; }' }] });
+    assert.deepStrictEqual(withFn.files.map((f) => f.path), ['index.html', 'functions/check.js'], 'a function file is kept');
     assert.deepStrictEqual([out.name, out.capabilities], ['Pizza poll', ['data', 'profile']]);
     assert.strictEqual(post({ name: 'x', files: [{ path: 'app.js', content: 'alert(1)' }] }), null, 'no index.html: no space');
     assert.strictEqual(post({ name: 'x', files: [{ path: 'index.html', content: 'just words' }] }), null, 'an index.html with no page in it: no space');
