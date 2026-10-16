@@ -18,6 +18,7 @@ t.test('the builder\'s prompt: the SDK reference, and the current files when cha
     assert.match(sys, /<script src="\/_openvibe\/sdk\.js"><\/script>/);
     assert.match(sys, /OV\.items\.set\(collection, value\)/);
     assert.match(sys, /never ask for passwords, payment details/);
+    assert.match(sys, /Phones first: at 360 px wide nothing is squeezed/);
     const prep = PREPARE['space.app.build']({ prompt: 'a poll about pizza' });
     assert.ok(prep.jsonSchema && prep.jsonSchema.properties.files && !/maxLength|maxItems/.test(JSON.stringify(prep.jsonSchema)), 'the model answers in the uncapped, non-strict schema');
     const fresh = render(tpl('space.app.build').user_prompt, prep.vars);
