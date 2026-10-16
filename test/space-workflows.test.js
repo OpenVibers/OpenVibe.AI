@@ -19,7 +19,7 @@ t.test('the builder\'s prompt: the SDK reference, and the current files when cha
     assert.match(sys, /OV\.items\.set\(collection, value\)/);
     assert.match(sys, /never ask for passwords, payment details/);
     assert.match(sys, /Phones first: at 360 px wide nothing is squeezed/);
-    assert.match(sys, /functions\/<name>\.js \(name: a-z, 0-9 and "-"\) defines async function handle\(request, ov\)/, 'server functions');
+    assert.match(sys, /functions\/<name>\.js \(name: a-z, 0-9 and "-"\) is a plain script that defines async function handle\(request, ov\) \{ … \} \(no export, import, require or module\.exports\)/, 'server functions');
     assert.match(sys, /OV\.fn\(name, body\)/);
     assert.ok(!/There is no server code/.test(sys));
     const prep = PREPARE['space.app.build']({ prompt: 'a poll about pizza' });
