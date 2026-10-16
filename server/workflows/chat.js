@@ -10,7 +10,15 @@
  *                       (an alias of default.chat: the shared provider, falling over to the local model), text out.
  *
  * Chat renders the transcript itself (one line per message, oldest first), so the template takes plain strings.
+ *
+ *   chat.member.turn    the same member with tools (the owner's "modular AI conversation… tool calling"): Chat sends a
+ *                       Chat Completions request (its own system message, the transcript, the tools it can run: search
+ *                       the network, the time, dice, a household's pantry) and gets the choices back, tool calls
+ *                       included; Chat runs the tools and sends the results in the next turn, a few turns at most.
+ *                       The same passthrough as ai.complete (the prompt is not kept), in Chat's namespace and on its
+ *                       route, so Chat's grant and quota apply; with a person's own key it goes to their provider.
  */
+const core = require('./core');
 
 const STR = (n) => ({ type: 'string', maxLength: n });
 const OBJ = (props, required) => ({ type: 'object', additionalProperties: false, required: required || Object.keys(props), properties: props });
@@ -55,6 +63,14 @@ const workflows = [
         output_schema: OBJ({ text: { type: 'string' } }),
         steps: [{ kind: 'llm', template: 'chat.member.reply', operation: 'chat', output: 'text', params: { max_tokens: 600, temperature: 0.7, timeout_ms: 25000 } }],
         default_route: 'chat.member', cache_mode: 'none', metadata: { seed: true },
+    },
+    {
+        key: 'chat.member.turn', name: 'Chat: an AI member\'s turn, with tools', namespace: 'chat',
+        description: 'One turn of a room\'s AI member as a Chat Completions request with the tools Chat runs (network search, the time, dice, a household\'s pantry); the choices come back with any tool calls. The prompt is not kept.',
+        input_schema: core.workflows.find((w) => w.key === 'ai.complete').input_schema,
+        output_schema: core.workflows.find((w) => w.key === 'ai.complete').output_schema,
+        metadata: { passthrough: true, seed: true },
+        steps: [{ kind: 'complete', route: 'chat.member' }], cache_mode: 'none', default_route: 'chat.member',
     },
 ];
 
