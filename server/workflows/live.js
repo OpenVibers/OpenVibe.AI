@@ -143,6 +143,15 @@ const templates = [
         default_route: 'live.chat', owner: 'live', metadata: { json_name: 'arena_headline' },
     },
     {
+        key: 'live.arena.drama', name: "Live: an Arena Alert story",
+        description: "From arena/drama.js (arena_drama): one measured event on the site (a rage quit, a viewer crash, a meltdown, a beef verdict…) and its facts in; a drama-news headline and blurb out.",
+        input_schema: { type: 'object' },
+        output_schema: {"type": "object", "additionalProperties": false, "required": ["headline", "blurb", "alert"], "properties": {"headline": {"type": "string", "description": "≤ 110 chars"}, "blurb": {"type": "string", "description": "1-3 sentences, ≤ 420 chars"}, "alert": {"type": "integer", "minimum": 1, "maximum": 5}}},
+        system_prompt: "You are the anchor of ARENA ALERT, the streaming site's own drama-news desk: breaking-news hype, tabloid energy, savage roasts, lolcow commentary, the way internet drama channels cover streamers. Every story is about real streamers on this site and comes with FACTS measured by the site. Rules: (1) use only the facts given: never invent an event, a number, a motive, a relationship or an accusation; you may speculate only as an obvious joke framed as a question (\"rage quit?\"). (2) Roast what they did on stream, not who they are: no slurs about race, religion, sexuality, gender or disability, no sexual content, no threats, no doxxing, no self-harm jokes. Swearing is fine. (3) Quotes in the facts are their own words and may be quoted verbatim. Write: headline (≤ 110 chars, ALL the drama, may start with 🚨), blurb (1-3 punchy sentences that state the facts with numbers), alert (1-5: how big this is on this small site). Output only the JSON.",
+        user_prompt: "{{json payload}}",
+        default_route: 'live.chat', owner: 'live', metadata: { json_name: 'arena_drama' },
+    },
+    {
         key: 'live.clips.confirm', name: "Live: is this chat spike clip-worthy",
         description: "From auto-clip-job.js (auto_clip_confirm): scene notes, transcript, sounds and chat around a spike.",
         input_schema: { type: 'object' },
@@ -407,6 +416,14 @@ const structured = [
         input_schema: { type: 'object', required: ['kind'], properties: { kind: { enum: ['open', 'forfeit', 'score'] } } },
         output_schema: {"type": "object", "additionalProperties": false, "required": ["headline"], "properties": {"headline": {"type": "string", "description": "≤ 100 chars, tabloid, inflammatory but funny, names both fighters"}}},
         steps: [{ kind: 'llm', template: 'live.arena.headline', operation: 'generate', output: 'json', prepare: 'live.arena.headline', postprocess: 'live.arena.headline', params: { max_tokens: 80, temperature: 1.0, timeout_ms: 15000 } }],
+        cache_mode: 'none',
+    },
+    {
+        key: 'live.arena.drama', name: "Arena Alert story", namespace: 'live',
+        description: "arena/drama.js: one measured event (kind, the streamers, the facts, an optional quote) in; a grounded drama-news headline, blurb and alert level out.",
+        input_schema: { type: 'object', required: ['kind', 'facts'], properties: { kind: { type: 'string', maxLength: 40 }, streamer: { type: 'string', maxLength: 80 }, other: { type: ['string', 'null'], maxLength: 80 }, facts: { type: 'object' }, quote: { type: ['string', 'null'], maxLength: 400 } } },
+        output_schema: {"type": "object", "additionalProperties": false, "required": ["headline", "blurb", "alert"], "properties": {"headline": {"type": "string"}, "blurb": {"type": "string"}, "alert": {"type": "integer", "minimum": 1, "maximum": 5}}},
+        steps: [{ kind: 'llm', template: 'live.arena.drama', operation: 'generate', output: 'json', prepare: 'live.arena.drama', postprocess: 'live.arena.drama', params: { max_tokens: 220, temperature: 1.0, timeout_ms: 20000 } }],
         cache_mode: 'none',
     },
     {
