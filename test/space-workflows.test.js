@@ -21,6 +21,7 @@ t.test('the builder\'s prompt: the SDK reference, and the current files when cha
     assert.match(sys, /Phones first: at 360 px wide nothing is squeezed/);
     assert.match(sys, /functions\/<name>\.js \(name: a-z, 0-9 and "-"\) is a plain script that defines async function handle\(request, ov\) \{ … \} \(no export, import, require or module\.exports\)/, 'server functions');
     assert.match(sys, /OV\.fn\(name, body\)/);
+    assert.match(sys, /never request\.user or request\.ov/, 'the visitor is on ov, not on the request');
     assert.ok(!/There is no server code/.test(sys));
     const prep = PREPARE['space.app.build']({ prompt: 'a poll about pizza' });
     assert.ok(prep.jsonSchema && prep.jsonSchema.properties.files && !/maxLength|maxItems/.test(JSON.stringify(prep.jsonSchema)), 'the model answers in the uncapped, non-strict schema');
