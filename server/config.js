@@ -146,6 +146,10 @@ function load(env = process.env) {
             threads: Math.max(2, Math.min(8, int(env.WHISPER_THREADS, 4))),
             beam: Math.max(1, Math.min(8, int(env.WHISPER_BEAM, 1))),
             maxConcurrent: Math.max(1, int(env.WHISPER_MAX_CONCURRENT, 1)),
+            // NVIDIA Parakeet TDT (parakeet-cli, same whisper.cpp build): on when PARAKEET_MODEL names the ggml model.
+            parakeetBin: env.PARAKEET_BIN || null,
+            parakeetModel: env.PARAKEET_MODEL || null,
+            engine: env.ASR_ENGINE === 'whisper' ? 'whisper' : 'auto',
         },
 
         // ── Quotas seeded at boot (admin API edits them afterwards) ──
