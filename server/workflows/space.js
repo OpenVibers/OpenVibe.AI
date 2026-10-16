@@ -41,7 +41,7 @@ const SDK_REFERENCE = [
 /** Space functions (OpenVibe.Space server/spaces/functions.js): code that runs on the server, not in the page. */
 const FUNCTIONS_REFERENCE = [
     'Server functions, only when the idea needs code the visitor must not see or change (hidden answers, a counter every visitor shares, checking a move or a score before it is saved, a page put together on the server):',
-    '- A file functions/<name>.js (name: a-z, 0-9 and "-") defines async function handle(request, ov). The page calls it with await OV.fn("<name>", body); a link or form may also use /api/<name>.',
+    '- A file functions/<name>.js (name: a-z, 0-9 and "-") is a plain script that defines async function handle(request, ov) { … } (no export, import, require or module.exports). The page calls it with await OV.fn("<name>", body); a link or form may also use /api/<name>.',
     '- request: { method, path, query, headers, body }. ov.user (the signed-in visitor or null), ov.items.list/add/set/remove (the shared lists; adds are the visitor\'s when signed in, otherwise the space\'s), ov.store.get/set/remove (the space\'s own server storage that visitors cannot read, values up to 16 KB), ov.ai.ask(text) (a signed-in visitor), console.log.',
     '- handle returns any JSON value, a string (HTML or text), or { status, body }. It runs in a sandbox: plain modern JavaScript, no require/import, fetch, timers, files or packages, about 1 s of computing and 100 ov calls per request.',
 ].join('\n');
