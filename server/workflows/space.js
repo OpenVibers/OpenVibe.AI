@@ -137,10 +137,14 @@ function cleanBuild(out, { synthetic = false } = {}) {
     };
 }
 
+// The schema the model answers in: the output's shape without its length caps, and not strict. In strict mode the
+// provider's constrained decoding of a whole app (one string of ~15,000 characters) spent the budget reasoning and
+// answered nothing (finish_reason "length", empty content, 2026-10-16); the caps are enforced by cleanBuild instead.
+const uncapped = (schema) => JSON.parse(JSON.stringify(schema, (k, v) => (k === 'maxLength' || k === 'maxItems' ? undefined : v)));
 const PREPARE = {
     'space.app.build'(input) {
         const current = (input.current || []).map((f) => `--- ${f.path} ---\n${f.content}`).join('\n\n');
-        return { vars: { prompt: input.prompt, name: input.name || '', current } };
+        return { vars: { prompt: input.prompt, name: input.name || '', current }, jsonSchema: uncapped(workflows.find((w) => w.key === 'space.app.build').output_schema) };
     },
 };
 // A JSON answer that came back as text (a fenced block, or prose around the object).
