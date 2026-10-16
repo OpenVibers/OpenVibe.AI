@@ -65,6 +65,7 @@ EXAMPLES['live.viewers.clone'] = { name: 'bob', overview: 'Hypes every build.', 
 EXAMPLES['live.arena.persona'] = { facts: { name: 'Ann', handle: 'ann', category: 'desktop', ratings: { heat: 70 }, things_they_said_on_stream: ['this borrow checker hates me'], roster_rivals: ['bob'] } };
 EXAMPLES['live.arena.quotes'] = { lines: ['this borrow checker hates me and I hate it back', 'chat you are all backseat compilers', 'I have never been this cooked'] };
 EXAMPLES['live.arena.headline'] = { kind: 'open', a: 'ann', b: 'bob', line: 'bob streams to his own alt accounts', rematch: false };
+EXAMPLES['live.arena.drama'] = { kind: 'rage_quit', streamer: 'bob', other: null, facts: { minutes_live: 6, usual_minutes: 140, last_title: 'ranked grind' }, quote: 'this game is rigged' };
 EXAMPLES['live.clips.confirm'] = { scene: ['streamer jumps up cheering'], transcript: [{ t: 94, text: 'IT COMPILES' }], sounds: [{ t: 95, label: 'Cheering', confidence: 0.8 }], chat: ['LETS GO', 'poggers'] };
 EXAMPLES['live.chat.global'] = { window_label: 'past 3 hours', prior_memory: 'croutons are a running joke', recent_labels: ['the crouton war'], messages: [{ mins_ago: 12, where: 'global', author: 'goosely', kind: null, text: 'croutons are soup confetti' }, { mins_ago: 3, where: '#ann', author: 'bob', kind: 'emote', text: 'waves' }] };
 EXAMPLES['live.chat.profile'] = { subject_kind: 'relay', name: 'KickFan', platform: 'kick', recent_24h: false, seen: 0, prior_memory: '', messages: [{ mins_ago: 2000, author: 'KickFan', text: 'hello from kick' }] };

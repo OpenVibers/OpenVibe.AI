@@ -118,6 +118,9 @@ const PREPARE = {
     'live.arena.headline'(input) {
         return { vars: { payload: input } };
     },
+    'live.arena.drama'(input) {
+        return { vars: { payload: input } };
+    },
     'live.clips.confirm'(input) {
         const clean = (t, n) => String(t || '').replace(/\s+/g, ' ').trim().slice(0, n);
         return { vars: {
@@ -340,6 +343,12 @@ const POSTPROCESS = {
     'live.arena.headline'(r) {
         const j = r.json || parseJsonLoose(r.text);
         return j && j.headline ? { headline: String(j.headline).slice(0, 120) } : null;
+    },
+    'live.arena.drama'(r) {
+        const j = r.json || parseJsonLoose(r.text);
+        if (!j || !j.headline || !j.blurb) return null;
+        const alert = Math.min(5, Math.max(1, Math.round(Number(j.alert) || 1)));
+        return { headline: String(j.headline).replace(/\s+/g, ' ').trim().slice(0, 130), blurb: String(j.blurb).replace(/\s+/g, ' ').trim().slice(0, 480), alert };
     },
     'live.clips.confirm'(r) {
         const j = r.json || parseJsonLoose(r.text);
