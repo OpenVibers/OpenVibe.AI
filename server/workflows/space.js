@@ -33,8 +33,17 @@ const SDK_REFERENCE = [
     '- OV.items.remove(collection, id): removes the visitor\'s own item (the space\'s owner may remove any).',
     '- OV.kv.get(key), OV.kv.set(key, value), OV.kv.remove(key): the signed-in visitor\'s private storage in this space (values up to 16 KB).',
     '- OV.ai.ask(text or { messages: [{ role: "user" | "assistant", content }] }): an answer from OpenVibe AI that follows the space\'s instructions (signed in; it counts against the visitor\'s daily AI allowance).',
+    '- OV.fn(name, body): runs the space\'s server function functions/<name>.js (a POST with body as JSON; OV.fn(name) alone is a GET) and returns what it answered.',
     'Every call returns a Promise. Failures are Errors with a .code: "auth.required" (call OV.signIn()), "quota" (try later) or another code: show a short friendly message.',
     'Collection names and keys: 1-64 characters of letters, digits, "-", "_" and ".".',
+].join('\n');
+
+/** Space functions (OpenVibe.Space server/spaces/functions.js): code that runs on the server, not in the page. */
+const FUNCTIONS_REFERENCE = [
+    'Server functions, only when the idea needs code the visitor must not see or change (hidden answers, a counter every visitor shares, checking a move or a score before it is saved, a page put together on the server):',
+    '- A file functions/<name>.js (name: a-z, 0-9 and "-") defines async function handle(request, ov). The page calls it with await OV.fn("<name>", body); a link or form may also use /api/<name>.',
+    '- request: { method, path, query, headers, body }. ov.user (the signed-in visitor or null), ov.items.list/add/set/remove (the shared lists; adds are the visitor\'s when signed in, otherwise the space\'s), ov.store.get/set/remove (the space\'s own server storage that visitors cannot read, values up to 16 KB), ov.ai.ask(text) (a signed-in visitor), console.log.',
+    '- handle returns any JSON value, a string (HTML or text), or { status, body }. It runs in a sandbox: plain modern JavaScript, no require/import, fetch, timers, files or packages, about 1 s of computing and 100 ov calls per request.',
 ].join('\n');
 
 const templates = [
@@ -46,9 +55,10 @@ const templates = [
             'You build "spaces" for OpenVibe.Space: small, complete web apps that run in the browser at their own address and use the visitor\'s OpenVibe account through the OpenVibe SDK.',
             '',
             'The platform:',
-            '- Static files only: HTML, CSS and JavaScript. There is no server code. The page may fetch only its own files and the SDK\'s API; scripts, styles and fonts may also come from cdnjs.cloudflare.com, cdn.jsdelivr.net, unpkg.com and Google Fonts (always an exact, pinned version).',
+            '- HTML, CSS and JavaScript that run in the browser, plus optional server functions (below). The page may fetch only its own files, its functions and the SDK\'s API; scripts, styles and fonts may also come from cdnjs.cloudflare.com, cdn.jsdelivr.net, unpkg.com and Google Fonts (always an exact, pinned version).',
             '- Storage, sign-in and AI come from the SDK:',
             SDK_REFERENCE,
+            FUNCTIONS_REFERENCE,
             '',
             'How you build:',
             '- Prefer ONE self-contained index.html with inline <style> and <script>. Use more files only when asked; never more than 6, and index.html is always one of them.',
@@ -56,7 +66,7 @@ const templates = [
             '- Make it look good: a deliberate visual style that fits the idea, readable on a phone and a desktop, light and dark (prefers-color-scheme), visible focus, labelled inputs, enough contrast.',
             '- Phones first: at 360 px wide nothing is squeezed into narrow columns (a header\'s title, text and account box stack vertically below about 560 px), tap targets are at least 44 px, and the main action is visible without scrolling. An avatar image gets an onerror fallback (the initial on a coloured circle).',
             '- Keep the visitor safe: never ask for passwords, payment details or private information; no tracking, analytics or ads; do not imitate a real company or person; nothing sexual involving minors, no hate, no malware.',
-            '- If the request needs something the platform cannot do (server code, another site\'s API, payments), build the closest honest version and say what is missing in the description.',
+            '- If the request needs something the platform cannot do (another site\'s API, payments, work that runs on its own or for long), build the closest honest version and say what is missing in the description.',
             '- When current files are given, change them as asked and keep everything else working; return every file of the space, changed or not.',
             '',
             'Answer with JSON only:',
@@ -160,4 +170,4 @@ const POSTPROCESS = {
     'space.app.build'(r) { return cleanBuild(r.json || parseLoose(r.text), { synthetic: r.synthetic }); },
 };
 
-module.exports = { templates, workflows, PREPARE, POSTPROCESS, SDK_REFERENCE, CAPABILITIES, cleanBuild, cleanPath };
+module.exports = { templates, workflows, PREPARE, POSTPROCESS, SDK_REFERENCE, FUNCTIONS_REFERENCE, CAPABILITIES, cleanBuild, cleanPath };
