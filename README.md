@@ -419,6 +419,13 @@ the service boots without Valkey; with it on, production refuses to boot without
   the tools Chat runs) passed through like `ai.complete` (the prompt is not kept) on route `chat.member`, so Chat's grant
   and quota apply and a person's own key reaches only their provider; the choices come back with any tool calls, and
   Chat sends the results in its next turn.
+- **Space's spaces** ([server/workflows/space.js](server/workflows/space.js), namespace `space`): `space.app.build`
+  is the AI builder of OpenVibe.Space. From what a person asks for (and a space's current files when changing one),
+  it returns a working space: name, description, the instructions its AI follows, the SDK features it uses, and up to
+  six files with an `index.html`. Paths are relative and safe, and an answer without a real page is no answer. It runs
+  on route `space.build` (the creative model, 180 s, 16,000 output tokens), on behalf of the builder. `space.app.ask`
+  is a space's own AI (`OV.ai.ask` in the space SDK): the maker's instructions under the platform's rules, on route
+  `space.ask` (an alias of `default.chat`), on behalf of the visitor, so it counts against their daily allowance.
 
   `overview.source` says which (`local_model`, `paid`, `extractive`), and `gaps` lists what is missing (no local
   model, no speech-to-text, no budget). The output is not cached: callers keep it. Live's grant names

@@ -149,7 +149,9 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
             cacheKey: `${wf.key}:${wf.version}`,
         };
         const exec = await pool.execute(route, step.operation || 'chat', req, { ...ctx, routeKey: route.key, routeVersion: route.version, promptHash: sha256({ s: system, u: user, i: image ? image.base64.length : 0 }) });
-        const r = { text: exec.result.text || '', json: exec.result.json || null };
+        // synthetic: the stub answered (no provider configured, or a test); a postprocess that checks an answer's
+        // substance (a space needs a real index.html) lets a synthetic answer through in the right shape.
+        const r = { text: exec.result.text || '', json: exec.result.json || null, synthetic: Boolean(exec.synthetic) };
         if (step.output === 'json' && !r.json) r.json = parseJsonLoose(r.text);
         let output;
         if (step.postprocess) {

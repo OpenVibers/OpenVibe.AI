@@ -77,6 +77,9 @@ EXAMPLES['live.stream.titles'] = { summaries: ['Fixed a borrow checker bug live'
 EXAMPLES['live.moments.rank'] = { vods: [{ title: 'Rust night', overview: 'the build finally compiles', views: 30, clips: 2, peak_viewers: 5 }, { title: 'Chill', overview: 'sitting at a desk', views: 3, clips: 0, peak_viewers: 1 }], want: 2 };
 EXAMPLES['live.hero.slogans'] = { global: 'Chat argued about croutons all day.', users: [{ name: 'goosely', text: 'always defends croutons' }], streamers: [{ name: 'ann', text: 'codes rust at night' }], vods: [{ name: 'Rust night', text: 'the build finally compiles' }], usernames: ['goosely', 'ann'], count: 20 };
 EXAMPLES['live.easter_egg'] = { vibe: 'croutons' };
+// Space's spaces (server/workflows/space.js): the builder, changing a space, and a space's own AI.
+EXAMPLES['space.app.build'] = { prompt: 'A guestbook where people sign in and leave a one-line note', name: 'Guestbook', current: [{ path: 'index.html', content: '<!doctype html><title>Guestbook</title><script src="/_openvibe/sdk.js"></script>' }] };
+EXAMPLES['space.app.ask'] = { space: 'Pirate helper', instructions: 'Talk like a pirate.', transcript: 'visitor: hi\nai: Ahoy!', message: 'What is a good name for a parrot?' };
 EXAMPLES['live.home.star'] = { recent_stars: ['bob'], previous_star: 'bob', candidates: [{ username: 'ann', name: 'Ann', language: 'en', last_14d: { sessions: 5, hours: 12 } }] };
 EXAMPLES['live.arena.judge_beef'] = { target_names: ['ann', 'Ann the Great'], target_as_transcribed: ['ann', 'an'], target_named_in_new_speech: true, how_the_name_was_matched: 'exact', what_speaker_already_said_about_target: null, new_speech: 'ann your stream is so boring even your bots left chat' };
 EXAMPLES['live.arena.judge_mic'] = { speech: 'chat you guys are the worst mods I have ever seen in my life' };
