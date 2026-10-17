@@ -193,7 +193,7 @@ const templates = [
         input_schema: { type: 'object' },
         output_schema: {"type": "object", "additionalProperties": false, "required": ["titles"], "properties": {"titles": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["index", "title"], "properties": {"index": {"type": "integer"}, "title": {"type": "string"}}}}}},
         system_prompt: "",
-        user_prompt: "Write a SHORT, catchy stream title for each livestream summary below — the way a real streamer titles a VOD: 3 to 6 words, punchy, no surrounding quotes, no trailing period. Match each stream's vibe.\n\n{{list}}\n\nReturn STRICT JSON only: {\"titles\": [{\"index\": <number>, \"title\": \"<3-6 word title>\"}]} with every item.",
+        user_prompt: "Write a SHORT, catchy stream title for each livestream summary below — the way a real streamer titles a VOD: 3 to 6 words, punchy, no surrounding quotes, no trailing period. Match each stream's vibe. Name what happens on the stream (the game, the activity, the topic), never what anyone looks like or wears (no shirts, hoodies, beanies, hats, glasses, headsets, beards, hair or faces).\n\n{{list}}\n\nReturn STRICT JSON only: {\"titles\": [{\"index\": <number>, \"title\": \"<3-6 word title>\"}]} with every item.",
         default_route: 'live.legacy', owner: 'live', metadata: { json_name: 'session_titles' },
     },
     {
