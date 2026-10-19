@@ -3,8 +3,6 @@
 //   live.moments.pick: the prepare hook formats the timeline, transcript and sounds as [m:ss] lines, names clip and
 //     chat signals, adds the flavor hint, and writes the "already used" line only when there is something to avoid;
 //     nothing to work from is no run; the postprocess refuses an answer without a time.
-//   live.arena.judge_beef / judge_mic: the user message is the same JSON object Live sent, keys in the same order;
-//     the system prompt and the JSON schema are Live's; an answer without a numeric quality is no answer.
 const assert = require('assert');
 const { suite } = require('./helpers');
 const { PREPARE, POSTPROCESS } = require('../server/workflows/hooks');
@@ -37,21 +35,6 @@ t.test('the answer is read like Live read it', () => {
     assert.deepStrictEqual(post({ text: 'Sure! {"t": 95.7, "title": "\\"It Compiles\\"", "desc": "He  jumps."}' }), { t: 95, title: 'It Compiles', desc: 'He jumps.' });
     assert.strictEqual(post({ text: '{"title": "no time"}' }), null);
     assert.strictEqual(post({ text: 'no json at all' }), null);
-});
-
-t.test('the Arena judges send what Live sent', () => {
-    const beef = live.templates.find((x) => x.key === 'live.arena.judge_beef');
-    const mic = live.templates.find((x) => x.key === 'live.arena.judge_mic');
-    assert.ok(beef && mic);
-    assert.match(beef.system_prompt, /^You judge live streamer-vs-streamer shit talk/);
-    assert.deepStrictEqual(beef.output_schema.required, ['about_target', 'aimed_at_target', 'quality', 'best_line', 'about', 'announcer', 'flagged']);
-    const input = { target_names: ['ann'], target_as_transcribed: ['an'], target_named_in_new_speech: false, how_the_name_was_matched: 'sound-alike', what_speaker_already_said_about_target: 'called her washed', new_speech: 'she is still washed' };
-    const user = render(beef.user_prompt, PREPARE['live.arena.judge_beef'](input).vars);
-    assert.strictEqual(user, JSON.stringify(input), 'the same object, keys in the same order');
-    assert.strictEqual(render(mic.user_prompt, PREPARE['live.arena.judge_mic']({ speech: 'x y' }).vars), JSON.stringify({ speech: 'x y' }));
-    const post = POSTPROCESS['live.arena.judge'];
-    assert.strictEqual(post({ json: { quality: 'high' } }), null);
-    assert.strictEqual(post({ json: { is_trash_talk: true, quality: 14.6 } }).quality, 10);
 });
 
 t.test('slogans, the daily secret and the star render as Live rendered them', () => {
@@ -102,18 +85,10 @@ t.test('chat analysis, person overviews, session titles and VOD ranking render a
     assert.strictEqual(POSTPROCESS['live.person.overview']({ text: 'Overview: A coder.' }).overview, 'A coder.');
 });
 
-t.test('Arena persona, quotes, headline and clip confirmation render as Live rendered them', () => {
+t.test('clip confirmation renders as Live rendered it', () => {
     const tp = (k) => live.templates.find((x) => x.key === k);
-    const facts = { name: 'Ann', numbers: { hours_live_90d: 3 } };
-    assert.strictEqual(render(tp('live.arena.persona').user_prompt, PREPARE['live.arena.persona']({ facts }).vars), `Write the Arena persona for this fighter. Facts (JSON):\n${JSON.stringify(facts)}`);
-    assert.match(tp('live.arena.persona').system_prompt, /^You write fighting-game "character select" bios/);
-    assert.strictEqual(render(tp('live.arena.quotes').user_prompt, PREPARE['live.arena.quotes']({ lines: ['a b', 'c'] }).vars), 'Lines (index: text):\n0: a b\n1: c');
-    const ctx = { kind: 'score', winner: 'ann', loser: 'bob', score_a: 3, score_b: 1 };
-    assert.strictEqual(render(tp('live.arena.headline').user_prompt, PREPARE['live.arena.headline'](ctx).vars), JSON.stringify(ctx));
     const clip = render(tp('live.clips.confirm').user_prompt, PREPARE['live.clips.confirm']({ scene: ['a  jump'], transcript: [{ t: 94, text: 'IT COMPILES' }], sounds: [{ t: 95, label: 'Cheering', confidence: 0.8 }], chat: [] }).vars);
     assert.match(clip, /ON SCREEN \(recent scene notes\):\n- a jump\n\nWHAT WAS SAID \(recent transcript\):\n- \[1:34\] IT COMPILES\n\nWHAT WAS HEARD \(non-speech sounds detected\):\n- \[1:35\] Cheering \(0\.80\)\n\nCHAT \(recent messages\):\n\(none\)\n\nReturn STRICT JSON only/);
-    assert.deepStrictEqual(POSTPROCESS['live.arena.quotes']({ json: { picks: [{ index: 5, why: 'x' }, { index: 1, why: 'y' }], walkout: 9, voice_verdict: 'v', mic_style: 'm' } }, { lines: ['a', 'b'] }), { picks: [{ index: 1, why: 'y' }], walkout: 1, voice_verdict: 'v', mic_style: 'm' });
-    assert.strictEqual(POSTPROCESS['live.arena.persona']({ json: { title: 'no name' } }), null);
     assert.deepStrictEqual(POSTPROCESS['live.clips.confirm']({ text: '{"clip": "yes", "title": " A  B "}' }), { clip: false, title: 'A B', desc: '' });
 });
 
@@ -150,7 +125,6 @@ t.test("a channel description is public prose: never about looks, no lists or la
     assert.match(tp('live.hero.slogans').user_prompt, /nothing crude or sexual, even when chat jokes that way, and skip usernames that look like keyboard mashes/);
     assert.match(tp('live.stream.describe_frame').user_prompt, /caption naming what happens, never what someone looks like or wears/);
     assert.match(tp('live.stream.titles').user_prompt, /never what anyone looks like or wears/);
-    assert.match(tp('live.arena.drama').system_prompt, /never guess a pronoun/);
     const out = POSTPROCESS['live.streamer.overview']({ text: '## Overview\n- Streamer handle: finditfixit (@finditfixit).\n- **Content:** repairs old TVs and radios\n- Tone: calm, patient\n\nAnn streams games: mostly Rust.' });
     assert.deepStrictEqual(out, { overview: 'finditfixit (@finditfixit). repairs old TVs and radios. calm, patient. Ann streams games: mostly Rust.' });
     assert.strictEqual(POSTPROCESS['live.streamer.overview']({ text: '## Overview\n' }), null, 'nothing but a heading is no overview');

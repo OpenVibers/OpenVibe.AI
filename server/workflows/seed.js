@@ -67,6 +67,24 @@ function providerRecords(config, env) {
     return out;
 }
 
+// Workflows and templates whose callers are gone: the Arena's (Live#264, 2026-10-19; it became The Rundown).
+const RETIRED = ['live.arena.persona', 'live.arena.quotes', 'live.arena.headline', 'live.arena.drama', 'live.arena.judge_beef', 'live.arena.judge_mic',
+    'live.arena.scene', 'live.arena.judge'];
+
+/** Retired with their callers: what is stored is archived, so nothing runs it and it leaves the admin lists. */
+async function retire({ registry, db, keys = RETIRED }) {
+    let n = 0;
+    for (const key of keys) {
+        for (const [kind, table] of [['workflow', 'workflows'], ['template', 'templates']]) {
+            for (const r of await db.prepare(`SELECT version FROM ${table} WHERE key = ? AND status <> 'archived'`).all(key)) {
+                await registry.setStatus(kind, key, r.version, 'archived', { actor: 'seed' });
+                n++;
+            }
+        }
+    }
+    return n;
+}
+
 async function seed({ registry, quotas, config, env = process.env, db }) {
     // Providers
     for (const p of providerRecords(config, env)) {
@@ -127,9 +145,9 @@ async function seed({ registry, quotas, config, env = process.env, db }) {
     await registry.seedVersioned('route', 'food.vision', { primary: { provider: 'shared', model: null }, fallbacks: [], options: {}, max_output_tokens: 1200, response_format: 'json', timeout_ms: 60000, alias_of: 'default.json' });
     // OpenVibe.Pics' alt text (pics.describe_image): JSON from an image, on the JSON pool like food.vision.
     await registry.seedVersioned('route', 'pics.vision', { primary: { provider: 'shared', model: null }, fallbacks: [], options: {}, max_output_tokens: 400, response_format: 'json', timeout_ms: 60000, alias_of: 'default.json' });
-    // Writing people read for fun (the Arena's drama desk, live.arena.drama): the chat pool with a stronger model as its
+    // Writing people read for fun (The Rundown's desk, live.rundown.*): the chat pool with a stronger model as its
     // authority (AI_CREATIVE_MODEL, gpt-5-mini on OpenAI's API by default; the shared default elsewhere). The nano default
-    // misspelled names and wrote flat copy (2026-10-16); the desk makes at most ~20 short calls an hour.
+    // misspelled names and wrote flat copy (2026-10-16); the desk makes at most 40 calls an hour.
     const creativeModel = env.AI_CREATIVE_MODEL || (shared && shared.kind === 'openai' && /api\.openai\.com/i.test(shared.base_url || '') ? 'gpt-5-mini' : null);
     if (creativeModel && !await registry.getModel('shared', creativeModel)) await registry.upsertModel({ provider_key: 'shared', model_key: creativeModel, type: 'chat', supports: { json: true, vision: true } }, { actor: 'seed' });
     await registry.seedVersioned('route', 'live.creative', pool(ROLE_TIMEOUT.chat, creativeModel ? { constraints: { objective: 'correctness', latency_class: 'interactive', model: creativeModel, authority: `shared:${creativeModel}` } } : {}));
@@ -149,6 +167,7 @@ async function seed({ registry, quotas, config, env = process.env, db }) {
         const { key, ...def } = w;
         await registry.seedVersioned('workflow', key, { description: null, default_route: null, cache_ttl_sec: null, metadata: {}, ...def });
     }
+    await retire({ registry, db });
 
     // Quotas
     const seedQuota = async (q) => {
@@ -160,4 +179,4 @@ async function seed({ registry, quotas, config, env = process.env, db }) {
     if (config.quotas.serviceRequestsPerDay > 0) await seedQuota({ scope_type: 'service', scope_id: '*', window: 'day', max_requests: config.quotas.serviceRequestsPerDay });
 }
 
-module.exports = { seed, providerRecords, HISTORICAL_ROUTES };
+module.exports = { seed, retire, providerRecords, HISTORICAL_ROUTES, RETIRED };
