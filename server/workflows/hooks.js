@@ -395,7 +395,9 @@ const POSTPROCESS = {
                 quotes: (Array.isArray(x.quotes) ? x.quotes : []).filter((q) => q && one(q.text, 400)).slice(0, 2).map((q) => ({ t: at(q.t), text: one(q.text, 400), en: one(q.en, 400) || null })),
             };
         });
-        return { segments };
+        const tset = new Set(ts.map((t) => Math.round(t * 10)));
+        const others = [...new Set((Array.isArray(j.others) ? j.others : []).map(Number).filter((t) => Number.isFinite(t) && tset.has(Math.round(t * 10))))].slice(0, 400);
+        return { others, segments };
     },
     'live.rundown.episode'(r, input) {
         const j = r.json || parseJsonLoose(r.text);
