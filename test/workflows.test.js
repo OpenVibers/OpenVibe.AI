@@ -62,10 +62,6 @@ EXAMPLES['live.viewers.plan'] = { stable: 'Stream: Rust night by ann. Roster: go
 EXAMPLES['live.viewers.reply'] = { stable: 'Stream: Rust night by ann. Roster: goosebot.', situation: 'ann is celebrating a build.', bot: 'goosebot', streamer_line: 'goosebot what do you think', max_words: 18 };
 EXAMPLES['live.viewers.fold'] = { channel_memory: 'croutons', personas: [{ username: 'goosebot', memory: '', lines: ['honk', 'croutons are soup confetti', 'compile faster'] }] };
 EXAMPLES['live.viewers.clone'] = { name: 'bob', overview: 'Hypes every build.', memory: '', samples: ['LETS GO', 'W'] };
-EXAMPLES['live.arena.persona'] = { facts: { name: 'Ann', handle: 'ann', category: 'desktop', ratings: { heat: 70 }, things_they_said_on_stream: ['this borrow checker hates me'], roster_rivals: ['bob'] } };
-EXAMPLES['live.arena.quotes'] = { lines: ['this borrow checker hates me and I hate it back', 'chat you are all backseat compilers', 'I have never been this cooked'] };
-EXAMPLES['live.arena.headline'] = { kind: 'open', a: 'ann', b: 'bob', line: 'bob streams to his own alt accounts', rematch: false };
-EXAMPLES['live.arena.drama'] = { kind: 'rage_quit', streamer: 'bob', other: null, what: 'bob usually goes 140 minutes. Today it lasted 6.', facts: { minutes_live: 6, usual_minutes: 140, last_title: 'ranked grind' }, quote: 'this game is rigged' };
 EXAMPLES['live.rundown.segment'] = { streamer: 'goosely', title: 'Tech news', category: 'Science & Technology', topics: ['Supermarket fridges hacked in France'], earlier: 'Opened with a router rant.', lines: [{ t: 1081, text: 'The person that deals with refrigeration, I am not going to say is stupid.' }, { t: 1096, text: 'Having the internet inside of a refrigerator is a bad idea.' }] };
 EXAMPLES['live.rundown.episode'] = { streamer: 'goosely', title: 'Tech news', category: 'Science & Technology', minutes: 140, peak_viewers: 6, chat_messages: 210, segments: [{ t: 1081, topic: 'Supermarket fridges hacked in France', title: 'Fridges on the internet', what: 'They read about hacked supermarket fridges.', take: 'Internet fridges are a bad idea.', quotes: ['Having the internet inside of a refrigerator is a bad idea.'] }] };
 EXAMPLES['live.rundown.topic'] = { topic: 'Supermarket fridges hacked in France', takes: [{ streamer: 'goosely', when: '2026-10-18', what: 'They read about hacked supermarket fridges.', take: 'Internet fridges are a bad idea.', quote: 'Having the internet inside of a refrigerator is a bad idea.' }] };
@@ -84,8 +80,6 @@ EXAMPLES['live.easter_egg'] = { vibe: 'croutons' };
 EXAMPLES['space.app.build'] = { prompt: 'A guestbook where people sign in and leave a one-line note', name: 'Guestbook', current: [{ path: 'index.html', content: '<!doctype html><title>Guestbook</title><script src="/_openvibe/sdk.js"></script>' }] };
 EXAMPLES['space.app.ask'] = { space: 'Pirate helper', instructions: 'Talk like a pirate.', transcript: 'visitor: hi\nai: Ahoy!', message: 'What is a good name for a parrot?' };
 EXAMPLES['live.home.star'] = { recent_stars: ['bob'], previous_star: 'bob', candidates: [{ username: 'ann', name: 'Ann', language: 'en', last_14d: { sessions: 5, hours: 12 } }] };
-EXAMPLES['live.arena.judge_beef'] = { target_names: ['ann', 'Ann the Great'], target_as_transcribed: ['ann', 'an'], target_named_in_new_speech: true, how_the_name_was_matched: 'exact', what_speaker_already_said_about_target: null, new_speech: 'ann your stream is so boring even your bots left chat' };
-EXAMPLES['live.arena.judge_mic'] = { speech: 'chat you guys are the worst mods I have ever seen in my life' };
 EXAMPLES['live.moments.pick'] = { title: 'Rust night', flavor: 'clip', timeline: [{ t: 12, text: 'the build fails' }, { t: 95, text: 'streamer jumps up cheering' }], transcript: [{ t: 94, text: 'IT COMPILES' }], sounds: [{ t: 96, label: 'Cheering' }], clipped: [95], spikes: [96], avoid: [300] };
 
 const t = suite('workflows');
@@ -112,6 +106,16 @@ t.test('boot seeds every required workflow key', async () => {
     for (const k of ['default.chat', 'default.json', 'default.embedding', 'default.image', 'wiki.generate', 'blog.draft', 'news.summarize', 'reviews.summarize', 'deals.enrich', 'coupons.extract', 'trade.summarize', 'codes.generate_docs', 'games.generate_lore', 'tools.describe', 'moderation.classify', 'food.suggest', 'food.vision', 'rent.screen', 'chat.member']) {
         assert.ok(await h.registry.getRoute(k), `missing historical route ${k}`);
     }
+});
+
+t.test("a retired workflow (the Arena's, Live#264) is never seeded and what is stored is archived", async () => {
+    const { retire, RETIRED } = require('../server/workflows/seed');
+    const keys = (await h.registry.listWorkflows()).map((w) => w.key);
+    assert.ok(!RETIRED.some((k) => keys.includes(k)), 'a fresh database has none of them');
+    const calls = [];
+    const db = { prepare: (sql) => ({ all: async (key) => (/FROM workflows/.test(sql) && key === 'live.arena.drama' ? [{ version: 1 }, { version: 2 }] : []) }) };
+    assert.strictEqual(await retire({ registry: { setStatus: async (...a) => calls.push(a.slice(0, 4)) }, db }), 2);
+    assert.deepStrictEqual(calls, [['workflow', 'live.arena.drama', 1, 'archived'], ['workflow', 'live.arena.drama', 2, 'archived']], 'every stored version is archived');
 });
 
 t.test('every workflow has compiling, versioned input and output schemas and an example', async () => {

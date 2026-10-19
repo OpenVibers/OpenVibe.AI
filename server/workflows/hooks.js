@@ -115,24 +115,6 @@ const PREPARE = {
     'live.viewers.clone'(input) {
         return { vars: { name: input.name, overview: input.overview || '', memory: input.memory || '', samples: (input.samples || []).length ? `- ${input.samples.join('\n- ')}` : '' } };
     },
-    'live.arena.persona'(input) {
-        return { vars: { facts: input.facts } };
-    },
-    'live.arena.quotes'(input) {
-        // Indexes can only point at the lines given.
-        const index = { type: 'integer', minimum: 0, maximum: input.lines.length - 1 };
-        const jsonSchema = { type: 'object', additionalProperties: false, required: ['picks', 'walkout', 'voice_verdict', 'mic_style'], properties: {
-            picks: { type: 'array', minItems: 1, maxItems: 6, items: { type: 'object', additionalProperties: false, required: ['index', 'why'], properties: { index, why: { type: 'string' } } } },
-            walkout: index, voice_verdict: { type: 'string' }, mic_style: { type: 'string' },
-        } };
-        return { vars: { lines: input.lines.map((t, i) => `${i}: ${t}`).join('\n') }, jsonSchema };
-    },
-    'live.arena.headline'(input) {
-        return { vars: { payload: input } };
-    },
-    'live.arena.drama'(input) {
-        return { vars: { payload: input } };
-    },
     // The Rundown (Live rundown/desk.js): transcript lines as "[seconds] text", the known topics one per line.
     'live.rundown.segment'(input) {
         const clean = (t, n) => String(t || '').replace(/\s+/g, ' ').trim().slice(0, n);
@@ -204,16 +186,6 @@ const PREPARE = {
     },
     'live.home.star'(input) {
         return { vars: { payload: { recent_stars: input.recent_stars || [], previous_star: input.previous_star || null, candidates: input.candidates } } };
-    },
-    // The Arena judges send what Live sent before, as one JSON object, in the same order.
-    'live.arena.judge_beef'(input) {
-        return { vars: { payload: {
-            target_names: input.target_names, target_as_transcribed: input.target_as_transcribed || [], target_named_in_new_speech: input.target_named_in_new_speech !== false,
-            how_the_name_was_matched: input.how_the_name_was_matched || 'exact', what_speaker_already_said_about_target: input.what_speaker_already_said_about_target || null, new_speech: input.new_speech,
-        } } };
-    },
-    'live.arena.judge_mic'(input) {
-        return { vars: { payload: { speech: input.speech } } };
     },
     'live.moments.pick'(input) {
         const lines = (list, max) => (list || []).map((x) => `[${mmss(Number(x.t) || 0)}] ${oneLine(x.text || x.label, max)}`).join('\n');
@@ -356,28 +328,6 @@ const POSTPROCESS = {
         const t = String(r.text || '').trim();
         return t ? { text: t.slice(0, 1000) } : null;
     },
-    'live.arena.persona'(r) {
-        const j = r.json || parseJsonLoose(r.text);
-        return j && typeof j === 'object' && j.fighter_name ? j : null;
-    },
-    'live.arena.quotes'(r, input) {
-        const j = r.json || parseJsonLoose(r.text);
-        if (!j || !Array.isArray(j.picks)) return null;
-        const ok = (i) => Number.isInteger(Number(i)) && Number(i) >= 0 && Number(i) < input.lines.length;
-        const picks = j.picks.filter((p) => p && ok(p.index)).slice(0, 6).map((p) => ({ index: Number(p.index), why: String(p.why || '').slice(0, 200) }));
-        if (!picks.length) return null;
-        return { picks, walkout: ok(j.walkout) ? Number(j.walkout) : picks[0].index, voice_verdict: String(j.voice_verdict || '').slice(0, 400), mic_style: String(j.mic_style || '').slice(0, 400) };
-    },
-    'live.arena.headline'(r) {
-        const j = r.json || parseJsonLoose(r.text);
-        return j && j.headline ? { headline: String(j.headline).slice(0, 120) } : null;
-    },
-    'live.arena.drama'(r) {
-        const j = r.json || parseJsonLoose(r.text);
-        if (!j || !j.headline || !j.blurb) return null;
-        const alert = Math.min(5, Math.max(1, Math.round(Number(j.alert) || 1)));
-        return { headline: String(j.headline).replace(/\s+/g, ' ').trim().slice(0, 130), blurb: String(j.blurb).replace(/\s+/g, ' ').trim().slice(0, 480), alert };
-    },
     // The Rundown: every field clamped; a segment without a topic, title or what is dropped; times stay inside the lines'.
     'live.rundown.segment'(r, input) {
         const j = r.json || parseJsonLoose(r.text);
@@ -470,12 +420,6 @@ const POSTPROCESS = {
         const j = r.json || parseJsonLoose(r.text);
         if (!j || !j.username) return null;
         return { username: String(j.username).slice(0, 64), headline: String(j.headline || '').trim().slice(0, 60), reason: String(j.reason || '').trim().slice(0, 170) };
-    },
-    // A judgement without a numeric quality is no answer (Live then uses its own heuristic).
-    'live.arena.judge'(r) {
-        const j = r.json || parseJsonLoose(r.text);
-        if (!j || typeof j !== 'object' || typeof j.quality !== 'number') return null;
-        return { ...j, quality: Math.max(0, Math.min(10, Math.round(j.quality))) };
     },
     'live.moments.pick'(r) {
         const j = r.json || parseJsonLoose(r.text);
