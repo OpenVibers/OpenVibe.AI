@@ -166,6 +166,10 @@ t.test('The Rundown: the segment prompt lists the lines and known topics; its ou
     assert.match(seg.system_prompt, /never a sentence they read out from an article/, 'a line read aloud is not theirs');
     assert.match(seg.system_prompt, /never "the streamer" or "Streamer"/);
     assert.match(seg.system_prompt, /theatrical one-liners in another/, 'a game character\'s English lines in a Greek stream are not the streamer');
+    for (const k of ['live.rundown.segment', 'live.rundown.episode', 'live.rundown.topic']) {
+        assert.match(tp(k).system_prompt, /Privacy: never write or quote where anyone is, lives or will be/, `${k}: no places, schools or time zones`);
+        assert.match(tp(k).system_prompt, /seems to be under 18/, `${k}: kind to minors`);
+    }
     const input = { streamer: 'goosely', title: 'News', category: 'Tech', topics: ['Supermarket fridges hacked in France'], lines: [{ t: 1081, text: 'The person that deals with refrigeration, I\'m not going to say is stupid.' }, { t: 1096.6, text: 'This is why having the internet inside of a refrigerator is a bad idea.' }] };
     const user = render(seg.user_prompt, PREPARE['live.rundown.segment'](input).vars);
     assert.ok(user.includes('Streamer: goosely') && user.includes('- Supermarket fridges hacked in France') && user.includes('[1097] This is why having the internet'), user);
