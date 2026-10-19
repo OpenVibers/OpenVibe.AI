@@ -133,6 +133,22 @@ const PREPARE = {
     'live.arena.drama'(input) {
         return { vars: { payload: input } };
     },
+    // The Rundown (Live rundown/desk.js): transcript lines as "[seconds] text", the known topics one per line.
+    'live.rundown.segment'(input) {
+        const clean = (t, n) => String(t || '').replace(/\s+/g, ' ').trim().slice(0, n);
+        return { vars: {
+            streamer: clean(input.streamer, 80), title: clean(input.title, 200) || '(none)', category: clean(input.category, 80) || '(none)',
+            topics: (input.topics || []).slice(0, 60).map((t) => `- ${clean(t, 120)}`).join('\n') || '(none yet)',
+            earlier: clean(input.earlier, 800) || '(this is the start)',
+            lines: (input.lines || []).map((x) => `[${Math.round(Number(x.t) || 0)}] ${clean(x.text, 1000)}`).join('\n'),
+        } };
+    },
+    'live.rundown.episode'(input) {
+        return { vars: { payload: input } };
+    },
+    'live.rundown.topic'(input) {
+        return { vars: { payload: input } };
+    },
     'live.clips.confirm'(input) {
         const clean = (t, n) => String(t || '').replace(/\s+/g, ' ').trim().slice(0, n);
         return { vars: {
@@ -361,6 +377,42 @@ const POSTPROCESS = {
         if (!j || !j.headline || !j.blurb) return null;
         const alert = Math.min(5, Math.max(1, Math.round(Number(j.alert) || 1)));
         return { headline: String(j.headline).replace(/\s+/g, ' ').trim().slice(0, 130), blurb: String(j.blurb).replace(/\s+/g, ' ').trim().slice(0, 480), alert };
+    },
+    // The Rundown: every field clamped; a segment without a topic, title or what is dropped; times stay inside the lines'.
+    'live.rundown.segment'(r, input) {
+        const j = r.json || parseJsonLoose(r.text);
+        if (!j || !Array.isArray(j.segments)) return null;
+        const one = (t, n) => String(t == null ? '' : t).replace(/\s+/g, ' ').trim().slice(0, n);
+        const ts = (input && input.lines || []).map((x) => Number(x.t)).filter(Number.isFinite);
+        const lo = ts.length ? Math.min(...ts) : 0, hi = ts.length ? Math.max(...ts) : Infinity;
+        const at = (v) => { const n = Number(v); return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : lo; };
+        const KINDS = ['news', 'games', 'tech', 'life', 'music', 'sports', 'money', 'internet', 'chat', 'other'];
+        const segments = j.segments.filter((x) => x && one(x.topic, 120) && one(x.title, 90) && one(x.what, 500)).slice(0, 4).map((x) => {
+            const start = at(x.start), end = Math.max(start, at(x.end));
+            return {
+                start, end, topic: one(x.topic, 120), kind: KINDS.includes(x.kind) ? x.kind : 'other', title: one(x.title, 90), what: one(x.what, 500),
+                take: one(x.take, 300) || null, quip: one(x.quip, 220), score: Math.min(5, Math.max(1, Math.round(Number(x.score) || 1))),
+                quotes: (Array.isArray(x.quotes) ? x.quotes : []).filter((q) => q && one(q.text, 400)).slice(0, 2).map((q) => ({ t: at(q.t), text: one(q.text, 400), en: one(q.en, 400) || null })),
+            };
+        });
+        return { segments };
+    },
+    'live.rundown.episode'(r, input) {
+        const j = r.json || parseJsonLoose(r.text);
+        if (!j || !j.title || !j.recap) return null;
+        const one = (t, n) => String(t == null ? '' : t).replace(/\s+/g, ' ').trim().slice(0, n);
+        const n = (input && input.segments || []).length;
+        const seen = new Set();
+        const chapters = (Array.isArray(j.chapters) ? j.chapters : []).filter((c) => c && Number.isInteger(c.index) && c.index >= 0 && c.index < n && !seen.has(c.index) && seen.add(c.index) && one(c.title, 60))
+            .slice(0, 10).map((c) => ({ index: c.index, title: one(c.title, 60) }));
+        const recap = String(j.recap).split(/\n\s*\n/).map((p) => p.replace(/\s+/g, ' ').trim()).filter(Boolean).slice(0, 4).join('\n\n').slice(0, 1200);
+        return { title: one(j.title, 80), logline: one(j.logline, 220), recap, chapters };
+    },
+    'live.rundown.topic'(r) {
+        const j = r.json || parseJsonLoose(r.text);
+        if (!j || !j.summary) return null;
+        const one = (t, n) => String(t == null ? '' : t).replace(/\s+/g, ' ').trim().slice(0, n);
+        return { headline: one(j.headline, 100), summary: one(j.summary, 700) };
     },
     'live.clips.confirm'(r) {
         const j = r.json || parseJsonLoose(r.text);

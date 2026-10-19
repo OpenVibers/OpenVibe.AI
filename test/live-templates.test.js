@@ -157,4 +157,38 @@ t.test("a channel description is public prose: never about looks, no lists or la
     assert.deepStrictEqual(POSTPROCESS['live.media.overview']({ text: 'They build a PC.\nThen they test it' }), { overview: 'They build a PC. Then they test it.' });
 });
 
+t.test('The Rundown: the segment prompt lists the lines and known topics; its output is clamped, kept to the lines and stripped of empty segments', () => {
+    const tp = (k) => live.templates.find((x) => x.key === k);
+    const seg = tp('live.rundown.segment');
+    assert.strictEqual(seg.default_route, 'live.creative');
+    assert.match(seg.system_prompt, /announcer or character lines/);
+    assert.match(seg.system_prompt, /never guess a pronoun/);
+    const input = { streamer: 'goosely', title: 'News', category: 'Tech', topics: ['Supermarket fridges hacked in France'], lines: [{ t: 1081, text: 'The person that deals with refrigeration, I\'m not going to say is stupid.' }, { t: 1096.6, text: 'This is why having the internet inside of a refrigerator is a bad idea.' }] };
+    const user = render(seg.user_prompt, PREPARE['live.rundown.segment'](input).vars);
+    assert.ok(user.includes('Streamer: goosely') && user.includes('- Supermarket fridges hacked in France') && user.includes('[1097] This is why having the internet'), user);
+    assert.ok(user.includes('Earlier in this stream: (this is the start)'));
+    const out = POSTPROCESS['live.rundown.segment']({ json: { segments: [
+        { start: 900, end: 5000, topic: 'Supermarket fridges hacked in France', kind: 'tech', title: 'Fridges on the internet', what: 'They read about fridges.', take: 'Internet fridges are a bad idea.', quip: 'Cold take.', score: 9, quotes: [{ t: 1096.6, text: 'a bad idea', en: '' }, { t: 1, text: '' }] },
+        { start: 1000, end: 1001, topic: '', title: 'x', what: 'y' },
+        { start: 1000, end: 1001, topic: 'T', title: 'x', what: 'y', kind: 'weird' },
+    ] } }, input);
+    assert.strictEqual(out.segments.length, 2, 'a segment with no topic is dropped');
+    assert.deepStrictEqual([out.segments[0].start, out.segments[0].end, out.segments[0].score], [1081, 1096.6, 5], 'times inside the lines, score 1-5');
+    assert.deepStrictEqual(out.segments[0].quotes, [{ t: 1096.6, text: 'a bad idea', en: null }]);
+    assert.strictEqual(out.segments[1].kind, 'other');
+    assert.strictEqual(POSTPROCESS['live.rundown.segment']({ text: 'nope' }, input), null);
+    assert.deepStrictEqual(POSTPROCESS['live.rundown.segment']({ json: { segments: [] } }, input), { segments: [] }, 'nothing said is an answer');
+});
+
+t.test('The Rundown: an episode keeps chapters that name a real segment once; a topic is clamped', () => {
+    const ep = POSTPROCESS['live.rundown.episode']({ json: { title: 'The Fridge Files', logline: 'A night of cold takes.', recap: 'One.\n\nTwo.\n\n\nThree.', chapters: [{ index: 0, title: 'Fridges' }, { index: 0, title: 'Again' }, { index: 7, title: 'Nope' }, { index: 1, title: '' }] } }, { segments: [{}, {}] });
+    assert.deepStrictEqual(ep, { title: 'The Fridge Files', logline: 'A night of cold takes.', recap: 'One.\n\nTwo.\n\nThree.', chapters: [{ index: 0, title: 'Fridges' }] });
+    assert.strictEqual(POSTPROCESS['live.rundown.episode']({ json: { title: 'x' } }, { segments: [] }), null, 'no recap, no episode');
+    assert.deepStrictEqual(POSTPROCESS['live.rundown.topic']({ json: { headline: ' Fridges ', summary: 'Two streamers agree.' } }), { headline: 'Fridges', summary: 'Two streamers agree.' });
+    const tp = (k) => live.templates.find((x) => x.key === k);
+    const payload = { topic: 'T', takes: [{ streamer: 'a', what: 'b' }] };
+    assert.strictEqual(render(tp('live.rundown.topic').user_prompt, PREPARE['live.rundown.topic'](payload).vars), JSON.stringify(payload));
+    for (const k of ['live.rundown.segment', 'live.rundown.episode', 'live.rundown.topic']) assert.ok(live.workflows.find((w) => w.key === k && w.steps[0].template === k), k);
+});
+
 t.run();
