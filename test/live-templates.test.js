@@ -180,7 +180,9 @@ t.test('The Rundown: the segment prompt lists the lines and known topics; its ou
     assert.deepStrictEqual(out.segments[0].quotes, [{ t: 1096.6, text: 'a bad idea', en: null }]);
     assert.strictEqual(out.segments[1].kind, 'other');
     assert.strictEqual(POSTPROCESS['live.rundown.segment']({ text: 'nope' }, input), null);
-    assert.deepStrictEqual(POSTPROCESS['live.rundown.segment']({ json: { segments: [] } }, input), { segments: [] }, 'nothing said is an answer');
+    assert.deepStrictEqual(POSTPROCESS['live.rundown.segment']({ json: { others: [], segments: [] } }, input), { others: [], segments: [] }, 'nothing said is an answer');
+    assert.deepStrictEqual(POSTPROCESS['live.rundown.segment']({ json: { others: [1096.6, 5, 'x', 1096.6], segments: [] } }, input).others, [1096.6], 'others: only the times of lines given, once');
+    assert.match(seg.system_prompt, /list in others the t of every line that is NOT the streamer/);
 });
 
 t.test('The Rundown: an episode keeps chapters that name a real segment once; a topic is clamped', () => {
