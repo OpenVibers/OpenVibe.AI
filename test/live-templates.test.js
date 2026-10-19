@@ -169,6 +169,9 @@ t.test('The Rundown: the segment prompt lists the lines and known topics; its ou
     assert.match(seg.system_prompt, /commentators/);
     assert.match(seg.system_prompt, /never one of the kinds below/);
     assert.match(seg.system_prompt, /never invent a meaning for them/);
+    assert.match(seg.system_prompt, /Play-by-play is not a segment/, 'a night of in-game reactions is the recap, not a take each stretch');
+    assert.match(seg.system_prompt, /never a mood or a description of the stream/, '"Frustration and chaos in the match" gathered 106 takes');
+    assert.match(seg.system_prompt, /in-game reactions are 2 at most/);
     for (const k of ['live.rundown.segment', 'live.rundown.episode', 'live.rundown.topic']) {
         assert.match(tp(k).system_prompt, /Privacy: never write or quote where anyone is, lives or will be/, `${k}: no places, schools or time zones`);
         assert.match(tp(k).system_prompt, /seems to be under 18/, `${k}: kind to minors`);
