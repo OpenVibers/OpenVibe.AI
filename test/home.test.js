@@ -84,6 +84,9 @@ t.test('/stats (price and latency) is in search: index,follow, its own descripti
     assert.ok(r.text.includes('<meta name="robots" content="index,follow">'), 'indexable');
     assert.match(r.text, /<meta name="description" content="Price and latency of every AI model OpenVibe\.AI called in the last 7 days: [^"]+">/);
     assert.ok(r.text.includes(`<link rel="canonical" href="${SITE}/stats">`), 'canonical');
+    assert.ok(r.text.includes(`<meta property="og:url" content="${SITE}/stats">`), 'a shared link has its tags');
+    assert.match(r.text, new RegExp(`<meta property="og:image" content="${SITE.replace(/\./g, '\\.')}/shared/social/ai\\.jpg\\?v=[0-9a-f]+">`));
+    assert.ok(r.text.includes('<meta name="twitter:card" content="summary_large_image">'));
 });
 
 t.test('robots.txt, sitemap.xml and llms.txt name the public origin', async () => {
