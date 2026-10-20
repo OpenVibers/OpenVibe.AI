@@ -119,9 +119,11 @@ const NAV = [
     ['/console/quotas', 'Quotas', 'quotas'], ['/console/usage', 'Usage', 'usage'], ['/console/cache', 'Cache', 'cache'], ['/console/audit', 'Audit', 'audit'],
 ];
 
-function layout({ title, section, staff, csrf, notice, error, body, site = 'operator console' }) {
+// The console's pages are noindex; the one public page drawn with this layout (/stats) passes robots, a description and
+// its canonical.
+function layout({ title, section, staff, csrf, notice, error, body, site = 'operator console', robots = 'noindex,nofollow', description = null, canonical = null }) {
     return `<!doctype html>${render(html`<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="robots" content="noindex,nofollow"><meta name="referrer" content="no-referrer"><title>${title} · AI ${site}</title><style>${new Raw(CSS)}</style></head>
+<meta name="robots" content="${robots}">${description ? html`<meta name="description" content="${description}">` : ''}${canonical ? html`<link rel="canonical" href="${canonical}">` : ''}<meta name="referrer" content="no-referrer"><title>${title} · AI ${site}</title><style>${new Raw(CSS)}</style></head>
 <body><a class="skip" href="#main">Skip to content</a><header><div class="bar"><span class="brand">OpenVibe.AI · ${site}</span>
 ${staff ? html`<nav aria-label="Console"><ul>${NAV.map(([href, label, id]) => html`<li><a href="${href}"${id === section ? html` aria-current="page"` : ''}>${label}</a></li>`)}</ul></nav>
 <div class="who"><span>${staff.username ? `@${staff.username} ` : ''}<code>${staff.subject}</code> · ${staff.role}</span>
@@ -512,9 +514,12 @@ function allowance(cards) {
  * Public price and latency per provider and model: provider_stats_daily totals (quotas.statsFor) and the
  * rate cards only. Nothing here is per caller; rows: { provider, model, capability, requests, ok, p50, p95, cards }.
  */
-function stats({ days, from, to, rows }) {
+function stats({ days, from, to, rows, canonical = null }) {
     return layout({
-        title: 'Price and latency', site: 'stats', body: html`<h1>Price and latency</h1>
+        // In search, as the sitemap and robots.txt say: it was noindex,nofollow from the console's layout.
+        title: 'Price and latency', site: 'stats', robots: 'index,follow', canonical,
+        description: `Price and latency of every AI model OpenVibe.AI called in the last ${days} days: p50 and p95 latency, success rate, price per million tokens and the free allowance.`,
+        body: html`<h1>Price and latency</h1>
 <p class="muted">Every provider and model AI called in the last ${days} UTC days (${from} to ${to}). Latency is the upper bound of a fixed latency bucket, the slowest day in the window; prices are per million tokens from the current rate cards.</p>
 ${table(`Providers and models, ${from} to ${to}`, ['Provider', 'Model', 'Capability', 'p50', 'p95', 'Success rate', 'Price', 'Free allowance'], rows.map((r) => html`<tr>
 <td><code>${r.provider}</code></td><td>${r.model ? html`<code>${r.model}</code>` : '—'}</td><td>${r.capability || '—'}</td>
