@@ -78,6 +78,14 @@ t.test('/updates: what shipped on this site, the shared update log, with one hea
     assert.ok(r.headers.get('content-security-policy').includes("connect-src 'self' https://openvibe.network"), 'the log reads the network changelog');
 });
 
+t.test('/stats (price and latency) is in search: index,follow, its own description and canonical', async () => {
+    const r = await request(h.base, 'GET', '/stats');
+    assert.strictEqual(r.status, 200);
+    assert.ok(r.text.includes('<meta name="robots" content="index,follow">'), 'indexable');
+    assert.match(r.text, /<meta name="description" content="Price and latency of every AI model OpenVibe\.AI called in the last 7 days: [^"]+">/);
+    assert.ok(r.text.includes(`<link rel="canonical" href="${SITE}/stats">`), 'canonical');
+});
+
 t.test('robots.txt, sitemap.xml and llms.txt name the public origin', async () => {
     const robots = await request(h.base, 'GET', '/robots.txt');
     assert.strictEqual(robots.status, 200);

@@ -116,7 +116,7 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
             res.setHeader('Cache-Control', cachePolicy.htmlHeaders());
             res.setHeader('Content-Security-Policy', views.CSP);
             res.type('html').send(views.pages.stats({
-                days: STATS_DAYS, rows,
+                days: STATS_DAYS, rows, canonical: `${String(config.baseUrl || '').replace(/\/+$/, '')}/stats`,
                 from: new Date(now - STATS_DAYS * 86400000).toISOString().slice(0, 10), to: new Date(now).toISOString().slice(0, 10),
             }));
         } catch (e) { next(e); }
