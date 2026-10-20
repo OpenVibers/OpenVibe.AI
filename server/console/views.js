@@ -8,6 +8,7 @@
  * and whether it resolves (configured | missing | not_required), never a value; base URLs lose any
  * user info and query string. Run inputs and outputs arrive already bounded by queries.preview.
  */
+const social = require('openvibe-shared/social');
 const crypto = require('crypto');
 
 class Raw { constructor(s) { this.s = s; } }
@@ -120,10 +121,14 @@ const NAV = [
 ];
 
 // The console's pages are noindex; the one public page drawn with this layout (/stats) passes robots, a description and
-// its canonical.
+// its canonical, and gets the share tags (the site's card from openvibe-shared/social) a shared link needs.
+function shareTags({ title, description, canonical }) {
+    const image = new URL(social.url('ai') || '/shared/social/ai.jpg', canonical).href;
+    return html`<meta property="og:type" content="website"><meta property="og:site_name" content="OpenVibe.AI"><meta property="og:title" content="${title}">${description ? html`<meta property="og:description" content="${description}">` : ''}<meta property="og:url" content="${canonical}"><meta property="og:image" content="${image}"><meta name="twitter:card" content="summary_large_image">`;
+}
 function layout({ title, section, staff, csrf, notice, error, body, site = 'operator console', robots = 'noindex,nofollow', description = null, canonical = null }) {
     return `<!doctype html>${render(html`<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="robots" content="${robots}">${description ? html`<meta name="description" content="${description}">` : ''}${canonical ? html`<link rel="canonical" href="${canonical}">` : ''}<meta name="referrer" content="no-referrer"><title>${title} · AI ${site}</title><style>${new Raw(CSS)}</style></head>
+<meta name="robots" content="${robots}">${description ? html`<meta name="description" content="${description}">` : ''}${canonical ? html`<link rel="canonical" href="${canonical}">${shareTags({ title: `${title} · AI ${site}`, description, canonical })}` : ''}<meta name="referrer" content="no-referrer"><title>${title} · AI ${site}</title><style>${new Raw(CSS)}</style></head>
 <body><a class="skip" href="#main">Skip to content</a><header><div class="bar"><span class="brand">OpenVibe.AI · ${site}</span>
 ${staff ? html`<nav aria-label="Console"><ul>${NAV.map(([href, label, id]) => html`<li><a href="${href}"${id === section ? html` aria-current="page"` : ''}>${label}</a></li>`)}</ul></nav>
 <div class="who"><span>${staff.username ? `@${staff.username} ` : ''}<code>${staff.subject}</code> · ${staff.role}</span>
