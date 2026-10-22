@@ -99,20 +99,31 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
     // nothing per caller. Only registered providers are listed: a person's own key records its runs as
     // byo:<owner>:<subject>, which must never reach a public page.
     const STATS_DAYS = 7;
+    async function statsRows() {
+        const rows = [];
+        for (const s of await quotas.statsFor({ days: STATS_DAYS })) {
+            const p = await registry.getProvider(s.provider);
+            if (!p) continue;
+            const m = s.model ? await registry.getModel(s.provider, s.model) : null;
+            rows.push({
+                provider: s.provider, model: s.model, capability: (m && m.type) || p.capabilities.join(', '),
+                requests: Number(s.requests) || 0, ok: Number(s.ok) || 0, p50: s.latency_p50_ms, p95: s.latency_p95_ms,
+                cards: await pool.rateCardsFor(s.provider, s.model || null),
+            });
+        }
+        return rows;
+    }
+    // The home's numbers and model table are the same rows, read at most once a minute (the home is cached for five).
+    let homeStats = { at: 0, rows: null };
+    async function homeRows() {
+        if (homeStats.rows && clock.now() - homeStats.at < 60_000) return homeStats.rows;
+        try { homeStats = { at: clock.now(), rows: await statsRows() }; } catch (e) { log.warn(`[home] price and latency rows unavailable: ${e.message}`); }
+        return homeStats.rows || [];
+    }
     app.get('/stats', async (req, res, next) => {
         try {
             const now = clock.now();
-            const rows = [];
-            for (const s of await quotas.statsFor({ days: STATS_DAYS })) {
-                const p = await registry.getProvider(s.provider);
-                if (!p) continue;
-                const m = s.model ? await registry.getModel(s.provider, s.model) : null;
-                rows.push({
-                    provider: s.provider, model: s.model, capability: (m && m.type) || p.capabilities.join(', '),
-                    requests: Number(s.requests) || 0, ok: Number(s.ok) || 0, p50: s.latency_p50_ms, p95: s.latency_p95_ms,
-                    cards: await pool.rateCardsFor(s.provider, s.model || null),
-                });
-            }
+            const rows = await statsRows();
             res.setHeader('Cache-Control', cachePolicy.htmlHeaders());
             res.setHeader('Content-Security-Policy', views.CSP);
             res.type('html').send(views.pages.stats({
@@ -150,13 +161,14 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
             .send(home.renderUpdates({ siteUrl: config.baseUrl }));
     });
 
-    app.get('/', (req, res) => {
+    app.get('/', async (req, res) => {
         res.vary('Accept');
         if (req.accepts(['text/plain', 'text/html']) === 'text/html') {
+            const rows = await homeRows();
             return res.type('html')
                 .set('Content-Security-Policy', home.HOME_CSP)
                 .set('Cache-Control', 'private, max-age=300')
-                .send(home.renderHome({ siteUrl: config.baseUrl }));
+                .send(home.renderHome({ siteUrl: config.baseUrl, stats: { days: STATS_DAYS, rows } }));
         }
         res.type('text/plain').send([
             'OpenVibe.AI: providers, models, routing, versioned prompt templates and workflows, runs, citations, scoped cache, quotas and audit.',
