@@ -18,7 +18,7 @@ function assertSitemapLastmods(xml, tag = 'url') {
 const fs = require('fs');
 const path = require('path');
 const { boot, request, suite } = require('./helpers');
-const { HOME_CSP } = require('../server/home');
+const { HOME_CSP, renderHome, FAQ, DESCRIPTION } = require('../server/home');
 
 const SITE = 'https://ai.openvibe.services';
 const BROWSER = 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8';
@@ -45,6 +45,42 @@ t.test('GET / as a browser: the home page, its CSP and a private cache', async (
     assert.ok(r.text.includes(`${SITE}/api/v1/chat`), 'the examples call the public origin');
     assert.ok(r.text.includes('https://openvibe.services/projects'), 'where a project and an app are made');
     assert.ok(!/ai\.openvibe\.network/.test(r.text), 'never the old name');
+});
+
+t.test('the home: numbers and the model table come from the /stats rows; nothing is shown without them', async () => {
+    const card = (i, o) => ({ in: { unit_price_usd: i, unit_size: 1e6 }, cached: { unit_price_usd: i / 10, unit_size: 1e6 }, out: { unit_price_usd: o, unit_size: 1e6 } });
+    const rows = [
+        { provider: 'local', model: 'qwen2.5-1.5b-instruct', capability: 'chat, generate', requests: 10, ok: 10, p50: 25600, p95: 25600, cards: null },
+        { provider: 'shared', model: 'gpt-5-nano', capability: 'chat, generate, summarize, classify, extract, enrich, json', requests: 1003, ok: 1000, p50: 3200, p95: 25600, cards: card(0.05, 0.4) },
+        { provider: 'shared', model: 'never-answered', capability: 'chat', requests: 3, ok: 0, p50: 25600, p95: 25600, cards: card(0.25, 2) },
+    ];
+    const html = renderHome({ siteUrl: SITE, stats: { days: 7, rows } });
+    assert.match(html, /<b>1,010<\/b><span>calls answered in the last 7 days<\/span>/);
+    assert.match(html, /<b>2<\/b><span>models answered them<\/span>/);
+    assert.match(html, /<b>99\.4%<\/b><span>of provider calls succeeded<\/span>/);
+    assert.ok(html.indexOf('gpt-5-nano') < html.indexOf('qwen2.5-1.5b-instruct'), 'most used first');
+    assert.ok(!html.includes('never-answered'), 'a model with no answer is left out');
+    assert.ok(html.includes('$0.05 in · $0.40 out per 1M tokens') && html.includes('not billed'), 'prices from the rate cards');
+    assert.ok(html.includes('under 3.2 s'), 'latency as the bucket bound');
+    assert.ok(html.includes('chat, generate, summarize, classify, extract and 2 more'), 'long capability lists are cut');
+    assert.ok(html.includes('a small local model, without tools'), 'what an app gets on the router, as the README says');
+    const empty = renderHome({ siteUrl: SITE, stats: { days: 7, rows: [] } });
+    assert.ok(!/calls answered|id="models"/.test(empty), 'no rows: no numbers and no table');
+});
+
+t.test('the home: OpenAI SDK samples, the FAQ and its JSON-LD, a description of at most 160 characters', async () => {
+    const html = renderHome({ siteUrl: SITE, stats: { days: 7, rows: [] } });
+    assert.ok(html.includes(`base_url=&quot;${SITE}/v1&quot;`) || html.includes(`base_url="${SITE}/v1"`), 'the Python sample points at /v1');
+    assert.ok(html.includes(`baseURL: &#39;${SITE}/v1&#39;`) || html.includes(`baseURL: '${SITE}/v1'`), 'the Node sample points at /v1');
+    assert.ok(DESCRIPTION.length <= 160, `description ${DESCRIPTION.length} chars`);
+    assert.ok(html.includes(`<meta name="description" content="${DESCRIPTION}">`), 'the whole description, not clipped');
+    const blocks = [...html.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)].map((m) => JSON.parse(m[1]));
+    const types = blocks.map((b) => b['@type']);
+    for (const t of ['WebSite', 'WebApplication', 'FAQPage']) assert.ok(types.includes(t), `JSON-LD ${t}: ${types}`);
+    const faq = blocks.find((b) => b['@type'] === 'FAQPage');
+    assert.strictEqual(faq.mainEntity.length, FAQ.length);
+    faq.mainEntity.forEach((q) => assert.ok(html.includes(`<h3>${q.name.replace(/'/g, '&#39;')}</h3>`), `the page shows "${q.name}"`));
+    assert.ok(!/OpenVibe\.Codes/.test(html), 'apps and the API reference are on OpenVibe.Services, never named as Codes');
 });
 
 t.test('GET / for curl and API clients: the text index, unchanged in kind', async () => {
