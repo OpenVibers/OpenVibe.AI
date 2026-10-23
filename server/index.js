@@ -73,7 +73,9 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         try {
             const pruned = await runs.prune();
             const expired = await cache.prune();
-            if (pruned || expired) log.log(`[ai] retention: ${pruned} old run(s), ${expired} expired cache entr${expired === 1 ? 'y' : 'ies'}`);
+            // Billing readings never sent go with their runs (server/usage-samples.js expireUnsent).
+            const lapsed = await require('./usage-samples').expireUnsent(db, { days: config.runs.retentionDays, now: clock.now() });
+            if (pruned || expired || lapsed) log.log(`[ai] retention: ${pruned} old run(s), ${expired} expired cache entr${expired === 1 ? 'y' : 'ies'}, ${lapsed} unsent usage reading(s)`);
         } catch (err) { log.error(`[ai] retention failed: ${err.message}`); }
     }, 60 * 60 * 1000);
     housekeeping.unref?.();

@@ -133,6 +133,18 @@ async function readingsFor(db, usageSampleIds) {
     return out;
   });
 }
+/**
+ * Readings Billing never took expire with their run (runs.prune, AI_RUN_RETENTION_DAYS): a reading lives no longer than
+ * the run it explains. Until Billing rates AI's metrics and the relay is configured, every reading waits here; on
+ * 2026-10-23 that was 80,793 rows growing 4,000 a day, nearly all OpenVibe's own sites (service:live), worth about $3
+ * (plan E2). The run's tokens and cost stay in runs and usage_daily. Sent rows are the relay's own prune; rows Billing
+ * refused stay for the console. → rows removed
+ */
+async function expireUnsent(db, { days, now = Date.now() } = {}) {
+  if (!(Number(days) > 0)) return 0;
+  const r = await db.prepare(`DELETE FROM ${TABLE} WHERE sent_at IS NULL AND rejected_at IS NULL AND created_at < ?`).run(now - Number(days) * 86400000);
+  return Number(r.changes) || 0;
+}
 /** The run a reading key names: `ai:<run id>:<attempt>:<kind>` (the run id is the second segment). */
 const runIdOf = (key) => { const p = String(key || '').split(':'); return p[0] === 'ai' && p[1] ? p[1] : null; };
 /** Staff console: readings by delivery state and the latest rows carrying a send error (never a public page: keys name runs). */
@@ -151,4 +163,4 @@ async function stop({ drainMs = 3000 } = {}) {
   if (r) { let timer; await Promise.race([r.flush().catch(() => {}), new Promise((res) => { timer = setTimeout(res, drainMs); if (timer.unref) timer.unref(); })]); clearTimeout(timer); await r.stop(); }
 }
 function _reset() { if (pruneTimer) clearInterval(pruneTimer); pruneTimer = null; if (relay) relay.stop(); relay = null; on = false; queued = 0; lastError = null; }
-module.exports = { IMAGE_KIND, init, record, sampleOf, sampleFromUsage, keyOf, runIdOf, readingsFor, deliveryReport, status, stop, _reset, TABLE, KINDS, UNIT };
+module.exports = { IMAGE_KIND, init, record, sampleOf, sampleFromUsage, keyOf, runIdOf, readingsFor, deliveryReport, expireUnsent, status, stop, _reset, TABLE, KINDS, UNIT };
