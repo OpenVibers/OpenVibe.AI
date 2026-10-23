@@ -202,6 +202,21 @@ t.test('a reading Billing refuses is failed, with its error, in explain and on t
     assert.deepStrictEqual([f.run_id, f.state], [r.body.run.id, 'failed']);
 });
 
+t.test('a reading Billing never took expires with its run; sent, refused and recent rows stay', async () => {
+    const DAY = 86400000;
+    const now = Date.UTC(2026, 9, 23);
+    const put = (id, ageDays, extra = {}) => h.db.prepare(`INSERT INTO usage_sample_outbox (event_id, envelope, created_at, sent_at, rejected_at) VALUES (?, ?, ?, ?, ?)`)
+        .run(id, JSON.stringify({ id }), now - ageDays * DAY, extra.sent ? now : null, extra.rejected ? now : null);
+    await put('ai:run_old:0:in', 31);
+    await put('ai:run_old_sent:0:in', 31, { sent: true });
+    await put('ai:run_old_refused:0:in', 31, { rejected: true });
+    await put('ai:run_new:0:in', 29);
+    assert.strictEqual(await usageSamples.expireUnsent(h.db, { days: 30, now }), 1);
+    const left = new Set((await h.db.prepare("SELECT event_id FROM usage_sample_outbox WHERE event_id LIKE 'ai:run_old%' OR event_id = 'ai:run_new:0:in'").all()).map((r) => r.event_id));
+    assert.deepStrictEqual([...left].sort(), ['ai:run_new:0:in', 'ai:run_old_refused:0:in', 'ai:run_old_sent:0:in']);
+    assert.strictEqual(await usageSamples.expireUnsent(h.db, { days: 0, now }), 0, 'no retention configured: nothing goes');
+});
+
 t.test('shutdown', async () => { usageSamples._reset(); await h.stop(); await seam.close(); });
 
 t.run();
