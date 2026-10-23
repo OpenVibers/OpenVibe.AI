@@ -181,7 +181,8 @@ function createFetcher(config, { transport = null } = {}) {
     /**
      * One upstream response for a media reader (server/media-proxy.js): the same URL rules as fetchUrl, redirects
      * judged and followed here (the reader never sees them), a Range header passed through, the body left as a stream.
-     * → { res } (an http.IncomingMessage with status 200/206/416), or throws AiError.
+     * → { res, url } (an http.IncomingMessage with status 200/206/416, and the URL it came from after redirects), or
+     * throws AiError.
      */
     async function openStream(raw, { method = 'GET', range = null, signal, timeoutMs = m.timeoutMs } = {}) {
         let target = judge(raw);
@@ -214,7 +215,7 @@ function createFetcher(config, { transport = null } = {}) {
                 err.upstreamStatus = res.statusCode;   // the loopback reader passes a 4xx on, so ffmpeg reads "gone", not "down"
                 throw err;
             }
-            return { res };
+            return { res, url: target.url.toString() };   // url: where the bytes came from, after redirects
         }
         throw new AiError(502, 'source.unavailable', 'too many redirects');
     }
