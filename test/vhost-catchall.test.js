@@ -11,4 +11,7 @@ assert.match(catchAll, /limit_except GET HEAD \{ deny all; \}/, 'the catch-all o
 assert.match(catchAll, /proxy_pass http:\/\/127\.0\.0\.1:4700;/, 'and lets the app answer (favicon, 404 page)');
 assert.ok(!/location \/ \{\s*return 404;\s*\}/.test(conf), "nginx's bare 404 page (no lang) is gone");
 assert.match(conf, /location ~\* \^\/metrics\(\/\|\$\) \{ return 404; \}/, '/metrics stays refused');
-console.log('vhost catch-all: GET/HEAD reach the app (favicon, 404 page); other methods refused; /metrics refused');
+const reports = /location = \/release-metrics \{([\s\S]*?)\n    \}/.exec(conf);
+assert.ok(reports && /limit_except POST \{ deny all; \}/.test(reports[1]) && /proxy_pass http:\/\/127\.0\.0\.1:4700;/.test(reports[1]), 'open tabs\' release reports (POST /release-metrics) reach the app');
+assert.ok(conf.indexOf('location = /release-metrics') < conf.lastIndexOf('    location / {'), 'before the GET-only catch-all');
+console.log('vhost catch-all: GET/HEAD reach the app (favicon, 404 page); other methods refused; /metrics refused; POST /release-metrics passes');
