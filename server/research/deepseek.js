@@ -49,8 +49,9 @@ function createDeepseek({ http, key, base = 'https://api.deepseek.com', dailyCap
         const body = { query: String(query).slice(0, 128), count, need_content: needContent };
         if (question) body.ori_question = String(question).slice(0, 128);
         const j = await call('/v1/tools/search', body, signal);
+        // DeepSeek numbers repeated hits on one page with a fragment ("…#1"): the page is the same without it.
         return (j.results || []).filter((r) => r && canonicalUrl(r.url)).map((r) => ({
-            url: r.url,
+            url: String(r.url).replace(/#\d+$/, ''),
             title: String(r.title || '').slice(0, 300),
             site: r.site_name || null,
             snippet: String(r.snippet || '').slice(0, 400),
