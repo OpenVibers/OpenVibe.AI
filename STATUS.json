@@ -9,7 +9,7 @@
   "domain": "ai.openvibe.services (the old ai.openvibe.network address was retired on 2026-10-10); the service runs on openvibe-ovh (/opt/openvibe.ai, unit openvibe-ai) on 127.0.0.1:4700 behind nginx; OpenVibe.Live and OpenVibe.Network call it on loopback",
   "contracts": "openvibe-contracts v0.212.0",
   "sdk": "openvibe-sdk v0.62.0",
-  "shared": "openvibe-shared v4.10.0",
+  "shared": "openvibe-shared v4.11.0",
   "capabilities": [
     "ai.run.create",
     "ai.run.read",
@@ -54,5 +54,5 @@
     "owner/T5: Billing unitFits() to accept unit image (OpenVibe.Billing server/ops/rating.js) — until then Billing stores image readings unrated (billing.no_card / billing.unit_mismatch)",
     "Contracts: list POST /api/v1/image under ai.run.create and ai.app.run implementedBy (manifests/capabilities); add image to provider.v1 and provider-manage-request.v1 capabilities, model.v1 and provider-manage-request.v1 model type, definition-version-request.v1 step kind (media_analysis lags the same way)"
   ],
-  "updated": "2026-10-24"
+  "updated": "2026-10-25"
 }
