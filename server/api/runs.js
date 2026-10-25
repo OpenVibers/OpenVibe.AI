@@ -2,7 +2,10 @@
 /**
  * Run API.
  *
- *   POST /api/v1/runs                       create (ai.run.create); ?wait=ms waits for the result
+ *   POST /api/v1/runs                       create (ai.run.create); ?wait=ms waits for the result; ?stream=1 answers
+ *                                           server-sent events instead: `delta` { text } as an OpenAI-format upstream
+ *                                           writes the answer (each tool-calling turn's text too), then `run` { run }
+ *                                           when it ends or the wait is over (`error` { code, message } if it breaks)
  *   GET  /api/v1/runs                       the caller's runs (ai.run.read)
  *   GET  /api/v1/runs/:id                   one run (+ citations, request log metadata)
  *   run.usage.usage_sample_ids: the run's Billing readings (one per attempt per token metric), null when none
@@ -66,11 +69,47 @@ function runsRouter({ runs, registry, auth, config, log = console }) {
         return res.status(status).json({ run, replayed: !created.created || undefined });
     }
 
+    /**
+     * ?stream=1: the run is made first (a refused one answers its usual status and problem), then the event stream opens
+     * and the answer's text goes out as it is written. A replay or a cached run has no deltas: its `run` comes at once.
+     */
+    async function createAndStream(req, res, body, waitMs) {
+        if (req.principal.kind === 'app') body = appBody(req.principal, body, req.body);
+        checkNamespace(req, String(body.workflow || ''));
+        const idem = body.idempotency_key || req.ov.idempotencyKey || undefined;
+        let opened = false;
+        const early = [];
+        const alive = () => !res.writableEnded && !res.destroyed;
+        const send = (event, data) => { if (alive()) res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); };
+        const onDelta = (d) => {
+            const text = d && d.delta && typeof d.delta.content === 'string' ? d.delta.content : '';
+            if (!text) return;
+            if (opened) send('delta', { text }); else early.push(text);
+        };
+        const created = await runs.create({ ...body, idempotency_key: idem }, req.principal, { trace: req.ov.traceId, requestId: req.ov.requestId, onDelta });
+        res.status(200);
+        res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+        res.setHeader('Cache-Control', 'no-store');
+        res.setHeader('X-Accel-Buffering', 'no');
+        res.setHeader('X-OpenVibe-Run-Id', created.run.id);
+        if (typeof res.flushHeaders === 'function') res.flushHeaders();
+        opened = true;
+        if (early.length) send('delta', { text: early.splice(0).join('') });
+        try {
+            const run = await runs.explained(await runs.wait(created, waitMs));
+            send('run', { run, replayed: !created.created || undefined });
+        } catch (err) {
+            send('error', { code: (err && err.code) || 'internal', message: String((err && err.message) || 'error').slice(0, 500) });
+        }
+        if (alive()) res.end();
+    }
+
     r.post('/api/v1/runs', create, async (req, res) => {
         try {
             const wait = Math.max(0, Math.min(Number(req.query.wait) || 0, config.runs.maxWaitMs));
+            if (req.query.stream === '1') return await createAndStream(req, res, req.body || {}, wait || config.runs.maxWaitMs);
             await createAndRespond(req, res, req.body || {}, wait);
-        } catch (err) { sendError(res, err, req.ov, log); }
+        } catch (err) { if (!res.headersSent) sendError(res, err, req.ov, log); else if (!res.writableEnded) res.end(); }
     });
 
     r.get('/api/v1/runs', read, async (req, res) => {
