@@ -596,5 +596,5 @@ Part of the [OpenVibe network](https://openvibe.network). Built in the open by [
 <!-- versions:start -->
 - openvibe-contracts: v0.212.0
 - openvibe-sdk: v0.62.0
-- openvibe-shared: v4.10.0
+- openvibe-shared: v4.11.0
 <!-- versions:end -->
