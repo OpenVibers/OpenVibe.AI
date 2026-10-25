@@ -135,14 +135,14 @@ function sections({ siteUrl, stats }) {
         "for await (const chunk of stream) process.stdout.write(chunk.choices[0]?.delta?.content ?? '');",
     ].join('\n');
     return showcase.hero({
-        eyebrow: 'OpenVibe.AI · alpha',
+        eyebrow: 'OpenVibe.AI · part of OpenVibe Services · alpha',
         title: 'Many models, one API.', accent: 'Every answer explained.',
         lede: 'Chat, generate, summarize, classify, extract and embed through one API, or point any OpenAI client at it. OpenVibe.AI picks a '
             + 'model by price, measured latency and health, falls back when a provider fails, and tells you on every run which model answered, '
             + 'why it was chosen and what it cost.',
         actions: [{ label: 'Start building', href: PROJECTS_URL, primary: true }, { label: 'See prices and latency', href: '/stats' }],
         note: 'Alpha. OpenVibe.Live and OpenVibe.Network already run their AI here in production; developer apps start in the sandbox, on free and local capacity.',
-    }) + numbers(stats) + showcase.features({
+    }) + '<section class="sc-sec sc-part-of"><p class="sc-note">Part of <a href="https://openvibe.services/">OpenVibe Services</a>: the building blocks every OpenVibe product runs on, with one console, one account and one SDK.</p></section>' + numbers(stats) + showcase.features({
         title: 'What you get',
         items: [
             { icon: 'ov:text', title: 'Six operations, and OpenAI\'s API', text: 'Chat, generate, summarize, classify, extract and embed, with JSON output on a schema. Any OpenAI client works too: point it at /v1 for Chat Completions with tools.' },
