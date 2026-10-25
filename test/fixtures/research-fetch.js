@@ -52,7 +52,7 @@ function createResearchFetch({ deepseek = { status: 200 }, fandom = false } = {}
             if (u.pathname === '/v1/tools/search') return json({ results: [
                 { title: 'SQLite Home Page', url: 'https://sqlite.org/index.html?utm_source=a', snippet: 'Small. Fast. Reliable.', summary: 'SQLite is a C library.', content: 'SQLite is a C-language library that implements a small, fast, self-contained, high-reliability, full-featured SQL database engine. '.repeat(6), site_name: 'SQLite', date: '2026-01-01T00:00:00Z', authority: 4, rerank_score: 2.8 },
                 { title: 'SQLite — Wikipedia mirror', url: 'https://en.m.wikipedia.org/wiki/SQLite', snippet: 'dup', summary: 'dup', content: 'duplicate of the encyclopedia page', authority: 3, rerank_score: 2.0 },
-                { title: 'A thin page', url: 'https://example.com/thin', snippet: 'short', summary: '', content: '', authority: 1, rerank_score: 1.2 },
+                { title: 'A thin page', url: 'https://example.com/thin#1', snippet: 'short', summary: '', content: '', authority: 1, rerank_score: 1.2 },
             ] });
             if (u.pathname === '/v1/tools/fetch') return json({ title: 'A thin page', content: 'The full text DeepSeek fetched for the thin page.' });
         }
