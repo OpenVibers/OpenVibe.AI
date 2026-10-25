@@ -77,6 +77,11 @@ function sanitizeNext(v) {
 
 const NOTICES = {
     provider_status: 'Provider status changed.',
+    provider_added: 'Provider added. Point a route at it below, or on the route\'s page.',
+    provider_key: 'Key replaced. Runs use it from now on.',
+    model_added: 'Model registered.',
+    route_used: 'Route changed: new runs use the provider and model you chose (the previous one is kept as a fallback).',
+    route_default: 'Route back to its default.',
     circuit_reset: 'Circuit reset: the provider will be tried again.',
     version_status: 'Version status changed.',
     quota_saved: 'Quota saved.',
@@ -90,7 +95,7 @@ const DEF_KINDS = {
 };
 const DAY_MS = 86400000;
 
-function consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console }) {
+function consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, vault = null }) {
     const cc = config.console;
     const r = express.Router();
     const scoped = ['/console', '/auth'];
@@ -268,7 +273,7 @@ function consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, e
     // ── Providers ────────────────────────────────────────────
     r.get('/console/providers', read, wrap(async (req, res) => await send(res, 200, pages.providers({
         ...common(req), rows: (await Promise.all((await registry.listProviders()).map(ops.providerView))), models: await registry.listModels(), stubFallback: config.stubFallback,
-        canManage: req.staff.caps.includes(CAPS.providerManage), notice: notice(req),
+        canManage: req.staff.caps.includes(CAPS.providerManage), notice: notice(req), keyHints: vault ? await vault.hints() : new Map(),
     }))));
     r.post('/console/providers/:key/status', needs(CAPS.providerManage), wrap(async (req, res) => {
         await ops.setProviderStatus(req.params.key, String(req.body.status || ''), who(req));
@@ -278,6 +283,84 @@ function consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, e
         if (!await registry.getProvider(req.params.key)) throw new AiError(404, 'ai.not_found', 'no such provider');
         await ops.resetCircuit(req.params.key, who(req));
         res.redirect(303, '/console/providers?done=circuit_reset');
+    }));
+
+    // Adding a provider with its key, replacing a key, registering a model (owner: ai.provider.manage). The key goes to
+    // the vault (server/vault.js, encrypted at rest); the provider's secret_ref names it, never holds it.
+    const presets = require('./presets');
+    const KEY_RE = /^[a-z0-9][a-z0-9._-]{1,40}$/;
+    r.get('/console/providers/new', needs(CAPS.providerManage), wrap(async (req, res) => await send(res, 200, pages.providerNew({
+        ...common(req), presets: presets.PRESETS, preset: presets.byId(String(req.query.preset || '')) || null, vaultReady: !!vault && /^[0-9a-f]{64}$/i.test(String(config.credentialsKey || '')),
+    }))));
+    r.post('/console/providers', needs(CAPS.providerManage), wrap(async (req, res) => {
+        if (!vault) throw new AiError(503, 'vault.unavailable', 'provider keys cannot be stored here');
+        const b = req.body || {};
+        const preset = presets.byId(String(b.preset || 'custom')) || presets.byId('custom');
+        const key = String(b.key || preset.id).trim().toLowerCase();
+        if (!KEY_RE.test(key)) throw new AiError(422, 'ai.invalid', 'the provider name is 2-41 lowercase letters, digits, dots and dashes');
+        if (await registry.getProvider(key)) throw new AiError(409, 'ai.conflict', `a provider called ${key} already exists: replace its key on the providers page`);
+        const baseUrl = String(b.base_url || preset.base_url || '').trim();
+        if (!/^https:\/\/[^\s]+$/i.test(baseUrl)) throw new AiError(422, 'ai.invalid', 'the base URL is an https address');
+        await vault.put(key, b.api_key, who(req));
+        const caps = [...presets.TEXT_CAPS, ...(b.vision ? ['vision'] : [])];
+        await registry.upsertProvider({
+            key, display_name: String(b.display_name || preset.name || key).slice(0, 80), kind: preset.kind, status: 'active', base_url: baseUrl.replace(/\/+$/, ''),
+            auth_mode: preset.kind === 'anthropic' ? 'x-api-key' : 'bearer', secret_ref: `vault:${key}`, default_model: String(b.default_model || preset.model || '').trim() || null,
+            capabilities: caps, timeout_ms: 60000, priority: 50, billing_profile: 'metered', metadata: { added_from: 'console', preset: preset.id },
+        }, { ...who(req), origin: 'admin' });
+        res.redirect(303, '/console/providers?done=provider_added');
+    }));
+    r.post('/console/providers/:key/key', needs(CAPS.providerManage), wrap(async (req, res) => {
+        if (!vault) throw new AiError(503, 'vault.unavailable', 'provider keys cannot be stored here');
+        const p = await registry.getProvider(req.params.key);
+        if (!p) throw new AiError(404, 'ai.not_found', 'no such provider');
+        await vault.put(p.key, (req.body || {}).api_key, who(req));
+        if (p.secret_ref !== `vault:${p.key}`) await registry.upsertProvider({ key: p.key, secret_ref: `vault:${p.key}` }, { ...who(req), origin: 'admin' });
+        else await registry.upsertProvider({ key: p.key }, { ...who(req), origin: 'admin' });   // a new updated_at: the pool rebuilds its adapter
+        await registry.audit(who(req).actor, 'provider.key_replaced', 'provider', p.key, { trace: who(req).trace });
+        res.redirect(303, '/console/providers?done=provider_key');
+    }));
+    r.post('/console/providers/:key/models', needs(CAPS.providerManage), wrap(async (req, res) => {
+        const p = await registry.getProvider(req.params.key);
+        if (!p) throw new AiError(404, 'ai.not_found', 'no such provider');
+        const b = req.body || {};
+        const price = (v) => (v === '' || v == null ? undefined : Number(v));
+        const source = String(b.price_source || '').trim();
+        if (source && !/^https:\/\/[^\s]+$/.test(source)) throw new AiError(422, 'ai.invalid', 'the price source is the provider\'s https price page');
+        if ((price(b.cost_in) != null || price(b.cost_out) != null) && !source) throw new AiError(422, 'ai.invalid', 'name the price page the prices come from');
+        await registry.upsertModel({
+            provider_key: p.key, model_key: String(b.model_key || '').trim(), display_name: String(b.display_name || '').trim() || null, type: 'chat',
+            supports: { json: true, vision: !!b.vision, tools: !!b.tools, streaming: true },
+            // Prices are the person's, typed from the provider's own price page (which they name), checked today.
+            ...(price(b.cost_in) != null || price(b.cost_out) != null ? { cost: { in_per_mtok: price(b.cost_in) ?? null, out_per_mtok: price(b.cost_out) ?? null, ...(source ? { source, verified_at: new Date(clock.now()).toISOString().slice(0, 10) } : {}) } } : {}),
+        }, who(req));
+        res.redirect(303, '/console/providers?done=model_added');
+    }));
+    // Which provider and model a route uses (owner: it changes what OpenVibe spends). A new route version with the
+    // choice as its primary and the route's previous primary as the first fallback; "default" goes back to what the
+    // service seeds (the newest version the seed wrote, as a new version).
+    r.post('/console/routes/:key/use', needs(CAPS.providerManage), wrap(async (req, res) => {
+        const route = await registry.getRoute(req.params.key);
+        if (!route) throw new AiError(404, 'ai.not_found', 'no such route');
+        const b = req.body || {};
+        if (b.default === '1') {
+            const seeded = (await registry.listRoutes({ history: true })).filter((x) => x.key === route.key && x.created_by === 'seed').sort((a, c) => c.version - a.version)[0];
+            if (!seeded) throw new AiError(409, 'ai.conflict', 'this route has no default to go back to');
+            const { version, created_by, created_at, key: _k, ...def } = seeded;
+            await registry.createRouteVersion(route.key, { ...def, status: 'active' }, who(req));
+            return res.redirect(303, `/console/routes/${encodeURIComponent(route.key)}?done=route_default`);
+        }
+        const [provider, model] = String(b.target || '').split('|');
+        const p = await registry.getProvider(provider || '');
+        if (!p) throw new AiError(422, 'ai.invalid', 'choose a provider');
+        const effective = route.alias_of ? await registry.resolveRoute(route.key) : route;
+        const previous = effective && effective.primary && effective.primary.provider && !(effective.primary.provider === p.key && (effective.primary.model || null) === (model || null)) ? [{ provider: effective.primary.provider, model: effective.primary.model || null }] : [];
+        await registry.createRouteVersion(route.key, {
+            primary: { provider: p.key, model: model || p.default_model || null }, fallbacks: previous, capability: null, constraints: {}, pinned: [], alias_of: null,
+            options: (effective && effective.options) || {}, max_output_tokens: effective ? effective.max_output_tokens : null,
+            response_format: (effective && effective.response_format) || 'text', timeout_ms: effective ? effective.timeout_ms : null, status: 'active',
+        }, who(req));
+        res.redirect(303, `/console/routes/${encodeURIComponent(route.key)}?done=route_used`);
     }));
 
     // ── Routes, templates, workflows ─────────────────────────
@@ -305,6 +388,7 @@ function consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, e
             return await send(res, 200, pages.definition({
                 ...common(req), kind, key: req.params.key, versions, selected: await registry[k.get](req.params.key, selected.version),
                 inUse: inUseMap(kind, versions).get(req.params.key), canManage: req.staff.caps.includes(CAPS.workflowManage), notice: notice(req),
+                ...(kind === 'routes' ? { canChoose: req.staff.caps.includes(CAPS.providerManage), providers: (await registry.listProviders()).filter((p) => p.status === 'active' && p.kind !== 'whisper' && p.kind !== 'stub'), models: await registry.listModels() } : {}),
             }));
         }));
         r.post(`/console/${kind}/:key/versions/:version/status`, needs(CAPS.workflowManage), wrap(async (req, res) => {

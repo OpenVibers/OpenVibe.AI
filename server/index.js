@@ -32,6 +32,9 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     // PostgreSQL (ADR-035): opened and migrated here unless the caller (a test) hands in a migrated handle.
     const db = givenDb || await openDb(config, { log });
     const registry = createRegistry(db, { clock, env });
+    // Provider keys an owner stored from the console (server/vault.js): into this process before any provider is built.
+    const vault = require('./vault').createVault({ db, config, clock, log });
+    await vault.load().catch((err) => log.warn(`[Vault] ${err.message}`));
     const pool = createProviderPool({ db, registry, config, clock, fetchImpl, env, log, credentialFetch });
     // T6 step 8: the SaaS tier budgets on openvibe-sdk/govern in Valkey (server/govern.js); off unless AI_GOVERN_TIERS=1.
     const tiers = createTiers({ config, valkey, clock, log });
@@ -62,7 +65,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     // NODE_ENV=test (tests pin a PEM or point the URL at a stub and let the client fetch on first use).
     const keys = createNetworkKeys({ config });
     const auth = createAuth({ config, log });
-    const app = createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials });
+    const app = createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, vault });
     let jwks = null;
     let keyLoaded = Promise.resolve(null);
     if (!keys.pinned && config.nodeEnv !== 'test') {
