@@ -3,7 +3,7 @@
 // from a run of ai.complete — text, tool calls and a tool-result round trip, emulated streaming as chunks then [DONE], an
 // app token whose run is its project's, OpenAI-shaped errors (no token, bad body), GET /v1/models; and the OpenAI-format
 // adapter's complete() passes tools, tool_choice and the tool messages through as written, mapping max_tokens to
-// max_completion_tokens (and dropping sampling knobs) for a reasoning model.
+// max_completion_tokens with room to think and low effort (and dropping sampling knobs) for a reasoning model.
 const assert = require('assert');
 const http = require('http');
 const { boot, request, token, suite, ALL } = require('./helpers');
@@ -135,7 +135,7 @@ t.test('the OpenAI-format adapter passes the request through as written', async 
     assert.deepStrictEqual(seen[0].body, { model: 'gpt-4.1-mini', messages, tools: [WEATHER], tool_choice: 'required', parallel_tool_calls: false, top_p: 0.9, max_tokens: 300, temperature: 0.2 });
     assert.deepStrictEqual([out.model, out.usage.input, out.usage.output, out.completion.choices[0].finish_reason], ['up-1', 12, 7, 'tool_calls']);
     await p.complete({ model: 'gpt-5-nano', maxTokens: 300, temperature: 0.2, openai: { messages, top_p: 0.9 } });
-    assert.deepStrictEqual(seen[1].body, { model: 'gpt-5-nano', messages, max_completion_tokens: 300 }, 'a reasoning model: max_completion_tokens, no sampling knobs');
+    assert.deepStrictEqual(seen[1].body, { model: 'gpt-5-nano', messages, max_completion_tokens: 300 + 1024, reasoning_effort: 'low' }, 'a reasoning model: max_completion_tokens with room to think, low effort, no sampling knobs');
     const plain = createOpenAiProvider({ key: 'local', capabilities: ['chat'] }, { fetchImpl });
     assert.strictEqual(plain.supports('tools'), false, 'tools are declared, never assumed');
 });

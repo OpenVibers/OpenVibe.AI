@@ -130,7 +130,8 @@ function createOpenAiProvider(record, { apiKey = '', fetchImpl = globalThis.fetc
     /**
      * complete (the OpenAI-compatible endpoint, /v1/chat/completions): the caller's Chat Completions request as they
      * wrote it (messages with tool calls and tool results, tools, tool_choice, response_format, stop, seed), sent to
-     * this upstream with the routed model. A reasoning model takes max_completion_tokens and its default temperature.
+     * this upstream with the routed model. A reasoning model takes max_completion_tokens (with room to think), low
+     * reasoning effort and its default temperature.
      * → { completion, text, model, usage }
      */
     async function complete(req) {
@@ -140,7 +141,11 @@ function createOpenAiProvider(record, { apiKey = '', fetchImpl = globalThis.fetc
             if (o[k] !== undefined && o[k] !== null) body[k] = o[k];
         }
         if (isReasoningModel(req.model)) {
-            if (req.maxTokens) body.max_completion_tokens = req.maxTokens;
+            // max_tokens is the answer the caller wants; a reasoning model thinks first, out of the same allowance. Without
+            // room for that, and with its default (medium) effort, a long tool result could use it all up thinking and
+            // answer nothing: Chat's first production inbox action (2026-10-25) ended "finish_reason: length", empty.
+            if (req.maxTokens) body.max_completion_tokens = Math.max(req.maxTokens, 256) + 1024;
+            body.reasoning_effort = 'low';
             for (const k of ['top_p', 'presence_penalty', 'frequency_penalty']) delete body[k];
         } else {
             if (req.maxTokens) body.max_tokens = req.maxTokens;
