@@ -42,16 +42,21 @@ function sendError(res, err, ctx, log = console) {
     return svc.sendError(res, req, err, log, PROBLEMS);
 }
 
-/** 'env:NAME' -> the value of process.env.NAME (read by name; never logged). */
+/**
+ * A secret by reference, never logged: 'env:NAME' → the value of process.env.NAME; 'vault:<provider key>' → the key an
+ * owner stored for that provider from the console (server/vault.js, encrypted at rest).
+ */
 function resolveSecret(ref, env = process.env) {
     if (!ref) return '';
+    const v = /^vault:([a-z0-9][a-z0-9._-]{0,63})$/.exec(String(ref));
+    if (v) return require('./vault').get(v[1]);
     const m = /^env:([A-Z][A-Z0-9_]{0,63})$/.exec(String(ref));
     if (!m) return '';
     return env[m[1]] ? String(env[m[1]]) : '';
 }
 
 function secretRefValid(ref) {
-    return ref == null || ref === '' || /^env:[A-Z][A-Z0-9_]{0,63}$/.test(String(ref));
+    return ref == null || ref === '' || /^env:[A-Z][A-Z0-9_]{0,63}$/.test(String(ref)) || /^vault:[a-z0-9][a-z0-9._-]{0,63}$/.test(String(ref));
 }
 
 /** Loose JSON repair, ported from Live's llm.parseJsonLoose (models emit slightly broken JSON). */

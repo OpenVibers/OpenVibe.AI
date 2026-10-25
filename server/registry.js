@@ -66,7 +66,7 @@ function createRegistry(db, { clock = { now: () => Date.now() }, env = process.e
         if (!PROVIDER_KINDS.includes(p.kind)) throw new AiError(422, 'ai.invalid', `provider kind must be one of ${PROVIDER_KINDS.join(', ')}`);
         if (!['active', 'disabled'].includes(p.status)) throw new AiError(422, 'ai.invalid', 'provider status must be active or disabled');
         if (!['none', 'bearer', 'x-api-key'].includes(p.auth_mode)) throw new AiError(422, 'ai.invalid', 'auth_mode must be none, bearer or x-api-key');
-        if (!secretRefValid(p.secret_ref)) throw new AiError(422, 'ai.invalid', "secret_ref must be 'env:NAME' (a reference, never a secret value)");
+        if (!secretRefValid(p.secret_ref)) throw new AiError(422, 'ai.invalid', "secret_ref must be 'env:NAME' or 'vault:<provider key>' (a reference, never a secret value)");
         if (p.base_url && !/^https?:\/\/[^\s]+$/i.test(p.base_url)) throw new AiError(422, 'ai.invalid', 'base_url must be an http(s) URL');
         if (!BILLING_PROFILES.includes(p.billing_profile)) throw new AiError(422, 'ai.invalid', `billing_profile must be one of ${BILLING_PROFILES.join(', ')}`);
         // metadata.billing_profile only seeds the column (upsertProvider), but it is refused here too so an

@@ -23,7 +23,10 @@ const NETWORK = 'http://network.test';
 const PROVIDER_SECRET = `sentinel-provider-${crypto.randomBytes(12).toString('hex')}`;
 const CLIENT_SECRET = `sentinel-client-${crypto.randomBytes(12).toString('hex')}`;
 const SESSION_SECRET = crypto.randomBytes(32).toString('hex');
-const SECRETS = [PROVIDER_SECRET, CLIENT_SECRET, SESSION_SECRET];
+const VAULT_KEY = crypto.randomBytes(32).toString('hex');
+const ADDED_KEY = `sentinel-added-${crypto.randomBytes(12).toString('hex')}`;
+const REPLACED_KEY = `sentinel-replaced-${crypto.randomBytes(12).toString('hex')}`;
+const SECRETS = [PROVIDER_SECRET, CLIENT_SECRET, SESSION_SECRET, VAULT_KEY, ADDED_KEY, REPLACED_KEY];
 const ops = token('ops', ALL);
 const live = token('live', ['ai.run.create', 'ai.run.read']);
 const news = token('news', ['ai.run.create', 'ai.run.read']);
@@ -133,7 +136,7 @@ t.test('boot with a provider secret, a seam provider, a failing stub and a few r
     h = await boot({
         env: {
             BASE_URL: 'https://ai.test', OV_NETWORK_INTERNAL_URL: NETWORK, OV_OAUTH_CLIENT_SECRET: CLIENT_SECRET, AI_CONSOLE_SESSION_SECRET: SESSION_SECRET,
-            AI_USER_MODULES: 'off', AI_API_KEY: PROVIDER_SECRET, AI_PROVIDER: 'openai', AI_BASE_URL: 'http://127.0.0.1:1/v1', AI_STUB_FALLBACK: 'false',
+            AI_USER_MODULES: 'off', AI_API_KEY: PROVIDER_SECRET, AI_PROVIDER: 'openai', AI_BASE_URL: 'http://127.0.0.1:1/v1', AI_STUB_FALLBACK: 'false', AI_CREDENTIALS_KEY: VAULT_KEY,
         },
         fetchImpl: fakeFetch,
     });
@@ -363,6 +366,59 @@ t.test('owner: providers, circuits, quotas and cache purge through the console, 
     const purge = (await auditRows("action = 'cache.purge' AND actor = ?", people.owner)).pop();
     assert.strictEqual(purge.target_id, 'ai.generate');
     assert.strictEqual(JSON.parse(purge.metadata).removed, 1);
+});
+
+t.test('owner: add a provider with its key (kept encrypted), replace the key, register a model, point a route at it and back', async () => {
+    let x = await get('/console/providers/new?preset=deepseek', cookies.owner);
+    assert.strictEqual(x.status, 200);
+    assert.match(x.text, /value="https:\/\/api\.deepseek\.com\/v1"/);
+    assert.match(x.text, /name="api_key" required/);
+    assert.strictEqual((await get('/console/providers/new', cookies.admin)).status, 403, 'an admin does not add providers');
+    x = await post('/console/providers', cookies.owner, { preset: 'custom', key: 'cheapapi', display_name: 'Cheap API', base_url: 'http://insecure.test/v1', api_key: ADDED_KEY, default_model: 'cheap-1', _csrf: csrf.owner });
+    assert.ok(x.status >= 400, 'https only');
+    x = await post('/console/providers', cookies.owner, { preset: 'custom', key: 'cheapapi', display_name: 'Cheap API', base_url: 'https://api.cheap.test/v1/', api_key: ADDED_KEY, default_model: 'cheap-1', _csrf: csrf.owner });
+    assert.strictEqual(x.status, 303, x.text);
+    const p = await h.registry.getProvider('cheapapi');
+    assert.deepStrictEqual([p.kind, p.secret_ref, p.base_url, p.default_model, p.auth_mode], ['openai', 'vault:cheapapi', 'https://api.cheap.test/v1', 'cheap-1', 'bearer']);
+    const row = await h.db.prepare('SELECT sealed, hint FROM provider_secrets WHERE provider_key = ?').get('cheapapi');
+    assert.ok(row && !row.sealed.includes(ADDED_KEY), 'encrypted at rest');
+    assert.strictEqual(row.hint, `…${ADDED_KEY.slice(-4)}`);
+    assert.strictEqual(require('../server/util').resolveSecret('vault:cheapapi'), ADDED_KEY, 'the pool resolves it');
+    assert.strictEqual(require('../server/vault')._open({ credentialsKey: VAULT_KEY }, row.sealed, 'cheapapi'), ADDED_KEY);
+    assert.throws(() => require('../server/vault')._open({ credentialsKey: VAULT_KEY }, row.sealed, 'otherapi'), 'bound to its provider');
+    x = await get('/console/providers', cookies.owner);
+    assert.ok(!x.text.includes(ADDED_KEY), 'the page never shows the key');
+    assert.match(x.text, new RegExp(`key …${ADDED_KEY.slice(-4)}`));
+    x = await post('/console/providers', cookies.owner, { preset: 'custom', key: 'cheapapi', base_url: 'https://api.cheap.test/v1', api_key: ADDED_KEY, _csrf: csrf.owner });
+    assert.ok(x.status >= 400, 'no second provider of the same name');
+    x = await post('/console/providers/cheapapi/key', cookies.owner, { api_key: REPLACED_KEY, _csrf: csrf.owner });
+    assert.strictEqual(x.status, 303);
+    assert.strictEqual(require('../server/util').resolveSecret('vault:cheapapi'), REPLACED_KEY);
+    x = await post('/console/providers/cheapapi/models', cookies.owner, { model_key: 'cheap-2', cost_in: '0.1', cost_out: '0.4', _csrf: csrf.owner });
+    assert.ok(x.status >= 400, 'prices name the page they come from');
+    x = await post('/console/providers/cheapapi/models', cookies.owner, { model_key: 'cheap-2', cost_in: '0.1', cost_out: '0.4', price_source: 'https://cheap.test/pricing', tools: '1', _csrf: csrf.owner });
+    assert.strictEqual(x.status, 303, x.text);
+    const m = await h.registry.getModel('cheapapi', 'cheap-2');
+    assert.deepStrictEqual([m.cost.in_per_mtok, m.cost.out_per_mtok, m.supports.tools], [0.1, 0.4, true]);
+    // Point default.json at it: a new version, the previous primary kept as the first fallback; then back to the default.
+    const before = await h.registry.getRoute('default.json');
+    x = await get('/console/routes/default.json', cookies.owner);
+    assert.match(x.text, /<option value="cheapapi\|cheap-2">Cheap API · cheap-2<\/option>/);
+    x = await post('/console/routes/default.json/use', cookies.owner, { target: 'cheapapi|cheap-2', _csrf: csrf.owner });
+    assert.strictEqual(x.status, 303, x.text);
+    const used = await h.registry.getRoute('default.json');
+    assert.strictEqual(used.version, before.version + 1);
+    assert.deepStrictEqual(used.primary, { provider: 'cheapapi', model: 'cheap-2' });
+    assert.strictEqual(used.created_by, people.owner);
+    x = await post('/console/routes/default.json/use', cookies.owner, { default: '1', _csrf: csrf.owner });
+    assert.strictEqual(x.status, 303, x.text);
+    const back = await h.registry.getRoute('default.json');
+    assert.strictEqual(back.version, used.version + 1);
+    assert.notStrictEqual((back.primary || {}).provider, 'cheapapi');
+    assert.strictEqual((await post('/console/routes/default.json/use', cookies.admin, { target: 'cheapapi|', _csrf: csrf.admin })).status, 403, 'only the owner changes what a route spends');
+    const audits = await auditRows("target_id = 'cheapapi'");
+    assert.ok(audits.some((a) => a.action === 'provider.create') && audits.some((a) => a.action === 'provider.key_replaced'));
+    assert.ok(audits.every((a) => !String(a.metadata).includes(ADDED_KEY) && !String(a.metadata).includes(REPLACED_KEY)), 'no key in the audit');
 });
 
 t.test('admin API changes write the same audit rows, and the audit page shows who changed what', async () => {

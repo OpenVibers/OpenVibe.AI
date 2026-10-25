@@ -254,7 +254,9 @@ needs scripts and inline styles), like Billing's staff console. Code: `server/co
 | Page | What it shows |
 |---|---|
 | `/console` | providers needing attention, runs and failures of the last 24 h by error code, today's spend, the queue, the busiest quota windows |
-| `/console/providers` | every provider (kind, status, **secret reference name and whether it resolves, never a value**, circuit, base URL without query/user info, default model, priority/timeout) and the models |
+| `/console/providers` | every provider (kind, status, **secret reference name and whether it resolves, never a value**, circuit, base URL without query/user info, default model, priority/timeout) and the models; for the owner, per provider: replace its key, register a model (with prices typed from the provider's own price page, which the form requires) |
+| `/console/providers/new` | the owner adds a provider in a few clicks: DeepSeek, OpenRouter, Groq, Gemini, Mistral, Together, Fireworks, Cerebras, xAI, OpenAI, Anthropic or any OpenAI-compatible API (`server/console/presets.js`), with its API key, which is kept encrypted (`vault:<provider>`, below) |
+| `/console/routes/:key` (owner form) | **use another provider**: a new route version whose primary is the provider and model chosen, with the previous primary kept as the first fallback; **back to the default** writes the newest seeded version again |
 | `/console/routes`, `/templates`, `/workflows` (`/:key[?version=]`) | every key's newest version and the version in use; per key every version with its status and content (primary and fallbacks in order, prompts, steps, schemas) |
 | `/console/runs` | runs newest first, filtered by status (tabs), workflow, requester (`live` = `service:live`), error code and a UTC time range; failed runs grouped by error code |
 | `/console/runs/:id` | versions used, provider/model, fallback, attempts, tokens, cost, the Billing reading with its delivery state, free share and last send error, error code and detail, requester/attribution/target, grounding, citations, the request log (hashes only), and the stored input/output **bounded**: strings cut at 240 characters, lists at 20 items, 6 KB in all, credential-named keys blanked; raw debug fields never |
@@ -271,7 +273,7 @@ the same one the admin API does:
 |---|---|---|---|
 | `staff.site.view` | admin, owner | `ai.usage.read` | open the console, read every page |
 | `staff.ai.manage` | admin, owner | `ai.workflow.manage` | set a route/template/workflow version's status; cancel a queued or running run |
-| `staff.secrets.manage` | owner | `ai.provider.manage` | enable/disable a provider, reset its circuit, add/change a quota, purge the cache (one workflow, or all with a confirmation) |
+| `staff.secrets.manage` | owner | `ai.provider.manage` | add a provider with its key, replace a key, register a model, choose a route's provider and model, enable/disable a provider, reset its circuit, add/change a quota, purge the cache (one workflow, or all with a confirmation) |
 
 A `global_mod` (only `staff.console.access`), a user or a token without a `usr_` subject is refused
 (403, no session, audited as `console.sign_in.refused`). The session (`__Host-ovai_staff`, host-only,
@@ -284,6 +286,15 @@ through the same functions as the admin API (`server/ops.js`, `registry.setStatu
 versions of routes, templates and workflows, models and provider records are still created through
 the admin API only. There is no drill mode in AI; the console starts nothing (no timer, no outbound
 call) until someone signs in.
+
+### Provider keys added from the console (`vault:`)
+
+A provider the owner adds from the console keeps its key in `provider_secrets` (migration `0010_provider_secrets.sql`,
+`server/vault.js`): AES-256-GCM with `AI_CREDENTIALS_KEY`, bound to the provider's key so a row copied to another
+provider does not decrypt, with only a four-character hint ever shown. The provider's `secret_ref` is
+`vault:<provider key>`, which `util.resolveSecret` reads from this process's decrypted copy (loaded at boot and after
+every change; providers resolve secrets synchronously). Audit rows say a key was replaced, never what it is. Without
+`AI_CREDENTIALS_KEY` the form says keys cannot be stored and nothing is added.
 
 ## The eleven record groups
 

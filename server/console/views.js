@@ -60,6 +60,8 @@ form.inline select{width:auto}
 button{font:inherit;padding:6px 13px;border-radius:7px;border:1px solid var(--line);background:var(--card);color:var(--fg);cursor:pointer}
 button.primary{background:var(--accent-strong, var(--accent, #3472d8));border-color:var(--accent-strong, var(--accent, #3472d8));color:var(--on-accent-strong, var(--on-accent))}button.danger{border-color:var(--bad);color:var(--bad)}
 button.link{border:0;background:none;padding:0;color:var(--accent);text-decoration:underline}
+a.button{display:inline-block;padding:6px 13px;border-radius:7px;background:var(--accent-strong, var(--accent, #3472d8));color:var(--on-accent-strong, var(--on-accent));text-decoration:none;font-weight:600}
+tr.sub td{border-top:0;padding-top:0}input.num{width:7em}tr.sub details{margin:2px 0 8px}tr.sub form{margin:6px 0}
 fieldset{border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin:0;min-width:0}legend{padding:0 6px;font-weight:600}
 dl{display:grid;grid-template-columns:minmax(0,max-content) minmax(0,1fr);gap:6px 16px;margin:0}dt{color:var(--muted)}dd{margin:0;min-width:0}
 .cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr));gap:16px;align-items:start}
@@ -204,25 +206,54 @@ function limitsUsed(c) {
     return parts.join(' · ') || `${n(c.used.requests)} requests`;
 }
 
-function providers({ staff, csrf, rows, models, canManage, stubFallback, notice, error }) {
+function providers({ staff, csrf, rows, models, canManage, stubFallback, notice, error, keyHints = new Map() }) {
+    const keyCell = (p) => {
+        const h = keyHints.get(p.key);
+        return h && String(p.secret_ref || '') === `vault:${p.key}` ? html`<br><span class="muted">key ${h.hint}, set ${when(h.updated_at)}</span>` : '';
+    };
+    const manageRow = (p) => (canManage && p.kind !== 'stub' && p.kind !== 'whisper' ? html`<tr class="sub"><td colspan="10"><details><summary>Key and models for <code>${p.key}</code></summary>
+<form class="inline" method="post" action="/console/providers/${enc(p.key)}/key">${csrfField(csrf)}<label>New API key <input type="password" name="api_key" required minlength="8" autocomplete="off" spellcheck="false"></label><button type="submit">Replace key</button></form>
+<form class="inline" method="post" action="/console/providers/${enc(p.key)}/models">${csrfField(csrf)}<label>Model <input type="text" name="model_key" required maxlength="200" placeholder="deepseek-flash" spellcheck="false"></label>
+<label><input type="checkbox" name="vision" value="1"> reads pictures</label> <label><input type="checkbox" name="tools" value="1"> tools</label>
+<label>$ in / Mtok <input type="number" name="cost_in" step="0.0001" min="0" class="num"></label> <label>$ out / Mtok <input type="number" name="cost_out" step="0.0001" min="0" class="num"></label>
+<label>from the price page <input type="url" name="price_source" placeholder="https://…/pricing"></label><button type="submit">Register model</button></form></details></td></tr>` : '');
     return layout({
         title: 'Providers', section: 'providers', staff, csrf, notice, error, body: html`<h1>Providers and models</h1>
-<p class="muted">Credentials are secret <em>references</em> (<code>env:NAME</code>) resolved from the service environment; this page shows the name and whether it resolves, never a value. Routes try their primary and then each fallback in order; the table below is in provider priority order. The deterministic stub joins every route as a last resort: <strong>${stubFallback ? 'on' : 'off'}</strong> (<code>AI_STUB_FALLBACK</code>).</p>
+${canManage ? html`<p><a class="button" href="/console/providers/new">Add a provider</a> <span class="muted">DeepSeek, OpenRouter, Groq, Gemini, Mistral, Together, Fireworks, Cerebras, xAI, OpenAI, Anthropic or any OpenAI-compatible API. Then choose it on a route's page.</span></p>` : ''}
+<p class="muted">Credentials are secret <em>references</em> (<code>env:NAME</code>, or <code>vault:NAME</code> for a key added here, kept encrypted) resolved inside the service; this page shows the name and whether it resolves, never a value. Routes try their primary and then each fallback in order; the table below is in provider priority order. The deterministic stub joins every route as a last resort: <strong>${stubFallback ? 'on' : 'off'}</strong> (<code>AI_STUB_FALLBACK</code>).</p>
 ${table('Providers', ['Provider', 'Kind', 'Status', 'Credentials', 'Circuit', 'Base URL', 'Default model', 'Can do', 'Priority / timeout', ...(canManage ? ['Actions'] : [])], rows.map((p) => html`<tr>
 <td><code>${p.key}</code><br><span class="muted">${p.display_name}</span></td><td>${p.kind}</td><td>${badge(p.status)}</td>
-<td>${badge(p.credentials)}${p.secret_ref ? html`<br><code>${p.secret_ref}</code>` : ''}<br><span class="muted">${p.auth_mode}</span></td>
+<td>${badge(p.credentials)}${p.secret_ref ? html`<br><code>${p.secret_ref}</code>` : ''}${keyCell(p)}<br><span class="muted">${p.auth_mode}</span></td>
 <td>${badge(p.health.state)}${p.health.consecutive_failures ? html`<br><span class="muted">${n(p.health.consecutive_failures)} failure(s) in a row</span>` : ''}${p.health.last_error ? html`<br><span class="muted">${clip(p.health.last_error, 160)}</span>` : ''}</td>
 <td class="mono">${safeUrl(p.base_url)}</td><td>${p.default_model ? html`<code>${p.default_model}</code>` : '—'}</td><td>${(p.capabilities || []).join(', ') || '—'}</td>
 <td>${n(p.priority)} · ${n(p.timeout_ms)} ms<br><span class="muted">${p.origin}, updated ${when(p.updated_at)}</span></td>
 ${canManage ? html`<td><form class="inline" method="post" action="/console/providers/${enc(p.key)}/status">${csrfField(csrf)}<input type="hidden" name="status" value="${p.status === 'active' ? 'disabled' : 'active'}"><button type="submit" class="${p.status === 'active' ? 'danger' : ''}">${p.status === 'active' ? 'Disable' : 'Enable'}<span class="sr-only"> ${p.key}</span></button></form>
 ${p.health.state !== 'closed' || p.health.consecutive_failures ? html` <form class="inline" method="post" action="/console/providers/${enc(p.key)}/reset">${csrfField(csrf)}<button type="submit">Reset circuit<span class="sr-only"> of ${p.key}</span></button></form>` : ''}</td>` : ''}
-</tr>`), 'no providers.')}
+</tr>${manageRow(p)}`), 'no providers.')}
 ${canManage ? '' : html`<p class="muted">Enabling, disabling and circuit resets need <code>ai.provider.manage</code> (the owner's <code>staff.secrets.manage</code>).</p>`}
 ${table('Models', ['Provider', 'Model', 'Type', 'Status', 'Context / max output', 'Cost per Mtok (in / out / cached)', 'Supports'], models.map((m) => html`<tr>
 <td><code>${m.provider_key}</code></td><td><code>${m.model_key}</code></td><td>${m.type}</td><td>${badge(m.status)}</td>
 <td>${m.context_window ? n(m.context_window) : '—'} / ${m.max_output ? n(m.max_output) : '—'}</td>
 <td>${m.cost.in_per_mtok != null ? usd(m.cost.in_per_mtok) : '—'} / ${m.cost.out_per_mtok != null ? usd(m.cost.out_per_mtok) : '—'} / ${m.cost.cached_per_mtok != null ? usd(m.cost.cached_per_mtok) : '—'}</td>
 <td>${Object.entries(m.supports).filter(([, v]) => v).map(([k]) => k).join(', ') || '—'}</td></tr>`), 'no models registered (providers use their default model).')}`,
+    });
+}
+
+function providerNew({ staff, csrf, presets, preset, vaultReady, notice, error }) {
+    const p = preset || presets.find((x) => x.id === 'deepseek');
+    return layout({
+        title: 'Add a provider', section: 'providers', staff, csrf, notice, error, body: html`<h1>Add a provider</h1>
+<p class="muted">Pick a provider, paste an API key from its site and name its default model. The key is stored encrypted inside OpenVibe.AI and never shown again (only its last four characters). Nothing uses the provider until you choose it on a route's page.</p>
+${vaultReady ? '' : html`<p class="bad">Keys cannot be stored on this server: <code>AI_CREDENTIALS_KEY</code> is not set.</p>`}
+<nav aria-label="Providers"><ul class="tabs">${presets.map((x) => html`<li><a href="/console/providers/new?preset=${enc(x.id)}"${x.id === p.id ? html` aria-current="page"` : ''}>${x.name}</a></li>`)}</ul></nav>
+<form method="post" action="/console/providers" class="stack">${csrfField(csrf)}<input type="hidden" name="preset" value="${p.id}">
+<label>Name in OpenVibe <input type="text" name="key" required pattern="[a-z0-9][a-z0-9._-]{1,40}" value="${p.id === 'custom' ? '' : p.id}" spellcheck="false"></label>
+<label>Shown as <input type="text" name="display_name" maxlength="80" value="${p.id === 'custom' ? '' : p.name}"></label>
+<label>Base URL <input type="url" name="base_url" required value="${p.base_url}" placeholder="https://api.example.com/v1" spellcheck="false"></label>
+<label>API key <input type="password" name="api_key" required minlength="8" autocomplete="off" spellcheck="false"></label>${p.keys ? html` <span class="muted">Get one at <a href="${p.keys}" rel="noopener noreferrer">${safeUrl(p.keys)}</a></span>` : ''}
+<label>Default model <input type="text" name="default_model" value="${p.model}" placeholder="the model id the provider uses" spellcheck="false"></label>
+<label><input type="checkbox" name="vision" value="1"> Its default model reads pictures</label>
+<p><button type="submit"${vaultReady ? '' : html` disabled`}>Add ${p.id === 'custom' ? 'the provider' : p.name}</button> <a href="/console/providers">Back</a></p></form>`,
     });
 }
 
@@ -263,7 +294,7 @@ ${table(`${k.title} (newest version of each)`, head, body, `no ${kind}.`)}`,
     });
 }
 
-function definition({ staff, csrf, kind, key, versions, selected, inUse, canManage, notice, error }) {
+function definition({ staff, csrf, kind, key, versions, selected, inUse, canManage, notice, error, canChoose = false, providers = [], models = [] }) {
     const k = KINDS[kind];
     const v = selected;
     let content;
@@ -303,6 +334,13 @@ ${table('Versions', ['Version', 'Status', 'Created by', 'Created', ...(canManage
 <td><a href="/console/${kind}/${enc(key)}${qs({ version: x.version })}"${x.version === v.version ? html` aria-current="true"` : ''}>v${x.version}</a>${x.version === inUse ? html` <span class="ok">in use</span>` : ''}</td>
 <td>${badge(x.status)}</td><td>${x.created_by || '—'}</td><td>${when(x.created_at)}</td>${canManage ? html`<td>${statusForm(x)}</td>` : ''}</tr>`))}
 ${canManage ? '' : html`<p class="muted">Changing a version's status needs <code>ai.workflow.manage</code> (<code>staff.ai.manage</code>).</p>`}
+${kind === 'routes' && canChoose ? html`<h2>Use another provider</h2>
+<form class="inline" method="post" action="/console/routes/${enc(key)}/use">${csrfField(csrf)}<label>Provider and model <select name="target">${providers.map((p) => [
+        html`<option value="${p.key}|">${p.display_name || p.key} · ${p.default_model || 'its default model'}</option>`,
+        ...models.filter((m) => m.provider_key === p.key && m.status === 'active' && m.model_key !== p.default_model).map((m) => html`<option value="${p.key}|${m.model_key}">${p.display_name || p.key} · ${m.model_key}</option>`),
+    ])}</select></label><button type="submit">Use for this route</button></form>
+<form class="inline" method="post" action="/console/routes/${enc(key)}/use">${csrfField(csrf)}<input type="hidden" name="default" value="1"><button type="submit">Back to the default</button></form>
+<p class="muted">A new version of the route: runs use the provider and model you choose, with the route's previous primary as its first fallback. Every change is audited.</p>` : ''}
 <h2>Version ${v.version}</h2>${content}`,
     });
 }
@@ -533,4 +571,4 @@ ${table(`Providers and models, ${from} to ${to}`, ['Provider', 'Model', 'Capabil
     });
 }
 
-module.exports = { CSP, html, esc, safeUrl, pages: { signIn, message, overview, providers, definitions, definition, runs, run, quotas, usage, cache, audit, stats } };
+module.exports = { CSP, html, esc, safeUrl, pages: { signIn, message, overview, providers, providerNew, definitions, definition, runs, run, quotas, usage, cache, audit, stats } };
