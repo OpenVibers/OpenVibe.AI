@@ -100,6 +100,7 @@ idempotent replay):
 |---|---|
 | `POST /api/v1/runs` (`?wait=ms`, `Idempotency-Key`), `POST /runs/:id/cancel`, `POST /runs/:id/retry`, `POST /runs/:id/citations` | `ai.run.create` |
 | `POST /api/v1/{chat,generate,summarize,classify,extract,enrich,embed,image}` — each a run of workflow `ai.<op>` | `ai.run.create` |
+| `POST /api/v1/research` — a run of `research.gather` ([MegaSource](#megasource-research)) | `ai.run.create` (namespace `research.*`) or `ai.app.run` (free sources only) |
 | `POST /api/v1/{chat,generate,summarize,classify,extract,embed,image}` (no `enrich`), `GET /runs/:id` (the app's own runs) | `ai.app.run` for a developer-app token ([Developer apps](#developer-apps)) |
 | `GET /api/v1/runs`, `GET /runs/:id` (+ citations, request-log metadata), `GET /runs/:id/citations` | `ai.run.read` (own runs) |
 | `GET /api/v1/workflows\|templates\|routes[/:key]` | `ai.run.create`, `ai.workflow.manage` or `ai.usage.read` |
@@ -374,7 +375,7 @@ the service boots without Valkey; with it on, production refuses to boot without
 
 ## Workflows
 
-- **Seed product workflows** — `wiki.generate_space`, `wiki.generate_page`, `blog.draft_post`,
+- **Seed product workflows** — `wiki.generate_space`, `wiki.generate_page` (both on route `wiki.write`, see [MegaSource](#megasource-research)), `blog.draft_post`,
   `news.summarize_story`, `news.compare_perspectives`, `reviews.summarize_entity`,
   `deals.enrich_deal`, `coupons.extract_coupon`, `trade.summarize_market_context`,
   `codes.generate_docs`, `games.generate_lore`, `moderation.classify`, `food.suggest_recipes`,
@@ -431,6 +432,38 @@ the service boots without Valkey; with it on, production refuses to boot without
   model, no speech-to-text, no budget). The output is not cached: callers keep it. Live's grant names
   `media.analyze`.
 - **Direct operations** — `ai.chat|generate|summarize|classify|extract|enrich|embed|image`.
+
+## MegaSource research
+
+`research.gather` (namespace `research`, `server/research/`, `server/workflows/research.js`) answers one question from
+many sources at once and returns one ranked, de-duplicated evidence pack the product workflows cite by number. No model
+is called; a run is recorded like a provider call (provider `research`, model `megasource`), so DeepSeek's per-call
+price counts against the cost quotas and the daily usage.
+
+| Source | What it gives | Terms |
+|---|---|---|
+| Wikipedia | the best articles' full text, their pictures (each with its licence; an article's own non-free files are marked) and the Wikidata id | CC BY-SA 4.0 |
+| Fandom | the topic's own community wiki when it has one (from the web results' hosts, else the topic as a subdomain, confirmed by the wiki's name): pages read through its MediaWiki API, infobox rows kept as "Label: value" | CC BY-SA 3.0; pictures marked not free |
+| Wikidata | the top article's key statements as labelled facts, and its picture | CC0 |
+| DeepSeek | web search with page text (Search API) and full text for short results (Fetch API), fetched by DeepSeek, never from this host | $0.75 per 1,000 successful calls each |
+| Commons, Openverse | freely licensed pictures (CC0, public domain, CC BY, CC BY-SA; NonCommercial and NoDerivatives are not counted as free), kept only when their title or description names the subject | per picture |
+
+Input: `query` (required), `topic` (the subject it belongs to: finds the topic's wiki), `focus` (one subject inside the
+topic), `lang`, `max_sources` (≤ 20), `max_images` (≤ 24), `content_chars` (≤ 12,000), `providers` (a subset). Output:
+`sources` (each with `url`, `title`, `content`, `retrieved_at` and `provenance.provider|site|license`), `images` (each with
+`license`, `free`, `author`, `source_url`, `provider`), `facts`, `topic_wiki`, `providers` (per source: ok, ms, count, or
+why it was skipped or failed) and `usage` (requests, DeepSeek calls, `cost_usd`). Cached for a day per calling service.
+
+Every source is optional and fails on its own. DeepSeek is used only when its key resolves (`AI_RESEARCH_DEEPSEEK_KEY_REF`,
+default `env:DEEPSEEK_API_KEY`; `AI_RESEARCH_DEEPSEEK=0` turns it off), only for first-party callers (a developer app's
+run reads the free sources), within `AI_RESEARCH_DEEPSEEK_DAILY` calls a day (1500), and it stands down on its own
+answers: 402 (balance used up) for 30 minutes, 401 for an hour, 429 for a minute. Tests read a canned web
+(`test/fixtures/research-fetch.js`); none reaches the internet.
+
+OpenVibe.Wiki's "vibe a wiki" uses it with `wiki.generate_space` (plans the pages: main page first, each with a kind,
+an outline and a search phrase) and `wiki.generate_page` (writes one page: lead, sections, infobox, `[[links]]` to the
+planned pages, and up to three of the numbered pictures by heading), both on route `wiki.write` (the creative model,
+7,000 output tokens, 170 s, past the provider's chat timeout).
 
 ## Image generation
 

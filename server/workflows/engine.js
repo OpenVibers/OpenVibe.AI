@@ -12,6 +12,8 @@
  *   embed        embeddings
  *   media_analysis  local-first media analysis: FFmpeg signals, scenes, local speech-to-text, highlights and
  *                an overview from a local model (or extractive; paid only with a budget). See media-analysis.js.
+ *   research     MegaSource (server/research/): Wikipedia, the topic's Fandom wiki, Wikidata, DeepSeek web search,
+ *                Commons and Openverse, merged into numbered sources, licensed pictures and facts. No model call.
  *
  * The final output is validated against the workflow's output schema. An empty or invalid answer
  * fails the run (output.empty / output.invalid); nothing is ever filled in. input.sources become
@@ -96,11 +98,13 @@ function normMessages(messages, user) {
     return out;
 }
 
-function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spawnImpl, log = console }) {
+function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spawnImpl, log = console, research = null }) {
     // One loopback reader for everything that streams media (server/media-proxy.js): transcripts and media.analyze.
     let proxy = null;
     const reader = () => proxy || (proxy = require('../media-proxy').createMediaProxy({ fetcher, log }));
     const mediaAnalysis = require('./media-analysis').createMediaAnalysis({ registry, pool, fetcher, quotas, config, spawnImpl, log, reader });
+    let researcher = research;
+    const megasource = () => researcher || (researcher = require('../research').createResearch({ config: config.research || {}, log }));
     async function routeFor(key) {
         const r = await registry.resolveRoute(key);
         if (!r) throw new AiError(503, 'route.unavailable', `no route ${key}`);
@@ -248,7 +252,29 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
         return { output: { images: images.map(i => ({ b64: i.b64 || null, url: i.url || null })), count: images.length }, exec, route };
     }
 
-    const STEP = { llm: llmStep, passthrough: passthroughStep, complete: completeStep, transcribe: transcribeStep, embed: embedStep, image: imageStep, media_analysis: mediaAnalysis.step };
+    /** research: no model call. A developer app's run leaves the paid web search out (its DeepSeek calls are ours). */
+    async function researchStep(step, input, wf, run, ctx) {
+        let output;
+        try {
+            output = await megasource().gather(input, { signal: ctx.signal, allowPaid: !ctx.appRun });
+        } catch (err) {
+            if (err && err.status === 422) throw new AiError(422, 'input.invalid', err.message);
+            throw err;
+        }
+        if (!output.sources.length && !output.images.length) throw new AiError(502, 'source.unavailable', `no source answered for "${output.query}"`, { providers: output.providers });
+        // Recorded like a provider call: DeepSeek's per-call price counts against the cost quotas and the daily usage.
+        const exec = { provider: 'research', model: 'megasource', usage: { input: 0, output: 0, cached: 0 }, cost: Number(output.usage && output.usage.cost_usd) || 0, synthetic: false, fallbackUsed: false, explain: null };
+        return { output, exec };
+    }
+
+    /** A research run's grounding: what it read is the output itself; the gaps are the sources that did not answer. */
+    function researchGrounding(output) {
+        const gaps = Object.entries((output && output.providers) || {}).filter(([, p]) => p && !p.ok)
+            .map(([name, p]) => `${name}: ${p.skipped || p.error || 'did not answer'}`.slice(0, 300));
+        return { cited: [], gaps: gaps.slice(0, 20), read: (output && output.sources ? output.sources.length : 0) };
+    }
+
+    const STEP = { llm: llmStep, passthrough: passthroughStep, complete: completeStep, transcribe: transcribeStep, embed: embedStep, image: imageStep, media_analysis: mediaAnalysis.step, research: researchStep };
 
     /**
      * Run a workflow. ctx: { signal, logRequest, debugRaw, inputHash }
@@ -286,7 +312,7 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
         }));
         return {
             output: last.output, citations, jsonSchema,
-            grounding: groundingOf(last.output, sources.length, citeStep),
+            grounding: wf.steps.some((s) => s.kind === 'research') ? researchGrounding(last.output) : groundingOf(last.output, sources.length, citeStep),
             synthetic: Boolean(exec && exec.synthetic),
             provider: exec ? exec.provider : null, model: exec ? exec.model : null, fallbackUsed: Boolean(exec && exec.fallbackUsed),
             usage, cost,
@@ -295,7 +321,7 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
         };
     }
 
-    return { execute, narrowCitations };
+    return { execute, narrowCitations, research: () => megasource() };
 }
 
 module.exports = { createEngine, narrowCitations, collectCited, collectGaps, groundingOf };
