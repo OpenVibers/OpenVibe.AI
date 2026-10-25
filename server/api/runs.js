@@ -142,6 +142,17 @@ function runsRouter({ runs, registry, auth, config, log = console }) {
         });
     }
 
+    // MegaSource research (workflow research.gather): first-party services and developer apps alike; an app's run leaves
+    // DeepSeek's paid web search out and reads only the free sources.
+    r.post('/api/v1/research', createApp, async (req, res) => {
+        try {
+            const body = req.body || {};
+            const { idempotency_key: idem, target, attribution, on_behalf_of: obo, options, ...input } = body;
+            const wait = req.query.wait != null ? Math.max(0, Math.min(Number(req.query.wait) || 0, config.runs.maxWaitMs)) : config.runs.maxWaitMs;
+            await createAndRespond(req, res, { workflow: 'research.gather', input, idempotency_key: idem, target, attribution, on_behalf_of: obo, options }, wait);
+        } catch (err) { sendError(res, err, req.ov, log); }
+    });
+
     return r;
 }
 

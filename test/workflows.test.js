@@ -34,8 +34,9 @@ const EXAMPLES = {
     'ai.enrich': { record: { name: 'Widget' }, instructions: 'normalise the name' },
     'ai.embed': { input: ['one', 'two'] },
     'ai.image': { prompt: 'A goose eating croutons, watercolour.', size: '1024x1024', n: 1 },
-    'wiki.generate_space': { topic: 'SQLite', sources: SRC(2) },
-    'wiki.generate_page': { title: 'WAL mode', sources: SRC(3) },
+    'wiki.generate_space': { topic: 'SQLite', max_pages: 6, sources: SRC(2) },
+    'wiki.generate_page': { title: 'WAL mode', topic: 'SQLite', pages: ['SQLite', 'WAL mode', 'Journal'], images: [{ title: 'WAL diagram', description: 'How WAL writes' }], sources: SRC(3) },
+    'research.gather': { query: 'SQLite', max_images: 4 },
     'blog.draft_post': { topic: 'Why we self-host', sources: SRC(1) },
     'blog.write_digest': { desk: 'News digest', about: 'Government and space agency announcements', period: '14 October 2026', sources: SRC(3) },
     'blog.write_satire': { topic: 'Is it safe to let your air fryer vote?', angle: 'a consumer safety explainer' },
@@ -136,11 +137,14 @@ t.test('every workflow runs end to end on the stub and returns schema-valid outp
         assert.strictEqual(r.status, 201, `${w.key}: ${r.status} ${r.text.slice(0, 300)}`);
         const run = r.body.run;
         assert.strictEqual(run.status, 'succeeded', `${w.key}: ${JSON.stringify(run.error)}`);
-        assert.strictEqual(run.synthetic, true, `${w.key} should be marked synthetic`);
+        // Research calls no model: it reads (here, the canned web of test/fixtures/research-fetch.js) and is never synthetic.
+        const reads = w.steps.some((s) => s.kind === 'research');
+        assert.strictEqual(run.synthetic, !reads, `${w.key} should ${reads ? 'not ' : ''}be marked synthetic`);
         assert.strictEqual(run.provenance.origin, 'ai');
         assert.strictEqual(run.provenance.workflow, w.key);
         assert.ok(run.provenance.model, `${w.key} has a model`);
         assert.ok(schemas.validate(w.output_schema, run.output).valid, `${w.key} output invalid`);
+        if (reads) { assert.ok(run.output.sources.length && Array.isArray(run.grounding.gaps)); continue; }
         // WS-O task 3: every output says what backs it: cited sources, or explicit gaps.
         assert.ok(run.grounding && Array.isArray(run.grounding.cited) && Array.isArray(run.grounding.gaps), `${w.key} has grounding`);
         assert.ok(run.grounding.cited.length || run.grounding.gaps.length, `${w.key}: citations or explicit gaps`);

@@ -20,6 +20,7 @@ const media = require('./media');
 const core = require('./core');
 const products = require('./products');
 const chat = require('./chat');
+const research = require('./research');
 const { resolveSecret } = require('../util');
 
 const ROLE_TIMEOUT = { chat: 20000, vision: 30000, director: 25000, summary: 30000, legacy: 30000 };
@@ -155,15 +156,18 @@ async function seed({ registry, quotas, config, env = process.env, db }) {
     // Space's spaces (server/workflows/space.js): the builder writes whole apps, so it gets the creative model and room to
     // finish; a space's own AI is conversation text, an alias of the chat pool.
     await registry.seedVersioned('route', 'space.build', pool(180000, { max_output_tokens: 16000, options: { outlast_provider_timeout: true }, ...(creativeModel ? { constraints: { objective: 'correctness', latency_class: 'interactive', model: creativeModel, authority: `shared:${creativeModel}` } } : {}) }));
+    // Wiki generation (wiki.generate_space, wiki.generate_page): long cited pages people read, so the creative model, room
+    // to write (a page is several thousand tokens) and time to finish past the provider's chat timeout.
+    await registry.seedVersioned('route', 'wiki.write', pool(170000, { max_output_tokens: 7000, response_format: 'json', options: { outlast_provider_timeout: true, temperature: 0.4 }, ...(creativeModel ? { constraints: { objective: 'correctness', latency_class: 'interactive', model: creativeModel, authority: `shared:${creativeModel}` } } : {}) }));
     await registry.seedVersioned('route', 'space.ask', { primary: { provider: 'shared', model: null }, fallbacks: [], options: {}, max_output_tokens: 800, response_format: 'text', timeout_ms: null, alias_of: 'default.chat' });
     await registry.seedVersioned('route', 'chat.member', { primary: { provider: 'shared', model: null }, fallbacks: [], options: {}, max_output_tokens: 600, response_format: 'text', timeout_ms: null, alias_of: 'default.chat' });
 
     // Templates, then workflows (workflows reference templates)
-    for (const t of [...live.templates, ...core.templates, ...products.templates, ...media.templates, ...chat.templates, ...space.templates]) {
+    for (const t of [...live.templates, ...core.templates, ...products.templates, ...media.templates, ...chat.templates, ...space.templates, ...research.templates]) {
         const { key, ...def } = t;
         await registry.seedVersioned('template', key, { description: null, default_route: null, owner: 'ai', visibility: 'internal', metadata: {}, ...def });
     }
-    for (const w of [...live.workflows, ...core.workflows, ...products.workflows, ...media.workflows, ...chat.workflows, ...space.workflows]) {
+    for (const w of [...live.workflows, ...core.workflows, ...products.workflows, ...media.workflows, ...chat.workflows, ...space.workflows, ...research.workflows]) {
         const { key, ...def } = w;
         await registry.seedVersioned('workflow', key, { description: null, default_route: null, cache_ttl_sec: null, metadata: {}, ...def });
     }

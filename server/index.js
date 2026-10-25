@@ -26,7 +26,7 @@ const { createApp } = require('./app');
 const { gracefulStop, telemetry } = require('openvibe-sdk/service');
 const { createPgTelemetrySink, startTelemetryRetention } = require('openvibe-sdk/telemetry');
 
-async function start({ config, db: givenDb = null, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, listen = true, credentialFetch = null, valkey = null } = {}) {
+async function start({ config, db: givenDb = null, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, listen = true, credentialFetch = null, valkey = null, research = null } = {}) {
     config = config || load(env);
     schemas.configure(config.schemaCache);
     // PostgreSQL (ADR-035): opened and migrated here unless the caller (a test) hands in a migrated handle.
@@ -41,7 +41,8 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     const quotas = createQuotas(db, { clock, registry, freeAllowance, tiers });
     const cache = createCache(db, { clock });
     const fetcher = createFetcher(config);
-    const engine = createEngine({ registry, pool, fetcher, quotas, config, log });
+    // MegaSource (server/research/): the DeepSeek key resolves by name from this environment; tests hand in their own.
+    const engine = createEngine({ registry, pool, fetcher, quotas, config, log, research: research || require('./research').createResearch({ config: config.research, env, log }) });
     // ai.run.* to OpenVibe.Events through the outbox (server/events.js); before recovery, so its failures are announced.
     require('./events').init(db, { log });
     // platform.usage-sample@1 readings to OpenVibe.Billing through their own outbox (server/usage-samples.js).

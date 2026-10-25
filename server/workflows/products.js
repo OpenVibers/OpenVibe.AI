@@ -17,6 +17,8 @@ const STR = (n) => ({ type: 'string', maxLength: n });
 const OBJ = (props, required) => ({ type: 'object', additionalProperties: false, required: required || Object.keys(props), properties: props });
 const ARR = (items, max = 20) => ({ type: 'array', items, maxItems: max });
 const CLAIM = OBJ({ text: STR(600), citations: CITES });
+// What a wiki page is about (wiki.generate_space): the wiki's own page groups follow from it.
+const PAGE_KINDS = ['overview', 'character', 'person', 'episode', 'season', 'work', 'place', 'group', 'object', 'concept', 'event', 'production', 'reception', 'list', 'other'];
 
 const RULES = 'You prepare a DRAFT evidence package for OpenVibe editors — never publication truth. Use ONLY the numbered sources provided. Every claim must cite the source numbers it rests on in its `citations` array (integers, e.g. [0, 2]). If the sources do not support something, leave it out and list it in `gaps`. Never invent facts, names, numbers, prices, ratings, dates or quotes. Output only JSON matching the schema.';
 
@@ -31,10 +33,10 @@ function productTemplate(key, name, task, route, extraUser = '') {
 }
 
 const templates = [
-    productTemplate('wiki.generate_space', 'Wiki: propose a space', 'Propose a wiki space for the topic: a title, a one-paragraph summary and a page tree (page titles with short outlines), grounded in the sources.', 'wiki.generate',
-        'Topic: {{topic}}{{#audience}}\nAudience: {{audience}}{{/audience}}\n\n'),
-    productTemplate('wiki.generate_page', 'Wiki: draft a page', 'Draft one wiki page: summary, sections and infobox values, each cited.', 'wiki.generate',
-        'Page title: {{title}}{{#space}}\nSpace: {{space}}{{/space}}{{#outline}}\nRequested outline: {{json outline}}{{/outline}}\n\n'),
+    productTemplate('wiki.generate_space', 'Wiki: plan a wiki', 'Plan a wiki about the topic, written like an encyclopedia or a well-kept fan wiki, from the numbered sources. `title`: the wiki\'s name (usually the topic\'s name). `summary`: one paragraph saying what the topic is, cited. `pages`: the main page first, titled exactly as the topic is best known, with kind overview; then the subjects a reader would look up, as many as the sources say enough about, up to {{max_pages}} pages in all: the people or characters, works (episodes, seasons, films, books, games, albums), places, groups, objects, concepts, events, and its production and reception when the sources cover them. Each page: `title` (its usual name; add the topic in brackets only to tell two subjects apart), `kind`, `parent` (the title of another page in this list it belongs under, else an empty string; the main page has none), `outline` (three to six short section headings this page should have), `query` (a short web search phrase that finds this subject, such as "Ron Stoppable Kim Possible"), and `citations`. Only plan subjects the sources name; leave out anything they do not support.', 'wiki.write',
+        'Topic: {{topic}}{{#audience}}\nAudience: {{audience}}{{/audience}}\nPages at most: {{max_pages}}\n\n'),
+    productTemplate('wiki.generate_page', 'Wiki: write a page', 'Write one page of the wiki from the numbered sources, encyclopedic and engaging, the way a well-kept wiki reads. `summary`: one or two plain sentences saying what the subject is. `lead`: the opening paragraph or two, in Markdown. `sections`: follow the requested outline where the sources support it (skip or merge headings they do not), each with a `heading` and a Markdown `body` of one or more full paragraphs (a list where it reads better), each citing its sources; about 500 to 1500 words in all when the sources allow, shorter when they do not. Link other pages of this wiki, and only titles from the list of pages, as [[Exact Title]] the first time each is mentioned. `infobox`: up to twelve key facts as `label` and `value` (for example First appearance, Voiced by, Created by, Release date, Location), each cited; the Wikidata facts are good material. `images`: up to three pictures from the numbered list of pictures that clearly show this page\'s subject, judged by their title and description (never a picture of something or someone else, and none when no picture fits), each with its `index`, a short factual `caption`, and `section`: the heading it illustrates, or lead for the page\'s main picture. Never write source numbers or "[n]" in the text. Never describe a real person\'s looks, body, clothing or age.', 'wiki.write',
+        'Page title: {{title}}\nWiki topic: {{topic}}{{#outline}}\nRequested outline: {{json outline}}{{/outline}}\n\nPages of this wiki (link only these, as [[Title]]):\n{{pages_block}}\n\n{{#images_block}}Pictures (by number):\n{{images_block}}\n\n{{/images_block}}'),
     productTemplate('blog.draft_post', 'Blog: draft a post', 'Draft a blog post in Markdown for the brief. Claims of fact must cite sources; opinion and framing need none. If there are no sources, write only what needs no facts and list the facts you would need in gaps.', 'blog.draft',
         'Topic: {{topic}}{{#brief}}\nBrief: {{brief}}{{/brief}}{{#tone}}\nTone: {{tone}}{{/tone}}{{#audience}}\nAudience: {{audience}}{{/audience}}\n\n'),
     productTemplate('blog.write_digest', 'Blog: write a desk digest', 'Write one digest post for an OpenVibe.Blog desk from the numbered sources (the items its sources published in the period). Pick the items a reader of this desk would most want to know about, about twelve at most, and skip routine, minor or duplicate ones. Group them into two to five sections, most important first. Each section is a list of short paragraphs, one story per paragraph, two to four plain sentences saying what happened and why it matters to this desk\'s readers, exactly as the sources state it; each paragraph lists the numbers of the sources it rests on in its `citations`. Never write source numbers, "(Source n)" or brackets in the text itself. Neutral and readable: no opinion stated as fact, no hype, no advice, no predictions. Name prices, dates and numbers only as the sources give them. List in gaps only what a reader would miss (an item you could not make sense of, a missing date or price). title: a headline naming the one or two biggest stories, at most 90 characters, without the words digest, desk, roundup or snapshot and without a date. dek: one sentence about the period.', 'blog.draft',
@@ -67,16 +69,31 @@ const templates = [
 
 const workflows = [
     {
-        key: 'wiki.generate_space', name: 'Propose a wiki space', namespace: 'wiki',
-        input_schema: OBJ({ topic: STR(300), audience: STR(300), sources: SOURCES(1) }, ['topic', 'sources']),
-        output_schema: OBJ({ title: STR(200), summary: STR(2000), pages: ARR(OBJ({ title: STR(200), slug_hint: STR(120), outline: ARR(STR(300), 20), citations: CITES }), 40), citations: CITES, gaps: GAPS }),
-        default_route: 'wiki.generate',
+        key: 'wiki.generate_space', name: 'Plan a wiki', namespace: 'wiki',
+        input_schema: OBJ({ topic: STR(300), audience: STR(300), max_pages: { type: 'integer', minimum: 1, maximum: 40 }, sources: SOURCES(1) }, ['topic', 'sources']),
+        output_schema: OBJ({
+            title: STR(200), summary: STR(2000),
+            pages: ARR(OBJ({ title: STR(200), kind: { enum: PAGE_KINDS }, parent: STR(200), outline: ARR(STR(120), 8), query: STR(160), citations: CITES }), 40),
+            citations: CITES, gaps: GAPS,
+        }),
+        default_route: 'wiki.write',
+        steps: [{ kind: 'llm', template: 'wiki.generate_space', operation: 'generate', output: 'json', prepare: 'wiki.space', cite: true, params: { max_tokens: 4000, temperature: 0.3, timeout_ms: 150000 } }],
     },
     {
-        key: 'wiki.generate_page', name: 'Draft a wiki page', namespace: 'wiki',
-        input_schema: OBJ({ title: STR(300), space: STR(300), outline: ARR(STR(300), 30), sources: SOURCES(1) }, ['title', 'sources']),
-        output_schema: OBJ({ title: STR(300), summary: STR(2000), sections: ARR(OBJ({ heading: STR(200), body: STR(20000), citations: CITES }), 40), infobox: ARR(OBJ({ key: STR(100), value: STR(500), citations: CITES }), 30), citations: CITES, gaps: GAPS }),
-        default_route: 'wiki.generate',
+        key: 'wiki.generate_page', name: 'Write a wiki page', namespace: 'wiki',
+        input_schema: OBJ({
+            title: STR(300), topic: STR(300), space: STR(300), outline: ARR(STR(300), 30), pages: ARR(STR(200), 60),
+            images: ARR(OBJ({ title: STR(300), description: STR(400) }, ['title']), 16), sources: SOURCES(1),
+        }, ['title', 'sources']),
+        output_schema: OBJ({
+            title: STR(300), summary: STR(500), lead: STR(6000),
+            sections: ARR(OBJ({ heading: STR(160), body: STR(12000), citations: CITES }), 14),
+            infobox: ARR(OBJ({ label: STR(60), value: STR(300), citations: CITES }), 14),
+            images: ARR(OBJ({ index: { type: 'integer', minimum: 0, maximum: 15 }, caption: STR(300), section: STR(160) }), 3),
+            citations: CITES, gaps: GAPS,
+        }),
+        default_route: 'wiki.write',
+        steps: [{ kind: 'llm', template: 'wiki.generate_page', operation: 'generate', output: 'json', prepare: 'wiki.page', cite: true, params: { max_tokens: 7000, temperature: 0.4, timeout_ms: 170000 } }],
     },
     {
         key: 'blog.draft_post', name: 'Draft a blog post', namespace: 'blog',
@@ -215,7 +232,7 @@ const workflows = [
 ].map(w => ({
     cache_mode: 'private',
     ...w,
-    steps: [{ kind: 'llm', template: w.key, operation: w.key === 'moderation.classify' || w.key === 'rent.screen_listing' ? 'classify' : 'generate', output: 'json', prepare: 'sources', cite: true, params: { max_tokens: 2400, temperature: 0.3 } }],
+    steps: w.steps || [{ kind: 'llm', template: w.key, operation: w.key === 'moderation.classify' || w.key === 'rent.screen_listing' ? 'classify' : 'generate', output: 'json', prepare: 'sources', cite: true, params: { max_tokens: 2400, temperature: 0.3 } }],
     metadata: { draft: true, seed: true },
 }));
 

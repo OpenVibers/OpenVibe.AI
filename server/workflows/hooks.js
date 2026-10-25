@@ -271,6 +271,24 @@ const PREPARE = {
     sources(input) {
         return { vars: { ...input, sources_block: sourcesBlock(input.sources), source_count: (input.sources || []).length } };
     },
+    // Wiki generation (OpenVibe.Wiki's "vibe a wiki"): the plan's page budget, and a page's link targets and pictures.
+    'wiki.space'(input) {
+        return { vars: { ...input, max_pages: input.max_pages || 12, sources_block: sourcesBlock(input.sources), source_count: (input.sources || []).length } };
+    },
+    'wiki.page'(input) {
+        const pages = (Array.isArray(input.pages) ? input.pages : []).map((t) => clean(t, 200)).filter(Boolean).slice(0, 60);
+        const images = (Array.isArray(input.images) ? input.images : []).slice(0, 16);
+        return {
+            vars: {
+                ...input,
+                topic: input.topic || input.space || input.title,
+                pages_block: pages.map((t) => `- ${t}`).join('\n') || '(this is the only page)',
+                images_block: images.map((im, i) => `[${i}] ${clean(im.title, 300)}${im.description ? ` — ${clean(im.description, 400)}` : ''}`).join('\n'),
+                sources_block: sourcesBlock(input.sources),
+                source_count: (input.sources || []).length,
+            },
+        };
+    },
     'pics.describe_image'(input) {
         return { vars: { title: clean(input.title, 120) || '' } };
     },
