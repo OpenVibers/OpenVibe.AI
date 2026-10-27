@@ -393,7 +393,9 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             const latency = Date.now() - t0;
             if (ctx.logRequest) ctx.logRequest({ ...base, model_key: result.model, status: 'ok', output_hash: sha256(result.text || ''), tokens_in: usage.input, tokens_out: usage.output, tokens_cached: 0, tokens_estimated: 0, cost_usd: 0, latency_ms: latency });
             return { result: { text: result.text, json: null, model: result.model, usage }, provider: cred.providerKey, providerKind: 'node', model: result.model, fallbackUsed: false, usage, cost: 0, latencyMs: latency, synthetic: false, tried: [], startedAt: t0,
-                explain: { objective: 'own-machine', reasons: ['the person\'s own machine, by their choice'], selected: { provider: 'node', machine: cred.machine, model: result.model }, candidates: [] } };
+                explain: { objective: 'own-machine', reasons: [cred.machine === 'any' ? 'the fastest of the person\'s own machines that answered, by their choice' : 'the person\'s own machine, by their choice'],
+                    selected: { provider: 'node', machine: result.machine || cred.machine, model: result.model },
+                    candidates: (result.tried || []).map((x) => ({ provider: 'node', machine: x.machine, skipped: x.error })) } };
         } catch (err) {
             if (ctx.logRequest) ctx.logRequest({ ...base, status: 'error', latency_ms: Date.now() - t0, error: String(err && err.message || err).slice(0, 500) });
             if (ctx.signal && ctx.signal.aborted) throw new AiError(409, 'run.cancelled', 'run was cancelled');
