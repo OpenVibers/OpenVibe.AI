@@ -23,7 +23,7 @@
 const placement = require('openvibe-sdk/placement');
 const contracts = require('openvibe-contracts');
 const { AiError, resolveSecret, sha256 } = require('../util');
-const { retryable, sleep, ProviderError } = require('./common');
+const { retryable, sleep, ProviderError, schemaInstruction } = require('./common');
 const { createStubProvider } = require('./stub');
 const { createOpenAiProvider } = require('./openai');
 const { createResponsesProvider } = require('./responses');
@@ -43,7 +43,9 @@ function rateLimited(err) {
     return (err && err.status === 429) || (err && err.code === 'provider.rate_limited');
 }
 
-function createProviderPool({ db, registry, config, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, credentialFetch = null }) {
+function createProviderPool({ db, registry, config, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, credentialFetch = null, machineModels = null }) {
+    // A person's own machine as their model (credential provider node, server/machines.js).
+    const machines = machineModels || require('../machines').createMachineModels({ config, env, fetchImpl });
     const cache = new Map();          // key -> { stamp, adapter }
     const stats = {};                 // key -> { calls, failures, ... } (in memory; tests + /api/ready)
 
@@ -368,7 +370,39 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
      * shared with anyone, chat operations only; the base URL they chose is reached through guardedFetch. One
      * request-log row per attempt under provider_key byo:<owner>:<subject>, priced by the model's list price.
      */
+    /**
+     * A run on the person's own machine (credential provider node): one chat completion through OpenVibe.Bot to their
+     * model server. Text only, no fallback, nothing spent; one request-log row under byo:<owner>:<subject>.
+     */
+    async function executeOnMachine(cred, operation, req, ctx = {}) {
+        if (!['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich'].includes(operation)) throw new AiError(422, 'credential.unsupported', `a person's own machine answers text only, not ${operation}`);
+        if (req.image) throw new AiError(422, 'credential.unsupported', 'a person\'s own machine reads no pictures yet');
+        const wanted = ctx.role || ((/^live\.(chat|vision|director|summary|legacy)$/.exec(ctx.routeKey || '') || [])[1]) || null;
+        const model = (wanted && cred.models[wanted]) || cred.models.chat;
+        if (!model) throw new AiError(422, 'credential.no_model', 'the person\'s own machine credential names no model (models.chat)');
+        const sysText = [...(req.system || []).map((x) => x.text), req.json ? schemaInstruction(req.json) : ''].filter(Boolean).join('\n\n');
+        const messages = [
+            ...(sysText ? [{ role: 'system', content: sysText }] : []),
+            ...(req.messages || []).map((m) => ({ role: m.role === 'assistant' ? 'assistant' : m.role === 'system' ? 'system' : 'user', content: Array.isArray(m.content) ? m.content.filter((p) => p && p.type === 'text').map((p) => p.text).join('\n') : String(m.content || '') })),
+        ];
+        const base = { operation, provider_key: cred.providerKey, model_key: model, route_key: ctx.routeKey || null, route_version: ctx.routeVersion || null, fallback: 0, prompt_hash: ctx.promptHash || null };
+        const t0 = Date.now();
+        try {
+            const result = await machines.chat({ machine: cred.machine, subject: cred.subject, model, messages, maxTokens: req.maxTokens, temperature: req.temperature, signal: ctx.signal, timeoutMs: Math.max(5000, Math.min(req.timeoutMs || 120000, 300000)) });
+            const usage = result.usage;
+            const latency = Date.now() - t0;
+            if (ctx.logRequest) ctx.logRequest({ ...base, model_key: result.model, status: 'ok', output_hash: sha256(result.text || ''), tokens_in: usage.input, tokens_out: usage.output, tokens_cached: 0, tokens_estimated: 0, cost_usd: 0, latency_ms: latency });
+            return { result: { text: result.text, json: null, model: result.model, usage }, provider: cred.providerKey, providerKind: 'node', model: result.model, fallbackUsed: false, usage, cost: 0, latencyMs: latency, synthetic: false, tried: [], startedAt: t0,
+                explain: { objective: 'own-machine', reasons: ['the person\'s own machine, by their choice'], selected: { provider: 'node', machine: cred.machine, model: result.model }, candidates: [] } };
+        } catch (err) {
+            if (ctx.logRequest) ctx.logRequest({ ...base, status: 'error', latency_ms: Date.now() - t0, error: String(err && err.message || err).slice(0, 500) });
+            if (ctx.signal && ctx.signal.aborted) throw new AiError(409, 'run.cancelled', 'run was cancelled');
+            throw err;
+        }
+    }
+
     async function executeWithCredential(cred, operation, req, ctx = {}) {
+        if (cred.provider === 'node') return await executeOnMachine(cred, operation, req, ctx);
         // Text operations are all chat completions on the person's provider (templated workflows use generate).
         // A project's own provider (ADR-056 secret, ai.complete) passes a Chat Completions request through as written.
         const completing = operation === 'complete' && cred.provider === 'openai';
