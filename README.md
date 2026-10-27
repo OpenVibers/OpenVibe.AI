@@ -27,7 +27,8 @@ owns publication truth: Wiki, Blog, News, Live, … decide what to publish.
   attribution quotas (`ai.quota.attribution.manage`)
 - a person's own computer as their provider (credential provider `node`, contracts 0.220.0): a model on their own
   machine (Ollama, LM Studio, llama.cpp through the OpenVibe Node), reached through OpenVibe.Bot with `bot.machine.ai`
-  for that person only, free and with no key (`server/machines.js`; Bot on this host by default, `OV_BOT_INTERNAL_URL`)
+  for that person only, free and with no key (`server/machines.js`; Bot on this host by default, `OV_BOT_INTERNAL_URL`);
+  machine `any` (contracts 0.221.0) uses the fastest of their machines that is on with the model, then the next
 - the `ai.run.queued|succeeded|failed|cached` events and the `ai.preferences` / `ai.usage_summary`
   user modules' AI side
 
@@ -641,7 +642,7 @@ ai.openvibe.network notice from OpenVibe.Sites.
 Part of the [OpenVibe network](https://openvibe.network). Built in the open by [OpenVibers](https://github.com/OpenVibers).
 
 <!-- versions:start -->
-- openvibe-contracts: v0.220.0
+- openvibe-contracts: v0.221.0
 - openvibe-sdk: v0.65.0
 - openvibe-shared: v4.15.2
 <!-- versions:end -->

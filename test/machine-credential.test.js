@@ -41,6 +41,13 @@ t.test('store a node credential: the machine, no key', async () => {
     assert.ok(validate('ai.credential@1', r.body).valid, JSON.stringify(validate('ai.credential@1', r.body).errors));
     const row = await h.db.prepare('SELECT key_enc, machine FROM subject_credentials WHERE owner = ? AND subject = ?').get('chat', FRAN);
     assert.deepStrictEqual([row.key_enc, row.machine], ['', MACHINE], 'nothing sealed');
+    // Any of their machines (contracts 0.221.0), kept for another person: never "anyone".
+    const OTHER = 'usr_01JAB2C3D4E5F6G7H8J9K0MNP5';
+    assert.strictEqual((await request(h.base, 'PUT', `/api/v1/credentials/${OTHER}`, { tok: chat, body: { provider: 'node', machine: 'anyone', models: { chat: 'llama3.1:8b' } } })).status, 422);
+    r = await request(h.base, 'PUT', `/api/v1/credentials/${OTHER}`, { tok: chat, body: { provider: 'node', machine: 'any', models: { chat: 'llama3.1:8b' } } });
+    assert.deepStrictEqual([r.status, r.body.machine], [200, 'any'], r.text);
+    assert.ok(validate('ai.credential@1', r.body).valid);
+    assert.strictEqual((await request(h.base, 'DELETE', `/api/v1/credentials/${OTHER}`, { tok: chat })).status < 300, true);
 });
 
 t.test('a run with it goes to that machine as the person, costs nothing, and says where it ran', async () => {
@@ -87,7 +94,7 @@ t.test('server/machines.js: one POST to Bot as the person with a service token; 
     assert.strictEqual(m.enabled, true);
     await assert.rejects(m.chat({ machine: 'dev_nope', subject: FRAN, model: 'm', messages: [] }), (e) => e.status === 422);
     const out = await m.chat({ machine: MACHINE, subject: FRAN, model: 'llama3.1:8b', messages: [{ role: 'user', content: 'hi' }], maxTokens: 99999, temperature: 5, timeoutMs: 1000 });
-    assert.deepStrictEqual(out, { text: 'Hi.', model: 'llama3.1:8b', usage: { input: 12, output: 3, cached: 0 } });
+    assert.deepStrictEqual(out, { text: 'Hi.', model: 'llama3.1:8b', usage: { input: 12, output: 3, cached: 0 }, machine: MACHINE, tried: [] });
     assert.strictEqual(calls[0].url, `http://bot.test/api/v1/machines/${MACHINE}/commands`);
     assert.strictEqual(calls[0].init.headers.Authorization, 'Bearer svc-openvibe.bot');
     assert.strictEqual(calls[0].init.headers['X-OV-Subject'], FRAN);
@@ -99,6 +106,40 @@ t.test('server/machines.js: one POST to Bot as the person with a service token; 
     await assert.rejects(m.chat({ machine: MACHINE, subject: FRAN, model: 'm', messages: [] }), (e) => e.status === 502 && e.code === 'machine.failed' && /no model server/.test(e.message));
     answer = 'down';
     await assert.rejects(m.chat({ machine: MACHINE, subject: FRAN, model: 'm', messages: [] }), (e) => e.status === 503 && e.code === 'machine.unreachable');
+});
+
+t.test('machine any (contracts 0.221.0): the fastest of the person\'s own machines that is on with the model, then the next', async () => {
+    const { createMachineModels } = require('../server/machines');
+    const id = (c) => `dev_01M5YGM39VC2RRGDQPRD6D4S${c}`;
+    const list = [
+        { id: id('AA'), online: false, ai_models: true, computer: { ai: { models: ['llama3.1:8b'], ready: true } } },
+        { id: id('BB'), online: true, ai_models: true, computer: { ai: { models: ['qwen2.5:7b'], ready: true } } },
+        { id: id('CC'), online: true, ai_models: true, computer: { ai: { models: ['llama3.1:8b'], ready: true }, ai_speed: { model: 'llama3.1:8b', tokens_per_s: 6 } } },
+        { id: id('DD'), online: true, ai_models: true, computer: { ai: { models: ['llama3.1:8b'], ready: true }, ai_speed: { model: 'llama3.1:8b', tokens_per_s: 31 } } },
+    ];
+    const asked = [];
+    let busy = new Set([id('DD')]);
+    let listed = list;
+    const fetchImpl = async (url, init = {}) => {
+        if (url === 'http://bot.test/api/v1/machines') {
+            assert.strictEqual(init.headers['X-OV-Subject'], FRAN, 'as the person');
+            return { ok: true, status: 200, json: async () => ({ machines: listed }) };
+        }
+        const dev = /machines\/([^/]+)\/commands$/.exec(url)[1];
+        asked.push(dev);
+        const body = busy.has(dev) ? { result: 'nack', reason: 'the model is answering another request on this machine' }
+            : { result: 'ack', data: { model: 'llama3.1:8b', message: { content: `from ${dev}` }, usage: { prompt_tokens: 3, completion_tokens: 2 } } };
+        return { ok: true, status: 200, json: async () => body };
+    };
+    const m = createMachineModels({ config: { bot: { url: 'http://bot.test' } }, env: {}, fetchImpl, tokens: { getToken: async () => 'svc' } });
+    const out = await m.chat({ machine: 'any', subject: FRAN, model: 'llama3.1:8b', messages: [{ role: 'user', content: 'hi' }] });
+    assert.deepStrictEqual(asked, [id('DD'), id('CC')], 'the fastest first, the next when it is busy; never one that is off or lacks the model');
+    assert.deepStrictEqual([out.text, out.machine, out.tried.map((x) => x.machine)], [`from ${id('CC')}`, id('CC'), [id('DD')]]);
+    busy = new Set([id('DD'), id('CC')]);
+    await assert.rejects(m.chat({ machine: 'any', subject: FRAN, model: 'llama3.1:8b', messages: [] }), (e) => e.status === 503 && e.code === 'machine.none' && /answered/.test(e.message));
+    listed = [];
+    await assert.rejects(m.chat({ machine: 'any', subject: FRAN, model: 'llama3.1:8b', messages: [] }), (e) => e.status === 503 && e.code === 'machine.none' && /is on with/.test(e.message));
+    await assert.rejects(m.chat({ machine: 'anyone', subject: FRAN, model: 'm', messages: [] }), (e) => e.status === 422);
 });
 
 t.test('close', async () => { await h.close(); });
