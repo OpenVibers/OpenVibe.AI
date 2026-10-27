@@ -13,6 +13,9 @@
  * subject (the additional data), so a row copied to another owner or subject does not decrypt. Without the key
  * configured the routes answer 503 and credentialed runs are refused. Spend is what the credential's requests
  * cost today (provider_key byo:<owner>:<subject>), checked against the optional budget_usd_per_day.
+ *
+ * Provider node (contracts 0.220.0) is the person's own machine instead: `machine` names it, there is no key (nothing is
+ * sealed, no hint), and a run reaches it only through OpenVibe.Bot (server/machines.js), for that person only.
  */
 const crypto = require('crypto');
 const express = require('express');
@@ -56,7 +59,8 @@ function createCredentials({ db, config, clock = { now: () => Date.now() } }) {
 
     async function view(row) {
         return {
-            subject: row.subject, owner: row.owner, provider: row.provider, base_url: row.base_url || null, key_hint: row.key_hint,
+            subject: row.subject, owner: row.owner, provider: row.provider, base_url: row.base_url || null,
+            ...(row.provider === 'node' ? { machine: row.machine } : { key_hint: row.key_hint }),
             models: JSON.parse(row.models || '{}'), budget_usd_per_day: row.budget_usd_day == null ? null : row.budget_usd_day,
             spent_usd_today: Math.round(await spentToday(row.owner, row.subject) * 1e6) / 1e6,
             created_at: row.created_at, updated_at: row.updated_at, last_used_at: row.last_used_at || null,
@@ -70,8 +74,17 @@ function createCredentials({ db, config, clock = { now: () => Date.now() } }) {
         if (!v.valid) throw new AiError(422, 'input.invalid', 'body does not match ai.credential-put@1', { errors: v.errors });
         const at = iso(clock.now());
         const prev = await row(owner, subject);
+        if (body.provider === 'node') {
+            // The person's own machine: nothing to seal. Bot checks it is theirs and that they turned it on, at each run.
+            await db.prepare(`INSERT INTO subject_credentials (owner, subject, provider, base_url, machine, key_enc, key_hint, models, budget_usd_day, created_at, updated_at)
+                        VALUES (?, ?, 'node', NULL, ?, '', '', ?, NULL, ?, ?)
+                        ON CONFLICT(owner, subject) DO UPDATE SET provider = excluded.provider, base_url = NULL, machine = excluded.machine, key_enc = '',
+                          key_hint = '', models = excluded.models, budget_usd_day = NULL, updated_at = excluded.updated_at`)
+                .run(owner, subject, body.machine, JSON.stringify(body.models || {}), prev ? prev.created_at : at, at);
+            return await view(await row(owner, subject));
+        }
         // The stored key stays for a change of models or budget; a new provider or endpoint needs the key again.
-        const sameEndpoint = prev && prev.provider === body.provider && (prev.base_url || null) === (body.base_url || null);
+        const sameEndpoint = prev && prev.provider !== 'node' && prev.provider === body.provider && (prev.base_url || null) === (body.base_url || null);
         if (body.api_key == null && !sameEndpoint) {
             throw new AiError(400, 'credential.key_required', prev ? 'enter the key again to change the provider or its address' : 'api_key is required the first time');
         }
@@ -99,6 +112,7 @@ function createCredentials({ db, config, clock = { now: () => Date.now() } }) {
     async function admit(owner, subject) {
         const r = await row(owner, subject);
         if (!r) throw new AiError(404, 'credential.not_found', 'no credential stored for that subject');
+        if (r.provider === 'node') return;   // the person's own machine: no key, no spend
         secretKey();
         if (r.budget_usd_day != null && r.budget_usd_day > 0 && await spentToday(owner, subject) >= r.budget_usd_day) {
             const tomorrow = new Date(iso(clock.now()).slice(0, 10) + 'T00:00:00.000Z').getTime() + 86400000;
@@ -111,6 +125,7 @@ function createCredentials({ db, config, clock = { now: () => Date.now() } }) {
         const r = await row(owner, subject);
         if (!r) throw new AiError(404, 'credential.not_found', 'the credential was deleted');
         await db.prepare('UPDATE subject_credentials SET last_used_at = ? WHERE owner = ? AND subject = ?').run(iso(clock.now()), owner, subject);
+        if (r.provider === 'node') return { providerKey: providerKeyFor(owner, subject), provider: 'node', subject, machine: r.machine, models: JSON.parse(r.models || '{}') };
         return { providerKey: providerKeyFor(owner, subject), provider: r.provider, base_url: r.base_url || null, apiKey: open(r.key_enc, `${owner}|${subject}`), models: JSON.parse(r.models || '{}') };
     }
 

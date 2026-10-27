@@ -226,6 +226,11 @@ function load(env = process.env) {
             intervalMs: Math.max(100, int(env.USAGE_SAMPLES_INTERVAL_MS, 2000)),
         },
 
+        // ── A person's own machine as their model (server/machines.js; contracts 0.219.0/0.220.0): runs with a
+        // credential of provider node go through OpenVibe.Bot (bot.machine.ai), on this host by default (as Actor reaches
+        // it); OV_BOT_INTERNAL_URL= (empty) turns it off.
+        bot: { url: trimUrl(env.OV_BOT_INTERNAL_URL != null ? env.OV_BOT_INTERNAL_URL : 'http://127.0.0.1:4630') },
+
         // ── Tier budgets (T6 step 8, server/govern.js): openvibe-sdk/govern in Valkey, off unless AI_GOVERN_TIERS=1.
         govern: loadGovern(env, { bool, int, num: float }),
     };
