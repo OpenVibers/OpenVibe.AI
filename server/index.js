@@ -11,6 +11,8 @@ const { load } = require('./config');
 const { openDb } = require('./db');
 const { createRegistry } = require('./registry');
 const { createProviderPool } = require('./providers');
+const { createBenchEvidence } = require('./bench/evidence');
+const { createBenchEvents } = require('./bench/events');
 const { createFetcher } = require('./fetcher');
 const { createEngine } = require('./workflows/engine');
 const { createCache } = require('./cache');
@@ -35,7 +37,9 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     // Provider keys an owner stored from the console (server/vault.js): into this process before any provider is built.
     const vault = require('./vault').createVault({ db, config, clock, log });
     await vault.load().catch((err) => log.warn(`[Vault] ${err.message}`));
-    const pool = createProviderPool({ db, registry, config, clock, fetchImpl, env, log, credentialFetch, machineModels });
+    // BENCH-11: Bench's ratings as routing evidence, and the opted-in tie rule inside placement.
+    const bench = createBenchEvidence({ db, registry, config, clock, fetchImpl, log });
+    const pool = createProviderPool({ db, registry, config, clock, fetchImpl, env, log, credentialFetch, machineModels, bench });
     // T6 step 8: the SaaS tier budgets on openvibe-sdk/govern in Valkey (server/govern.js); off unless AI_GOVERN_TIERS=1.
     const tiers = createTiers({ config, valkey, clock, log });
     // §2.1.8: the provider free allowance per subject, priced off the pool's own rate cards (server/free-allowance.js);
@@ -65,7 +69,9 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     // NODE_ENV=test (tests pin a PEM or point the URL at a stub and let the client fetch on first use).
     const keys = createNetworkKeys({ config });
     const auth = createAuth({ config, log });
-    const app = createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, vault });
+    // The Events consumer side: a signed bench.rating.changed webhook, subscribed at boot (server/bench/events.js).
+    const benchEvents = createBenchEvents({ bench, config, log, fetchImpl, clientSecret: env.OV_OAUTH_CLIENT_SECRET });
+    const app = createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, vault, benchEvents });
     let jwks = null;
     let keyLoaded = Promise.resolve(null);
     if (!keys.pinned && config.nodeEnv !== 'test') {
@@ -85,6 +91,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     housekeeping.unref?.();
 
     let server = null;
+    let benchSubscription = null;
     if (listen) userModules.start();
     if (listen) {
         server = await new Promise((resolve, reject) => {
@@ -95,12 +102,14 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         server.headersTimeout = 66000;
         server.requestTimeout = config.runs.maxWaitMs + 30000;
         log.log(`[ai] listening on http://${config.host}:${server.address().port} (${config.nodeEnv})`);
+        benchSubscription = benchEvents.startSubscriptions({ port: server.address().port });
         const shared = await registry.getProvider('shared');
         log.log(`[ai] shared provider: ${shared.kind} ${shared.status}, credentials ${registry.publicProvider(shared).credentials}; stub fallback ${config.stubFallback ? 'on' : 'off'}`);
     }
 
     async function close() {
         clearInterval(housekeeping);
+        if (benchSubscription) benchSubscription.stop();
         userModules.stop();
         if (jwks) jwks.stop();
         if (server) {
@@ -116,7 +125,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         if (!givenDb) await db.close();
     }
 
-    return { config, db, registry, pool, quotas, tiers, cache, fetcher, engine, runs, keys, keyLoaded, auth, app, server, close };
+    return { config, db, registry, pool, quotas, tiers, cache, fetcher, engine, runs, keys, keyLoaded, auth, app, server, bench, benchEvents, close };
 }
 
 if (require.main === module) {

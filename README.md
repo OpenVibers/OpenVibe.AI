@@ -43,7 +43,8 @@ owns publication truth: Wiki, Blog, News, Live, … decide what to publish.
 
 - PostgreSQL 18 (OpenVibe.Host `roles/data/`, ADR-035): every read and write is async through `openvibe-sdk/db`
 - OpenVibe.Network (JWKS, service tokens, SSO for the operator console, user modules)
-- OpenVibe.Events (the `ai.run.*` outbox relay; off without `EVENTS_URL`)
+- OpenVibe.Events (the `ai.run.*` outbox relay, and the signed `bench.rating.changed` subscription; off without `EVENTS_URL`)
+- OpenVibe.Bench (`bench.rating.changed` and `GET /api/v1/boards/:kind?type=elo|cost`, for opted-in routes)
 - OpenVibe.Media (recordings `media.analyze` reads, over allow-listed https URLs or signed URLs)
 - provider APIs configured by the operator (OpenAI-compatible, OpenAI Responses, Anthropic, the HTTP seam), whisper.cpp
   and the local model server `openvibe-llm.service` on this host
@@ -59,8 +60,9 @@ Implemented here (the service manifest's `capabilities`, audience `openvibe.ai`;
 registered since openvibe-contracts 0.109.0). A service token's `ns`
 claim limits which workflow namespaces it may run; an app token is fixed to its project's.
 
-Called elsewhere, as the service principal `ai`: `events.event.publish` (Events, the outbox relay)
-and `network.modules.read` / `network.modules.write` for `ai.preferences` and `ai.usage_summary`
+Called elsewhere, as the service principal `ai`: `events.event.publish` (Events, the outbox relay) and
+`events.subscription.manage` (Events, creating AI's own `bench.rating.changed` subscription), and
+`network.modules.read` / `network.modules.write` for `ai.preferences` and `ai.usage_summary`
 (Network). Other services grant `ai` their own draft capabilities (for example
 `blog.post.create`, `news.story.revise`, `reviews.summary.propose`) to receive drafts.
 
@@ -361,6 +363,21 @@ failure; a fallback that answers is recorded on the run (`fallback_used`), in th
 (`fallback = 1`) and in the audit log. Every run response and `GET /api/v1/runs/:id` carry `explain`
 (objective, reasons, selected, and every candidate with its estimated cost, latency and excluded
 reason).
+
+### Bench evidence (BENCH-11, plan §4.12 and §4.7)
+
+AI consumes OpenVibe.Bench's `bench.rating.changed` (through the signed `/internal/events` webhook, subscribed
+at boot with `events.subscription.manage`) and keeps a small `bench_evidence` table: per kind and category, the
+model, provider, Elo rating, confidence interval, games and Bench's cost per solved. A sparse event (Bench's
+current outbox names only `subjects`) is filled from `GET /api/v1/boards/:kind?type=elo|cost`.
+
+A route learns from that only when it opts in — `learn_from_bench: true` on the route, default off; `bench_kind`
+names the board (when absent AI infers it from the route key or operation, e.g. `chat.reply`), and
+`bench_category` defaults to `all`. Among the route's eligible offers, placement then prefers the **cheapest**
+offer whose rating interval overlaps the leader's (the highest non-provisional rating): statistically tied with
+the best, so price decides. A provisional rating (under 10 games) never decides. With no evidence the order is
+exactly the one placement produced. `GET /api/v1/routes/:key` carries a `bench` object with the evidence, the
+leader, the tied offers, the selected offer and the reason; the operator console shows the same read-only.
 
 `GET /api/v1/routes?operation=generate` lists each route's eligible offers as `{ provider, model }`.
 A first-party service holding `ai.run.create` may pin one on `POST /api/v1/generate` (and on

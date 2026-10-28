@@ -20,7 +20,7 @@ const ovServe = require('openvibe-shared/serve');
 const home = require('./home');
 const pkg = require('../package.json');
 
-function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, credentials = null, vault = null }) {
+function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, credentials = null, vault = null, benchEvents = null }) {
     const app = express();
     app.disable('x-powered-by');
     app.set('trust proxy', 'loopback');
@@ -86,6 +86,16 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
     app.get('/api/ready', readiness.handler);
     // GET /release.json (ADR-016) and POST /release-metrics (open tabs' update reports into /metrics).
     release.mount(app, { registry: metrics.registry });
+
+    // Events → AI (BENCH-11): loopback only, like every service's /internal. Events posts the signed v2
+    // delivery; nginx answers 404 for /internal, and a request carrying forwarding headers is not loopback.
+    app.use('/internal', (req, res, next) => {
+        if (req.headers['x-forwarded-for'] || req.headers['x-real-ip'] || req.headers['cf-connecting-ip']) {
+            return http.sendProblem(res, 404, 'ai.not_found', { ctx: req.ov });
+        }
+        return next();
+    });
+    if (benchEvents) app.use(benchEvents.router);
 
     // Operator actions shared by the admin API and the operator console (one implementation, one audit row).
     const ops = createOps({ db, registry, pool, quotas, cache, runs });

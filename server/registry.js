@@ -18,6 +18,7 @@ const BILLING_PROFILES = ['metered', 'subscription', 'payg', 'free', 'byok'];
 const FEATURES = ['chat', 'complete', 'generate', 'summarize', 'classify', 'extract', 'enrich', 'embed', 'vision', 'json', 'tools', 'transcribe', 'image'];
 const LIFECYCLE = ['draft', 'active', 'deprecated', 'archived'];
 const KEY_RE = /^[a-z][a-z0-9_-]*(\.[a-z0-9_-]+)*$/;
+const flag = (v) => v === true || v === 1 || /^(1|true|yes|on)$/i.test(String(v == null ? '' : v));
 
 function createRegistry(db, { clock = { now: () => Date.now() }, env = process.env } = {}) {
     const now = () => iso(clock.now());
@@ -189,10 +190,12 @@ function createRegistry(db, { clock = { now: () => Date.now() }, env = process.e
             fallbacks: parseJson(r.fallbacks, []), options: parseJson(r.options, {}), max_output_tokens: r.max_output_tokens,
             response_format: r.response_format, timeout_ms: r.timeout_ms, alias_of: r.alias_of,
             capability: r.capability || null, constraints: parseJson(r.constraints, {}), pinned: parseJson(r.pinned, []),
+            // BENCH-11: a route's opt-in to Bench's measured outcomes, and the board it reads (null = infer).
+            learn_from_bench: Boolean(r.learn_from_bench), bench_kind: r.bench_kind || null, bench_category: r.bench_category || null,
             created_by: r.created_by, created_at: r.created_at,
         };
     }
-    const routeContent = (r) => sha256({ p: r.primary, f: r.fallbacks, o: r.options, m: r.max_output_tokens, rf: r.response_format, t: r.timeout_ms, a: r.alias_of, s: r.status, c: r.capability || null, x: r.constraints || {}, pi: r.pinned || [] });
+    const routeContent = (r) => sha256({ p: r.primary, f: r.fallbacks, o: r.options, m: r.max_output_tokens, rf: r.response_format, t: r.timeout_ms, a: r.alias_of, s: r.status, c: r.capability || null, x: r.constraints || {}, pi: r.pinned || [], b: Boolean(r.learn_from_bench), bk: r.bench_kind || null, bc: r.bench_category || null });
     async function createRouteVersion(key, input, { actor = 'system', trace = null } = {}) {
         if (!KEY_RE.test(key || '')) throw new AiError(422, 'ai.invalid', 'route key must be lowercase dotted');
         const prev = decodeRoute(await latestAny('routes', key));
@@ -209,9 +212,15 @@ function createRegistry(db, { clock = { now: () => Date.now() }, env = process.e
             response_format: input.response_format || (prev && prev.response_format) || 'text',
             timeout_ms: input.timeout_ms !== undefined ? input.timeout_ms : (prev ? prev.timeout_ms : null),
             alias_of: input.alias_of !== undefined ? input.alias_of : (prev ? prev.alias_of : null),
+            // BENCH-11: off unless the route opts in; an edit that omits these keeps the previous version's choice.
+            learn_from_bench: input.learn_from_bench !== undefined ? flag(input.learn_from_bench) : Boolean(prev && prev.learn_from_bench),
+            bench_kind: input.bench_kind !== undefined ? (String(input.bench_kind || '').trim() || null) : (prev ? prev.bench_kind : null),
+            bench_category: input.bench_category !== undefined ? (String(input.bench_category || '').trim() || null) : (prev ? prev.bench_category : null),
             status: input.status || 'active',
         };
         if (r.capability && !FEATURES.includes(r.capability)) throw new AiError(422, 'ai.invalid', `route capability must be one of ${FEATURES.join(', ')}`);
+        if (r.bench_kind && !KEY_RE.test(r.bench_kind)) throw new AiError(422, 'ai.invalid', 'bench_kind must be a lowercase dotted Bench kind id (e.g. chat.reply)');
+        if (r.bench_category && r.bench_category.length > 100) throw new AiError(422, 'ai.invalid', 'bench_category must be at most 100 characters');
         if (!r.alias_of && !r.capability) {
             if (!r.primary || !r.primary.provider) throw new AiError(422, 'ai.invalid', 'route needs primary.provider or a capability');
             for (const c of [r.primary, ...(r.fallbacks || [])]) {
@@ -230,11 +239,12 @@ function createRegistry(db, { clock = { now: () => Date.now() }, env = process.e
         const version = await nextVersion('routes', key);
         const primaryProvider = r.alias_of ? ((r.primary && r.primary.provider) || 'stub')
             : (r.primary && r.primary.provider) || ((r.pinned && r.pinned[0] && r.pinned[0].provider) || 'stub');
-        await db.prepare(`INSERT INTO routes (key, version, status, primary_provider, primary_model, fallbacks, options, max_output_tokens, response_format, timeout_ms, alias_of, capability, constraints, pinned, created_by, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        await db.prepare(`INSERT INTO routes (key, version, status, primary_provider, primary_model, fallbacks, options, max_output_tokens, response_format, timeout_ms, alias_of, capability, constraints, pinned, learn_from_bench, bench_kind, bench_category, created_by, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
             .run(key, version, r.status, primaryProvider, (r.primary && r.primary.model) || null,
                 JSON.stringify(r.fallbacks || []), JSON.stringify(r.options || {}), r.max_output_tokens, r.response_format, r.timeout_ms, r.alias_of,
-                r.capability || null, JSON.stringify(r.constraints || {}), JSON.stringify(r.pinned || []), actor, now());
+                r.capability || null, JSON.stringify(r.constraints || {}), JSON.stringify(r.pinned || []),
+                r.learn_from_bench ? 1 : 0, r.bench_kind, r.bench_category, actor, now());
         await audit(actor, 'route.version', 'route', key, { trace, metadata: { version, previous: prev ? prev.version : null, status: r.status, alias_of: r.alias_of, capability: r.capability || null } });
         return await getRoute(key, version);
     }

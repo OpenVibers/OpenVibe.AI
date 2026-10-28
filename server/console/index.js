@@ -394,6 +394,8 @@ function consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, e
             primary: { provider: p.key, model: model || p.default_model || null }, fallbacks: previous, capability: null, constraints: {}, pinned: [], alias_of: null,
             options: (effective && effective.options) || {}, max_output_tokens: effective ? effective.max_output_tokens : null,
             response_format: (effective && effective.response_format) || 'text', timeout_ms: effective ? effective.timeout_ms : null, status: 'active',
+            learn_from_bench: Boolean(effective && effective.learn_from_bench),
+            bench_kind: (effective && effective.bench_kind) || null, bench_category: (effective && effective.bench_category) || null,
         }, who(req));
         res.redirect(303, `/console/routes/${encodeURIComponent(route.key)}?done=route_used`);
     }));
@@ -420,8 +422,20 @@ function consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, e
             if (!versions.length) return await send(res, 404, pages.message({ title: 'Not found', text: `No ${k.one} ${req.params.key}.`, back: `/console/${kind}`, ...common(req) }));
             const want = Number(req.query.version);
             const selected = (Number.isInteger(want) && versions.find((x) => x.version === want)) || versions[0];
+            const current = await registry[k.get](req.params.key, selected.version);
+            // BENCH-11: read-only evidence on a route's page. It changes what runs pick, so it is shown with
+            // the leader, the tied offers and the reason; it is not editable here (bench_kind is an API field).
+            let bench = null;
+            if (kind === 'routes' && current.status === 'active' && pool.benchView) {
+                try {
+                    const target = current.alias_of ? await registry.resolveRoute(current.key) : current;
+                    if (target && target.status === 'active') bench = await pool.benchView(target, target.capability || 'chat');
+                } catch (err) {
+                    log.warn(`[console] bench evidence for route ${current.key}: ${err.message}`);
+                }
+            }
             return await send(res, 200, pages.definition({
-                ...common(req), kind, key: req.params.key, versions, selected: await registry[k.get](req.params.key, selected.version),
+                ...common(req), kind, key: req.params.key, versions, selected: current, bench,
                 inUse: inUseMap(kind, versions).get(req.params.key), canManage: req.staff.caps.includes(CAPS.workflowManage), notice: notice(req),
                 ...(kind === 'routes' ? { canChoose: req.staff.caps.includes(CAPS.providerManage), providers: (await registry.listProviders()).filter((p) => p.status === 'active' && p.kind !== 'whisper' && p.kind !== 'stub'), models: await registry.listModels() } : {}),
             }));
