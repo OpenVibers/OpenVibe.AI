@@ -73,6 +73,8 @@ function load(env = process.env) {
             // Signs the sign-in flow cookie and keys the client-address hashes: 32+ random characters.
             sessionSecretRef: 'env:AI_CONSOLE_SESSION_SECRET',
             sessionTtlMin: Math.max(5, Math.min(12 * 60, int(env.AI_CONSOLE_SESSION_TTL_MIN, 60))),
+            // A person's session for their run receipt (GET /runs/:id): a longer, read-only session.
+            personSessionTtlMin: Math.max(5, Math.min(7 * 24 * 60, int(env.AI_PERSON_SESSION_TTL_MIN, 24 * 60))),
             redirectUri: `${baseUrl}/auth/callback`,
             // Secure (and __Host-) cookies whenever the console is served over https (always in production).
             cookieSecure: baseUrl.startsWith('https://'),

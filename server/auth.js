@@ -34,6 +34,7 @@ const CAPS = Object.freeze({
     credentialManage: 'ai.credential.manage',
     quotaAttributionManage: 'ai.quota.attribution.manage',
     appRun: 'ai.app.run',
+    actionsRead: 'ai.actions.read',
 });
 
 /**

@@ -107,6 +107,7 @@ idempotent replay):
 | `POST /api/v1/research` — a run of `research.gather` ([MegaSource](#megasource-research)) | `ai.run.create` (namespace `research.*`) or `ai.app.run` (free sources only) |
 | `POST /api/v1/{chat,generate,summarize,classify,extract,embed,image}` (no `enrich`), `GET /runs/:id` (the app's own runs) | `ai.app.run` for a developer-app token ([Developer apps](#developer-apps)) |
 | `GET /api/v1/runs`, `GET /runs/:id` (+ citations, request-log metadata), `GET /runs/:id/citations` | `ai.run.read` (own runs) |
+| `GET /api/v1/actions?subject=usr_…` — one person's Action Center items (`common.action-list-result@1`, runs whose `on_behalf_of` is that person) | `ai.actions.read` (first-party service) |
 | `GET /api/v1/workflows\|templates\|routes[/:key]` | `ai.run.create`, `ai.workflow.manage` or `ai.usage.read` |
 | `GET /api/v1/routes?operation=generate` | the same read: every route's `offers` (`{provider, model}`), plus the operation's deduplicated `offers` |
 | `POST /api/v1/{templates,workflows,routes}/:key/versions`, `…/versions/:v/status` | `ai.workflow.manage` |
@@ -115,7 +116,9 @@ idempotent replay):
 | `GET /api/health`, `GET /api/ready`, `GET /release.json` | public |
 | `GET /metrics` | direct loopback callers only (a request carrying X-Forwarded-For gets 404) |
 | `GET /console…`, `/auth/login\|callback`, `POST /auth/logout` | Network staff, signed in (see [Operator console](#operator-console)) |
-| `GET /robots.txt` | public: disallows `/console`, `/auth/`, `/api/` |
+| `GET /runs/:id` — one run's receipt (status, workflow, model, cost, times, output or error; never the input) | the run's person, signed in (see [Run receipts](#run-receipts)) |
+| `GET /auth/person/login\|callback` | any Network person, for a run receipt |
+| `GET /robots.txt` | public: disallows `/console`, `/runs`, `/auth/`, `/api/` |
 | `GET /stats` | public: p50/p95 latency, success rate and rate-card price per registered provider and model over the last 7 days (server-rendered, `openvibe-shared/cache-policy` HTML headers, nothing per caller) |
 
 Browser reads of `GET /stats` and `GET /release.json` allow exact origins from `AI_CORS_ORIGINS`
@@ -291,6 +294,22 @@ through the same functions as the admin API (`server/ops.js`, `registry.setStatu
 versions of routes, templates and workflows, models and provider records are still created through
 the admin API only. There is no drill mode in AI; the console starts nothing (no timer, no outbound
 call) until someone signs in.
+
+## Run receipts
+
+`GET /runs/:id` is the person-facing page the Action Center's AI item links to (plan 2026-10-28
+§3.10). It shows one run's status, workflow, model, cost, created/started/finished times and the
+output or the error — never the stored input, the request log, the trace or another person's run.
+It is server-rendered with the console's classes and CSP (no script, no form, no external resource),
+`noindex`, `no-store`, `Referrer-Policy: no-referrer`.
+
+A person signs in through the same Network OAuth client and callback as the console, but
+`GET /auth/person/login` marks the flow as a person flow: the callback stores a read-only session
+(`__Host-ovai_person`, host-only, HttpOnly, Secure, SameSite=Lax, `AI_PERSON_SESSION_TTL_MIN` = 24 h;
+only its hash in `person_sessions`) and redirects only to the exact `/runs/run_<ULID>` page asked
+for. It grants no capability and never opens `/console`. The page shows a run only when the run's
+`on_behalf_of` is that session's `usr_…` subject; any other run is a 404. `GET /api/v1/actions` for
+the Action Center is separate: a first-party service token with `ai.actions.read` names the person.
 
 ### Provider keys added from the console (`vault:`)
 
