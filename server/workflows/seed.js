@@ -60,7 +60,7 @@ function providerRecords(config, env) {
         // No json: the small local model must not be offered the product JSON routes. Embed only with an embedding model.
         const localCaps = ['chat', 'generate', 'summarize', 'classify', 'extract'];
         if (config.localLlm.embedModel) localCaps.push('embed');
-        out.push({ key: 'local', display_name: 'Local model (OpenAI-compatible server on this host)', kind: 'openai', status: 'active', base_url: config.localLlm.url, auth_mode: 'none', secret_ref: null, default_model: config.localLlm.model || 'local', capabilities: localCaps, timeout_ms: config.localLlm.timeoutMs, priority: 5, metadata: { configured_by: 'AI_LOCAL_LLM_URL', local: true, paid: false, billing_profile: 'free' } });
+        out.push({ key: 'local', display_name: 'Local model (OpenAI-compatible server on this host)', kind: 'openai', status: 'active', base_url: config.localLlm.url, auth_mode: 'none', secret_ref: null, default_model: config.localLlm.model || 'local', capabilities: localCaps, timeout_ms: config.localLlm.timeoutMs, priority: 5, metadata: { configured_by: 'AI_LOCAL_LLM_URL', embed_url: config.localLlm.embedUrl || config.localLlm.url, local: true, paid: false, billing_profile: 'free' } });
     }
     if (config.httpSeamUrl) {
         out.push({ key: 'http-seam', display_name: 'Local HTTP seam', kind: 'http', status: 'active', base_url: config.httpSeamUrl, auth_mode: 'none', default_model: null, capabilities: [], timeout_ms: 30000, priority: 60, metadata: { configured_by: 'AI_HTTP_SEAM_URL', billing_profile: 'metered' } });

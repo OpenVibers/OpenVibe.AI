@@ -51,6 +51,9 @@ function buildBody({ model, system, messages, image, json, maxTokens, temperatur
 
 function createOpenAiProvider(record, { apiKey = '', fetchImpl = globalThis.fetch } = {}) {
     const baseUrl = String(record.base_url || DEFAULT_BASE_URL).replace(/\/+$/, '');
+    // A local llama.cpp process serves one model, so the embedding endpoint may live on another local
+    // server (AI_LOCAL_EMBED_URL, seeded as metadata.embed_url). Every other operation stays on base_url.
+    const embedBaseUrl = String((record.metadata && record.metadata.embed_url) || baseUrl).replace(/\/+$/, '');
     const headers = () => (apiKey ? { Authorization: `Bearer ${apiKey}` } : {});
     const caps = new Set(record.capabilities && record.capabilities.length ? record.capabilities : [...TEXT_OPS, 'json', 'vision', 'embed', 'transcribe', 'image']);
 
@@ -77,7 +80,7 @@ function createOpenAiProvider(record, { apiKey = '', fetchImpl = globalThis.fetc
     }
 
     async function embed(req) {
-        const j = await postJson(`${baseUrl}/embeddings`, headers(), { model: req.model, input: req.input }, { signal: req.signal, timeoutMs: req.timeoutMs, fetchImpl });
+        const j = await postJson(`${embedBaseUrl}/embeddings`, headers(), { model: req.model, input: req.input }, { signal: req.signal, timeoutMs: req.timeoutMs, fetchImpl });
         const vectors = (j.data || []).sort((a, b) => a.index - b.index).map(d => d.embedding);
         const u = j.usage || {};
         return { vectors, model: j.model || req.model, usage: { input: u.prompt_tokens || u.total_tokens || 0, output: 0, cached: 0 } };
