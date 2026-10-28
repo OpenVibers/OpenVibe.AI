@@ -73,7 +73,33 @@ function projectProviderOf(spec) {
     return { base_url: `${u.origin}${u.pathname.replace(/\/+$/, '')}`, model: String(spec.model), secret: String(spec.secret) };
 }
 
-function createRuns({ db, registry, engine, cache, quotas, config, clock = { now: () => Date.now() }, log = console, userModules = null, credentials = null, tiers = null, projectSecrets = null }) {
+/**
+ * A generate run's `route: { provider, model }`: one offer from GET /api/v1/routes. Only a first-party
+ * service may ask for one, and only on the generate operation; the offer itself is checked against the
+ * routing's own list later, once the run's route is resolved.
+ */
+const ROUTE_PIN_KEYS = new Set(['provider', 'model']);
+function routePinRequest(value, principal, wf) {
+    if (value == null) return null;
+    if (principal.kind === 'app') throw new AiError(403, 'capability.denied', 'a developer app may not pin a route; use the routing pool');
+    if (!principal.subject || principal.subject.type !== 'service') throw new AiError(403, 'capability.denied', 'only a first-party service may pin a route');
+    if (!wf || wf.key !== 'ai.generate') throw new AiError(422, 'input.invalid', 'route pinning is available on the generate operation (ai.generate) only');
+    if (typeof value !== 'object' || Array.isArray(value)) throw new AiError(422, 'input.invalid', 'route must be { provider, model }');
+    for (const k of Object.keys(value)) if (!ROUTE_PIN_KEYS.has(k)) throw new AiError(422, 'input.invalid', `route has no field ${k}; send { provider, model }`);
+    const provider = typeof value.provider === 'string' ? value.provider.trim() : '';
+    if (!provider || provider.length > 128 || !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(provider)) {
+        throw new AiError(422, 'input.invalid', 'route.provider must name a provider from GET /api/v1/routes');
+    }
+    let model = null;
+    if (value.model != null) {
+        if (typeof value.model !== 'string') throw new AiError(422, 'input.invalid', 'route.model must be a model name or null');
+        model = value.model.trim();
+        if (!model || model.length > 200) throw new AiError(422, 'input.invalid', 'route.model must be a model name or null');
+    }
+    return { provider, model };
+}
+
+function createRuns({ db, registry, engine, cache, quotas, config, clock = { now: () => Date.now() }, log = console, userModules = null, credentials = null, tiers = null, projectSecrets = null, pool = null }) {
     const inflight = new Map();     // run id -> { controller, promise, release, caller }
     const queue = [];               // run ids waiting for the worker
     let active = 0;
@@ -160,6 +186,8 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         const wf = body.version ? await registry.getWorkflow(wfKey, Number(body.version)) : await registry.activeWorkflow(wfKey);
         if (!wf) throw new AiError(404, 'workflow.not_found', `no active workflow ${wfKey}${body.version ? ` v${body.version}` : ''}`);
         if (body.version && !['active', 'deprecated'].includes(wf.status)) throw new AiError(409, 'workflow.inactive', `${wfKey} v${wf.version} is ${wf.status}`);
+        const pinned = routePinRequest(body.route, principal, wf);
+        if (pinned && body.credential != null) throw new AiError(422, 'input.invalid', 'a pinned route cannot be combined with a person\'s credential; the pin is the provider');
         validateRefs(body);
         const input = body.input === undefined ? {} : body.input;
         const inputJson = stableStringify(input);
@@ -177,7 +205,10 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         if (idem) {
             const prev = await db.prepare('SELECT * FROM runs WHERE requester_type = ? AND requester_id = ? AND idempotency_key = ?').get(requester.type, requester.id, idem);
             if (prev) {
-                if (prev.input_hash !== inputHash || prev.workflow_key !== wf.key) throw new AiError(409, 'idempotency.conflict', 'this idempotency_key was used with a different workflow or input');
+                const prevPin = parseJson(prev.options, {}).pinned_offer || null;
+                if (prev.input_hash !== inputHash || prev.workflow_key !== wf.key || stableStringify(prevPin) !== stableStringify(pinned)) {
+                    throw new AiError(409, 'idempotency.conflict', 'this idempotency_key was used with a different workflow, input or route');
+                }
                 return { run: decode(prev), created: false, promise: inflight.get(prev.id) ? inflight.get(prev.id).promise : null };
             }
         }
@@ -186,6 +217,18 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         const tpl = llmStep ? await registry.activeTemplate(llmStep.template) : null;
         const routeKey = (wf.steps[0] && wf.steps[0].route) || (tpl && tpl.default_route) || wf.default_route || null;
         const route = routeKey && !String(routeKey).includes('{') ? await registry.resolveRoute(routeKey) : null;
+        if (pinned) {
+            if (!route || route.disabled) throw new AiError(503, 'route.unavailable', `route ${routeKey || '(none)'} is not available, so its offers cannot be listed`);
+            if (!pool) throw new AiError(503, 'route.unavailable', 'routing is not available on this service');
+            const step = wf.steps.find((x) => x.kind === 'llm');
+            const operation = (step && step.operation) || 'generate';
+            const offers = await pool.offers(route, operation, { requesterType: requester.type, requesterId: requester.id });
+            const offered = offers.some((o) => o.provider === pinned.provider && (pinned.model == null || o.model === pinned.model));
+            if (!offered) {
+                const shown = pinned.model ? `${pinned.provider}/${pinned.model}` : pinned.provider;
+                throw new AiError(422, 'input.invalid', `route ${shown} is not offered for ${operation} to this caller; GET /api/v1/routes?operation=${operation} lists the offers`);
+            }
+        }
         const options = body.options && typeof body.options === 'object' ? body.options : {};
         // A person's own key (WS-O task 2): only the service that stored it, within its daily budget; never cached.
         const credentialSubject = body.credential && typeof body.credential === 'object' ? String(body.credential.subject || '') : null;
@@ -206,6 +249,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             requesterType: requester.type, requesterId: requester.id,
             actorKey: subjectKey(body.on_behalf_of), targetKey: entityKey(body.target), attributionKey: entityKey(body.attribution), workflowKey: wf.key,
             ...(app ? { appRun: true, projectId: app.projectId, sandbox: app.sandbox } : {}),
+            ...(pinned ? { routePin: pinned } : {}),
             // POST /v1/chat/completions with stream: true: the upstream's deltas, as they arrive (kept in memory only).
             ...(typeof onDelta === 'function' ? { onDelta } : {}),
         };
@@ -221,13 +265,15 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             source_service: requester.type === 'service' ? requester.id : null,
             target: body.target ? JSON.stringify(body.target) : null, target_key: ctx.targetKey,
             input: null, input_hash: inputHash, idempotency_key: idem, trace_id: trace, request_id: requestId, retry_of: retryOf,
-            options: JSON.stringify({ cache: options.cache !== false && credentialSubject === null && !projectProvider, debug: Boolean(options.debug), input_retained: kept.full,
-                ...(credentialSubject !== null ? { credential_subject: credentialSubject } : {}), ...(projectProvider ? { project_provider: projectProvider } : {}) }), created_at: now,
+            options: JSON.stringify({ cache: options.cache !== false && credentialSubject === null && !projectProvider && !pinned, debug: Boolean(options.debug), input_retained: kept.full,
+                ...(credentialSubject !== null ? { credential_subject: credentialSubject } : {}), ...(projectProvider ? { project_provider: projectProvider } : {}), ...(pinned ? { pinned_offer: pinned } : {}) }), created_at: now,
         };
         base.input = stableStringify(kept.value);
 
         // Cache (scoped; never crosses requester/actor/target/attribution)
-        const scope = options.cache === false || credentialSubject !== null || projectProvider ? null : cache.scopeFor(wf.cache_mode, ctx);
+        // A pinned run is never served from (or written to) the shared cache: the caller asked for THIS model,
+        // and another model's answer under the same prompt would silently break the pin.
+        const scope = options.cache === false || credentialSubject !== null || projectProvider || pinned ? null : cache.scopeFor(wf.cache_mode, ctx);
         let cacheKey = null;
         if (scope) {
             cacheKey = cache.keyFor({ scope, workflowKey: wf.key, workflowVersion: wf.version, templateVersion: base.template_version, routeKey: base.route_key, routeVersion: base.route_version, inputHash });
@@ -275,7 +321,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                 await events.runChanged(await getRow(id));
             });
         } catch (err) { if (hold) await tiers.release(hold); throw err; }
-        await registry.audit(principal.sub, retryOf ? 'run.retry' : 'run.create', 'run', id, { trace, metadata: { workflow: wf.key, version: wf.version, target: ctx.targetKey, retry_of: retryOf } });
+        await registry.audit(principal.sub, retryOf ? 'run.retry' : 'run.create', 'run', id, { trace, metadata: { workflow: wf.key, version: wf.version, target: ctx.targetKey, retry_of: retryOf, ...(pinned ? { pinned_offer: pinned } : {}) } });
 
         const controller = new AbortController();
         let release;
@@ -358,6 +404,9 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                 // limited to free and local capacity when it is a sandbox run or when no tier budget governs its
                 // project (AI_GOVERN_TIERS off): metered capacity is only ever spent under a project budget.
                 appRun: Boolean(ctx.appRun), freeOnly: Boolean(ctx.appRun && (ctx.sandbox || !(tiers && tiers.enabled))),
+                // Who asked, for a step that must not call the caller back (research: Search's own web ladder).
+                requesterType: ctx.requesterType, requesterId: ctx.requesterId,
+                ...(ctx.routePin ? { routePin: ctx.routePin } : {}),
                 ...(credential ? { credential, role: input && typeof input.role === 'string' ? input.role : null } : {}),
                 ...(typeof ctx.onDelta === 'function' ? { onDelta: ctx.onDelta } : {}) });
             if (controller.signal.aborted) throw new AiError(409, 'run.cancelled', 'cancelled');
@@ -439,11 +488,13 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         if (!row) throw new AiError(404, 'run.not_found', 'no such run');
         assertOwner(row, principal, 'ai.workflow.manage', principalHas);
         if (!['failed', 'cancelled'].includes(row.status)) throw new AiError(409, 'run.not_retryable', `only failed or cancelled runs can be retried (this one is ${row.status})`);
-        if (parseJson(row.options, {}).input_retained === false) throw new AiError(409, 'run.input_not_retained', 'this run did not keep its input (inline media or a passthrough prompt); submit it again');
+        const opts = parseJson(row.options, {});
+        if (opts.input_retained === false) throw new AiError(409, 'run.input_not_retained', 'this run did not keep its input (inline media or a passthrough prompt); submit it again');
         return await create({
             workflow: row.workflow_key, input: parseJson(row.input, {}), target: parseJson(row.target, null) || undefined,
             attribution: parseJson(row.attribution, null) || undefined, on_behalf_of: parseJson(row.on_behalf_of, null) || undefined,
-            options: { ...parseJson(row.options, {}), cache: false },
+            route: opts.pinned_offer || undefined,
+            options: { ...opts, cache: false },
         }, principal, { trace, requestId, retryOf: id });
     }
 

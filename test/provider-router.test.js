@@ -119,6 +119,37 @@ t.test('a local embedding model makes default.embedding a pool: the failing paid
     await h.stop(); await paid.close(); await local.close();
 });
 
+t.test('the local provider embeds on AI_LOCAL_EMBED_URL while chat stays on AI_LOCAL_LLM_URL', async () => {
+    // llama.cpp serves one model per process: the chat GGUF and the embedding GGUF may be two local servers.
+    const chat = await seamServer(() => ({ text: 'local chat answer', model: 'chat-model', usage: { prompt_tokens: 3, completion_tokens: 2 } }));
+    const embedSrv = await seamServer((body, req) => {
+        assert.ok(req.url.endsWith('/embeddings'), `except embedding requests, nothing reaches the embed server (${req.url})`);
+        return { data: [{ index: 0, embedding: [0.3, 0.4, 0.5] }], model: body.model, usage: { prompt_tokens: 2, total_tokens: 2 } };
+    });
+    h = await boot({ env: {
+        AI_STUB_FALLBACK: 'false', AI_PROVIDER_RETRIES: '0', AI_BREAKER_FAILURES: '50',
+        AI_PROVIDER: 'openai', AI_BASE_URL: `${chat.url}/v1`,
+        AI_LOCAL_LLM_URL: `${chat.url}/v1`, AI_LOCAL_LLM_MODEL: 'chat-model',
+        AI_LOCAL_EMBED_URL: `${embedSrv.url}/v1`, AI_LOCAL_EMBED_MODEL: 'bge-small-en-v1.5',
+    } });
+    const local = await h.registry.getProvider('local');
+    assert.strictEqual(local.metadata.embed_url, `${embedSrv.url}/v1`, 'the seeded local provider carries the embedding URL');
+
+    const media = await h.registry.resolveRoute('media.local');
+    const chatExec = await h.pool.execute(media, 'summarize', { messages: [{ role: 'user', content: 'hello' }], timeoutMs: 2000 }, { routeKey: media.key, routeVersion: media.version });
+    assert.strictEqual(chatExec.provider, 'local');
+    assert.strictEqual(chat.calls, 1, 'the chat model stays on AI_LOCAL_LLM_URL');
+    assert.strictEqual(embedSrv.calls, 0);
+
+    const embedding = await h.registry.resolveRoute('default.embedding');
+    const embedExec = await h.pool.execute(embedding, 'embed', { input: ['x'], timeoutMs: 2000 }, { routeKey: embedding.key, routeVersion: embedding.version });
+    assert.strictEqual(embedExec.provider, 'local');
+    assert.deepStrictEqual(embedExec.result.vectors, [[0.3, 0.4, 0.5]]);
+    assert.strictEqual(embedSrv.calls, 1, 'the embedding model is called on AI_LOCAL_EMBED_URL');
+    assert.strictEqual(chat.calls, 1, 'and never on the chat server');
+    await h.stop(); await chat.close(); await embedSrv.close();
+});
+
 t.test('two providers on one capability: the cheaper is chosen; a circuit-open one is excluded', async () => {
     const ok = await seam();
     const flaky = await seamServer(() => ({ status: 500, body: { error: { message: 'boom' } } }));

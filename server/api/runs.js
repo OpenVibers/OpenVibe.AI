@@ -16,6 +16,8 @@
  *   POST /api/v1/runs/:id/citations         attach sources/citations to a finished run (ai.run.create, owner)
  *   POST /api/v1/{chat,generate,summarize,classify,extract,enrich,embed}
  *                                           direct operations: a run of workflow ai.<op>, waited for
+ *                                           generate also takes route: {provider, model}, one offer from
+ *                                           GET /api/v1/routes?operation=generate (first-party services only)
  *
  * Developer apps (ADR-014, ai.app.run): POST /api/v1/{chat,generate,summarize,classify,extract,embed}
  * and GET /api/v1/runs/:id also take an app token; the run is the app's project's (see auth.appOrCap,
@@ -174,9 +176,9 @@ function runsRouter({ runs, registry, auth, config, log = console }) {
         r.post(`/api/v1/${op}`, DIRECT_OPS.includes(`ai.${op}`) ? createApp : create, async (req, res) => {
             try {
                 const body = req.body || {};
-                const { idempotency_key: idem, target, attribution, on_behalf_of: obo, options, ...input } = body;
+                const { idempotency_key: idem, target, attribution, on_behalf_of: obo, options, route, ...input } = body;
                 const wait = req.query.wait != null ? Math.max(0, Math.min(Number(req.query.wait) || 0, config.runs.maxWaitMs)) : config.runs.maxWaitMs;
-                await createAndRespond(req, res, { workflow: `ai.${op}`, input, idempotency_key: idem, target, attribution, on_behalf_of: obo, options }, wait);
+                await createAndRespond(req, res, { workflow: `ai.${op}`, input, idempotency_key: idem, target, attribution, on_behalf_of: obo, options, route }, wait);
             } catch (err) { sendError(res, err, req.ov, log); }
         });
     }

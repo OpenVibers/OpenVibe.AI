@@ -6,8 +6,11 @@
  *   wikipedia   articles for the query: full text of the best ones, lead pictures, the Wikidata id
  *   fandom      the topic's own community wiki, when it has one (characters, episodes, places, lore)
  *   wikidata    the top article's key statements as labelled facts (an infobox's raw material) and its picture
+ *   search_fabric  the web through OpenVibe.Search's web scope (the Search Fabric) first: the open index, then the
+ *               providers Search routes to, every page with its provider, URL and dates
  *   deepseek    web search with page text (DeepSeek's Search API) and pages it cannot read in full (its Fetch API);
- *               paid per call, so only for first-party callers and within its daily cap
+ *               paid per call, so only for first-party callers and within its daily cap. It is the fallback when the
+ *               Search Fabric is not configured, refuses or answers nothing
  *   commons     freely licensed pictures for the query
  *   openverse   more openly licensed pictures
  *
@@ -20,6 +23,7 @@ const { createWikimedia } = require('./wikimedia');
 const { createFandom } = require('./fandom');
 const { createOpenverse } = require('./openverse');
 const { createDeepseek } = require('./deepseek');
+const { createSearchFabric } = require('./search-fabric');
 const { clip, canonicalUrl, hostOf } = require('./text');
 const { resolveSecret } = require('../util');
 
@@ -30,15 +34,19 @@ const int = (v, lo, hi, d) => { const n = Math.round(Number(v)); return Number.i
 const oneLine = (s, n) => String(s == null ? '' : s).replace(/\s+/g, ' ').trim().slice(0, n);
 const short = (err) => oneLine(err && err.message ? err.message : err, 160) || 'failed';
 
-function createResearch({ config = {}, env = process.env, fetchImpl, now = () => Date.now(), log = console } = {}) {
+function createResearch({ config = {}, env = process.env, fetchImpl, now = () => Date.now(), log = console, fabric = null } = {}) {
     const http = createHttp({ ...(fetchImpl ? { fetchImpl } : {}), timeoutMs: config.timeoutMs || 15000 });
     const wikimedia = createWikimedia({ http });
     const fandom = createFandom({ http });
     const openverse = createOpenverse({ http });
     const deepseek = createDeepseek({ http, key: config.deepseekKey || (config.deepseek !== false ? resolveSecret(config.deepseekKeyRef, env) : ''), base: config.deepseekUrl || 'https://api.deepseek.com', dailyCap: config.deepseekDaily || 1500, now, log });
+    const search = fabric || createSearchFabric({ config: config.fabric || {}, env, fetchImpl, now });
+    const searchAvailable = () => (search && typeof search.available === 'function'
+        ? search.available()
+        : { configured: Boolean(search && search.search), reason: search ? null : 'search fabric is off' });
 
     function status() {
-        return { providers: PROVIDERS, deepseek: deepseek.status() };
+        return { providers: PROVIDERS, deepseek: deepseek.status(), search: search && typeof search.status === 'function' ? search.status() : searchAvailable() };
     }
 
     /**
@@ -46,9 +54,10 @@ function createResearch({ config = {}, env = process.env, fetchImpl, now = () =>
      *   query   what to research ("Kim Possible", "Ron Stoppable Kim Possible")
      *   topic   the subject the query belongs to, used to find the topic's own wiki (defaults to the query)
      *   focus   one subject inside the topic (a character, an episode): searched for inside the topic's wiki
-     * opts: { signal, allowPaid } — allowPaid false (a developer app) leaves DeepSeek out.
+     * opts: { signal, allowPaid, allowFabric } — allowPaid false (a developer app) leaves paid DeepSeek out; allowFabric
+     * false keeps Search's own ladder from asking Search back (the caller is Search).
      */
-    async function gather(input = {}, { signal = null, allowPaid = true } = {}) {
+    async function gather(input = {}, { signal = null, allowPaid = true, allowFabric = true } = {}) {
         const query = oneLine(input.query, 200);
         if (!query) throw Object.assign(new Error('research needs a query'), { status: 422 });
         const topic = oneLine(input.topic, 200) || query;
@@ -61,7 +70,7 @@ function createResearch({ config = {}, env = process.env, fetchImpl, now = () =>
         const searchText = focus && !query.toLowerCase().includes(focus.toLowerCase()) ? `${focus} ${query}` : query;
         const retrievedAt = new Date(now()).toISOString();
         const providers = {};
-        const usage = { requests: 0, deepseek_search: 0, deepseek_fetch: 0, cost_usd: 0 };
+        const usage = { requests: 0, deepseek_search: 0, deepseek_fetch: 0, search_fabric: 0, search_fabric_cost_usd: 0, cost_usd: 0 };
         const startRequests = http.count();
 
         async function timed(name, fn) {
@@ -79,21 +88,66 @@ function createResearch({ config = {}, env = process.env, fetchImpl, now = () =>
         }
         const skip = (name, reason) => { providers[name] = { ok: false, skipped: reason }; return null; };
 
+        const wantWeb = want.has('deepseek');
+        const fabricReady = wantWeb && allowFabric && searchAvailable().configured;
+
+        /**
+         * The web evidence: the Search Fabric first, DeepSeek direct only when the fabric is not configured,
+         * fails or answers nothing. `allowPaid: false` keeps the fabric to its free and cached steps (quick)
+         * and never reaches DeepSeek.
+         */
+        async function webEvidence() {
+            if (!wantWeb) return null;
+            if (fabricReady) {
+                const t0 = now();
+                try {
+                    const page = await search.search(searchText, { limit: 8, depth: allowPaid ? 'standard' : 'quick', signal });
+                    const cost = Number(page.route && page.route.cost_usd) || 0;
+                    const results = page.results || [];
+                    // A page without a snippet cannot become a source; leave it to DeepSeek rather than cite a stub.
+                    const usable = results.filter((r) => r && (r.snippet || r.content));
+                    providers.search_fabric = { ok: usable.length > 0, ms: now() - t0, count: usable.length, cost_usd: cost };
+                    if (page.route && Array.isArray(page.route.explain)) providers.search_fabric.explain = page.route.explain.slice(0, 20);
+                    if (usable.length) {
+                        usage.search_fabric += 1;
+                        usage.search_fabric_cost_usd += cost;
+                        return { results: usable, via: 'search_fabric' };
+                    }
+                    providers.search_fabric.skipped = results.length ? 'no result text' : 'no results';
+                } catch (err) {
+                    if (signal && signal.aborted) throw err;
+                    providers.search_fabric = { ok: false, ms: now() - t0, error: short(err) };
+                }
+            }
+            if (!allowPaid) {
+                skip('deepseek', 'first-party callers only');
+                return null;
+            }
+            if (!deepseek.available()) {
+                skip('deepseek', deepseek.status().configured ? (deepseek.status().reason || 'daily cap reached') : 'not configured');
+                return null;
+            }
+            const results = await timed('deepseek', async () => {
+                usage.deepseek_search += 1;
+                return deepseek.search(searchText, { count: 8, needContent: true, question: input.question || null, signal });
+            });
+            return results && results.length ? { results, via: 'deepseek' } : null;
+        }
+
         // Round one, all at once: Wikipedia, web search and the picture libraries.
-        const useDeepseek = want.has('deepseek') && (allowPaid ? (deepseek.available() || skip('deepseek', deepseek.status().configured ? (deepseek.status().reason || 'daily cap reached') : 'not configured')) : skip('deepseek', 'first-party callers only'));
-        const [wiki, web, commons, openv] = await Promise.all([
+        const webTask = webEvidence();
+        const [wiki, webOut, commons, openv] = await Promise.all([
             want.has('wikipedia') ? timed('wikipedia', async () => {
                 const hits = await wikimedia.searchWikipedia(searchText, { lang, limit: focus ? 4 : 5, signal });
                 const list = await wikimedia.articles(hits.map((h) => h.title), { lang, full: focus ? 2 : 3, chars, signal });
                 return list.filter((a) => !a.disambiguation && a.text);
             }) : null,
-            useDeepseek ? timed('deepseek', async () => {
-                usage.deepseek_search += 1;
-                return deepseek.search(searchText, { count: 8, needContent: true, question: input.question || null, signal });
-            }) : null,
+            webTask,
             maxImages && want.has('commons') ? timed('commons', () => wikimedia.commonsSearch(searchText, { limit: 8, signal })) : null,
             maxImages && want.has('openverse') ? timed('openverse', () => openverse.search(searchText, { limit: 6, signal })) : null,
         ]);
+        const web = webOut ? webOut.results : null;
+        const webVia = webOut ? webOut.via : null;
 
         // Round two: the topic's own wiki, the top article's facts and pictures, and full text for web results that came back short.
         const top = wiki && wiki[0];
@@ -108,7 +162,7 @@ function createResearch({ config = {}, env = process.env, fetchImpl, now = () =>
             }) : null,
             want.has('wikidata') && top && top.qid ? timed('wikidata', () => wikimedia.wikidataFacts(top.qid, { lang, signal })) : null,
             maxImages && want.has('wikipedia') && top ? timed('wikipedia_images', () => wikimedia.articleImages(top.title, { lang, limit: 10, signal })) : null,
-            useDeepseek && web ? (async () => {
+            webVia === 'deepseek' && web ? (async () => {
                 // A short result is read in full, unless it is a copy of an encyclopedia page already read.
                 const read = new Set((wiki || []).map((a) => canonicalUrl(a.url)));
                 const thin = web.filter((r) => r.score >= 1 && r.content.length < 400 && !read.has(canonicalUrl(r.url))).slice(0, 2);
@@ -127,8 +181,9 @@ function createResearch({ config = {}, env = process.env, fetchImpl, now = () =>
             maxImages && leadName && !leadListed ? wikimedia.fileInfo([leadName], { lang, allowSvg: true, signal }).catch(() => null) : null,
         ]);
 
-        // Sources, ranked: the topic's own pages first, then the encyclopedia, then the web by DeepSeek's score.
+        // Sources, ranked: the topic's own pages first, then the encyclopedia, then the web by its route's order.
         const scored = [];
+        const fromFabric = webVia === 'search_fabric';
         const focusLc = (focus || '').toLowerCase();
         (fan && fan.pages || []).forEach((p, i) => {
             const exact = focusLc ? p.title.toLowerCase() === focusLc : i === 0;
@@ -141,7 +196,25 @@ function createResearch({ config = {}, env = process.env, fetchImpl, now = () =>
         (web || []).forEach((r) => {
             const content = clip(r.content || r.summary || r.snippet, chars);
             if (!content) return;
-            scored.push({ score: Math.min(r.score, 3) * 0.9 + Math.max(r.authority, 0) * 0.08, s: { source_type: 'web', url: r.url, title: r.title || hostOf(r.url), snippet: r.snippet || clip(r.summary, 300), content, published_at: r.date || undefined, retrieved_at: retrievedAt, provenance: { provider: 'deepseek', site: r.site || hostOf(r.url), authority: r.authority, score: r.score } } });
+            scored.push({
+                score: Math.min(r.score, 3) * 0.9 + Math.max(r.authority, 0) * 0.08,
+                s: {
+                    source_type: 'web',
+                    url: r.url,
+                    title: r.title || hostOf(r.url),
+                    snippet: r.snippet || clip(r.summary, 300),
+                    content,
+                    published_at: r.date || undefined,
+                    retrieved_at: r.retrieved_at || retrievedAt,
+                    provenance: {
+                        provider: fromFabric ? (r.provider || 'search_fabric') : 'deepseek',
+                        site: r.site || hostOf(r.url),
+                        authority: r.authority,
+                        score: r.score,
+                        ...(fromFabric ? { via: 'search_fabric' } : {}),
+                    },
+                },
+            });
         });
         if (facts && facts.facts.length) {
             scored.push({ score: 2.0, s: { source_type: 'wikidata', url: facts.url, title: `${facts.name} — Wikidata`, snippet: facts.description || `${facts.facts.length} facts`, content: facts.facts.map((f) => `${f.label}: ${f.value}`).join('\n'), retrieved_at: retrievedAt, provenance: { provider: 'wikidata', site: 'wikidata.org', license: LICENSE.wikidata } } });
@@ -183,6 +256,8 @@ function createResearch({ config = {}, env = process.env, fetchImpl, now = () =>
         }
 
         usage.requests = http.count() - startRequests;
+        // Only calls this run made are its cost. A paid Search Fabric step is Search's (and, for DeepSeek, a nested
+        // AI run as `search`), so its route cost is reported separately and never billed to this run twice.
         usage.cost_usd = Number(((usage.deepseek_search + usage.deepseek_fetch) * deepseek.PRICE_PER_CALL_USD).toFixed(5));
         return {
             query, topic, focus, lang, retrieved_at: retrievedAt,

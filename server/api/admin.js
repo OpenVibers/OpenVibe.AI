@@ -79,14 +79,73 @@ function adminRouter({ db, registry, pool, quotas, cache, runs, auth, ops = crea
         templates: { list: registry.listTemplates, get: registry.getTemplate, create: registry.createTemplateVersion, one: 'template' },
         workflows: { list: registry.listWorkflows, get: registry.getWorkflow, create: registry.createWorkflowVersion, one: 'workflow' },
     };
+
+    /**
+     * The offers one route's routing lists for an operation: the eligible provider/model candidates in the
+     * order placement would try them. GET /api/v1/routes publishes these (and the operation can be asked for
+     * with ?operation=generate); a generate run may pin one, and server/runs.js checks it against this same list.
+     */
+    function operationFor(route, requested) {
+        const own = route && route.capability ? route.capability : null;
+        if (!requested) return own || 'chat';
+        if (!own || own === requested) return requested;
+        // A chat route serves generate too; every other route keeps its own operation's offers.
+        return own === 'chat' && requested === 'generate' ? requested : own;
+    }
+    async function routeOffers(route, operation, req) {
+        if (!route || route.status !== 'active') return [];
+        try {
+            let target = route;
+            if (route.alias_of) {
+                target = await registry.resolveRoute(route.key);
+                if (!target || target.disabled) return [];
+            }
+            return await pool.offers(target, operationFor(target, operation), { requesterType: req.principal.subject.type, requesterId: req.principal.subject.id });
+        } catch (err) {
+            log.warn(`[ai] offers for route ${route.key}: ${err.message}`);
+            return [];
+        }
+    }
+    r.get('/api/v1/routes', defRead, wrap(async (req) => {
+        const operation = req.query.operation ? String(req.query.operation) : null;
+        const routes = await registry.listRoutes({ history: req.query.history === '1', namespace: req.query.namespace });
+        for (const route of routes) route.offers = await routeOffers(route, operation, req);
+        // With ?operation=…, also the operation's own menu. For the default operations that is the
+        // default route's list (ai.generate uses default.chat), so every offer there is pinnable for
+        // that operation; an operation with no default route gets the routes' union.
+        if (!operation) return { routes };
+        const baseKey = operation === 'chat' || operation === 'generate' ? 'default.chat'
+            : operation === 'embed' ? 'default.embedding'
+                : operation === 'image' ? 'default.image' : null;
+        const base = baseKey ? routes.find((x) => x.key === baseKey) : null;
+        const offers = [];
+        const seen = new Set();
+        for (const route of (base ? [base] : routes)) for (const o of route.offers) {
+            const id = `${o.provider}|${o.model || ''}`;
+            if (seen.has(id)) continue;
+            seen.add(id);
+            offers.push(o);
+        }
+        return { routes, offers };
+    }));
+    r.get('/api/v1/routes/:key', defRead, wrap(async (req) => {
+        const latest = await registry.getRoute(req.params.key, req.query.version ? Number(req.query.version) : undefined);
+        if (!latest) throw new AiError(404, 'ai.not_found', `no route ${req.params.key}`);
+        const versions = (await registry.listRoutes({ history: true })).filter(x => x.key === req.params.key).map(x => ({ version: x.version, status: x.status, created_by: x.created_by, created_at: x.created_at }));
+        const operation = req.query.operation ? String(req.query.operation) : null;
+        return { route: { ...latest, offers: await routeOffers(latest, operation, req) }, versions };
+    }));
+
     for (const [plural, k] of Object.entries(kinds)) {
-        r.get(`/api/v1/${plural}`, defRead, wrap(async (req) => ({ [plural]: await k.list({ history: req.query.history === '1', namespace: req.query.namespace }) })));
-        r.get(`/api/v1/${plural}/:key`, defRead, wrap(async (req) => {
-            const latest = await k.get(req.params.key, req.query.version ? Number(req.query.version) : undefined);
-            if (!latest) throw new AiError(404, 'ai.not_found', `no ${k.one} ${req.params.key}`);
-            const versions = (await k.list({ history: true })).filter(x => x.key === req.params.key).map(x => ({ version: x.version, status: x.status, created_by: x.created_by, created_at: x.created_at }));
-            return { [k.one]: latest, versions };
-        }));
+        if (plural !== 'routes') {
+            r.get(`/api/v1/${plural}`, defRead, wrap(async (req) => ({ [plural]: await k.list({ history: req.query.history === '1', namespace: req.query.namespace }) })));
+            r.get(`/api/v1/${plural}/:key`, defRead, wrap(async (req) => {
+                const latest = await k.get(req.params.key, req.query.version ? Number(req.query.version) : undefined);
+                if (!latest) throw new AiError(404, 'ai.not_found', `no ${k.one} ${req.params.key}`);
+                const versions = (await k.list({ history: true })).filter(x => x.key === req.params.key).map(x => ({ version: x.version, status: x.status, created_by: x.created_by, created_at: x.created_at }));
+                return { [k.one]: latest, versions };
+            }));
+        }
         // An edit is always a new version; the previous one stays readable.
         r.post(`/api/v1/${plural}/:key/versions`, defWrite, wrap(async (req, res) => {
             try {

@@ -109,6 +109,7 @@ idempotent replay):
 | `GET /api/v1/runs`, `GET /runs/:id` (+ citations, request-log metadata), `GET /runs/:id/citations` | `ai.run.read` (own runs) |
 | `GET /api/v1/actions?subject=usr_…` — one person's Action Center items (`common.action-list-result@1`, runs whose `on_behalf_of` is that person) | `ai.actions.read` (first-party service) |
 | `GET /api/v1/workflows\|templates\|routes[/:key]` | `ai.run.create`, `ai.workflow.manage` or `ai.usage.read` |
+| `GET /api/v1/routes?operation=generate` | the same read: every route's `offers` (`{provider, model}`), plus the operation's deduplicated `offers` |
 | `POST /api/v1/{templates,workflows,routes}/:key/versions`, `…/versions/:v/status` | `ai.workflow.manage` |
 | `POST/PATCH /api/v1/providers…`, `…/disable\|enable\|reset`, `POST/PATCH /api/v1/models…`, `POST /api/v1/quotas`, `DELETE /api/v1/cache` | `ai.provider.manage` |
 | `GET /api/v1/status\|usage\|quotas\|requests\|audit\|cache\|providers\|models` | `ai.usage.read` |
@@ -359,7 +360,17 @@ provider that is disabled, missing credentials, circuit-open or unable to do the
 failure; a fallback that answers is recorded on the run (`fallback_used`), in the request log
 (`fallback = 1`) and in the audit log. Every run response and `GET /api/v1/runs/:id` carry `explain`
 (objective, reasons, selected, and every candidate with its estimated cost, latency and excluded
-reason). `GET /api/v1/runs/:id` adds `explain.usage_readings` when the run has a Billing reading: per
+reason).
+
+`GET /api/v1/routes?operation=generate` lists each route's eligible offers as `{ provider, model }`.
+A first-party service holding `ai.run.create` may pin one on `POST /api/v1/generate` (and on
+`POST /api/v1/runs` for `ai.generate`) with `"route": { "provider": …, "model": … }`. The run tries
+that offer alone, never a fallback; a provider/model the routing does not list for `generate` is
+`422 input.invalid` in words, and the caller's `ns` is still checked first (a workflow outside it is
+`403 capability.namespace_denied`). Developer-app tokens (`ai.app.run`) cannot pin. Quotas, tier budgets and Billing readings are exactly as for an unpinned
+run, and a pinned run is never served from the shared cache.
+
+`GET /api/v1/runs/:id` adds `explain.usage_readings` when the run has a Billing reading: per
 reading its `idempotency_key`, `state` (`queued` until Billing accepts it, `sent`, or `failed` when Billing
 refused it), `attempts`, `queued_at`, `sent_at`, `rejected_at`, `next_attempt_at`, `last_error` (the
 outbox's last send error, also while a queued reading is retried) and `free_allowance_used` when some
@@ -471,7 +482,7 @@ the service boots without Valkey; with it on, production refuses to boot without
 
 `research.gather` (namespace `research`, `server/research/`, `server/workflows/research.js`) answers one question from
 many sources at once and returns one ranked, de-duplicated evidence pack the product workflows cite by number. No model
-is called; a run is recorded like a provider call (provider `research`, model `megasource`), so DeepSeek's per-call
+is called; a run is recorded like a provider call (provider `research`, model `megasource`), so the web route's per-call
 price counts against the cost quotas and the daily usage.
 
 | Source | What it gives | Terms |
@@ -479,20 +490,28 @@ price counts against the cost quotas and the daily usage.
 | Wikipedia | the best articles' full text, their pictures (each with its licence; an article's own non-free files are marked) and the Wikidata id | CC BY-SA 4.0 |
 | Fandom | the topic's own community wiki when it has one (from the web results' hosts, else the topic as a subdomain, confirmed by the wiki's name): pages read through its MediaWiki API, infobox rows kept as "Label: value" | CC BY-SA 3.0; pictures marked not free |
 | Wikidata | the top article's key statements as labelled facts, and its picture | CC0 |
-| DeepSeek | web search with page text (Search API) and full text for short results (Fetch API), fetched by DeepSeek, never from this host | $0.75 per 1,000 successful calls each |
+| Search Fabric | the web through OpenVibe.Search's web scope (`POST /api/v1/query`, capability `search.fabric.query`) first: the open index, then the providers Search routes to; every page keeps its provider, URL and dates | per provider Search used |
+| DeepSeek | the fallback web search when the fabric is off, refuses or answers nothing: page text (Search API) and full text for short results (Fetch API), fetched by DeepSeek, never from this host | $0.75 per 1,000 successful calls each |
 | Commons, Openverse | freely licensed pictures (CC0, public domain, CC BY, CC BY-SA; NonCommercial and NoDerivatives are not counted as free), kept only when their title or description names the subject | per picture |
 
 Input: `query` (required), `topic` (the subject it belongs to: finds the topic's wiki), `focus` (one subject inside the
 topic), `lang`, `max_sources` (≤ 20), `max_images` (≤ 24), `content_chars` (≤ 12,000), `providers` (a subset). Output:
-`sources` (each with `url`, `title`, `content`, `retrieved_at` and `provenance.provider|site|license`), `images` (each with
-`license`, `free`, `author`, `source_url`, `provider`), `facts`, `topic_wiki`, `providers` (per source: ok, ms, count, or
-why it was skipped or failed) and `usage` (requests, DeepSeek calls, `cost_usd`). Cached for a day per calling service.
+`sources` (each with `url`, `title`, `content`, `published_at`, `retrieved_at` and `provenance.provider|site|via|license`),
+`images` (each with `license`, `free`, `author`, `source_url`, `provider`), `facts`, `topic_wiki`, `providers` (per route:
+ok, ms, count, cost, or why it was skipped or failed) and `usage` (requests, DeepSeek calls, fabric calls and the fabric's
+`search_fabric_cost_usd`; `cost_usd` is this run's own DeepSeek calls, so a paid fabric step is not billed twice —
+Search and its nested AI run pay it). Cached for a day per calling service.
 
-Every source is optional and fails on its own. DeepSeek is used only when its key resolves (`AI_RESEARCH_DEEPSEEK_KEY_REF`,
-default `env:DEEPSEEK_API_KEY`; `AI_RESEARCH_DEEPSEEK=0` turns it off), only for first-party callers (a developer app's
-run reads the free sources), within `AI_RESEARCH_DEEPSEEK_DAILY` calls a day (1500), and it stands down on its own
-answers: 402 (balance used up) for 30 minutes, 401 for an hour, 429 for a minute. Tests read a canned web
-(`test/fixtures/research-fetch.js`); none reaches the internet.
+Web search asks the Search Fabric first, as AI's own service principal (audience `openvibe.search`). Search's viewer
+requires `search.query.delegate` of a service token, so Network must grant `ai` that capability on `openvibe.search`
+(the route's `search.fabric.query` is public). The token is requested with exactly that scope; without
+`OV_OAUTH_CLIENT_SECRET` or with `AI_RESEARCH_SEARCH=0` the fabric is skipped. When Search's own web ladder calls this
+endpoint for DeepSeek or Wikipedia, research keeps DeepSeek direct, so Search is never asked back in a loop. DeepSeek is
+used only when its key resolves (`AI_RESEARCH_DEEPSEEK_KEY_REF`, default `env:DEEPSEEK_API_KEY`;
+`AI_RESEARCH_DEEPSEEK=0` turns it off), only for first-party callers (a developer app's run reads the free sources),
+within `AI_RESEARCH_DEEPSEEK_DAILY` calls a day (1500), and it stands down on its own answers: 402 (balance used up) for
+30 minutes, 401 for an hour, 429 for a minute. Tests read a canned web (`test/fixtures/research-fetch.js`); none reaches
+the internet.
 
 OpenVibe.Wiki's "vibe a wiki" uses it with `wiki.generate_space` (plans the pages: main page first, each with a kind,
 an outline and a search phrase) and `wiki.generate_page` (writes one page: lead, sections, infobox, `[[links]]` to the
@@ -663,5 +682,5 @@ Part of the [OpenVibe network](https://openvibe.network). Built in the open by [
 <!-- versions:start -->
 - openvibe-contracts: v0.222.0
 - openvibe-sdk: v0.67.0
-- openvibe-shared: v4.29.0
+- openvibe-shared: v4.33.0
 <!-- versions:end -->
