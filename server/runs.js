@@ -458,6 +458,33 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         return (await db.prepare(`SELECT * FROM runs ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY id DESC LIMIT ?`).all(...args, Math.min(200, Number(limit) || 50))).map(decode);
     }
 
+    // The columns a person's Action Center item and run receipt need. Input, its hash, the trace and the
+    // request/idempotency identifiers are deliberately absent: another person's input is never even read.
+    const PERSON_COLUMNS = `id, workflow_key, workflow_version, status, on_behalf_of, output, error_code, error_detail,
+        provider_key, model_key, cost_usd, tokens_in, tokens_out, attempts, created_at, started_at, finished_at,
+        synthetic, cached_from, retry_of, citations_count`;
+
+    /**
+     * A person's runs for the Action Center: on_behalf_of is that user. Everything still queued/running, then the
+     * terminal ones updated since `since`; newest updated first, at most limit (50 by the route).
+     */
+    async function listOnBehalfOf(subject, { since = null, limit = 50 } = {}) {
+        const where = ["on_behalf_of IS NOT NULL", "on_behalf_of::jsonb->>'type' = 'user'", "on_behalf_of::jsonb->>'id' = ?"];
+        const args = [subject];
+        if (since != null) {
+            where.push("(status IN ('queued', 'running', 'waiting') OR COALESCE(finished_at, started_at, created_at) >= ?)");
+            args.push(iso(since));
+        }
+        const rows = await db.prepare(`SELECT ${PERSON_COLUMNS} FROM runs WHERE ${where.join(' AND ')}
+            ORDER BY COALESCE(finished_at, started_at, created_at) DESC LIMIT ?`).all(...args, Math.min(50, Number(limit) || 50));
+        return rows.map(decode);
+    }
+
+    /** One run for its person's receipt page, without its input. The caller checks on_behalf_of. */
+    async function getReceipt(id) {
+        return decode(await db.prepare(`SELECT ${PERSON_COLUMNS} FROM runs WHERE id = ?`).get(id));
+    }
+
     /** The run with its Billing readings in explain.usage_readings (server/usage-samples.js readingsFor); unchanged when it has none. */
     async function explained(run) {
         const ids = run && run.usage ? run.usage.usage_sample_ids : null;
@@ -502,7 +529,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
     /** Queue depth for /metrics and /api/ready: runs waiting for a slot, and runs holding one. */
     function stats() { return { queued: queue.length, running: active, inflight: inflight.size, max_concurrent: config.runs.maxConcurrent, max_queued: config.runs.maxQueued }; }
 
-    return { create, wait, get, list, cancel, retry, citations, addCitations, requestsFor, explained, recoverInterrupted, prune, drain, stats, inflight, TERMINAL, decode };
+    return { create, wait, get, getReceipt, list, listOnBehalfOf, cancel, retry, citations, addCitations, requestsFor, explained, recoverInterrupted, prune, drain, stats, inflight, TERMINAL, decode };
 }
 
 module.exports = { createRuns, entityKey, subjectKey };

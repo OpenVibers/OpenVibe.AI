@@ -4,6 +4,7 @@
  * ai.openvibe.services under /console, for OpenVibe.Network staff.
  *
  *   GET  /auth/login, /auth/callback     Network SSO (authorization code + PKCE S256, OAuth client `ai`)
+ *   GET  /auth/person/login              the same sign-in for any person, for their run receipt page
  *   POST /auth/logout
  *   GET  /console                        overview: providers, runs and failures (24 h), spend, queue, quotas
  *   GET  /console/providers              providers (secret reference names + presence only) and models
@@ -75,6 +76,13 @@ function sanitizeNext(v) {
     return s;
 }
 
+/** Where to go after a person signs in for a run receipt: exactly one /runs/run_<ULID> page; anything else goes home. */
+function sanitizeRunNext(v) {
+    if (typeof v === 'string' && /[\u0000-\u001f\u007f\\]/.test(v)) return '/';
+    const s = String(v || '');
+    return s.length <= 300 && /^\/runs\/run_[0-9A-HJKMNP-TV-Z]{26}$/.test(s) ? s : '/';
+}
+
 const NOTICES = {
     provider_status: 'Provider status changed.',
     provider_added: 'Provider added. Point a route at it below, or on the route\'s page.',
@@ -95,7 +103,7 @@ const DEF_KINDS = {
 };
 const DAY_MS = 86400000;
 
-function consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, vault = null }) {
+function consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, vault = null, personSessions = null }) {
     const cc = config.console;
     const r = express.Router();
     const scoped = ['/console', '/auth'];
@@ -208,20 +216,47 @@ function consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, e
         res.redirect(302, sso.authorizeUrl(config, { state, challenge }));
     });
 
+    // A person's sign-in for one run receipt. It uses the same OAuth client and redirect URI, but the
+    // flow cookie says which callback branch to take, so a non-staff person never receives a staff session.
+    r.get('/auth/person/login', (req, res) => {
+        const state = random(32);
+        const { verifier, challenge } = sso.pkcePair();
+        sessions.setFlow(res, { s: state, v: verifier, n: sanitizeRunNext(req.query.next), kind: 'person' });
+        res.redirect(302, sso.authorizeUrl(config, { state, challenge }));
+    });
+
     r.get('/auth/callback', wrap(async (req, res) => {
         const flow = sessions.takeFlow(req, res);
-        if (req.query.error) return await send(res, 400, pages.signIn({ message: `Sign-in was not completed (${String(req.query.error).slice(0, 60)}).` }));
+        const personFlow = flow && flow.kind === 'person';
+        if (req.query.error) {
+            const text = `Sign-in was not completed (${String(req.query.error).slice(0, 60)}).`;
+            return await send(res, 400, personFlow ? pages.message({ title: 'Sign-in not completed', text, back: '/', site: 'your runs' }) : pages.signIn({ message: text }));
+        }
         if (!flow || !req.query.code || !sameString(req.query.state, flow.s)) {
-            return await send(res, 400, pages.signIn({ message: 'The sign-in could not be verified (expired or mismatched state). Please try again.' }));
+            const text = 'The sign-in could not be verified (expired or mismatched state). Please try again.';
+            return await send(res, 400, personFlow ? pages.message({ title: 'Sign-in not verified', text, back: '/', site: 'your runs' }) : pages.signIn({ message: text }));
         }
         let person;
         try {
             person = await sso.exchange({ config, clientSecret: clientSecret(), code: req.query.code, verifier: flow.v, now: clock.now(), fetchImpl, log });
         } catch (e) {
             log.warn(`[console] sign-in failed: ${e.message}`);
-            return await send(res, e.status && e.status < 500 ? 400 : 502, pages.signIn({ message: 'OpenVibe.Network did not confirm the sign-in. Please try again.' }));
+            const text = 'OpenVibe.Network did not confirm the sign-in. Please try again.';
+            return await send(res, e.status && e.status < 500 ? 400 : 502, personFlow ? pages.message({ title: 'Sign-in failed', text, back: '/', site: 'your runs' }) : pages.signIn({ message: text }));
         }
         const ipHash = sessions.ipHash(req.ip);
+        if (flow.kind === 'person') {
+            if (!personSessions) return await send(res, 503, pages.message({ title: 'Sign-in unavailable', text: 'The run page sign-in is not configured on this host.', back: '/', site: 'your runs' }));
+            if (person.error) {
+                await audit('anonymous', 'run_page.sign_in.refused', 'run_page', 'sign_in', { reason: person.error, ip_hash: ipHash }, req);
+                return await send(res, 403, pages.message({ title: 'Not authorized', text: 'This page needs an OpenVibe.Network person account. Your sign-in was recorded.', back: '/', site: 'your runs' }));
+            }
+            await db.tx(async () => {
+                await personSessions.create(res, { subject: person.subject, username: person.username });
+                await audit(person.subject, 'run_page.sign_in', 'run_page', 'sign_in', { ip_hash: ipHash }, req);
+            });
+            return res.redirect(303, flow.n || '/');
+        }
         if (person.error) {
             await audit('anonymous', 'console.sign_in.refused', 'console', 'sign_in', { reason: person.error, ip_hash: ipHash }, req);
             return await send(res, 403, pages.message({ title: 'Not authorized', text: 'This console is only for OpenVibe.Network staff. Your sign-in was recorded.' }));
@@ -475,4 +510,4 @@ function consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, e
     return r;
 }
 
-module.exports = { consoleRouter, consoleCapabilities, sanitizeNext, STAFF_TO_AI };
+module.exports = { consoleRouter, consoleCapabilities, sanitizeNext, sanitizeRunNext, STAFF_TO_AI };

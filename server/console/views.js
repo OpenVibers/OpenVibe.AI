@@ -152,8 +152,8 @@ function signIn({ next, message }) {
     });
 }
 
-function message({ title, text, staff, csrf, back = '/console' }) {
-    return layout({ title, staff, csrf, body: html`<h1>${title}</h1><div class="card"><p>${text}</p><p><a href="${back}">Back</a></p></div>` });
+function message({ title, text, staff, csrf, back = '/console', site = 'operator console' }) {
+    return layout({ title, staff, csrf, site, body: html`<h1>${title}</h1><div class="card"><p>${text}</p><p><a href="${back}">Back</a></p></div>` });
 }
 
 const CAP_LABELS = {
@@ -381,7 +381,7 @@ const ref = (x) => (x ? (x.service ? `${x.service}:${x.type}:${x.id}` : `${x.typ
 function run({ staff, csrf, r, citations, requests, input, output, canCancel, notice, error }) {
     const g = r.grounding;
     const sampleIds = r.usage.usage_sample_ids || [];
-    const open = r.status === 'queued' || r.status === 'running';
+    const open = r.status === 'queued' || r.status === 'running' || r.status === 'waiting';
     return layout({
         title: `Run ${r.id}`, section: 'runs', staff, csrf, notice, error, body: html`<h1>Run <span class="mono">${r.id}</span> ${badge(r.status)}</h1>
 <div class="cols"><div class="card"><dl>
@@ -534,6 +534,42 @@ ${table('Audit rows, newest first', ['#', 'At', 'Actor', 'Action', 'Target', 'De
     });
 }
 
+// ── Person: one run (GET /runs/:id, signed in) ───────────────
+/**
+ * A person's receipt for one run: status, workflow, model, cost, times, and the output or the error.
+ * It never shows the input, the request log, the trace or anyone else's run. The console's classes
+ * and CSS are reused; no script, no form and no external resource.
+ */
+function runReceipt({ viewer, r, output, outputCut }) {
+    const open = r.status === 'queued' || r.status === 'running' || r.status === 'waiting';
+    const provider = r.provenance && r.provenance.provider;
+    const model = r.provenance && r.provenance.model;
+    const usage = r.usage || {};
+    const cost = usage.cost_usd == null ? '—' : usd(usage.cost_usd);
+    return layout({
+        title: `Run ${r.id}`, site: 'your runs', body: html`<h1>Run <span class="mono">${r.id}</span> ${badge(r.status)}</h1>
+${viewer && viewer.username ? html`<p class="muted">Signed in as @${viewer.username}.</p>` : ''}
+${open ? html`<div class="banner" role="status"><strong>${r.status === 'queued' ? 'Waiting to start' : r.status === 'waiting' ? 'Waiting for you' : 'Running'}</strong> — reload this page for the latest.</div>` : ''}
+${r.error ? html`<div class="banner error" role="alert"><strong>${r.error.code || 'The run failed'}</strong><br>${clip(r.error.detail, 1000)}</div>` : ''}
+<div class="cols"><div class="card"><dl>
+<dt>Status</dt><dd>${badge(r.status)}</dd>
+<dt>Workflow</dt><dd><code>${r.workflow.key}</code> v${r.workflow.version}</dd>
+<dt>Model</dt><dd>${provider || model ? html`${provider ? html`<code>${provider}</code>` : '—'}${model ? html` / <code>${model}</code>` : ''}` : '—'}</dd>
+<dt>Cost</dt><dd>${cost}</dd>
+<dt>Created</dt><dd>${when(r.created_at)}</dd>
+<dt>Started</dt><dd>${when(r.started_at)}</dd>
+<dt>Finished</dt><dd>${when(r.finished_at)}</dd>
+${r.created_at && r.finished_at ? html`<dt>Duration</dt><dd>${span(r.created_at, r.finished_at)}</dd>` : ''}
+${r.provenance && r.provenance.cached_from ? html`<dt>From cache</dt><dd><a class="mono" href="/runs/${enc(r.provenance.cached_from)}">${r.provenance.cached_from}</a></dd>` : ''}
+${r.retry_of ? html`<dt>Retry of</dt><dd><a class="mono" href="/runs/${enc(r.retry_of)}">${r.retry_of}</a></dd>` : ''}
+</dl>${r.synthetic ? html`<p class="muted mt">Synthetic: produced by the stub provider.</p>` : ''}</div></div>
+<h2>Output</h2>
+${output != null ? html`<pre tabindex="0">${output}</pre>${outputCut ? html`<p class="muted">Shown bounded; the run has more.</p>` : ''}` : html`<div class="card muted"><p class="m0">${r.error ? 'No output: the run failed.' : open ? 'No output yet.' : 'This run has no output.'}</p></div>`}
+<p class="muted">This page shows only your own run. Its input is not shown.</p>
+<p><a href="/">OpenVibe.AI</a></p>`,
+    });
+}
+
 // ── Public: price and latency (GET /stats, no sign-in) ───────
 const ms = (v) => (v == null ? '—' : `${n(v)} ms`);
 function rate(ok, total) {
@@ -571,4 +607,4 @@ ${table(`Providers and models, ${from} to ${to}`, ['Provider', 'Model', 'Capabil
     });
 }
 
-module.exports = { CSP, html, esc, safeUrl, pages: { signIn, message, overview, providers, providerNew, definitions, definition, runs, run, quotas, usage, cache, audit, stats } };
+module.exports = { CSP, html, esc, safeUrl, pages: { signIn, message, overview, providers, providerNew, definitions, definition, runs, run, runReceipt, quotas, usage, cache, audit, stats } };

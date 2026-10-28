@@ -7,10 +7,13 @@ const { instrument } = require('openvibe-shared/metrics');
 const { createRelease } = require('openvibe-shared/release');
 const { createAiReadiness, registerAiGauges } = require('./observability');
 const { runsRouter } = require('./api/runs');
+const { actionsRouter } = require('./api/actions');
 const { sendError } = require('./util');
 const { adminRouter } = require('./api/admin');
 const { createOps } = require('./ops');
 const { consoleRouter } = require('./console');
+const { createPersonSessions } = require('./person-session');
+const { runPageRouter } = require('./run-pages');
 const views = require('./console/views');
 const cachePolicy = require('openvibe-shared/cache-policy');
 const ovServe = require('openvibe-shared/serve');
@@ -87,13 +90,17 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
     // Operator actions shared by the admin API and the operator console (one implementation, one audit row).
     const ops = createOps({ db, registry, pool, quotas, cache, runs });
     app.use(runsRouter({ runs, registry, auth, config, log }));
+    app.use(actionsRouter({ runs, registry, auth, log }));
     // The OpenAI-compatible endpoint (POST /v1/chat/completions, GET /v1/models): runs of ai.complete.
     app.use(require('./api/openai').openaiRouter({ runs, auth, config, log }));
     app.use(require('./api/attribution-quotas').attributionQuotasRouter({ db, quotas, auth, clock, sendError: (res, err, ctx) => sendError(res, err, ctx, log) }));
     if (credentials) app.use(require('./credentials').credentialsRouter({ credentials, auth, registry, sendError: (res, err, ctx) => sendError(res, err, ctx, log) }));
     app.use(adminRouter({ db, registry, pool, quotas, cache, runs, auth, ops, log }));
     // The operator console (/console, /auth/*): Network staff, server-rendered, no scripts (server/console).
-    app.use(consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, env, clock, fetchImpl, log, vault }));
+    // Person sessions are separate, read-only and open one run receipt each (server/person-session.js).
+    const personSessions = createPersonSessions({ db, config, clock });
+    app.use(consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, env, clock, fetchImpl, log, vault, personSessions }));
+    app.use(runPageRouter({ runs, personSessions, log }));
 
     // Public price and latency (no sign-in, no scripts): provider_stats_daily totals and the rate cards,
     // nothing per caller. Only registered providers are listed: a person's own key records its runs as
@@ -136,7 +143,7 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
     // Discovery for the public home (ai.openvibe.services): the home and the price page are for search engines
     // and assistants; the console, its sign-in and the API are not.
     app.get('/robots.txt', (_req, res) => {
-        res.type('text/plain').send(`User-agent: *\nAllow: /$\nAllow: /stats\nAllow: /updates\nDisallow: /console\nDisallow: /auth/\nDisallow: /api/\n\nSitemap: ${config.baseUrl}/sitemap.xml\n`);
+        res.type('text/plain').send(`User-agent: *\nAllow: /$\nAllow: /stats\nAllow: /updates\nDisallow: /console\nDisallow: /runs\nDisallow: /auth/\nDisallow: /api/\n\nSitemap: ${config.baseUrl}/sitemap.xml\n`);
     });
     app.get('/sitemap.xml', async (_req, res, next) => {
         try {
@@ -179,6 +186,7 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
             'GET  /api/v1/workflows | templates | routes | providers | models | quotas | usage | audit',
             'GET  /api/health, /api/ready, /release.json',
             'GET  /stats      price and latency per provider and model (public)',
+            'GET  /runs/:id  your run receipt (OpenVibe.Network sign-in; your own runs only)',
             'GET  /console    the operator console (OpenVibe.Network staff sign-in)',
             '',
             'Callers authenticate with OpenVibe.Network tokens (audience openvibe.ai): first-party service tokens, or a',

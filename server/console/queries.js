@@ -107,14 +107,19 @@ async function runFacets(db) {
     };
 }
 
-/** A bounded, credential-blanked copy of a stored input/output for display. */
-function preview(value) {
+/**
+ * A bounded, credential-blanked copy of a stored input/output for display. The run receipt asks for
+ * more text than the console's 240 characters; the byte cap still bounds the page.
+ */
+function preview(value, { string = PREVIEW_STRING, bytes = PREVIEW_BYTES } = {}) {
+    const maxString = Math.max(1, Number(string) || PREVIEW_STRING);
+    const maxBytes = Math.max(256, Number(bytes) || PREVIEW_BYTES);
     let cut = false;
     const walk = (v, depth) => {
         if (typeof v === 'string') {
-            if (v.length <= PREVIEW_STRING) return v;
+            if (v.length <= maxString) return v;
             cut = true;
-            return `${v.slice(0, PREVIEW_STRING)}… (${v.length - PREVIEW_STRING} more characters)`;
+            return `${v.slice(0, maxString)}… (${v.length - maxString} more characters)`;
         }
         if (v == null || typeof v !== 'object') return v;
         if (depth >= PREVIEW_DEPTH) { cut = true; return '…'; }
@@ -131,7 +136,7 @@ function preview(value) {
     };
     if (value === null || value === undefined) return { text: null, cut: false };
     let text = JSON.stringify(walk(value, 0), null, 2);
-    if (text.length > PREVIEW_BYTES) { text = `${text.slice(0, PREVIEW_BYTES)}\n… (truncated)`; cut = true; }
+    if (text.length > maxBytes) { text = `${text.slice(0, maxBytes)}\n… (truncated)`; cut = true; }
     return { text, cut };
 }
 
