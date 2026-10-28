@@ -449,6 +449,25 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         throw new AiError(502, 'credential.provider_failed', `the person's own provider did not answer: ${String(lastErr && lastErr.message || lastErr).slice(0, 200)}`);
     }
 
+    /**
+     * The offers the routing lists for one operation of one route: the eligible candidates in the
+     * order placement would try them, as { provider, model }. GET /api/v1/routes publishes these and
+     * a pinned run is accepted only when it names one of them.
+     */
+    async function offers(route, operation, ctx = {}) {
+        const { explain } = await candidates(route, [operation], operation, ctx);
+        const out = [];
+        const seen = new Set();
+        for (const c of explain.candidates) {
+            if (!c || !c.eligible || !c.provider) continue;
+            const id = offerId(c.provider, c.model || null);
+            if (seen.has(id)) continue;
+            seen.add(id);
+            out.push({ provider: c.provider, model: c.model || null });
+        }
+        return out;
+    }
+
     async function execute(route, operation, req, ctx = {}) {
         if (ctx.credential) return await executeWithCredential(ctx.credential, operation, req, ctx);
         const features = [operation];
@@ -461,7 +480,19 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         // after that is final, never retried or handed to a fallback whose words would follow the first one's.
         let streamed = false;
         const onDelta = typeof req.onDelta === 'function' ? (d) => { streamed = true; req.onDelta(d); } : null;
-        const { order: list, explain } = await candidates(route, features, operation, ctx);
+        let { order: list, explain } = await candidates(route, features, operation, ctx);
+        // A first-party service's generate run may name one offer from GET /api/v1/routes. The run then
+        // tries that offer alone: no fallback to another model, so the caller gets the model it asked for
+        // or an explicit failure. server/runs.js validates the pin against this same offer list first.
+        if (ctx.routePin && operation === 'generate') {
+            const pin = ctx.routePin;
+            const chosen = list.find((c) => c.provider === pin.provider && (pin.model == null || c.model === pin.model));
+            if (!chosen) {
+                throw new AiError(422, 'route.not_offered', `route ${pin.model ? `${pin.provider}/${pin.model}` : pin.provider} is not offered for generate; GET /api/v1/routes?operation=generate lists the offers`);
+            }
+            list = [chosen];
+            explain.reasons = [`pinned to ${chosen.model ? `${chosen.provider}/${chosen.model}` : chosen.provider} for this run`, ...(explain.reasons || [])];
+        }
         for (let i = 0; i < list.length; i++) {
             const c = list[i];
             const entry = await adapter(c.provider);
@@ -548,7 +579,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         throw new AiError(503, 'provider.unavailable', 'no provider on this route could answer', { tried, explain });
     }
 
-    return { adapter, health, resetHealth, execute, executeWithCredential, priceFor, costOf, rateCardsFor, providerStates, stats, statFor, candidates };
+    return { adapter, health, resetHealth, execute, executeWithCredential, offers, priceFor, costOf, rateCardsFor, providerStates, stats, statFor, candidates };
 }
 
 module.exports = { createProviderPool };

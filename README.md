@@ -108,6 +108,7 @@ idempotent replay):
 | `POST /api/v1/{chat,generate,summarize,classify,extract,embed,image}` (no `enrich`), `GET /runs/:id` (the app's own runs) | `ai.app.run` for a developer-app token ([Developer apps](#developer-apps)) |
 | `GET /api/v1/runs`, `GET /runs/:id` (+ citations, request-log metadata), `GET /runs/:id/citations` | `ai.run.read` (own runs) |
 | `GET /api/v1/workflows\|templates\|routes[/:key]` | `ai.run.create`, `ai.workflow.manage` or `ai.usage.read` |
+| `GET /api/v1/routes?operation=generate` | the same read: every route's `offers` (`{provider, model}`), plus the operation's deduplicated `offers` |
 | `POST /api/v1/{templates,workflows,routes}/:key/versions`, `…/versions/:v/status` | `ai.workflow.manage` |
 | `POST/PATCH /api/v1/providers…`, `…/disable\|enable\|reset`, `POST/PATCH /api/v1/models…`, `POST /api/v1/quotas`, `DELETE /api/v1/cache` | `ai.provider.manage` |
 | `GET /api/v1/status\|usage\|quotas\|requests\|audit\|cache\|providers\|models` | `ai.usage.read` |
@@ -340,7 +341,17 @@ provider that is disabled, missing credentials, circuit-open or unable to do the
 failure; a fallback that answers is recorded on the run (`fallback_used`), in the request log
 (`fallback = 1`) and in the audit log. Every run response and `GET /api/v1/runs/:id` carry `explain`
 (objective, reasons, selected, and every candidate with its estimated cost, latency and excluded
-reason). `GET /api/v1/runs/:id` adds `explain.usage_readings` when the run has a Billing reading: per
+reason).
+
+`GET /api/v1/routes?operation=generate` lists each route's eligible offers as `{ provider, model }`.
+A first-party service holding `ai.run.create` may pin one on `POST /api/v1/generate` (and on
+`POST /api/v1/runs` for `ai.generate`) with `"route": { "provider": …, "model": … }`. The run tries
+that offer alone, never a fallback; a provider/model the routing does not list for `generate` is
+`422 input.invalid` in words, and the caller's `ns` is still checked first (a workflow outside it is
+`403 capability.namespace_denied`). Developer-app tokens (`ai.app.run`) cannot pin. Quotas, tier budgets and Billing readings are exactly as for an unpinned
+run, and a pinned run is never served from the shared cache.
+
+`GET /api/v1/runs/:id` adds `explain.usage_readings` when the run has a Billing reading: per
 reading its `idempotency_key`, `state` (`queued` until Billing accepts it, `sent`, or `failed` when Billing
 refused it), `attempts`, `queued_at`, `sent_at`, `rejected_at`, `next_attempt_at`, `last_error` (the
 outbox's last send error, also while a queued reading is retried) and `free_allowance_used` when some
