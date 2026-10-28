@@ -64,6 +64,9 @@ t.test('a successful run rolls up one ok attempt: counts, tokens, cost, a percen
 });
 
 t.test('a failed run counts an error and moves the route EWMA by alpha 0.2', async () => {
+    // A localhost failure can take as long as the good sample did; anchor the history so the 0.2 move
+    // is observable instead of depending on the two latencies differing by a millisecond.
+    await h.db.prepare("UPDATE placement_state SET ewma_latency_ms = 500 WHERE route_key = 'default.chat'").run();
     const before = await placementRow('default.chat');
     await route('dead', []);
     const r = await generate('nobody home');

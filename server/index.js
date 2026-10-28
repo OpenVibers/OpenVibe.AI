@@ -55,7 +55,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     // A person's own provider keys (WS-O task 2): stored by the service holding their consent, used by their runs only.
     const credentials = require('./credentials').createCredentials({ db, config, clock });
     const projectSecrets = require('./project-secrets').createProjectSecrets({ config, env, fetchImpl });
-    const runs = createRuns({ db, registry, engine, cache, quotas, config, clock, log, userModules, credentials, tiers, projectSecrets });
+    const runs = createRuns({ db, registry, engine, cache, quotas, config, clock, log, userModules, credentials, tiers, projectSecrets, pool });
     await seed({ registry, quotas, config, env, db });
     const interrupted = await runs.recoverInterrupted();
     if (interrupted) log.warn(`[ai] marked ${interrupted} interrupted run(s) failed (run.interrupted); callers can retry them`);
