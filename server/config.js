@@ -115,14 +115,24 @@ function load(env = process.env) {
         // Image generation (POST /api/v1/image, workflow ai.image): off until AI_IMAGE_MODEL names the shared
         // provider's image model (dall-e-3, gpt-image-1); then boot seeds that model and route default.image.
         image: { model: String(env.AI_IMAGE_MODEL || '').trim(), size: String(env.AI_IMAGE_SIZE || '').trim() || '1024x1024' },
-        // MegaSource (server/research/, workflow research.gather): DeepSeek's paid web search joins the free sources when
-        // its key resolves (a secret reference, read by name) and stays within AI_RESEARCH_DEEPSEEK_DAILY calls a day.
+        // MegaSource (server/research/, workflow research.gather): web search asks the Search Fabric's web scope
+        // first (OpenVibe.Search POST /api/v1/query, capability search.fabric.query) as AI's service principal;
+        // DeepSeek's paid search stays as the fallback when the fabric is off, refuses or answers nothing. The
+        // service token needs Search's viewer capability search.query.delegate (Network grant: ai on
+        // openvibe.search); Search's own ladder calls this service back, so that caller keeps DeepSeek directly.
         research: {
             deepseek: bool(env.AI_RESEARCH_DEEPSEEK, true),
             deepseekKeyRef: String(env.AI_RESEARCH_DEEPSEEK_KEY_REF || 'env:DEEPSEEK_API_KEY').trim(),
             deepseekUrl: trimUrl(env.AI_RESEARCH_DEEPSEEK_URL || 'https://api.deepseek.com'),
             deepseekDaily: int(env.AI_RESEARCH_DEEPSEEK_DAILY, 1500),
             timeoutMs: int(env.AI_RESEARCH_TIMEOUT_MS, 15000),
+            fabric: {
+                enabled: bool(env.AI_RESEARCH_SEARCH, true),
+                url: trimUrl(env.OV_SEARCH_INTERNAL_URL || env.AI_RESEARCH_SEARCH_URL || 'http://127.0.0.1:4710'),
+                networkUrl: trimUrl(env.OV_NETWORK_INTERNAL_URL || 'http://127.0.0.1:4000'),
+                clientId: String(env.OV_OAUTH_CLIENT_ID || 'ai').trim(),
+                timeoutMs: int(env.AI_RESEARCH_SEARCH_TIMEOUT_MS, 15000),
+            },
         },
         // media.analyze (server/workflows/media-analysis.js): the file cap (also bounded by free disk minus a reserve),
         // the download timeout, the scene-change threshold (scdet, 0-100) and the tools.
