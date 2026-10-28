@@ -61,6 +61,22 @@ function load(env = process.env) {
         networkPublicKey: env.OV_NETWORK_PUBLIC_KEY ? env.OV_NETWORK_PUBLIC_KEY.replace(/\\n/g, '\n') : null,
         audience: 'openvibe.ai',
 
+        // ── OpenVibe.Events → AI (server/bench/events.js): AI subscribes to bench.rating.changed at boot.
+        // The secret verifies the signed delivery (v2); unset turns POST /internal/events off. EVENTS_URL
+        // is the shared producer/consumer address, AI_EVENTS_URL overrides it. AI_EVENTS_SUBSCRIBE=0 (or no
+        // secret) leaves subscription creation to the operator/script; the endpoint is this service's loopback.
+        events: {
+            url: trimUrl(env.AI_EVENTS_URL || env.EVENTS_URL),
+            secrets: list(env.AI_EVENTS_SECRET || env.AI_BENCH_EVENTS_SECRET || env.EVENTS_SECRET, []),
+            endpoint: String(env.AI_EVENTS_ENDPOINT || '').trim(),
+            subscribe: bool(env.AI_EVENTS_SUBSCRIBE, true),
+        },
+        // Where AI reads board detail a sparse bench.rating.changed leaves out (cost per solved, intervals).
+        bench: {
+            url: trimUrl(env.AI_BENCH_URL || env.OV_BENCH_INTERNAL_URL || env.OV_BENCH_URL || env.BENCH_URL || 'http://127.0.0.1:5230'),
+            timeoutMs: int(env.AI_BENCH_TIMEOUT_MS, 15000),
+        },
+
         // PostgreSQL (ADR-035): DATABASE_URL serves (PgBouncer), DATABASE_DIRECT_URL migrates (owner role).
         db: { url: env.DATABASE_URL || '', directUrl: env.DATABASE_DIRECT_URL || '' },
 

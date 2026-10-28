@@ -264,6 +264,24 @@ const KINDS = {
 };
 const target = (c) => (c ? html`<code>${c.provider}</code>${c.model ? html` / <code>${c.model}</code>` : ''}` : '—');
 
+/** BENCH-11: the evidence an opted-in route used, read-only. Never a form: changing policy is an API edit. */
+function benchBlock(bench) {
+    if (!bench) return '';
+    if (!bench.enabled) return html`<h2>Bench evidence</h2><p class="muted">Learn from Bench is off for this route (<code>learn_from_bench: false</code>); placement keeps its own order.</p>`;
+    const rows = bench.evidence || [];
+    const tied = new Set((bench.tied || []).map((x) => `${x.provider || ''}|${x.model}`));
+    const body = rows.map((r) => html`<tr><td><code>${r.model}</code>${bench.selected && bench.selected.model === r.model ? html` <span class="ok">selected</span>` : tied.has(`${r.provider || ''}|${r.model}`) ? html` <span class="muted">tied</span>` : ''}</td>
+<td>${r.provider ? html`<code>${r.provider}</code>` : html`<span class="muted">any</span>`}</td><td>${r.rating == null ? '—' : n(r.rating)}</td>
+<td>${r.interval ? `${n(r.interval.lower)} – ${n(r.interval.upper)}` : '—'}</td><td>${n(r.games)}${r.provisional ? ' (provisional)' : ''}</td>
+<td>${r.cost_per_solved == null ? '—' : `$${r.cost_per_solved}`}</td><td>${r.updated_at ? when(r.updated_at) : '—'}</td></tr>`);
+    return html`<h2>Bench evidence</h2>
+<p class="muted">Read-only. ${bench.kind_id ? html`Board <code>${bench.kind_id}</code>` : 'No board named'} · category <code>${bench.category}</code>.
+Provisional ratings (under 10 games) never decide a route.</p>
+<p><strong>Why:</strong> ${bench.reason}</p>
+${bench.leader ? html`<p>Leader: <code>${bench.leader.model}</code> at ${n(bench.leader.rating)} (${n(bench.leader.games)} games, interval ${bench.leader.interval ? `${n(bench.leader.interval.lower)} – ${n(bench.leader.interval.upper)}` : '—'}).</p>` : ''}
+${rows.length ? table('Evidence used', ['Model', 'Provider', 'Rating', 'Interval', 'Games', 'Cost / solved', 'Updated'], body, 'no evidence.') : html`<p class="muted">No evidence yet: routing keeps its current order.</p>`}`;
+}
+
 function definitions({ staff, csrf, kind, rows, inUse }) {
     const k = KINDS[kind];
     const link = (key) => html`<a href="/console/${kind}/${enc(key)}"><code>${key}</code></a>`;
@@ -294,7 +312,7 @@ ${table(`${k.title} (newest version of each)`, head, body, `no ${kind}.`)}`,
     });
 }
 
-function definition({ staff, csrf, kind, key, versions, selected, inUse, canManage, notice, error, canChoose = false, providers = [], models = [] }) {
+function definition({ staff, csrf, kind, key, versions, selected, inUse, canManage, notice, error, canChoose = false, providers = [], models = [], bench = null }) {
     const k = KINDS[kind];
     const v = selected;
     let content;
@@ -302,9 +320,11 @@ function definition({ staff, csrf, kind, key, versions, selected, inUse, canMana
         content = html`<dl><dt>Status</dt><dd>${badge(v.status)}</dd>
 ${v.alias_of ? html`<dt>Alias of</dt><dd><a href="/console/routes/${enc(v.alias_of)}"><code>${v.alias_of}</code></a></dd>` : html`<dt>Primary</dt><dd>${target(v.primary)}</dd>
 <dt>Fallbacks</dt><dd>${v.fallbacks.length ? html`<ol>${v.fallbacks.map((f) => html`<li>${target(f)}</li>`)}</ol>` : html`<span class="warn">none: an outage of the primary fails every run on this route</span>`}</dd>`}
+<dt>Learn from Bench</dt><dd>${v.learn_from_bench ? html`on${v.bench_kind ? html` · board <code>${v.bench_kind}</code>` : ''}${v.bench_category ? html` · category <code>${v.bench_category}</code>` : ''}` : 'off'}</dd>
 <dt>Response format</dt><dd>${v.response_format}</dd><dt>Max output tokens</dt><dd>${v.max_output_tokens != null ? n(v.max_output_tokens) : '—'}</dd>
 <dt>Timeout</dt><dd>${v.timeout_ms ? `${n(v.timeout_ms)} ms` : 'provider default'}</dd><dt>Created</dt><dd>${v.created_by || '—'}, ${when(v.created_at)}</dd></dl>
-<h3>Options</h3><pre>${JSON.stringify(v.options || {}, null, 2)}</pre>`;
+<h3>Options</h3><pre>${JSON.stringify(v.options || {}, null, 2)}</pre>
+${benchBlock(bench)}`;
     } else if (kind === 'templates') {
         content = html`<dl><dt>Status</dt><dd>${badge(v.status)}</dd><dt>Name</dt><dd>${v.name}</dd><dt>Description</dt><dd>${v.description || '—'}</dd>
 <dt>Default route</dt><dd>${v.default_route ? html`<a href="/console/routes/${enc(v.default_route)}"><code>${v.default_route}</code></a>` : '—'}</dd>

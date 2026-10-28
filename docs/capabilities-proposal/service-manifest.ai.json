@@ -36,7 +36,9 @@
     "ai.run.failed",
     "ai.run.cached"
   ],
-  "eventsConsumed": [],
+  "eventsConsumed": [
+    "bench.rating.changed"
+  ],
   "namespacesOwned": [
     "ai.usage_summary"
   ],
@@ -87,5 +89,5 @@
       "none": "no claims: one process owns ai.db (better-sqlite3, single writer); a run is taken with a compare-and-set on its status (queued → running)"
     }
   },
-  "notes": "Providers, models, routing profiles, versioned prompt templates and workflows, runs, request logs, citations, scoped cache, quotas and audit. Workflow output is a draft/evidence package attributed to workflow + model + run. ai.run.queued|succeeded|failed|cached have payload contracts (v0.30.0, status planned): AI publishes them once its Events client is wired in; it publishes none today. ai.run.create takes ai.run-request@1 and returns ai.run@1."
+  "notes": "Providers, models, routing profiles, versioned prompt templates and workflows, runs, request logs, citations, scoped cache, quotas and audit. Workflow output is a draft/evidence package attributed to workflow + model + run. ai.run.queued|succeeded|failed|cached have payload contracts; AI publishes them through its outbox. AI consumes bench.rating.changed through a signed Events subscription and keeps per-kind Bench evidence; only routes with learn_from_bench: true consult it in placement. ai.run.create takes ai.run-request@1 and returns ai.run@1."
 }

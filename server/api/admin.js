@@ -133,7 +133,20 @@ function adminRouter({ db, registry, pool, quotas, cache, runs, auth, ops = crea
         if (!latest) throw new AiError(404, 'ai.not_found', `no route ${req.params.key}`);
         const versions = (await registry.listRoutes({ history: true })).filter(x => x.key === req.params.key).map(x => ({ version: x.version, status: x.status, created_by: x.created_by, created_at: x.created_at }));
         const operation = req.query.operation ? String(req.query.operation) : null;
-        return { route: { ...latest, offers: await routeOffers(latest, operation, req) }, versions };
+        // BENCH-11: the evidence this route used, the leader it compared against and why the offer order
+        // changed (or stayed). Null while there is no placement to learn from (an inactive route).
+        let bench = null;
+        if (latest.status === 'active' && pool.benchView) {
+            try {
+                const target = latest.alias_of ? await registry.resolveRoute(latest.key) : latest;
+                if (target && target.status === 'active') {
+                    bench = await pool.benchView(target, operationFor(target, operation), { requesterType: req.principal.subject.type, requesterId: req.principal.subject.id });
+                }
+            } catch (err) {
+                log.warn(`[ai] bench evidence for route ${latest.key}: ${err.message}`);
+            }
+        }
+        return { route: { ...latest, offers: await routeOffers(latest, operation, req), bench }, versions };
     }));
 
     for (const [plural, k] of Object.entries(kinds)) {

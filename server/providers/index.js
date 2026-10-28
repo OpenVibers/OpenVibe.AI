@@ -43,7 +43,7 @@ function rateLimited(err) {
     return (err && err.status === 429) || (err && err.code === 'provider.rate_limited');
 }
 
-function createProviderPool({ db, registry, config, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, credentialFetch = null, machineModels = null }) {
+function createProviderPool({ db, registry, config, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, credentialFetch = null, machineModels = null, bench = null }) {
     // A person's own machine as their model (credential provider node, server/machines.js).
     const machines = machineModels || require('../machines').createMachineModels({ config, env, fetchImpl });
     const cache = new Map();          // key -> { stamp, adapter }
@@ -339,9 +339,20 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
     }
 
     async function candidates(route, features, operation, ctx = {}) {
-        const { order, explain, placement: result = null, ...rest } = route.capability && operation
+        let { order, explain, placement: result = null, ...rest } = route.capability && operation
             ? await poolCandidates(route, features, operation, ctx)
             : await pinnedCandidates(route, features, ctx);
+        // BENCH-11: an opted-in route may put the cheapest offer statistically tied with Bench's leader first.
+        // A route without the opt-in (or without evidence) keeps the order placement just produced.
+        if (bench) {
+            const picked = await bench.select({ route, order, operation });
+            order = picked.order;
+            explain.bench = picked.view;
+            if (picked.view.status === 'selected' && picked.view.selected) {
+                explain.selected = offerId(picked.view.selected.provider, picked.view.selected.model);
+                explain.reasons = [picked.view.reason, ...(explain.reasons || [])];
+            }
+        }
         // A scoped route never ends on synthetic text (media.paid falls back to its extractive overview); an image
         // has no such fallback, so the dev/test stub PNG (AI_STUB_FALLBACK, off in production) still closes it.
         if (config.stubFallback && (!(route.constraints && route.constraints.provider_scope) || operation === 'image')
@@ -455,10 +466,12 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
      * a pinned run is accepted only when it names one of them.
      */
     async function offers(route, operation, ctx = {}) {
-        const { explain } = await candidates(route, [operation], operation, ctx);
+        const { order, explain } = await candidates(route, [operation], operation, ctx);
+        const rank = new Map((order || []).map((c, i) => [offerId(c.provider, c.model || null), i]));
         const out = [];
         const seen = new Set();
-        for (const c of explain.candidates) {
+        // The order placement would try, including a Bench-tie winner when an opted-in route has evidence.
+        for (const c of [...explain.candidates].sort((a, b) => (rank.get(offerId(a.provider, a.model || null)) ?? Infinity) - (rank.get(offerId(b.provider, b.model || null)) ?? Infinity))) {
             if (!c || !c.eligible || !c.provider) continue;
             const id = offerId(c.provider, c.model || null);
             if (seen.has(id)) continue;
@@ -466,6 +479,13 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             out.push({ provider: c.provider, model: c.model || null });
         }
         return out;
+    }
+
+    /** The Bench evidence a route used and why, for GET /api/v1/routes/:key and the operator console. */
+    async function benchView(route, operation, ctx = {}) {
+        if (!bench) return null;
+        const { explain } = await candidates(route, [operation], operation, ctx);
+        return explain.bench || null;
     }
 
     async function execute(route, operation, req, ctx = {}) {
@@ -579,7 +599,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         throw new AiError(503, 'provider.unavailable', 'no provider on this route could answer', { tried, explain });
     }
 
-    return { adapter, health, resetHealth, execute, executeWithCredential, offers, priceFor, costOf, rateCardsFor, providerStates, stats, statFor, candidates };
+    return { adapter, health, resetHealth, execute, executeWithCredential, offers, benchView, priceFor, costOf, rateCardsFor, providerStates, stats, statFor, candidates };
 }
 
 module.exports = { createProviderPool };
