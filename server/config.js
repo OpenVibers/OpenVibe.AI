@@ -103,8 +103,15 @@ function load(env = process.env) {
         httpSeamUrl: trimUrl(env.AI_HTTP_SEAM_URL),
         // A local model server speaking the OpenAI API (llama.cpp's llama-server, Ollama's /v1): the provider `local`,
         // route media.local (roadmap WS-O task 5). No key; never a paid provider. embedModel (an embedding GGUF the
-        // server serves at /embeddings) makes `local` a member of the default.embedding pool.
-        localLlm: { url: trimUrl(env.AI_LOCAL_LLM_URL), model: String(env.AI_LOCAL_LLM_MODEL || '').trim(), embedModel: String(env.AI_LOCAL_EMBED_MODEL || '').trim(), timeoutMs: int(env.AI_LOCAL_LLM_TIMEOUT_MS, 180000) },
+        // server serves at /embeddings) makes `local` a member of the default.embedding pool. llama.cpp serves one
+        // model per process, so embedUrl may name a second local server; it defaults to the chat model's URL.
+        localLlm: {
+            url: trimUrl(env.AI_LOCAL_LLM_URL),
+            embedUrl: trimUrl(env.AI_LOCAL_EMBED_URL) || trimUrl(env.AI_LOCAL_LLM_URL),
+            model: String(env.AI_LOCAL_LLM_MODEL || '').trim(),
+            embedModel: String(env.AI_LOCAL_EMBED_MODEL || '').trim(),
+            timeoutMs: int(env.AI_LOCAL_LLM_TIMEOUT_MS, 180000),
+        },
         // Image generation (POST /api/v1/image, workflow ai.image): off until AI_IMAGE_MODEL names the shared
         // provider's image model (dall-e-3, gpt-image-1); then boot seeds that model and route default.image.
         image: { model: String(env.AI_IMAGE_MODEL || '').trim(), size: String(env.AI_IMAGE_SIZE || '').trim() || '1024x1024' },
