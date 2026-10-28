@@ -24,7 +24,7 @@ const IMAGE = {
 const workflows = [
     {
         key: 'research.gather', name: 'Research a topic (MegaSource)', namespace: 'research',
-        description: 'Sources, licensed pictures and facts for a topic from Wikipedia, its Fandom wiki, Wikidata, DeepSeek web search, Commons and Openverse.',
+        description: 'Sources, licensed pictures and facts for a topic from Wikipedia, its Fandom wiki, Wikidata, the Search Fabric web scope (DeepSeek as its fallback), Commons and Openverse.',
         input_schema: {
             type: 'object', additionalProperties: false, required: ['query'],
             properties: {

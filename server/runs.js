@@ -404,6 +404,8 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                 // limited to free and local capacity when it is a sandbox run or when no tier budget governs its
                 // project (AI_GOVERN_TIERS off): metered capacity is only ever spent under a project budget.
                 appRun: Boolean(ctx.appRun), freeOnly: Boolean(ctx.appRun && (ctx.sandbox || !(tiers && tiers.enabled))),
+                // Who asked, for a step that must not call the caller back (research: Search's own web ladder).
+                requesterType: ctx.requesterType, requesterId: ctx.requesterId,
                 ...(ctx.routePin ? { routePin: ctx.routePin } : {}),
                 ...(credential ? { credential, role: input && typeof input.role === 'string' ? input.role : null } : {}),
                 ...(typeof ctx.onDelta === 'function' ? { onDelta: ctx.onDelta } : {}) });

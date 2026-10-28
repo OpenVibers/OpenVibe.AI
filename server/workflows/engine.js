@@ -256,7 +256,10 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
     async function researchStep(step, input, wf, run, ctx) {
         let output;
         try {
-            output = await megasource().gather(input, { signal: ctx.signal, allowPaid: !ctx.appRun });
+            // Search's own web ladder calls this endpoint for DeepSeek and Wikipedia. It must not be asked back
+            // (Search -> AI research -> Search): every other caller gets the fabric first, Search keeps DeepSeek.
+            const fromSearch = ctx.requesterType === 'service' && ctx.requesterId === 'search';
+            output = await megasource().gather(input, { signal: ctx.signal, allowPaid: !ctx.appRun, allowFabric: !fromSearch });
         } catch (err) {
             if (err && err.status === 422) throw new AiError(422, 'input.invalid', err.message);
             throw err;
