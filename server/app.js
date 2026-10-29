@@ -9,6 +9,7 @@ const { createAiReadiness, registerAiGauges } = require('./observability');
 const { runsRouter } = require('./api/runs');
 const { actionsRouter } = require('./api/actions');
 const { sendError } = require('./util');
+const openapi = require('./openapi');
 const { adminRouter } = require('./api/admin');
 const { createOps } = require('./ops');
 const { consoleRouter } = require('./console');
@@ -84,6 +85,8 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
     // fail; provider configuration is optional and degrades it (see observability.js).
     const readiness = createAiReadiness({ db, registry, pool, keys, runs, release: release.release });
     app.get('/api/ready', readiness.handler);
+    // GET /openapi.json: the public OpenAPI 3.1 document (server/openapi.js); /api/v1/openapi.json redirects here.
+    openapi.mount(app);
     // GET /release.json (ADR-016) and POST /release-metrics (open tabs' update reports into /metrics).
     release.mount(app, { registry: metrics.registry });
 
