@@ -86,7 +86,7 @@ const FAQ = [
     { q: 'Does it keep my prompts?', a: 'Not on /v1/chat/completions: each request is a run whose usage, cost and explanation are kept, and the prompt is not.' },
     { q: 'Who can read a run?', a: 'Only the project that made it. Runs, usage and the free allowance are per project, and a person\'s own provider key is never used for an app.' },
 ];
-const faq = () => `<section class="sc-sec" id="faq" aria-labelledby="h-faq"><h2 id="h-faq">Questions developers ask</h2><div class="ai-faq">${FAQ.map((p) => `<div><h3>${esc(p.q)}</h3><p>${esc(p.a)}</p></div>`).join('')}</div></section>`;
+const faq = () => `<section class="sc-sec" id="faq" aria-labelledby="h-faq"><h2 id="h-faq">Questions developers ask</h2><div class="ai-faq">${FAQ.map((p, i) => `<details${i === 0 ? ' open' : ''}><summary><h3>${esc(p.q)}</h3></summary><p>${esc(p.a)}</p></details>`).join('')}</div></section>`;
 
 function sections({ siteUrl, stats }) {
     const token = [
@@ -143,6 +143,7 @@ function sections({ siteUrl, stats }) {
         actions: [{ label: 'Start building', href: PROJECTS_URL, primary: true }, { label: 'See prices and latency', href: '/stats' }],
         note: 'Alpha. OpenVibe.Live and OpenVibe.Network already run their AI here in production; developer apps start in the sandbox, on free and local capacity.',
     }) + '<section class="sc-sec sc-part-of"><p class="sc-note">Part of <a href="https://openvibe.services/">OpenVibe Services</a>: the building blocks every OpenVibe product runs on, with one console, one account and one SDK.</p></section>' + numbers(stats) + showcase.features({
+        id: 'get',
         title: 'What you get',
         items: [
             { icon: 'ov:text', title: 'Six operations, and OpenAI\'s API', text: 'Chat, generate, summarize, classify, extract and embed, with JSON output on a schema. Any OpenAI client works too: point it at /v1 for Chat Completions with tools.' },
@@ -152,7 +153,9 @@ function sections({ siteUrl, stats }) {
             { icon: 'ov:account', title: 'Your project\'s runs', text: 'Runs belong to your project: another project can never read them. Usage is metered per project, with a free allowance first.' },
             { icon: 'ov:code', title: 'Open source', text: 'AGPL-3.0, built in the open. Every guarantee on this page has a test in the repository.' },
         ],
-    }) + models(stats) + showcase.code({
+    }) + models(stats)
+    + '<section class="sc-sec" id="build" aria-labelledby="h-build"><details class="ai-fold"><summary><h2 id="h-build">Build with it</h2><span>the OpenAI SDK, curl, four steps, sandbox and production</span></summary>'
+    + showcase.code({
         id: 'openai',
         title: 'Use the OpenAI SDK you already have',
         lede: `Point its base URL at ${siteUrl}/v1 and use your app's OpenVibe token as the key. Streaming and tools work; the answer's model names the model that ran.`,
@@ -189,7 +192,7 @@ function sections({ siteUrl, stats }) {
             { label: 'Who can read a run', values: ['The project that made it', 'The project that made it'] },
             { label: 'A person\'s own provider key', values: ['Never used', 'Never used'] },
         ],
-    }) + faq() + showcase.nextSteps({
+    }) + '</details></section>' + faq() + showcase.nextSteps({
         items: [
             { what: 'Prices and latency', text: 'Measured per provider and model over the last seven days.', href: '/stats' },
             { what: 'Create a project and an app', text: 'Sign in with your OpenVibe account; the sandbox is open to every project.', href: PROJECTS_URL, to: 'services' },
@@ -207,8 +210,22 @@ const HOME_STYLE = `<style>
 #openai .sc-code,#examples .sc-code{grid-template-columns:minmax(0,1fr)}
 #models table{min-width:860px}#models td:nth-child(3){min-width:190px}#models td,#models th{vertical-align:top}#models th code{white-space:nowrap}#models td:nth-child(4),#models td:nth-child(5){white-space:nowrap}
 .ai-faq{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(min(320px,100%),1fr))}
-.ai-faq>div{padding:16px 18px;border-radius:16px;border:1px solid var(--border,#1f2d47);background:var(--bg-secondary,#101828)}
-.ai-faq h3{margin:0 0 6px;font-size:15.5px;line-height:1.35}.ai-faq p{margin:0;font-size:14px;line-height:1.55;color:var(--text-secondary,#96a7c2)}
+.ai-faq>details{padding:16px 18px;border-radius:16px;border:1px solid var(--border,#1f2d47);background:var(--bg-secondary,#101828)}
+.ai-faq h3{margin:0;font-size:15.5px;line-height:1.35}.ai-faq p{margin:6px 0 0;font-size:14px;line-height:1.55;color:var(--text-secondary,#96a7c2)}
+.ai-faq summary{list-style:none;cursor:pointer}.ai-faq summary::-webkit-details-marker{display:none}.ai-faq summary h3::after{content:'+';float:right;margin-left:10px;color:var(--text-muted,#7386a3);font-weight:400}.ai-faq details[open] summary h3::after{content:'\\2212'}
+.ai-fold{border:1px solid var(--border,#1f2d47);border-radius:16px;background:var(--bg-secondary,#101828)}
+.ai-fold>summary{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:56px;padding:0 18px;cursor:pointer;list-style:none}
+.ai-fold>summary::-webkit-details-marker{display:none}.ai-fold>summary h2{margin:0}
+.ai-fold>summary span{color:var(--text-muted,#7386a3);font-weight:600;font-size:.86rem;text-align:right}
+.ai-fold>summary:focus-visible{outline:2px solid var(--accent,#3b82f6);outline-offset:-2px;border-radius:16px}
+.ai-fold .sc-sec{max-width:none;margin:0;padding:0 18px 18px}
+/* Phones (2026-10-29): a taste and a door. */
+@media (max-width:599px){
+.ai-num ul{display:flex;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;gap:8px;margin:0 -16px;padding:0 16px 2px}.ai-num ul::-webkit-scrollbar{display:none}.ai-num li{flex:0 0 auto;width:148px}
+#get .sc-grid{display:flex;flex-wrap:nowrap;overflow-x:auto;scroll-snap-type:x mandatory;scroll-padding-inline:16px;scrollbar-width:none;gap:10px;margin:0 -16px;padding:0 16px 4px}#get .sc-grid::-webkit-scrollbar{display:none}#get .sc-grid>*{flex:0 0 80%;min-width:0;scroll-snap-align:start}
+#models tbody tr:nth-child(n+6){display:none}
+.ai-fold>summary span{display:none}
+}
 </style>`;
 
 const NAV_LINKS = [{ label: 'Prices', href: '/stats' }, { label: 'Guide', href: GUIDE }];
