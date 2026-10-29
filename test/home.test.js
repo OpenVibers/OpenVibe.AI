@@ -139,13 +139,20 @@ t.test('robots.txt, sitemap.xml and llms.txt name the public origin', async () =
     assert.match(llms.headers.get('content-type'), /^text\/plain/);
     assert.ok(llms.text.startsWith('# OpenVibe.AI'));
     assert.ok(llms.text.includes(`${SITE}/stats`) && llms.text.includes(`POST ${SITE}/api/v1/chat`));
+    const full = await request(h.base, 'GET', '/llms-full.txt');
+    assert.strictEqual(full.status, 200);
+    assert.match(full.headers.get('content-type'), /^text\/plain/);
+    assert.ok(full.text.startsWith('# OpenVibe.AI'));
+    assert.ok(full.text.length >= 500, `real content, not a stub (${full.text.length} characters)`);
+    for (const loc of [...map.text.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => m[1])) assert.ok(full.text.includes(loc), `llms-full.txt names ${loc}`);
+    assert.ok(full.text.includes('OpenAPI reference'), 'the generated API reference is named');
 });
 
 const active = (file) => fs.readFileSync(path.join(__dirname, '..', 'deploy', 'nginx', file), 'utf8').split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
 
 t.test('the public vhost proxies the home, its files and exactly the developer-app API routes', () => {
     const conf = active('ai.openvibe.services.conf');
-    for (const loc of ['location = / {', 'location = /stats', 'location = /updates', 'location = /sitemap.xml', 'location = /llms.txt', 'location /shared/']) assert.ok(conf.includes(loc), loc);
+    for (const loc of ['location = / {', 'location = /stats', 'location = /updates', 'location = /sitemap.xml', 'location = /llms.txt', 'location = /llms-full.txt', 'location /shared/']) assert.ok(conf.includes(loc), loc);
     const ops = conf.indexOf('location ~ ^/api/v1/(chat|generate|summarize|classify|extract|embed)$ {');
     const run = conf.indexOf('location ~ ^/api/v1/runs/[A-Za-z0-9_-]+$ {');
     const completions = conf.indexOf('location = /v1/chat/completions {');
