@@ -265,6 +265,37 @@ ${sections({ siteUrl, stats })}
     });
 }
 
+/**
+ * The public page catalogue: /sitemap.xml lists these paths and /llms-full.txt describes them, so the
+ * two artifacts cannot drift apart. The API reference is a section body rather than a page: it is
+ * generated from the contracts at openvibe.services/docs/api, not served from this origin.
+ */
+const PUBLIC_PAGES = [
+    { path: '/', title: 'OpenVibe.AI home', text: 'One API for chat, generation, summaries, classification, extraction and embeddings across many models, OpenAI-compatible. Every run says which model answered, why it was chosen and what it cost; developer apps, tokens and the sandbox are explained here.' },
+    { path: '/stats', title: 'Prices and measured latency', text: 'Rate cards per provider and model and the measured p50 and p95 latency from the last seven days, with the number of calls each model answered. Nothing per caller.' },
+    { path: '/updates', title: 'What shipped on OpenVibe.AI', text: 'The shared changelog for OpenVibe.AI, newest first.' },
+];
+
+function llmsFullTxt({ siteUrl }) {
+    return seo.llmsFull({
+        site: SITE_NAME,
+        summary: SUMMARY,
+        base: siteUrl,
+        maxBytes: 256 * 1024,
+        sections: [
+            { title: 'Pages', pages: PUBLIC_PAGES.map((p) => ({ url: `${siteUrl}${p.path}`, title: p.title, text: p.text })) },
+            { title: 'Developer API', body: [
+                `OpenAPI reference (generated from the published contracts): ${API_DOCS_URL}`,
+                `Developer guide (tokens, limits, billing, sandbox): ${GUIDE}`,
+                `Create a project and an app: ${PROJECTS_URL}`,
+                `POST ${siteUrl}/api/v1/chat, /generate, /summarize, /classify, /extract, /embed`,
+                `POST ${siteUrl}/v1/chat/completions and GET ${siteUrl}/v1/models (OpenAI-compatible)`,
+                `GET ${siteUrl}/api/v1/runs/:id for your own runs`,
+            ].join('\n') },
+        ],
+    });
+}
+
 function llmsTxt({ siteUrl }) {
     return [
         `# ${SITE_NAME}`,
@@ -298,4 +329,4 @@ function renderNotFound() {
         '<h1>Not found</h1>', `<p>Nothing is here. <a href="/">${SITE_NAME}</a> · <a href="/stats">Prices and latency</a> · <a href="${NETWORK_URL}">OpenVibe</a></p>`, '</body>', '</html>'].join('\n');
 }
 
-module.exports = { renderHome, renderUpdates, llmsTxt, HOME_CSP, SITE_NAME, renderNotFound, FAQ, DESCRIPTION };
+module.exports = { renderHome, renderUpdates, llmsTxt, llmsFullTxt, PUBLIC_PAGES, HOME_CSP, SITE_NAME, renderNotFound, FAQ, DESCRIPTION };

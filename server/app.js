@@ -163,13 +163,20 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
             const from = new Date(clock.now() - STATS_DAYS * 86400000).toISOString().slice(0, 10);
             const stats = await db.prepare('SELECT MAX(day) AS lastmod FROM provider_stats_daily WHERE day >= ?').get(from);
             const statsLastmod = [stats && stats.lastmod ? new Date(stats.lastmod).toISOString() : null, releaseLastmod].filter(Boolean).sort().pop();
-            const entries = [['/', releaseLastmod], ['/stats', statsLastmod], ['/updates', releaseLastmod]];
+            // The paths come from home.PUBLIC_PAGES, the same catalogue /llms-full.txt describes.
+            const lastmods = { '/': releaseLastmod, '/stats': statsLastmod, '/updates': releaseLastmod };
+            const entries = home.PUBLIC_PAGES.map((p) => [p.path, lastmods[p.path]]);
             res.type('application/xml').send(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${entries.map(([p, lastmod]) => `  <url><loc>${config.baseUrl}${p}</loc>${lastmod ? `<lastmod>${lastmod.slice(0, 10)}</lastmod>` : ''}</url>`).join('\n')}\n</urlset>\n`);
         } catch (e) { next(e); }
     });
     app.get('/llms.txt', (_req, res) => {
         res.setHeader('Cache-Control', 'public, max-age=3600');
         res.type('text/plain').send(home.llmsTxt({ siteUrl: config.baseUrl }));
+    });
+    // The full AI map: the same page catalogue as the sitemap plus the developer API, in plain text.
+    app.get('/llms-full.txt', (_req, res) => {
+        res.setHeader('Cache-Control', 'public, max-age=3600');
+        res.type('text/plain').send(home.llmsFullTxt({ siteUrl: config.baseUrl }));
     });
 
     // GET /: the home page for a browser (server/home.js), the API index for curl and API clients (`*/*`, no
