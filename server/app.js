@@ -140,16 +140,45 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
         try { homeStats = { at: clock.now(), rows: await statsRows() }; } catch (e) { log.warn(`[home] price and latency rows unavailable: ${e.message}`); }
         return homeStats.rows || [];
     }
+    // The page routes keep their normal browser responses; only discovery and twin requests reach this router.
+    {
+        const agentRouter = express.Router();
+        require('openvibe-shared/agent-layer').mount(agentRouter, {
+            descriptor: require('./agent-descriptor'),
+            render: async (path) => {
+                if (path === '/' || path === '/index') return { html: home.renderHome({ siteUrl: config.baseUrl, stats: { days: STATS_DAYS, rows: await homeRows() } }) };
+                if (path === '/updates') return { html: home.renderUpdates({ siteUrl: config.baseUrl }) };
+                if (path !== '/stats') return null;
+                const now = clock.now();
+                return { html: views.pages.stats({ days: STATS_DAYS, rows: await statsRows(), canonical: `${config.baseUrl}/stats`,
+                    from: new Date(now - STATS_DAYS * 86400000).toISOString().slice(0, 10), to: new Date(now).toISOString().slice(0, 10) }) };
+            },
+        });
+        app.use((req, res, next) => {
+            if (req.path === '/.well-known/agent.json' || req.path.endsWith('.md') || req.query.format === 'markdown'
+                || req.accepts(['html', 'text/markdown']) === 'text/markdown') return agentRouter(req, res, next);
+            next();
+        });
+    }
+    app.use((req, res, next) => {
+        if (['/', '/updates'].includes(req.path) && req.accepts(['text/plain', 'text/html']) === 'text/html') {
+            res.setHeader('Link', require('openvibe-shared/agent-layer').linkHeaderTags(`${config.baseUrl}${req.path}`).header);
+        }
+        next();
+    });
     app.get('/stats', async (req, res, next) => {
         try {
             const now = clock.now();
             const rows = await statsRows();
             res.setHeader('Cache-Control', cachePolicy.htmlHeaders());
             res.setHeader('Content-Security-Policy', views.CSP);
-            res.type('html').send(views.pages.stats({
+            const links = require('openvibe-shared/agent-layer').linkHeaderTags(`${config.baseUrl}/stats`);
+            res.setHeader('Link', links.header);
+            const page = views.pages.stats({
                 days: STATS_DAYS, rows, canonical: `${String(config.baseUrl || '').replace(/\/+$/, '')}/stats`,
                 from: new Date(now - STATS_DAYS * 86400000).toISOString().slice(0, 10), to: new Date(now).toISOString().slice(0, 10),
-            }));
+            });
+            res.type('html').send(page.replace('</head>', `${links.head}</head>`));
         } catch (e) { next(e); }
     });
 

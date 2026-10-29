@@ -221,7 +221,7 @@ function renderUpdates({ siteUrl }) {
         title: `What shipped on ${SITE_NAME}`,
         siteName: SITE_NAME,
         description: `Every change deployed to ${SITE_NAME}, newest first.`,
-        canonical: `${siteUrl}/updates`,
+        canonical: `${siteUrl}/updates`, agentLayer: true,
         robots: 'index, follow',
         navbar: { service: 'ai', apiBase: NETWORK_URL, links: NAV_LINKS, history: { type: 'page', title: SITE_NAME } },
         footer: FOOTER, home: '/', navLinks: NAV_LINKS,
@@ -245,7 +245,7 @@ function renderHome({ siteUrl, stats = null }) {
         siteName: SITE_NAME,
         description: DESCRIPTION,
         summary: SUMMARY,
-        canonical: `${siteUrl}/`,
+        canonical: `${siteUrl}/`, agentLayer: true,
         robots: 'index, follow',
         jsonLd: [
             seo.jsonLd.website({ name: SITE_NAME, url: site, description: DESCRIPTION }),
