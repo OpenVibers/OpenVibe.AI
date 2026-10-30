@@ -13,6 +13,8 @@
  *                                              (tools need a provider that declares them); the answer names the
  *                                              model that ran
  *
+ *   x-openvibe-credential                      the person's own key for a provider instead of the router
+ *                                              (Codes C3): <provider> or <provider>:<subject>
  *   x_openvibe.provider                        an app's own provider instead of the router: { base_url (https, an
  *                                              OpenAI-format API), model, secret (the name of a project secret granted
  *                                              to ai for reveal to that origin, ADR-056) }; the key is revealed for
@@ -29,6 +31,7 @@
 const express = require('express');
 const { CAPS } = require('../auth');
 const { appAttribution } = require('../apps');
+const { credentialFor } = require('./credential');
 
 const FIELDS = ['messages', 'tools', 'tool_choice', 'parallel_tool_calls', 'response_format', 'stop', 'seed', 'top_p', 'presence_penalty', 'frequency_penalty', 'temperature'];
 
@@ -125,6 +128,10 @@ function openaiRouter({ runs, auth, config, log = console }) {
         if (maxTokens != null) input.max_tokens = Math.max(1, Math.min(Number(maxTokens) || 1, 16000));
         let body = { workflow: 'ai.complete', input };
         if (req.principal.kind === 'app') body = { ...body, attribution: appAttribution(req.principal) };
+        // The person's own key (Codes C3): x-openvibe-credential names the provider whose key this request uses.
+        const personKey = credentialFor(req);
+        if (personKey.error) return openaiError(res, personKey.status, personKey.error, 'invalid_request_error');
+        if (personKey.credential) body = { ...body, credential: personKey.credential };
         const own = b.x_openvibe && typeof b.x_openvibe === 'object' ? b.x_openvibe.provider : undefined;
         if (own !== undefined) body = { ...body, project_provider: own };
         let run;

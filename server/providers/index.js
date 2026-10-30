@@ -424,7 +424,9 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         if (cred.provider === 'node') return await executeOnMachine(cred, operation, req, ctx);
         // Text operations are all chat completions on the person's provider (templated workflows use generate).
         // A project's own provider (ADR-056 secret, ai.complete) passes a Chat Completions request through as written.
-        const completing = operation === 'complete' && cred.provider === 'openai';
+        // The OpenAI-format providers: a Chat Completions request is passed through as written (Codes C3: OpenRouter
+        // speaks that format too, so a person's OpenRouter key answers it as well).
+        const completing = operation === 'complete' && ['openai', 'openrouter'].includes(cred.provider);
         // Codes C3: POST /v1/messages on the person's own key. Only a provider that speaks Anthropic's Messages API serves
         // it — Anthropic itself, DeepSeek and MiniMax (their own Anthropic-compatible endpoints) and a custom endpoint.
         const messaging = operation === 'messages';
