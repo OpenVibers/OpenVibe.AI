@@ -56,7 +56,7 @@ t.test('without AI_MEMORY_KEY every route answers 503 memory.unavailable', async
     try {
         const r = await request(h.base, 'POST', '/api/v1/memory/items:batch', { tok: serviceWrite(), body: { items: [item('a note')], on_behalf_of: A } });
         assert.deepStrictEqual([r.status, r.body.code], [503, 'memory.unavailable']);
-        const g = await request(h.base, 'GET', `/api/v1/memory/items?on_behalf_of=${A}`, { tok: serviceRead() });
+        const g = await request(h.base, 'GET', '/api/v1/memory/items', { tok: userToken(A) });
         assert.deepStrictEqual([g.status, g.body.code], [503, 'memory.unavailable']);
     } finally { await h.stop(); }
 });
@@ -164,6 +164,64 @@ t.test('an agent sees active items only, at most 8, in its granted scopes, and t
 
         const mismatch = await request(h.base, 'POST', '/api/v1/memory/items:batch', { tok: serviceWrite({ on_behalf_of: A }), body: { items: [item('x')], on_behalf_of: B } });
         assert.deepStrictEqual([mismatch.status, mismatch.body.code], [403, 'capability.denied']);
+    } finally { await h.stop(); }
+});
+
+t.test('a service may only search and suggest: every other memory route is person-only', async () => {
+    const h = await boot({ env: { AI_MEMORY_KEY: KEY } });
+    try {
+        const who = userToken(A);
+        const made = await request(h.base, 'POST', '/api/v1/memory/items:batch', { tok: who, body: { items: [item("the person's active note")] } });
+        const id = made.body.items[0].id;
+        const read = serviceRead({ memory_scopes: ['user'] });
+        const denied = (r) => {
+            assert.deepStrictEqual([r.status, r.body.code], [403, 'capability.denied']);
+            assert.match(r.body.detail, /person's own token/);
+        };
+        denied(await request(h.base, 'GET', `/api/v1/memory/items?on_behalf_of=${A}`, { tok: read }));
+        denied(await request(h.base, 'GET', `/api/v1/memory/items/${id}?on_behalf_of=${A}`, { tok: read }));
+        denied(await request(h.base, 'GET', `/api/v1/memory/profile?scope=user&on_behalf_of=${A}`, { tok: read }));
+        denied(await request(h.base, 'PATCH', `/api/v1/memory/items/${id}`, { tok: serviceWrite(), body: { text: 'hijacked', on_behalf_of: A } }));
+        denied(await request(h.base, 'DELETE', `/api/v1/memory/items/${id}?on_behalf_of=${A}`, { tok: serviceWrite() }));
+        denied(await request(h.base, 'DELETE', `/api/v1/memory/items?source=person&on_behalf_of=${A}`, { tok: serviceWrite() }));
+        // None of the refusals touched the person's row.
+        const still = await request(h.base, 'GET', `/api/v1/memory/items/${id}`, { tok: who });
+        assert.deepStrictEqual([still.status, still.body.item.text, still.body.item.status], [200, "the person's active note", 'active']);
+
+        // A service's write is a suggestion under its own name, whatever the body says.
+        const suggested = await request(h.base, 'POST', '/api/v1/memory/items:batch', { tok: serviceWrite(), body: { items: [
+            item('a service suggestion', { status: 'active', source: 'person', confidence: 0.9 }),
+        ], on_behalf_of: A } });
+        assert.deepStrictEqual([suggested.status, suggested.body.items[0].status, suggested.body.items[0].source], [200, 'suggested', 'codes']);
+        assert.ok(suggested.body.items[0].confidence <= 0.5, `confidence ${suggested.body.items[0].confidence} > 0.5`);
+        const row = await h.db.prepare('SELECT status, source, confidence FROM memory_items WHERE owner = ? AND id = ?').get(`user:${A}`, suggested.body.items[0].id);
+        assert.deepStrictEqual([row.status, row.source, Number(row.confidence)], ['suggested', 'codes', 0.5]);
+
+        // Search still works for a service, and it is audited.
+        const search = await request(h.base, 'GET', `/api/v1/memory/search?q=active&scopes=user&on_behalf_of=${A}`, { tok: read });
+        assert.deepStrictEqual([search.status, search.body.items.length], [200, 1]);
+        const audit = await h.db.prepare('SELECT actor, item_ids FROM memory_reads WHERE owner = ?').get(`user:${A}`);
+        assert.equal(audit.actor, 'svc:codes');
+        assert.ok(!audit.item_ids.includes('active note'));
+    } finally { await h.stop(); }
+});
+
+t.test('a person token still writes active items, and still reads, changes and deletes them', async () => {
+    const h = await boot({ env: { AI_MEMORY_KEY: KEY } });
+    try {
+        const who = userToken(A);
+        const made = await request(h.base, 'POST', '/api/v1/memory/items:batch', { tok: who, body: { items: [
+            item('a person item', { status: 'active', source: 'claude-code', confidence: 1 }),
+        ] } });
+        assert.deepStrictEqual([made.status, made.body.items[0].status, made.body.items[0].source, made.body.items[0].confidence], [200, 'active', 'claude-code', 1]);
+        const id = made.body.items[0].id;
+        const list = await request(h.base, 'GET', '/api/v1/memory/items', { tok: who });
+        assert.deepStrictEqual([list.body.items.length, (await request(h.base, 'GET', `/api/v1/memory/items/${id}`, { tok: who })).status], [1, 200]);
+        const patched = await request(h.base, 'PATCH', `/api/v1/memory/items/${id}`, { tok: who, body: { text: 'a person edit' } });
+        assert.deepStrictEqual([patched.status, patched.body.item.text], [200, 'a person edit']);
+        assert.equal((await request(h.base, 'GET', '/api/v1/memory/profile?scope=project:empty', { tok: who })).status, 200);
+        const removed = await request(h.base, 'DELETE', `/api/v1/memory/items/${id}`, { tok: who });
+        assert.deepStrictEqual([removed.status, removed.body.deleted], [200, 1]);
     } finally { await h.stop(); }
 });
 

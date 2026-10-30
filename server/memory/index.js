@@ -206,7 +206,11 @@ function createMemory({ db, config, clock = { now: () => Date.now() }, log = con
             if (onlySecret(clean)) throw new AiError(422, 'memory.secret_only', `items[${index}] is only a secret and is refused`);
             const scope = validateScope(raw.scope, 'user');
             requireScope(req, scope);
-            const source = validateSource(raw.source || (serviceCaller ? req.principal.subject.id : 'person'));
+            // A service writes under its own name, never a body source; the person's own token keeps the body source.
+            const serviceSource = req.principal.subject && req.principal.subject.id
+                ? req.principal.subject.id
+                : String(req.principal.sub || '').replace(/^svc:/, '');
+            const source = validateSource(serviceCaller ? serviceSource : (raw.source || 'person'));
             // A service is an agent: what it writes is a suggestion, and it passes noLooks. A person may mark their own
             // item as AI-produced too (the Node imports what a coding tool wrote).
             const aiMade = serviceCaller || raw.no_looks === true || AI_SOURCES.has(source);
@@ -214,6 +218,10 @@ function createMemory({ db, config, clock = { now: () => Date.now() }, log = con
             text = String(text == null ? '' : text);
             if (!text.trim()) throw new AiError(422, 'input.invalid', `items[${index}].text is empty after no-looks`);
             if (onlySecret(text)) throw new AiError(422, 'memory.secret_only', `items[${index}] is only a secret and is refused`);
+            const askedConfidence = raw.confidence == null ? null : Number(raw.confidence);
+            const confidence = askedConfidence == null || !Number.isFinite(askedConfidence)
+                ? (serviceCaller ? 0.5 : 1)
+                : Math.max(0, Math.min(serviceCaller ? 0.5 : 1, askedConfidence));
             return {
                 id: `mem_${ids.ulid()}`,
                 scope,
@@ -222,9 +230,9 @@ function createMemory({ db, config, clock = { now: () => Date.now() }, log = con
                 mac: macOf(text),
                 source,
                 sourceRef: validateSourceRef(raw.source_ref),
-                // Anything a service or an AI produced is a suggestion until the person accepts it.
+                // A service or an AI may only suggest until the person accepts it; the body cannot raise that.
                 status: serviceCaller || aiMade ? 'suggested' : validateStatus(raw.status, 'active'),
-                confidence: Math.max(0, Math.min(1, Number(raw.confidence == null ? (serviceCaller ? 0.7 : 1) : raw.confidence))),
+                confidence,
                 seenAt: validateTime(raw.seen_at, at),
                 machine: raw.machine == null ? null : String(raw.machine).slice(0, 100),
             };
@@ -480,7 +488,8 @@ function createMemory({ db, config, clock = { now: () => Date.now() }, log = con
 
 /**
  * The memory routes. A person's own Network token acts for themselves; a service token needs the capability and
- * names the person with `on_behalf_of` (a body field, a query parameter, or the token's own claim).
+ * names the person with `on_behalf_of`, but it may only search (audited) and import suggestions. Every other route is
+ * person-only: a service gets 403 `capability.denied`.
  */
 function memoryRouter({ memory, auth, config, clock = { now: () => Date.now() }, log = console, sendError }) {
     const r = express.Router();
@@ -519,13 +528,24 @@ function memoryRouter({ memory, auth, config, clock = { now: () => Date.now() },
     const run = (fn) => async (req, res) => {
         try { res.set('Cache-Control', 'no-store').json(await fn(req)); } catch (err) { sendError(res, err, req.ov); }
     };
+    /**
+     * The person's own routes. A service with the read or write capability may only search (the audited agent read)
+     * and import suggestions; it may not browse, profile, patch or delete the person's memory. The guard runs after
+     * `guard`, which has set req.principal.
+     */
+    function personOnly(req, res, next) {
+        if (req.principal.kind === 'service') {
+            return http.sendProblem(res, 403, 'capability.denied', { detail: "this route is for the person's own token", ctx: req.ov });
+        }
+        return next();
+    }
     r.post('/api/v1/memory/items\\:batch', guard(WRITE_CAP), run(async (req) => await memory.batch(req, ownerOf(req))));
-    r.get('/api/v1/memory/items', guard(READ_CAP), run(async (req) => await memory.list(req, ownerOf(req))));
-    r.get('/api/v1/memory/items/:id', guard(READ_CAP), run(async (req) => await memory.get(req, ownerOf(req), req.params.id)));
-    r.patch('/api/v1/memory/items/:id', guard(WRITE_CAP), run(async (req) => await memory.patch(req, ownerOf(req), req.params.id)));
-    r.delete('/api/v1/memory/items/:id', guard(WRITE_CAP), run(async (req) => await memory.remove(req, ownerOf(req), req.params.id)));
-    r.delete('/api/v1/memory/items', guard(WRITE_CAP), run(async (req) => await memory.removeBySource(req, ownerOf(req))));
-    r.get('/api/v1/memory/profile', guard(READ_CAP), run(async (req) => await memory.profile(req, ownerOf(req))));
+    r.get('/api/v1/memory/items', guard(READ_CAP), personOnly, run(async (req) => await memory.list(req, ownerOf(req))));
+    r.get('/api/v1/memory/items/:id', guard(READ_CAP), personOnly, run(async (req) => await memory.get(req, ownerOf(req), req.params.id)));
+    r.patch('/api/v1/memory/items/:id', guard(WRITE_CAP), personOnly, run(async (req) => await memory.patch(req, ownerOf(req), req.params.id)));
+    r.delete('/api/v1/memory/items/:id', guard(WRITE_CAP), personOnly, run(async (req) => await memory.remove(req, ownerOf(req), req.params.id)));
+    r.delete('/api/v1/memory/items', guard(WRITE_CAP), personOnly, run(async (req) => await memory.removeBySource(req, ownerOf(req))));
+    r.get('/api/v1/memory/profile', guard(READ_CAP), personOnly, run(async (req) => await memory.profile(req, ownerOf(req))));
     r.get('/api/v1/memory/search', guard(READ_CAP), run(async (req) => await memory.search(req, ownerOf(req))));
     // The owner is resolved after the guard has set the principal.
     function ownerOf(req) {
