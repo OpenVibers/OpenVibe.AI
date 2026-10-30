@@ -13,6 +13,8 @@ const { createRegistry } = require('./registry');
 const { createProviderPool } = require('./providers');
 const { createBenchEvidence } = require('./bench/evidence');
 const { createBenchEvents } = require('./bench/events');
+const accountDataLib = require('./account-data');
+const { createNetworkSender, startSubscriptions } = require('openvibe-sdk/account-data');
 const { createFetcher } = require('./fetcher');
 const { createEngine } = require('./workflows/engine');
 const { createCache } = require('./cache');
@@ -73,7 +75,12 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     const keys = createNetworkKeys({ config });
     const auth = createAuth({ config, log });
     // The Events consumer side: a signed bench.rating.changed webhook, subscribed at boot (server/bench/events.js).
-    const benchEvents = createBenchEvents({ bench, config, log, fetchImpl, clientSecret: env.OV_OAUTH_CLIENT_SECRET });
+    const accountData = accountDataLib.create({ db, log });
+    const accountSend = env.OV_OAUTH_CLIENT_SECRET ? createNetworkSender({
+        networkInternalUrl: config.networkInternalUrl, clientId: config.console.clientId,
+        clientSecret: env.OV_OAUTH_CLIENT_SECRET, fetch: fetchImpl,
+    }) : null;
+    const benchEvents = createBenchEvents({ bench, accountData, accountSend, config, log, fetchImpl, clientSecret: env.OV_OAUTH_CLIENT_SECRET });
     const app = createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, vault, benchEvents, runBudgets });
     let jwks = null;
     let keyLoaded = Promise.resolve(null);
@@ -95,6 +102,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
 
     let server = null;
     let benchSubscription = null;
+    let accountSubscription = null;
     if (listen) userModules.start();
     if (listen) {
         server = await new Promise((resolve, reject) => {
@@ -106,6 +114,13 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         server.requestTimeout = config.runs.maxWaitMs + 30000;
         log.log(`[ai] listening on http://${config.host}:${server.address().port} (${config.nodeEnv})`);
         benchSubscription = benchEvents.startSubscriptions({ port: server.address().port });
+        if (config.events.subscribe && config.events.url && config.events.secrets.length && env.OV_OAUTH_CLIENT_SECRET) {
+            accountSubscription = startSubscriptions({
+                eventsUrl: config.events.url, endpoint: config.events.endpoint || `http://127.0.0.1:${server.address().port}/internal/events`,
+                secret: config.events.secrets[0], networkInternalUrl: config.networkInternalUrl,
+                clientId: config.console.clientId, clientSecret: env.OV_OAUTH_CLIENT_SECRET, fetch: fetchImpl, log,
+            });
+        }
         const shared = await registry.getProvider('shared');
         log.log(`[ai] shared provider: ${shared.kind} ${shared.status}, credentials ${registry.publicProvider(shared).credentials}; stub fallback ${config.stubFallback ? 'on' : 'off'}`);
     }
@@ -113,6 +128,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     async function close() {
         clearInterval(housekeeping);
         if (benchSubscription) benchSubscription.stop();
+        if (accountSubscription) accountSubscription.stop();
         userModules.stop();
         if (jwks) jwks.stop();
         if (server) {
