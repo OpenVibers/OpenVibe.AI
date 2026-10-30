@@ -60,6 +60,17 @@ function load(env = process.env) {
         credentialsKey: String(env.AI_CREDENTIALS_KEY || '').trim(),
         // The person's memory (server/memory/): AES-256-GCM with a key of its own, so it can rotate apart from credentials.
         memoryKey: String(env.AI_MEMORY_KEY || '').trim(),
+        // The store's own maintenance (server/memory/jobs.js): owner by owner, with a per-run cap. Off in test mode
+        // (the way the JWKS client is) and off while a provider is in a drill, so a drill never spends the budget.
+        memoryJobs: {
+            enabled: bool(env.AI_MEMORY_JOBS, nodeEnv !== 'test'),
+            intervalMs: int(env.AI_MEMORY_JOB_INTERVAL_MS, 15 * 60 * 1000),
+            maxOwners: int(env.AI_MEMORY_JOB_MAX_OWNERS, 10),
+            maxScopesPerOwner: int(env.AI_MEMORY_JOB_MAX_SCOPES, 4),
+            maxEmbeddings: int(env.AI_MEMORY_JOB_MAX_EMBEDDINGS, 100),
+            maxModelCalls: int(env.AI_MEMORY_JOB_MAX_MODEL_CALLS, 20),
+            maxProfiles: int(env.AI_MEMORY_JOB_MAX_PROFILES, 10),
+        },
         networkPublicKey: env.OV_NETWORK_PUBLIC_KEY ? env.OV_NETWORK_PUBLIC_KEY.replace(/\\n/g, '\n') : null,
         audience: 'openvibe.ai',
 

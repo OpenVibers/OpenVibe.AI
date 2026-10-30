@@ -15,6 +15,8 @@
  *   PATCH  /api/v1/memory/items/:id       text, kind, scope or status
  *   DELETE /api/v1/memory/items/:id
  *   DELETE /api/v1/memory/items?source=   everything from one source
+ *   POST   /api/v1/memory/items/:id/split   undo a merge: the item and the one it swallowed go apart again
+ *   POST   /api/v1/memory/items/:id/settle  the person settles a conflict: { keep: <id> } keeps one and archives the other
  *   GET    /api/v1/memory/profile?scope=  the cached profile, rebuilt by the cheap tier only when its items_hash moved,
  *                                         at most once an hour per owner and scope
  *   GET    /api/v1/memory/search?q=&scopes=  for agents (ai.memory.read + on_behalf_of): active items only, in the
@@ -22,6 +24,22 @@
  *
  * Every SQL query that reads or changes a memory table is scoped by `owner = $…` (test/memory.test.js greps for it).
  * The account export decrypts the person's own items for their own export; deletion removes the rows.
+ *
+ * M2c (this stage): the meaning of an item.
+ *   - Every new or edited item gets an embedding from AI's own embed route, called in-process (the platform's
+ *     budget, never the person's allowance). The vector is stored sealed, with the same AES-256-GCM scheme as the
+ *     text and the AAD `memory|<owner>|<id>|<scope>|emb`: an embedding leaks meaning (a nearest neighbour inverts
+ *     it), so it is as private as the text it came from, and only this module ever opens it.
+ *   - Two active items of one owner and scope that say the same thing (cosine at least 0.92) become one item with
+ *     two sources: the newer text wins, the older row is archived and keeps its id in `merged_into`. The person can
+ *     split them again (POST /items/:id/split).
+ *   - Two active items that are near each other but disagree (cosine 0.75 to 0.92) are judged by one cheap-tier
+ *     call that sees only those two notes, and both are marked `status = 'conflict'` with a `conflict_with` link:
+ *     a conflict never reaches an agent. The person settles it (POST /items/:id/settle { keep }).
+ *   - The profile is built from at most 60 active notes, newest first, passes noLooks and is at most about a
+ *     thousand tokens. It is cached by items_hash and rebuilt at most once an hour per owner and scope.
+ *   - The store's own maintenance runs in the background (server/memory/jobs.js): owner by owner, with a per-run
+ *     cap, off in test mode and off in a drill.
  */
 const crypto = require('crypto');
 const express = require('express');
@@ -40,6 +58,17 @@ const STATUSES = ['active', 'suggested', 'archived', 'conflict'];
 /** Items from these sources were produced by an AI, so they are suggestions and pass noLooks. */
 const AI_SOURCES = new Set(['actor', 'vibe', 'know']);
 const PROFILE_INTERVAL_MS = 60 * 60 * 1000;
+/* M2c: the meaning of an item. Two items of one owner and scope that say the same thing (cosine at least
+ * SAME_MEANING) become one item with two sources; two that are near each other but disagree (CONFLICT_MIN to
+ * SAME_MEANING) are marked and hidden until the person settles them. */
+const SAME_MEANING = 0.92;
+const CONFLICT_MIN = 0.75;
+const EMBED_ROUTE = 'default.embedding';
+const CHEAP_ROUTE = 'default.chat';
+const PROFILE_ITEMS = 60;          // the profile is built from at most this many notes, newest first
+const PROFILE_MAX_TOKENS = 1000;   // and the result is at most about this many tokens
+const PROFILE_MAX_CHARS = 4000;
+const RECONCILE_ROWS = 200;        // the rows compared per owner and scope
 const PROFILE_ID = 'profile';
 const MAX_BATCH = 200;
 const MAX_LIST = 2000;
@@ -134,6 +163,230 @@ function createMemory({ db, config, clock = { now: () => Date.now() }, log = con
 
     const normalize = (text) => String(text == null ? '' : text).replace(/\s+/g, ' ').trim();
     const macOf = (text) => crypto.createHmac('sha256', macKey()).update(normalize(text)).digest('hex');
+    // ── M2c: the meaning of an item ───────────────────────────────────────────────────────────────────────────
+    /** The AAD of a vector: the text's AAD with the `|emb` suffix, so a vector never opens as text. */
+    function embAad(owner, id, scope) { return aadFor(owner, id, scope) + '|emb'; }
+
+    /** The sources of a row, as a list. */
+    const sourceList = (value) => String(value || '').split(',').map((s) => s.trim()).filter(Boolean);
+
+    /** Cosine similarity of two vectors; 0 when they do not fit each other (a different length, an empty one). */
+    function cosine(a, b) {
+        if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length || !a.length) return 0;
+        let dot = 0, na = 0, nb = 0;
+        for (let i = 0; i < a.length; i++) {
+            const x = Number(a[i]) || 0;
+            const y = Number(b[i]) || 0;
+            dot += x * y; na += x * x; nb += y * y;
+        }
+        if (!na || !nb) return 0;
+        return dot / (Math.sqrt(na) * Math.sqrt(nb));
+    }
+
+    /** The vector of a row, opened in-process; null when the row has none or it does not open. */
+    function vectorOf(row, owner) {
+        if (!row || !row.embedding_enc) return null;
+        try {
+            const v = JSON.parse(open(row.embedding_enc, embAad(owner, row.id, row.scope)));
+            return Array.isArray(v) && v.length ? v : null;
+        } catch { return null; }
+    }
+
+    /**
+     * The embeddings of a few texts, from AI's own embed route, called in-process (never over HTTP to itself):
+     * the platform's own budget, never the person's allowance. The texts travel in the request and nowhere else:
+     * the pool is not asked to log the request, so the notes are not stored a second time.
+     */
+    async function embedTexts(texts) {
+        const list = (texts || []).map((t) => String(t == null ? '' : t));
+        if (!list.length || !registry || !pool) return { model: null, vectors: [] };
+        const route = await registry.resolveRoute(EMBED_ROUTE);
+        if (!route || route.disabled) return { model: null, vectors: [] };
+        const exec = await pool.execute(route, 'embed', { input: list, timeoutMs: route.timeout_ms || 30000 },
+            { routeKey: route.key, routeVersion: route.version });
+        const vectors = (exec.result && exec.result.vectors) || [];
+        if (vectors.length !== list.length) return { model: exec.model || null, vectors: [] };
+        return {
+            model: exec.model || null,
+            vectors: vectors.map((v) => (Array.isArray(v) ? v.map((n) => Number(n)) : null)),
+        };
+    }
+
+    /** Seals a vector under the item's AAD and stores it with the model that produced it. */
+    async function storeEmbedding(owner, row, vector, model) {
+        if (!row || !Array.isArray(vector) || !vector.length) return false;
+        const payload = JSON.stringify(vector.map((n) => Math.round((Number(n) || 0) * 1e6) / 1e6));
+        await q('UPDATE memory_items SET embedding_enc = $1, embedding_model = $2 WHERE owner = $3 AND id = $4')
+            .run(seal(payload, embAad(owner, row.id, row.scope)), model || null, owner, row.id);
+        return true;
+    }
+
+    /** The active items of one owner and scope, newest first, with the vectors they have. */
+    async function scopeItems(owner, scope) {
+        const rows = await q("SELECT * FROM memory_items WHERE owner = $1 AND scope = $2 AND status = 'active' ORDER BY updated_at DESC LIMIT " + RECONCILE_ROWS)
+            .all(owner, scope);
+        const out = [];
+        for (const row of rows) {
+            const vector = vectorOf(row, owner);
+            if (vector) out.push({ row, vector });
+        }
+        return out;
+    }
+
+    /** The newer of two items wins; the older one is archived and keeps its id in `merged_into`. */
+    function newerFirst(a, b) {
+        const at = Date.parse(a.row.updated_at || a.row.created_at || '') || 0;
+        const bt = Date.parse(b.row.updated_at || b.row.created_at || '') || 0;
+        if (at !== bt) return at > bt ? [a, b] : [b, a];
+        return String(a.row.id) > String(b.row.id) ? [a, b] : [b, a];
+    }
+
+    /** One item with two sources: the winner keeps its text, the loser is archived and points at the winner. */
+    async function mergePair(owner, winner, loser) {
+        const at = iso(clock.now());
+        const own = winner.row.source_own ? sourceList(winner.row.source_own) : sourceList(winner.row.source);
+        const union = [...new Set([...sourceList(winner.row.source), ...sourceList(loser.row.source)])];
+        await db.tx(async () => {
+            await q('UPDATE memory_items SET source = $1, source_own = $2, updated_at = $3 WHERE owner = $4 AND id = $5')
+                .run(union.join(',').slice(0, 500), own.join(',').slice(0, 500), at, owner, winner.row.id);
+            await q('UPDATE memory_items SET status = $1, merged_into = $2, updated_at = $3 WHERE owner = $4 AND id = $5')
+                .run('archived', winner.row.id, at, owner, loser.row.id);
+        });
+        return winner.row.id;
+    }
+
+    /** A JSON answer, wherever the provider put it. */
+    function parseJsonAnswer(value) {
+        if (value && typeof value === 'object') return value;
+        const text = String(value == null ? '' : value).trim();
+        if (!text) return null;
+        try { return JSON.parse(text); } catch { /* a model that answered in prose */ }
+        const found = /\{[\s\S]*\}/.exec(text);
+        if (found) { try { return JSON.parse(found[0]); } catch { return null; } }
+        return null;
+    }
+
+    /**
+     * One cheap-tier call: do these two notes disagree? The call sees these two notes and nothing else: never
+     * another person's item, never a third note. The answer is `{ conflict, why }`.
+     */
+    async function judgePair(owner, a, b) {
+        if (!registry || !pool) return { conflict: false, why: '' };
+        const route = await registry.resolveRoute(CHEAP_ROUTE);
+        if (!route || route.disabled) return { conflict: false, why: '' };
+        const textA = open(a.text_enc, aadFor(owner, a.id, a.scope));
+        const textB = open(b.text_enc, aadFor(owner, b.id, b.scope));
+        const schema = {
+            type: 'object', additionalProperties: false, required: ['conflict', 'why'],
+            properties: { conflict: { type: 'boolean' }, why: { type: 'string' } },
+        };
+        const prompt = [
+            'Two notes from the same person. Do they disagree?',
+            'Answer conflict true only when the two notes cannot both be true as they stand.',
+            'Notes about the same thing that are compatible, or that differ only in wording or in detail, are not a conflict.',
+            'Answer with conflict (true or false) and why (one short sentence).',
+            '',
+            'Note A:', textA,
+            '',
+            'Note B:', textB,
+        ].join('\n');
+        const exec = await pool.execute(route, 'chat', {
+            system: [{ text: 'You judge whether two notes from one person contradict each other. You answer with the schema you are given and nothing else.' }],
+            messages: [{ role: 'user', content: prompt }],
+            json: { name: 'conflict', schema, strict: true },
+            maxTokens: 200, temperature: 0, timeoutMs: 20000,
+        }, { routeKey: route.key, routeVersion: route.version });
+        const parsed = parseJsonAnswer(exec.result && (exec.result.json || exec.result.text));
+        return { conflict: Boolean(parsed && parsed.conflict === true), why: String((parsed && parsed.why) || '').slice(0, 300) };
+    }
+
+    /** Both items of a conflicting pair are marked, so neither reaches an agent. */
+    async function markConflict(owner, aId, bId) {
+        const at = iso(clock.now());
+        await db.tx(async () => {
+            await q("UPDATE memory_items SET status = 'conflict', conflict_with = $1, updated_at = $2 WHERE owner = $3 AND id = $4")
+                .run(bId, at, owner, aId);
+            await q("UPDATE memory_items SET status = 'conflict', conflict_with = $1, updated_at = $2 WHERE owner = $3 AND id = $4")
+                .run(aId, at, owner, bId);
+        });
+    }
+
+    /**
+     * One owner and one scope: the pairs that say the same thing become one item, and the pairs that are near each
+     * other but disagree are marked. `maxModelCalls` caps the cheap-tier calls of this run (0: nothing is judged).
+     * Two items are only compared when their vectors come from the same model: two vector spaces are never mixed.
+     */
+    async function reconcileScope(owner, scope, { maxModelCalls = 0 } = {}) {
+        const items = await scopeItems(owner, scope);
+        const out = { merged: 0, conflicts: 0, calls: 0 };
+        if (items.length < 2) return out;
+        const gone = new Set();
+        for (let i = 0; i < items.length; i++) {
+            if (gone.has(items[i].row.id)) continue;
+            for (let j = i + 1; j < items.length; j++) {
+                if (gone.has(items[j].row.id)) continue;
+                if ((items[i].row.embedding_model || '') !== (items[j].row.embedding_model || '')) continue;
+                const cos = cosine(items[i].vector, items[j].vector);
+                if (cos >= SAME_MEANING) {
+                    const [winner, loser] = newerFirst(items[i], items[j]);
+                    await mergePair(owner, winner, loser);
+                    gone.add(loser.row.id);
+                    out.merged++;
+                    continue;
+                }
+                if (cos >= CONFLICT_MIN && out.calls < maxModelCalls) {
+                    out.calls++;
+                    const verdict = await judgePair(owner, items[i].row, items[j].row);
+                    if (verdict.conflict) {
+                        await markConflict(owner, items[i].row.id, items[j].row.id);
+                        gone.add(items[i].row.id);
+                        gone.add(items[j].row.id);
+                        out.conflicts++;
+                    }
+                }
+            }
+        }
+        return out;
+    }
+
+    /** The items of an owner and scope that have no vector yet: they are embedded and stored (the platform's budget). */
+    async function embedMissing(owner, scope, limit = 50) {
+        const cap = Math.max(0, Math.min(Number(limit) || 0, RECONCILE_ROWS));
+        if (!cap) return 0;
+        const rows = await q("SELECT * FROM memory_items WHERE owner = $1 AND scope = $2 AND status = 'active' AND embedding_enc IS NULL ORDER BY updated_at DESC LIMIT " + cap)
+            .all(owner, scope);
+        if (!rows.length) return 0;
+        const texts = rows.map((r) => open(r.text_enc, aadFor(owner, r.id, r.scope)));
+        const { model, vectors } = await embedTexts(texts);
+        let stored = 0;
+        for (let i = 0; i < rows.length; i++) {
+            if (!vectors[i]) continue;
+            if (await storeEmbedding(owner, rows[i], vectors[i], model)) stored++;
+        }
+        return stored;
+    }
+
+    /**
+     * After an import: every new item gets an embedding, and the scope is settled. The import never spends a
+     * judgement on its own (the job does that, with its cap); it only merges what says the same thing.
+     */
+    async function embedAndReconcile(owner, ids, scopes) {
+        const out = { embedded: 0, merged: 0, conflicts: 0 };
+        if (!ids.length) return out;
+        const rows = await q('SELECT * FROM memory_items WHERE owner = $1 AND id = ANY($2::text[])').all(owner, ids);
+        const texts = rows.map((r) => open(r.text_enc, aadFor(owner, r.id, r.scope)));
+        const { model, vectors } = await embedTexts(texts);
+        for (let i = 0; i < rows.length; i++) {
+            if (!vectors[i]) continue;
+            if (await storeEmbedding(owner, rows[i], vectors[i], model)) out.embedded++;
+        }
+        for (const scope of scopes) {
+            const r = await reconcileScope(owner, scope, { maxModelCalls: 0 });
+            out.merged += r.merged;
+            out.conflicts += r.conflicts;
+        }
+        return out;
+    }
 
     function validateScope(scope, fallback = 'user') {
         const s = String(scope == null || scope === '' ? fallback : scope);
@@ -179,9 +432,13 @@ function createMemory({ db, config, clock = { now: () => Date.now() }, log = con
         }
         return {
             id: row.id, owner: row.owner, scope: row.scope, kind: row.kind, text,
-            source: row.source, source_ref: sourceRef, status: row.status, confidence: Number(row.confidence),
+            source: row.source, sources: sourceList(row.source), source_ref: sourceRef, status: row.status, confidence: Number(row.confidence),
             seen_at: row.seen_at, created_at: row.created_at, updated_at: row.updated_at,
             machine: row.machine || null,
+            // M2c: the links. merged_into names the item this one was merged into (it is archived); conflict_with
+            // names the item this one conflicts with (both are hidden from an agent until the person settles them).
+            merged_into: row.merged_into || null,
+            conflict_with: row.conflict_with || null,
             ...(AI_SOURCES.has(String(row.source).split(',')[0]) ? { no_looks: true } : {}),
         };
     }
@@ -238,6 +495,8 @@ function createMemory({ db, config, clock = { now: () => Date.now() }, log = con
             };
         });
         const out = [];
+        const createdIds = [];
+        const scopes = new Set();
         let created = 0;
         let deduped = 0;
         await db.tx(async () => {
@@ -258,9 +517,21 @@ function createMemory({ db, config, clock = { now: () => Date.now() }, log = con
                         it.sourceRef ? seal(JSON.stringify(it.sourceRef), aadFor(owner, it.id, it.scope)) : null,
                         it.status, it.confidence, it.seenAt, at, at, it.machine);
                 created++;
+                createdIds.push(it.id);
+                scopes.add(it.scope);
                 out.push(itemView(await q('SELECT * FROM memory_items WHERE owner = $1 AND id = $2').get(owner, it.id)));
             }
         });
+        // M2c: every new item gets an embedding, and the scopes it touched are settled: what says the same thing
+        // becomes one item with two sources. The import spends no judgement of its own: the job does that, with
+        // its cap. A failed embedding never fails the import: the job embeds the item later.
+        try { await embedAndReconcile(owner, createdIds, [...scopes]); }
+        catch (err) { log.warn(`[memory] the embedding of a new item did not finish (${err && err.code ? err.code : 'error'}); the job will do it`); }
+        // The answer shows the state after the merge: an item that was swallowed is archived and points at the winner.
+        for (let i = 0; i < out.length; i++) {
+            const row = await q('SELECT * FROM memory_items WHERE owner = $1 AND id = $2').get(owner, out[i].id);
+            if (row) out[i] = itemView(row);
+        }
         return { items: out, count: created + deduped, created, deduped };
     }
 
@@ -344,6 +615,16 @@ function createMemory({ db, config, clock = { now: () => Date.now() }, log = con
         // A profile built from the old text, kind or scope will not match its items_hash again: drop it now.
         const scopes = [...new Set([row.scope, nextScope])];
         await q('DELETE FROM memory_profiles WHERE owner = $1 AND scope = ANY($2::text[])').run(owner, scopes);
+        // M2c: a new text is a new meaning: the item is embedded again, and its scope is settled (what says the same
+        // thing becomes one item). A failed embedding never fails the edit: the job embeds the item later.
+        if (nextText !== null) {
+            const fresh = await q('SELECT * FROM memory_items WHERE owner = $1 AND id = $2').get(owner, row.id);
+            try {
+                const { model, vectors } = await embedTexts([nextText]);
+                if (vectors[0]) await storeEmbedding(owner, fresh, vectors[0], model);
+                await reconcileScope(owner, nextScope, { maxModelCalls: 0 });
+            } catch (err) { log.warn(`[memory] the embedding of an edited item did not finish (${err && err.code ? err.code : 'error'}); the job will do it`); }
+        }
         return { item: itemView(await q('SELECT * FROM memory_items WHERE owner = $1 AND id = $2').get(owner, row.id)) };
     }
 
@@ -375,7 +656,7 @@ function createMemory({ db, config, clock = { now: () => Date.now() }, log = con
 
     /** Items from one scope, active only: what a profile is built from and what an agent may see. */
     async function activeRows(owner, scope) {
-        return await q("SELECT * FROM memory_items WHERE owner = $1 AND scope = $2 AND status = 'active' ORDER BY updated_at DESC LIMIT 2000").all(owner, scope);
+        return await q("SELECT * FROM memory_items WHERE owner = $1 AND scope = $2 AND status = 'active' ORDER BY updated_at DESC LIMIT " + PROFILE_ITEMS).all(owner, scope);
     }
 
     function itemsHash(macs) {
@@ -389,7 +670,7 @@ function createMemory({ db, config, clock = { now: () => Date.now() }, log = con
             `Write a short profile of the person from their own memory notes for ${scope}.`,
             'Rules: summarize only what the notes say. Never guess or infer facts about the person.',
             'Never describe looks, body, clothing, hair, face, pose, age or a guessed gender: no looks, at any time.',
-            'Write at most 400 words and do not add a title.',
+            'Write at most 600 words and do not add a title.',
             '',
             notes,
         ].join('\n');
@@ -402,17 +683,19 @@ function createMemory({ db, config, clock = { now: () => Date.now() }, log = con
         const exec = await pool.execute(route, 'summarize', {
             system: [{ text: 'You write short, faithful profiles of a person from their own notes. Never guess, never describe looks or a body, and never add a fact the notes do not state.', cache: true }],
             messages: [{ role: 'user', content: prompt }],
-            maxTokens: 400,
+            maxTokens: PROFILE_MAX_TOKENS,
             temperature: 0.2,
             timeoutMs: 30000,
         }, { routeKey: route.key, routeVersion: route.version });
         return String((exec.result && exec.result.text) || '');
     }
 
-    async function profile(req, owner) {
-        assertConfigured();
-        const scope = validateScope(req.query.scope, 'user');
-        requireScope(req, scope);
+    /**
+     * The builder: the profile of one owner and scope. The cache is keyed by the items_hash (the MACs of the items
+     * it was built from) and is rebuilt only when that hash moved and the cache is at least an hour old: at most one
+     * build per owner and scope per hour, on the platform's own budget.
+     */
+    async function profileFor(owner, scope) {
         const rows = await activeRows(owner, scope);
         const hash = itemsHash(rows.map((r) => r.text_mac));
         const now = clock.now();
@@ -422,7 +705,7 @@ function createMemory({ db, config, clock = { now: () => Date.now() }, log = con
             const fresh = Number.isFinite(age) && age < PROFILE_INTERVAL_MS;
             if (fresh || cached.items_hash === hash) {
                 const text = open(cached.text_enc, aadFor(owner, PROFILE_ID, scope));
-                return { profile: { scope, text, items_hash: cached.items_hash, built_at: cached.built_at } };
+                return { profile: { scope, text, items_hash: cached.items_hash, built_at: cached.built_at }, rebuilt: false };
             }
         }
         if (!rows.length) {
@@ -431,15 +714,22 @@ function createMemory({ db, config, clock = { now: () => Date.now() }, log = con
             await q(`INSERT INTO memory_profiles (owner, scope, text_enc, items_hash, built_at) VALUES ($1, $2, $3, $4, $5)
                 ON CONFLICT (owner, scope) DO UPDATE SET text_enc = excluded.text_enc, items_hash = excluded.items_hash, built_at = excluded.built_at`)
                 .run(owner, scope, empty, hash, builtAt);
-            return { profile: { scope, text: '', items_hash: hash, built_at: builtAt } };
+            return { profile: { scope, text: '', items_hash: hash, built_at: builtAt }, rebuilt: true };
         }
         const items = rows.map((r) => ({ kind: r.kind, text: open(r.text_enc, aadFor(owner, r.id, r.scope)) }));
-        const text = String(noLooks(await summarize({ owner, scope, items })) || '').slice(0, 4000);
+        const text = String(noLooks(await summarize({ owner, scope, items })) || '').slice(0, PROFILE_MAX_CHARS);
         const builtAt = iso(now);
         await q(`INSERT INTO memory_profiles (owner, scope, text_enc, items_hash, built_at) VALUES ($1, $2, $3, $4, $5)
             ON CONFLICT (owner, scope) DO UPDATE SET text_enc = excluded.text_enc, items_hash = excluded.items_hash, built_at = excluded.built_at`)
             .run(owner, scope, seal(text, aadFor(owner, PROFILE_ID, scope)), hash, builtAt);
-        return { profile: { scope, text, items_hash: hash, built_at: builtAt } };
+        return { profile: { scope, text, items_hash: hash, built_at: builtAt }, rebuilt: true };
+    }
+
+    async function profile(req, owner) {
+        assertConfigured();
+        const scope = validateScope(req.query.scope, 'user');
+        requireScope(req, scope);
+        return { profile: (await profileFor(owner, scope)).profile };
     }
 
     /** An agent's search: active items only, the granted scopes, at most 8, and one memory_reads row with ids only. */
@@ -468,6 +758,83 @@ function createMemory({ db, config, clock = { now: () => Date.now() }, log = con
         return { items, count: items.length };
     }
 
+    /**
+     * Undo a merge: the item and the one it swallowed go apart again. The archived item keeps its own text and its
+     * own sources, and the winner's source list goes back to what it was before the merge.
+     */
+    async function split(req, owner, id) {
+        assertConfigured();
+        const row = await q('SELECT * FROM memory_items WHERE owner = $1 AND id = $2').get(owner, id);
+        if (!row) throw new AiError(404, 'memory.not_found', 'no such memory item');
+        requireScope(req, row.scope);
+        const children = await q("SELECT * FROM memory_items WHERE owner = $1 AND merged_into = $2 AND status = 'archived' ORDER BY created_at ASC")
+            .all(owner, row.id);
+        if (!children.length) throw new AiError(409, 'memory.not_split', 'this item was not merged with another one');
+        const at = iso(clock.now());
+        await db.tx(async () => {
+            for (const child of children) {
+                await q('UPDATE memory_items SET status = $1, merged_into = $2, updated_at = $3 WHERE owner = $4 AND id = $5')
+                    .run('active', null, at, owner, child.id);
+            }
+            const own = row.source_own ? sourceList(row.source_own) : sourceList(row.source);
+            await q('UPDATE memory_items SET source = $1, updated_at = $2 WHERE owner = $3 AND id = $4')
+                .run(own.join(',').slice(0, 500), at, owner, row.id);
+        });
+        await q('DELETE FROM memory_profiles WHERE owner = $1 AND scope = $2').run(owner, row.scope);
+        const ids = [row.id, ...children.map((c) => c.id)];
+        const items = (await q('SELECT * FROM memory_items WHERE owner = $1 AND id = ANY($2::text[])').all(owner, ids)).map(itemView);
+        return { items, count: items.length, split: children.length };
+    }
+
+    /** The person settles a conflict: the item they keep becomes active again, the other one is archived. */
+    async function settle(req, owner, id) {
+        assertConfigured();
+        const row = await q('SELECT * FROM memory_items WHERE owner = $1 AND id = $2').get(owner, id);
+        if (!row) throw new AiError(404, 'memory.not_found', 'no such memory item');
+        requireScope(req, row.scope);
+        const keep = String((req.body && req.body.keep) || '').trim();
+        if (!keep) throw new AiError(422, 'input.invalid', 'keep must name the item that stays');
+        if (keep === id) throw new AiError(422, 'input.invalid', 'keep must name the other item of the conflict');
+        const other = await q('SELECT * FROM memory_items WHERE owner = $1 AND id = $2').get(owner, keep);
+        if (!other || other.scope !== row.scope) throw new AiError(404, 'memory.not_found', 'no such memory item');
+        if (row.conflict_with !== keep && other.conflict_with !== id) throw new AiError(409, 'memory.not_conflict', 'these two items are not in conflict');
+        const at = iso(clock.now());
+        await db.tx(async () => {
+            await q('UPDATE memory_items SET status = $1, conflict_with = $2, updated_at = $3 WHERE owner = $4 AND id = $5')
+                .run('active', null, at, owner, other.id);
+            await q('UPDATE memory_items SET status = $1, conflict_with = $2, updated_at = $3 WHERE owner = $4 AND id = $5')
+                .run('archived', other.id, at, owner, row.id);
+        });
+        await q('DELETE FROM memory_profiles WHERE owner = $1 AND scope = $2').run(owner, row.scope);
+        return {
+            kept: itemView(await q('SELECT * FROM memory_items WHERE owner = $1 AND id = $2').get(owner, other.id)),
+            archived: itemView(await q('SELECT * FROM memory_items WHERE owner = $1 AND id = $2').get(owner, row.id)),
+        };
+    }
+
+    /**
+     * The owners the job has work for. This is the one statement that is not scoped by an owner: it returns owner
+     * identifiers and nothing else (no item, no text, no id), so it cannot carry one person's data out. Every other
+     * query of the job is owner-scoped.
+     */
+    async function ownersForJobs(limit) {
+        const cap = Math.max(1, Math.min(Number(limit) || 1, 500));
+        return await q('SELECT owner, MAX(updated_at) AS last_seen FROM memory_items WHERE owner IS NOT NULL AND owner <> $1 GROUP BY owner ORDER BY last_seen DESC LIMIT $2')
+            .all('', cap);
+    }
+
+    /** The scopes of one owner that hold items. */
+    async function scopesFor(owner, limit) {
+        const cap = Math.max(1, Math.min(Number(limit) || 1, 50));
+        const rows = await q('SELECT DISTINCT scope FROM memory_items WHERE owner = $1 ORDER BY scope LIMIT $2').all(owner, cap);
+        return rows.map((r) => r.scope);
+    }
+
+    /** Rebuilds the profile of one owner and scope when it is due (the same rule as the route). */
+    async function refreshProfile(owner, scope) {
+        assertConfigured();
+        return await profileFor(owner, scope);
+    }
     /** The person's own export only: decrypted items, profiles and read ids (never another person's rows). */
     async function exportFor(subject) {
         assertConfigured();
@@ -483,7 +850,12 @@ function createMemory({ db, config, clock = { now: () => Date.now() }, log = con
         ];
     }
 
-    return { assertConfigured, batch, list, get, patch, remove, removeBySource, profile, search, exportFor, aadFor, macOf, seal, open };
+    return {
+        assertConfigured, batch, list, get, patch, remove, removeBySource, profile, search, exportFor,
+        split, settle, aadFor, macOf, seal, open,
+        // The store's own maintenance (server/memory/jobs.js) drives the store through these.
+        ownersForJobs, scopesFor, embedMissing, reconcileScope, refreshProfile, profileFor,
+    };
 }
 
 /**
@@ -547,6 +919,9 @@ function memoryRouter({ memory, auth, config, clock = { now: () => Date.now() },
     r.delete('/api/v1/memory/items', guard(WRITE_CAP), personOnly, run(async (req) => await memory.removeBySource(req, ownerOf(req))));
     r.get('/api/v1/memory/profile', guard(READ_CAP), personOnly, run(async (req) => await memory.profile(req, ownerOf(req))));
     r.get('/api/v1/memory/search', guard(READ_CAP), run(async (req) => await memory.search(req, ownerOf(req))));
+    // M2c: undo a merge, and settle a conflict. Both are the person's own: a service may only search and suggest.
+    r.post('/api/v1/memory/items/:id/split', guard(WRITE_CAP), personOnly, run(async (req) => await memory.split(req, ownerOf(req), req.params.id)));
+    r.post('/api/v1/memory/items/:id/settle', guard(WRITE_CAP), personOnly, run(async (req) => await memory.settle(req, ownerOf(req), req.params.id)));
     // The owner is resolved after the guard has set the principal.
     function ownerOf(req) {
         const body = req.body && typeof req.body === 'object' ? req.body : {};
@@ -564,4 +939,4 @@ function memoryRouter({ memory, auth, config, clock = { now: () => Date.now() },
     return r;
 }
 
-module.exports = { createMemory, memoryRouter, PROFILE_INTERVAL_MS };
+module.exports = { createMemory, memoryRouter, PROFILE_INTERVAL_MS, PROFILE_ITEMS, SAME_MEANING, CONFLICT_MIN };

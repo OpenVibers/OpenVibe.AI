@@ -76,6 +76,9 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     const auth = createAuth({ config, log });
     // The person's memory (Memory M2a): sealed item text, the profile cache and the agent-read audit.
     const memory = require('./memory').createMemory({ db, config, clock, log, registry, pool });
+    // The store's own maintenance (Memory M2c): owner by owner, with a per-run cap. It is off in test mode and off
+    // while a provider is in a drill (server/memory/jobs.js).
+    const memoryJobs = require('./memory/jobs').createMemoryJobs({ memory, config, clock, log, registry });
     // The Events consumer side: a signed bench.rating.changed webhook, subscribed at boot (server/bench/events.js).
     const accountData = accountDataLib.create({ db, log, memory });
     const accountSend = env.OV_OAUTH_CLIENT_SECRET ? createNetworkSender({
@@ -106,6 +109,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     let benchSubscription = null;
     let accountSubscription = null;
     if (listen) userModules.start();
+    if (listen && config.memoryJobs && config.memoryJobs.enabled) memoryJobs.start();
     if (listen) {
         server = await new Promise((resolve, reject) => {
             const s = app.listen(config.port, config.host, () => resolve(s));
@@ -132,6 +136,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         if (benchSubscription) benchSubscription.stop();
         if (accountSubscription) accountSubscription.stop();
         userModules.stop();
+        memoryJobs.stop();
         if (jwks) jwks.stop();
         if (server) {
             server.closeAllConnections?.();
@@ -146,7 +151,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         if (!givenDb) await db.close();
     }
 
-    return { config, db, registry, pool, quotas, tiers, cache, fetcher, engine, runs, keys, keyLoaded, auth, app, server, bench, benchEvents, memory, close };
+    return { config, db, registry, pool, quotas, tiers, cache, fetcher, engine, runs, keys, keyLoaded, auth, app, server, bench, benchEvents, memory, memoryJobs, close };
 }
 
 if (require.main === module) {
