@@ -17,10 +17,11 @@ const express = require('express');
 const { http } = require('openvibe-contracts');
 const { serviceAuth } = require('openvibe-contracts');
 const { parseDelivery } = require('openvibe-sdk/events');
+const { TOPICS: ACCOUNT_TOPICS } = require('openvibe-sdk/account-data');
 
 const TOPIC = 'bench.rating.changed';
 
-function createBenchEvents({ bench, config, log = console, fetchImpl = globalThis.fetch, clientSecret = process.env.OV_OAUTH_CLIENT_SECRET }) {
+function createBenchEvents({ bench, accountData = null, accountSend = null, config, log = console, fetchImpl = globalThis.fetch, clientSecret = process.env.OV_OAUTH_CLIENT_SECRET }) {
     const router = express.Router();
     const secrets = (config.events && config.events.secrets) || [];
 
@@ -45,6 +46,15 @@ function createBenchEvents({ bench, config, log = console, fetchImpl = globalThi
         const event = delivery.event;
         if (!event || typeof event.event_id !== 'string' || !event.event_id) {
             return refused(res, 400, 'bench.bad_delivery', 'body must be { event: <envelope> }');
+        }
+        if (accountData && ACCOUNT_TOPICS.includes(event.event_type)) {
+            try {
+                const outcome = await accountData.apply(event, { send: accountSend });
+                return res.status(200).json({ event_id: event.event_id, outcome });
+            } catch (err) {
+                log.warn(`[account-data] event ${event.event_id} (${event.event_type}) failed: ${err.message}`);
+                return refused(res, 503, 'ai.account_retry', 'not applied; Events will retry');
+            }
         }
         try {
             const out = await apply(event);
