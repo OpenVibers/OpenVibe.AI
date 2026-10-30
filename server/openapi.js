@@ -116,6 +116,19 @@ route('delete', '/memory/items/{id}', {
     parameters: [path('id', str()), query('on_behalf_of', str())],
     responses: { 200: json('How many rows were removed', memoryResult), 404: problem, 503: problem, ...errors([401, 403]) },
 });
+route('post', '/memory/items/{id}/split', {
+    operationId: 'splitMemoryItem', summary: 'Undo a merge: the item and the one it swallowed go apart again', tags: ['memory'], security: memorySecurity,
+    description: 'ai.memory.write. The person’s own token only. An item that was merged into another one is restored with its own text and its own sources; the winner keeps only its own sources again.',
+    parameters: [path('id', str())],
+    responses: { 200: json('The items again', memoryResult), 404: problem, 409: problem, 503: problem, ...errors([401, 403]) },
+});
+route('post', '/memory/items/{id}/settle', {
+    operationId: 'settleMemoryConflict', summary: 'Settle a conflict between two notes', tags: ['memory'], security: memorySecurity,
+    description: 'ai.memory.write. The person’s own token only. keep names the item that stays (active again); the other one is archived. A conflict never reaches an agent until it is settled.',
+    parameters: [path('id', str())],
+    requestBody: body({ type: 'object', required: ['keep'], properties: { keep: str({ description: 'The id of the item that stays' }) } }),
+    responses: { 200: json('The kept item and the archived one', memoryResult), 404: problem, 409: problem, 422: problem, 503: problem, ...errors([401, 403]) },
+});
 route('get', '/memory/profile', {
     operationId: 'getMemoryProfile', summary: 'The cached profile for one scope', tags: ['memory'], security: memorySecurity,
     description: 'ai.memory.read. Rebuilt by the cheap tier only when items_hash changes, at most once an hour per owner and scope; the result passes noLooks.',

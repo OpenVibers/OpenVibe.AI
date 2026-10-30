@@ -31,6 +31,24 @@ function userToken(subject, { aud = ['openvibe.network'] } = {}) {
     return `${input}.${crypto.sign('RSA-SHA256', Buffer.from(input), privateKey).toString('base64url')}`;
 }
 
+/**
+ * The memory module's SQL statements, one by one: the comments are taken out first (an apostrophe in a comment is
+ * not a string), so every statement is checked on its own and not as one long blob.
+ */
+function memoryStatements(src) {
+    const stripped = src.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+    const out = [];
+    const re = /(['"`])((?:(?!\1)[^\\]|\\.)*)\1/g;
+    let m;
+    while ((m = re.exec(stripped))) {
+        const sql = m[2].trim();
+        if (/^(SELECT|UPDATE|DELETE)\b/i.test(sql) && /memory_items|memory_profiles|memory_reads/.test(sql)) out.push(sql);
+    }
+    return out;
+}
+
+/** The job's owner cursor: owner identifiers only, so it is the one statement without an owner predicate. */
+const OWNER_CURSOR = /^select\s+owner,\s*max\(updated_at\)\s+as\s+last_seen\s+from\s+memory_items\s+where\s+owner\s+is\s+not\s+null\s+and\s+owner\s*<>\s*\$\d+\s+group\s+by\s+owner\s+order\s+by\s+last_seen\s+desc\s+limit\s+\$\d+$/i;
 const serviceWrite = (extra = {}) => token('codes', ['ai.memory.write'], { extra });
 const serviceRead = (extra = {}) => token('codes', ['ai.memory.read'], { extra });
 const item = (text, extra = {}) => ({ text, ...extra });
@@ -121,10 +139,12 @@ t.test('one person cannot read, change or delete another person\'s item, and eve
         const problems = [];
         for (const f of files) {
             const src = fs.readFileSync(path.join(dir, f), 'utf8');
-            for (const m of src.matchAll(/(['"`])((?:(?!\1)[\s\S])*?(?:memory_items|memory_profiles|memory_reads)[\s\S]*?)\1/g)) {
-                const sql = m[2].trim();
-                if (!/^(SELECT|UPDATE|DELETE)\b/i.test(sql)) continue;
-                if (!/owner = \$/.test(sql)) problems.push(`${f}: ${sql.split('\n')[0]}`);
+            for (const sql of memoryStatements(src)) {
+                if (/owner = \$/.test(sql)) continue;
+                // The one statement that is not owner-scoped: the job's owner cursor. It returns owner identifiers
+                // and nothing else (no item, no text, no id), so it cannot carry one person's data out.
+                if (OWNER_CURSOR.test(sql)) continue;
+                problems.push(`${f}: ${sql.split('\n')[0]}`);
             }
         }
         assert.deepStrictEqual(problems, [], `a memory query is not owner-scoped: ${problems.join(' | ')}`);
@@ -334,7 +354,7 @@ t.test('account data: the table guard passes, the export is decrypted, and a del
 t.test('no item text reaches the logger during a full flow', async () => {
     const lines = [];
     const log = { log: (...a) => lines.push(a.join(' ')), warn: (...a) => lines.push(a.join(' ')), error: (...a) => lines.push(a.join(' ')) };
-    const h = await boot({ env: { AI_MEMORY_KEY: KEY }, log });
+    const h = await boot({ env: { AI_MEMORY_KEY: KEY, AI_MEMORY_JOBS: '1' }, log });
     try {
         const who = userToken(A);
         const marker = 'a-very-distinctive-note-that-must-not-be-logged';
@@ -347,6 +367,8 @@ t.test('no item text reaches the logger during a full flow', async () => {
         await request(h.base, 'GET', `/api/v1/memory/search?q=${encodeURIComponent(marker)}&scopes=user&on_behalf_of=${A}`, { tok: serviceRead({ memory_scopes: ['user'] }) });
         await request(h.base, 'PATCH', `/api/v1/memory/items/${id}`, { tok: who, body: { text: `${marker} edited` } });
         await request(h.base, 'DELETE', `/api/v1/memory/items/${id}`, { tok: who });
+        // M2c: the job (the store's own maintenance) runs here too, and it writes counts, never a note.
+        await h.memoryJobs.runOnce();
         const all = lines.join('\n');
         assert.ok(!all.includes(marker), `the logger saw the item text: ${all}`);
         assert.ok(!all.includes(secret), 'the logger saw the secret');
