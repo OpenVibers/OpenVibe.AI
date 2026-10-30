@@ -226,6 +226,44 @@ t.test('a service may only search and suggest: every other memory route is perso
     } finally { await h.stop(); }
 });
 
+t.test('the read log belongs to the person: who read, for what, how many notes, and never the ids or the text', async () => {
+    const h = await boot({ env: { AI_MEMORY_KEY: KEY } });
+    try {
+        // Two people, one agent read for each: the log is the person's, never a shared one.
+        for (const who of [A, B]) {
+            await request(h.base, 'POST', '/api/v1/memory/items:batch', { tok: userToken(who), body: { items: [
+                item(`a note of ${who}`, { source: 'claude-code' }),
+            ] } });
+            await request(h.base, 'GET', `/api/v1/memory/search?q=note&scopes=user&purpose=task-for-${who}&on_behalf_of=${who}`, { tok: serviceRead({ memory_scopes: ['user'] }) });
+        }
+        const mine = await request(h.base, 'GET', '/api/v1/memory/reads?limit=50', { tok: userToken(A) });
+        assert.deepStrictEqual([mine.status, mine.body.reads.length], [200, 1]);
+        const row = mine.body.reads[0];
+        assert.equal(row.actor, 'svc:codes');
+        assert.equal(row.purpose, 'task-for-' + A);
+        assert.deepStrictEqual(row.scopes, ['user']);
+        assert.equal(row.count, 1);
+        assert.ok(row.created_at, 'the read carries its time');
+        // The answer never carries the note ids and never the text.
+        assert.ok(!mine.text.includes('mem_'), 'the read log carries no item ids');
+        assert.ok(!mine.text.includes('a note of'), 'the read log carries no text');
+        assert.ok(!('item_ids' in row) && !('items' in row));
+
+        // Another person sees nothing of this one's reads.
+        const other = await request(h.base, 'GET', '/api/v1/memory/reads', { tok: userToken(B) });
+        assert.deepStrictEqual([other.status, other.body.reads.length], [200, 1]);
+        assert.equal(other.body.reads[0].purpose, 'task-for-' + B);
+
+        // A service may not read the person's audit.
+        const denied = await request(h.base, 'GET', `/api/v1/memory/reads?on_behalf_of=${A}`, { tok: serviceRead({ memory_scopes: ['user'] }) });
+        assert.deepStrictEqual([denied.status, denied.body.code], [403, 'capability.denied']);
+
+        // The limit is the person's: at most what was asked for.
+        const capped = await request(h.base, 'GET', '/api/v1/memory/reads?limit=0', { tok: userToken(A) });
+        assert.equal(capped.status, 200);
+    } finally { await h.stop(); }
+});
+
 t.test('a person token still writes active items, and still reads, changes and deletes them', async () => {
     const h = await boot({ env: { AI_MEMORY_KEY: KEY } });
     try {

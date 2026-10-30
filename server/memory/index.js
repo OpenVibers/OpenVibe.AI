@@ -17,6 +17,7 @@
  *   DELETE /api/v1/memory/items?source=   everything from one source
  *   POST   /api/v1/memory/items/:id/split   undo a merge: the item and the one it swallowed go apart again
  *   POST   /api/v1/memory/items/:id/settle  the person settles a conflict: { keep: <id> } keeps one and archives the other
+ *   GET    /api/v1/memory/reads         the person's own read log: who read, for what, how many notes (never ids, never text)
  *   GET    /api/v1/memory/profile?scope=  the cached profile, rebuilt by the cheap tier only when its items_hash moved,
  *                                         at most once an hour per owner and scope
  *   GET    /api/v1/memory/search?q=&scopes=  for agents (ai.memory.read + on_behalf_of): active items only, in the
@@ -835,6 +836,32 @@ function createMemory({ db, config, clock = { now: () => Date.now() }, log = con
         assertConfigured();
         return await profileFor(owner, scope);
     }
+    /**
+     * The person's own read log (M2b): who read their memory, for what, in which scopes, how many notes and when.
+     * It never carries the note ids and never the text: only the count of what was read. A service token may not
+     * read it (it is the person's own audit), so the route is person-only.
+     */
+    async function reads(req, owner) {
+        assertConfigured();
+        const limit = Math.max(1, Math.min(Number(req.query.limit) || 50, 200));
+        const rows = await q('SELECT id, actor, purpose, scopes, item_ids, created_at FROM memory_reads WHERE owner = $1 ORDER BY created_at DESC LIMIT $2').all(owner, limit);
+        const list = rows.map((r) => {
+            const scopes = [];
+            try { const parsed = JSON.parse(r.scopes || '[]'); if (Array.isArray(parsed)) for (const s of parsed) scopes.push(String(s).slice(0, 80)); } catch { /* a row without scopes */ }
+            let count = 0;
+            try { const parsed = JSON.parse(r.item_ids || '[]'); if (Array.isArray(parsed)) count = parsed.length; } catch { /* a row without ids */ }
+            return {
+                id: String(r.id || ''),
+                actor: String(r.actor || '').slice(0, 120),
+                purpose: r.purpose == null ? null : String(r.purpose).slice(0, 200),
+                scopes: scopes.slice(0, 10),
+                count,
+                created_at: r.created_at,
+            };
+        });
+        return { reads: list, count: list.length };
+    }
+
     /** The person's own export only: decrypted items, profiles and read ids (never another person's rows). */
     async function exportFor(subject) {
         assertConfigured();
@@ -851,7 +878,7 @@ function createMemory({ db, config, clock = { now: () => Date.now() }, log = con
     }
 
     return {
-        assertConfigured, batch, list, get, patch, remove, removeBySource, profile, search, exportFor,
+        assertConfigured, batch, list, get, patch, remove, removeBySource, profile, search, exportFor, reads,
         split, settle, aadFor, macOf, seal, open,
         // The store's own maintenance (server/memory/jobs.js) drives the store through these.
         ownersForJobs, scopesFor, embedMissing, reconcileScope, refreshProfile, profileFor,
@@ -918,6 +945,9 @@ function memoryRouter({ memory, auth, config, clock = { now: () => Date.now() },
     r.delete('/api/v1/memory/items/:id', guard(WRITE_CAP), personOnly, run(async (req) => await memory.remove(req, ownerOf(req), req.params.id)));
     r.delete('/api/v1/memory/items', guard(WRITE_CAP), personOnly, run(async (req) => await memory.removeBySource(req, ownerOf(req))));
     r.get('/api/v1/memory/profile', guard(READ_CAP), personOnly, run(async (req) => await memory.profile(req, ownerOf(req))));
+    // M2b: the person's own read log (who read their memory, and how much of it). Person-only, like the other
+    // browsing routes: a service has no business in the person's audit.
+    r.get('/api/v1/memory/reads', guard(READ_CAP), personOnly, run(async (req) => await memory.reads(req, ownerOf(req))));
     r.get('/api/v1/memory/search', guard(READ_CAP), run(async (req) => await memory.search(req, ownerOf(req))));
     // M2c: undo a merge, and settle a conflict. Both are the person's own: a service may only search and suggest.
     r.post('/api/v1/memory/items/:id/split', guard(WRITE_CAP), personOnly, run(async (req) => await memory.split(req, ownerOf(req), req.params.id)));
