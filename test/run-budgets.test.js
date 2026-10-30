@@ -35,7 +35,9 @@ const chat = (tok, headers = {}) => request(h.base, 'POST', '/v1/chat/completion
     tok, body: { model: 'openvibe', messages: [{ role: 'user', content: 'Say hello' }] }, headers: { 'x-openvibe-credential': 'openai', ...headers },
 });
 const budgetOf = (jti) => request(h.base, 'GET', `/api/v1/run-budgets/${jti}`, { tok: manager });
-const setBudget = (jti, body) => request(h.base, 'PUT', `/api/v1/run-budgets/${jti}`, { tok: manager, body });
+// Codes registers a budget with its own service token (client credentials: no on_behalf_of), never with a run token.
+const codesService = token('codes', ALL);
+const setBudget = (jti, body, tok = codesService) => request(h.base, 'PUT', `/api/v1/run-budgets/${jti}`, { tok, body });
 
 t.test('boot with the credentials key set', async () => {
     h = await boot({
@@ -59,6 +61,25 @@ t.test('a budget is registered for a run token', async () => {
     assert.strictEqual(r.status, 200, r.text);
     assert.strictEqual(r.body.budget_usd, 5);
     assert.strictEqual(r.body.budget_tokens, 1000);
+});
+
+t.test('the run token itself cannot raise its own budget', async () => {
+    // A run token passes ai.run.create (it calls the models), so the write route must look further: it acts for a
+    // person, and only the minting service may write. Without this an agent could set budget_usd to anything.
+    const own = runToken('tok_budget_1', { on_behalf_of: PERSON });
+    const r = await setBudget('tok_budget_1', { budget_usd: 1e9 }, own);
+    assert.strictEqual(r.status, 403, r.text);
+    const other = await setBudget('tok_budget_1', { budget_usd: 1e9 }, service);
+    assert.strictEqual(other.status, 403, 'another service is not the minting one either: ' + other.text);
+    assert.strictEqual((await budgetOf('tok_budget_1')).body.budget_usd, 5, 'the budget is unchanged');
+});
+
+t.test('a budget is set once: the same numbers again are fine, other numbers are refused', async () => {
+    const same = await setBudget('tok_budget_1', { budget_usd: 5, budget_tokens: 1000, expires_at: Math.floor(Date.now() / 1000) + 600 });
+    assert.strictEqual(same.status, 200, same.text);
+    const more = await setBudget('tok_budget_1', { budget_usd: 50, budget_tokens: 1000 });
+    assert.strictEqual(more.status, 409, more.text);
+    assert.strictEqual((await budgetOf('tok_budget_1')).body.budget_usd, 5);
 });
 
 t.test('the counter adds up across the requests of the run', async () => {
