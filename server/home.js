@@ -213,6 +213,8 @@ const HOME_STYLE = `<style>
 .ai-faq>details{padding:16px 18px;border-radius:16px;border:1px solid var(--border,#1f2d47);background:var(--bg-secondary,#101828)}
 .ai-faq h3{margin:0;font-size:15.5px;line-height:1.35}.ai-faq p{margin:6px 0 0;font-size:14px;line-height:1.55;color:var(--text-secondary,#96a7c2)}
 .ai-faq summary{list-style:none;cursor:pointer}.ai-faq summary::-webkit-details-marker{display:none}.ai-faq summary h3::after{content:'+';float:right;margin-left:10px;color:var(--text-muted,#7386a3);font-weight:400}.ai-faq details[open] summary h3::after{content:'\\2212'}
+/* 6 touch targets (2026-10-29). */
+@media (pointer:coarse){.ai-faq summary{min-height:44px}}
 .ai-fold{border:1px solid var(--border,#1f2d47);border-radius:16px;background:var(--bg-secondary,#101828)}
 .ai-fold>summary{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:56px;padding:0 18px;cursor:pointer;list-style:none}
 .ai-fold>summary::-webkit-details-marker{display:none}.ai-fold>summary h2{margin:0}
@@ -225,6 +227,10 @@ const HOME_STYLE = `<style>
 #get .sc-grid{display:flex;flex-wrap:nowrap;overflow-x:auto;scroll-snap-type:x mandatory;scroll-padding-inline:16px;scrollbar-width:none;gap:10px;margin:0 -16px;padding:0 16px 4px}#get .sc-grid::-webkit-scrollbar{display:none}#get .sc-grid>*{flex:0 0 80%;min-width:0;scroll-snap-align:start}
 #models tbody tr:nth-child(n+6){display:none}
 .ai-fold>summary span{display:none}
+}
+/* Touch targets on phones (fleet audit, 2026-10-29): touch pointers only. */
+@media (pointer: coarse){
+.ai-faq>summary{min-height:44px}
 }
 </style>`;
 
