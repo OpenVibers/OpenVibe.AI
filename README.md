@@ -49,15 +49,16 @@ owns publication truth: Wiki, Blog, News, Live, … decide what to publish.
 - OpenVibe.Media (recordings `media.analyze` reads, over allow-listed https URLs or signed URLs)
 - provider APIs configured by the operator (OpenAI-compatible, OpenAI Responses, Anthropic, the HTTP seam), whisper.cpp
   and the local model server `openvibe-llm.service` on this host
-- `openvibe-contracts` v0.86.0, `openvibe-sdk` v0.74.0 (service tokens, events outbox),
-  `openvibe-shared` v2.3.1, pinned by release tarball
+- `openvibe-contracts` v0.252.0, `openvibe-sdk` v0.75.0 (service tokens, events outbox, redact),
+  `openvibe-shared` v4.53.0, pinned by release tarball
 
 ## Capabilities
 
 Implemented here (the service manifest's `capabilities`, audience `openvibe.ai`; routes under
 [API](#api)): `ai.run.create`, `ai.run.read`, `ai.workflow.manage`, `ai.provider.manage`,
 `ai.usage.read`, `ai.credential.manage` (`/api/v1/credentials/:subject[/:provider]`),
-`ai.quota.attribution.manage` (per-streamer quotas) and `ai.app.run` (developer apps, ADR-014; public,
+`ai.quota.attribution.manage` (per-streamer quotas), `ai.memory.read` and `ai.memory.write` (Memory M2a,
+`/api/v1/memory/*`) and `ai.app.run` (developer apps, ADR-014; public,
 registered since openvibe-contracts 0.109.0). A service token's `ns`
 claim limits which workflow namespaces it may run; an app token is fixed to its project's.
 
@@ -111,6 +112,8 @@ idempotent replay):
 | `POST /api/v1/{chat,generate,summarize,classify,extract,embed,image}` (no `enrich`), `GET /runs/:id` (the app's own runs) | `ai.app.run` for a developer-app token ([Developer apps](#developer-apps)) |
 | `GET /api/v1/runs`, `GET /runs/:id` (+ citations, request-log metadata), `GET /runs/:id/citations` | `ai.run.read` (own runs) |
 | `GET /api/v1/actions?subject=usr_…` — one person's Action Center items (`common.action-list-result@1`, runs whose `on_behalf_of` is that person) | `ai.actions.read` (first-party service) |
+| `POST /api/v1/memory/items:batch`, `GET/PATCH/DELETE /api/v1/memory/items[/:id]`, `DELETE /api/v1/memory/items?source=`, `GET /api/v1/memory/profile` | `ai.memory.read` / `ai.memory.write` (the person's own token, or a service acting `on_behalf_of` them) |
+| `GET /api/v1/memory/search?q=&scopes=` — active items only, at most 8, in the grant's scopes, audited | `ai.memory.read` plus `on_behalf_of` |
 | `GET /api/v1/workflows\|templates\|routes[/:key]` | `ai.run.create`, `ai.workflow.manage` or `ai.usage.read` |
 | `GET /api/v1/routes?operation=generate` | the same read: every route's `offers` (`{provider, model}`), plus the operation's deduplicated `offers` |
 | `POST /api/v1/{templates,workflows,routes}/:key/versions`, `…/versions/:v/status` | `ai.workflow.manage` |
@@ -202,6 +205,19 @@ coding agents, Codes' harnesses) points its base URL at `https://ai.openvibe.ser
     not https answers 400, and a first-party service token naming a provider answers 403.
   - Production app runs that use the router are limited to free and local capacity (see Developer apps). Today that is
     a small local model without tools, so a coding agent's loop needs its project's own provider.
+
+## Memory
+
+Memory M2a (spec `research-2026-10-30/memory-m2-spec.md`): a person's own notes, sealed with `AI_MEMORY_KEY`
+(AES-256-GCM, AAD `memory|<owner>|<id>|<scope>`, `m1:`), deduped by an HMAC of the normalized text (HKDF-SHA256, info
+`memory-mac`), and scoped by `user:<usr_…>` on every query. The server redacts every item again with
+`openvibe-sdk/redact` (the Node's shapes and corpus) and refuses an item that is only a secret; what an agent writes is
+a suggestion, and every item a service writes passes `noLooks`. An agent's search is active-only, at most 8 items, in
+the scopes its token's grant names (`user` always; `project:*` when the grant lists it), and leaves a `memory_reads`
+row with ids, never text. The profile cache rebuilds only when its `items_hash` moves, at most once an hour, in-process
+on the service's own chat route (no run row, no person allowance). The account export decrypts the person's items for
+their own export; a deletion removes the rows. Unset `AI_MEMORY_KEY` turns every memory route into 503
+`memory.unavailable`; no default key exists.
 
 ## Anthropic-compatible endpoint
 
@@ -641,6 +657,8 @@ Reporting a vulnerability: [SECURITY.md](SECURITY.md). The rules the code keeps:
 - **Secrets.** Shared provider keys are `env:NAME` references, never values; a person's own key is
   AES-256-GCM encrypted with `AI_CREDENTIALS_KEY`, bound to its owner and subject, and never returned
   (a four-character hint only). No response, log or console page carries a secret value.
+- **Memory.** Item text is sealed with `AI_MEMORY_KEY` and bound to its owner, id and scope; plaintext exists only
+  inside a request, and the profile builder calls the provider in-process so the notes are not written to a run.
 - **Private data.** The request log keeps hashes, not prompts; raw prompts and inline images are not
   kept; the cache never crosses requester, actor, target or attribution; `history: false` keeps
   neither input nor cache entry.

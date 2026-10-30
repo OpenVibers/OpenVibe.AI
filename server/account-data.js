@@ -28,6 +28,11 @@ const TABLES = [
     { table: 'person_sessions', subject: 'subject', file: 'person-sessions.json', columns: ['username', 'created_at', 'expires_at', 'revoked_at'], order: 'created_at' },
     { table: 'subject_credentials', subject: 'subject', file: 'provider-credentials.json', order: 'updated_at',
         columns: ['owner', 'subject', 'provider', 'base_url', 'machine', 'key_hint', 'models', 'budget_usd_day', 'is_default', 'spend_key', 'created_at', 'updated_at', 'last_used_at'] },
+    // Memory M2a: the rows are deleted by owner here; the decrypted items are added by extraExport below. The text is
+    // never exported sealed (it would be unreadable to the person) and the generic table export stays out of it.
+    { table: 'memory_items', subject: 'owner', value: (usr) => `user:${usr}`, file: null, erase: 'delete' },
+    { table: 'memory_profiles', subject: 'owner', value: (usr) => `user:${usr}`, file: null, erase: 'delete' },
+    { table: 'memory_reads', subject: 'owner', value: (usr) => `user:${usr}`, file: null, erase: 'delete' },
     { table: 'free_allowance_usage', subject: 'subject', file: 'free-allowance.json', erase: { keep: ledger } },
     { table: 'routes', subject: 'created_by', file: null, erase: { keep: 'the route catalogue is the service\'s; created_by is the staff audit trail' } },
     { table: 'templates', subject: 'created_by', file: null, erase: { keep: 'the template catalogue is the service\'s; created_by is the staff audit trail' } },
@@ -58,8 +63,17 @@ async function extraErase(t, subjects, counts) {
     counts.add(counts.erased, 'runs', await t.exec('DELETE FROM runs WHERE id = ANY($1::text[])', [ids]));
 }
 
-function create({ db, log = console } = {}) {
-    return createAccountData({ db, service: 'ai', tables: TABLES, extraExport, extraErase, log });
+function create({ db, log = console, memory = null } = {}) {
+    // Memory text is sealed; the person's own export gets it decrypted from the module that holds the key. Without the
+    // key the rest of the account data still exports, and the memory file says it is unavailable (never any text).
+    const exportAll = async (handle, subject) => {
+        const files = await extraExport(handle, subject);
+        if (!memory) return files;
+        try { files.push(...(await memory.exportFor(subject))); }
+        catch (err) { log.warn(`[account-data] memory export unavailable: ${err.code || err.message}`); files.push({ name: 'memory-items.json', content: { unavailable: 'AI_MEMORY_KEY is not configured on this service' } }); }
+        return files;
+    };
+    return createAccountData({ db, service: 'ai', tables: TABLES, extraExport: exportAll, extraErase, log });
 }
 
 module.exports = { create, TABLES, TOPICS, extraExport, extraErase };

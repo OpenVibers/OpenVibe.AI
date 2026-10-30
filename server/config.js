@@ -58,6 +58,8 @@ function load(env = process.env) {
         issuer: trimUrl(env.OV_NETWORK_ISSUER || env.OV_NETWORK_URL || 'https://openvibe.network'),
         // A person's own provider keys (server/credentials.js): AES-256-GCM, 64 hex characters; unset = credentials off.
         credentialsKey: String(env.AI_CREDENTIALS_KEY || '').trim(),
+        // The person's memory (server/memory/): AES-256-GCM with a key of its own, so it can rotate apart from credentials.
+        memoryKey: String(env.AI_MEMORY_KEY || '').trim(),
         networkPublicKey: env.OV_NETWORK_PUBLIC_KEY ? env.OV_NETWORK_PUBLIC_KEY.replace(/\\n/g, '\n') : null,
         audience: 'openvibe.ai',
 

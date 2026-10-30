@@ -77,6 +77,58 @@ function route(method, p, operation) {
     (PATHS[p] = PATHS[p] || {})[method] = operation;
 }
 
+// ── Memory (Memory M2a) ──────────────────────────────────────────────────────────────────────
+const memoryItem = ref('MemoryItem');
+const memoryBody = ref('MemoryWriteRequest');
+const memoryResult = ref('MemoryResult');
+const memorySecurity = SERVICE;   // the person's own token, or a service token plus on_behalf_of
+route('post', '/memory/items:batch', {
+    operationId: 'importMemoryItems', summary: 'Import up to 200 memory items', tags: ['memory'], security: memorySecurity,
+    description: 'ai.memory.write. Redaction runs again on the server; an item that is only a secret is refused. Dedupe is by text_mac within owner and scope: the same text updates seen_at and adds the source. AI-produced items are suggestions until the person accepts them.',
+    requestBody: body(memoryBody),
+    responses: { 200: json('The stored (or deduped) items', memoryResult), 422: problem, 503: problem, ...errors([400, 401, 403]) },
+});
+route('get', '/memory/items', {
+    operationId: 'listMemoryItems', summary: 'List the person’s own memory items', tags: ['memory'], security: memorySecurity,
+    description: 'ai.memory.read. q searches decrypted text in-process over that owner’s rows only, capped at 2,000.',
+    parameters: [query('scope', str()), query('status', str({ enum: ['active', 'suggested', 'archived', 'conflict'] })), query('q', str()), query('on_behalf_of', str())],
+    responses: { 200: json('The person’s items', memoryResult), 403: problem, 503: problem, ...errors([401]) },
+});
+route('delete', '/memory/items', {
+    operationId: 'deleteMemorySource', summary: 'Delete everything from one source', tags: ['memory'], security: memorySecurity,
+    description: 'ai.memory.write. Delete means gone: the rows are removed and the profiles that used them are rebuilt.',
+    parameters: [{ ...query('source', str(), 'The adapter id or service to delete'), required: true }, query('on_behalf_of', str())],
+    responses: { 200: json('How many rows were removed', memoryResult), 422: problem, 503: problem, ...errors([401, 403]) },
+});
+route('get', '/memory/items/{id}', {
+    operationId: 'getMemoryItem', summary: 'Read one memory item', tags: ['memory'], security: memorySecurity,
+    parameters: [path('id', str()), query('on_behalf_of', str())],
+    responses: { 200: json('The item', memoryResult), 404: problem, 503: problem, ...errors([401, 403]) },
+});
+route('patch', '/memory/items/{id}', {
+    operationId: 'updateMemoryItem', summary: 'Change text, kind, scope or status', tags: ['memory'], security: memorySecurity,
+    parameters: [path('id', str())],
+    requestBody: body(memoryBody),
+    responses: { 200: json('The changed item', memoryResult), 404: problem, 422: problem, 503: problem, ...errors([401, 403]) },
+});
+route('delete', '/memory/items/{id}', {
+    operationId: 'deleteMemoryItem', summary: 'Delete one memory item', tags: ['memory'], security: memorySecurity,
+    parameters: [path('id', str()), query('on_behalf_of', str())],
+    responses: { 200: json('How many rows were removed', memoryResult), 404: problem, 503: problem, ...errors([401, 403]) },
+});
+route('get', '/memory/profile', {
+    operationId: 'getMemoryProfile', summary: 'The cached profile for one scope', tags: ['memory'], security: memorySecurity,
+    description: 'ai.memory.read. Rebuilt by the cheap tier only when items_hash changes, at most once an hour per owner and scope; the result passes noLooks.',
+    parameters: [query('scope', str()), query('on_behalf_of', str())],
+    responses: { 200: json('The cached profile', memoryResult), 503: problem, ...errors([401, 403]) },
+});
+route('get', '/memory/search', {
+    operationId: 'searchMemoryForAgent', summary: 'An agent reads active memory in its granted scopes', tags: ['memory'], security: memorySecurity,
+    description: 'ai.memory.read plus on_behalf_of. Active items only, at most 8, in the scopes the token’s grant names (user always; project:* only when granted). The read is audited in memory_reads with item ids, never text.',
+    parameters: [query('q', str()), query('scopes', str(), 'Comma-separated scopes; default user'), query('purpose', str(), 'The task or run the person sees'), query('on_behalf_of', str())],
+    responses: { 200: json('At most 8 active items', memoryResult), 403: problem, 503: problem, ...errors([401]) },
+});
+
 // ── Runs ──────────────────────────────────────────────────────────────────────────────────────
 route('post', '/runs', {
     operationId: 'createRun', summary: 'Start a workflow run (201 finished, 202 queued or running, 200 replay)', tags: ['runs'], security: SERVICE,
@@ -233,6 +285,29 @@ function openapi() {
                     title: nullable('string'), author: nullable('string'), published_at: nullable('string'), retrieved_at: nullable('string'),
                     snippet: nullable('string'), content_hash: nullable('string'), trust: { type: 'object' }, provenance: { type: 'object' },
                     attached_by: str(), created_at: str({ format: 'date-time' }),
+                } },
+                MemoryItem: { type: 'object', required: ['id', 'owner', 'scope', 'kind', 'text', 'source', 'status', 'confidence', 'created_at', 'updated_at'], properties: {
+                    id: str({ pattern: '^mem_[0-9A-HJKMNP-TV-Z]{26}$' }), owner: str(), scope: str(),
+                    kind: str({ enum: ['preference', 'fact', 'project_rule', 'procedure', 'decision', 'lesson'] }),
+                    text: str(), source: str(), source_ref: nullable('object'),
+                    status: str({ enum: ['active', 'suggested', 'archived', 'conflict'] }), confidence: { type: 'number' },
+                    seen_at: str({ format: 'date-time' }), created_at: str({ format: 'date-time' }), updated_at: str({ format: 'date-time' }),
+                    machine: nullable('string'), no_looks: { type: 'boolean' },
+                } },
+                MemoryProfile: { type: 'object', properties: {
+                    scope: str(), text: str(), items_hash: str({ pattern: '^[0-9a-f]{64}$' }), built_at: str({ format: 'date-time' }),
+                } },
+                MemoryResult: { type: 'object', properties: {
+                    items: arrayOf(ref('MemoryItem')), item: ref('MemoryItem'), profile: ref('MemoryProfile'),
+                    deleted: integer({ minimum: 0 }), count: integer({ minimum: 0 }),
+                } },
+                MemoryWriteRequest: { type: 'object', properties: {
+                    items: arrayOf(ref('MemoryItemWrite')), on_behalf_of: str(), text: str(), kind: str(), scope: str(), status: str(), source: str(),
+                } },
+                MemoryItemWrite: { type: 'object', required: ['text'], properties: {
+                    text: str(), kind: str(), scope: str(), source: str(), source_ref: nullable('object'), on_behalf_of: str(),
+                    status: str({ enum: ['active', 'suggested', 'archived', 'conflict'] }), confidence: { type: 'number' },
+                    machine: nullable('string'), no_looks: { type: 'boolean' }, seen_at: str({ format: 'date-time' }),
                 } },
                 ActionItem: { type: 'object', required: ['service', 'id', 'kind', 'title', 'bucket', 'state'], properties: {
                     service: { const: 'ai' }, id: str(), kind: { const: 'ai_run' }, title: str(), summary: nullable('string'),
