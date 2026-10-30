@@ -76,7 +76,6 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     const auth = createAuth({ config, log });
     // The Events consumer side: a signed bench.rating.changed webhook, subscribed at boot (server/bench/events.js).
     const accountData = accountDataLib.create({ db, log });
-    await accountData.ensureSchema();
     const accountSend = env.OV_OAUTH_CLIENT_SECRET ? createNetworkSender({
         networkInternalUrl: config.networkInternalUrl, clientId: config.console.clientId,
         clientSecret: env.OV_OAUTH_CLIENT_SECRET, fetch: fetchImpl,
