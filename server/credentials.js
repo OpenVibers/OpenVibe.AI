@@ -46,7 +46,7 @@ function aadFor(owner, subject, provider) { return `${owner}|${subject}|${provid
 function legacyAadFor(owner, subject) { return `${owner}|${subject}`; }
 
 function createCredentials({ db, config, clock = { now: () => Date.now() } }) {
-    // subject_credentials is in migrations/0001_initial.sql (ADR-035); 0011 added the node machine, 0012 the provider
+    // subject_credentials is in migrations/0001_initial.sql (ADR-035); 0011 added the node machine, 0014 the provider
     // dimension (is_default, spend_key, one row per provider).
     const iso = (ms) => new Date(ms).toISOString();
 
@@ -118,13 +118,15 @@ function createCredentials({ db, config, clock = { now: () => Date.now() } }) {
         const prev = await getRow(owner, subject, body.provider);
         if (body.provider === 'node') {
             // The person's own machine: nothing to seal. Bot checks it is theirs and that they turned it on, at each run.
+            await db.tx(async () => {
             if (makeDefault) await db.prepare('UPDATE subject_credentials SET is_default = false WHERE owner = ? AND subject = ? AND provider <> ?').run(owner, subject, 'node');
             await db.prepare(`INSERT INTO subject_credentials (owner, subject, provider, base_url, machine, key_enc, key_hint, models, budget_usd_day, is_default, spend_key, created_at, updated_at)
                         VALUES (?, ?, 'node', NULL, ?, '', '', ?, NULL, ?, ?, ?, ?)
                         ON CONFLICT(owner, subject, provider) DO UPDATE SET base_url = NULL, machine = excluded.machine, key_enc = '',
-                          key_hint = '', models = excluded.models, budget_usd_day = NULL, is_default = excluded.is_default, updated_at = excluded.updated_at`)
+                          key_hint = '', models = excluded.models, budget_usd_day = NULL, is_default = subject_credentials.is_default OR excluded.is_default, updated_at = excluded.updated_at`)
                 .run(owner, subject, body.machine, JSON.stringify(body.models || {}), makeDefault,
                     (prev && prev.spend_key) || (makeDefault ? providerKeyFor(owner, subject) : providerKeyFor(owner, subject, 'node')), prev ? prev.created_at : at, at);
+            });
             return await view(await getRow(owner, subject, 'node'));
         }
         // The stored key stays for a change of models or budget; a new provider or endpoint needs the key again.
@@ -134,14 +136,16 @@ function createCredentials({ db, config, clock = { now: () => Date.now() } }) {
             throw new AiError(400, 'credential.key_required', prev ? 'enter the key again to change the provider or its address' : 'key is required the first time');
         }
         const key = newKey != null ? newKey : await openRow(prev);
+        await db.tx(async () => {
         if (makeDefault) await db.prepare('UPDATE subject_credentials SET is_default = false WHERE owner = ? AND subject = ? AND provider <> ?').run(owner, subject, body.provider);
         await db.prepare(`INSERT INTO subject_credentials (owner, subject, provider, base_url, key_enc, key_hint, models, budget_usd_day, is_default, spend_key, created_at, updated_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(owner, subject, provider) DO UPDATE SET base_url = excluded.base_url, key_enc = excluded.key_enc,
-                      key_hint = excluded.key_hint, models = excluded.models, budget_usd_day = excluded.budget_usd_day, is_default = excluded.is_default, updated_at = excluded.updated_at`)
+                      key_hint = excluded.key_hint, models = excluded.models, budget_usd_day = excluded.budget_usd_day, is_default = subject_credentials.is_default OR excluded.is_default, updated_at = excluded.updated_at`)
             .run(owner, subject, body.provider, body.base_url || null, seal(key, aadFor(owner, subject, body.provider)), `…${key.slice(-4)}`, JSON.stringify(body.models || {}),
                 body.budget_usd_per_day ? Number(body.budget_usd_per_day) : null, makeDefault,
                 (prev && prev.spend_key) || (makeDefault ? providerKeyFor(owner, subject) : providerKeyFor(owner, subject, body.provider)), prev ? prev.created_at : at, at);
+        });
         return await view(await getRow(owner, subject, body.provider));
     }
 

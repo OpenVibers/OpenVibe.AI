@@ -132,6 +132,10 @@ t.test('one credential per provider: the legacy route is the default, each provi
     assert.strictEqual((await request(h.base, 'GET', `/api/v1/credentials/${FRAN}`, { tok: live })).body.provider, 'anthropic', 'the default is the v1 route');
     assert.strictEqual((await request(h.base, 'GET', `/api/v1/credentials/${FRAN}/anthropic`, { tok: live })).body.provider, 'anthropic');
     assert.strictEqual((await request(h.base, 'GET', `/api/v1/credentials/${FRAN}/deepseek`, { tok: live })).body.provider, 'deepseek', 'the other provider is still there');
+    // Changing the default's budget through its own provider route keeps it the default (the flag is not cleared).
+    r = await request(h.base, 'PUT', `/api/v1/credentials/${FRAN}/anthropic`, { tok: live, body: { budget_usd_per_day: 2, models: { chat: 'claude-haiku-4-5-20251001' } } });
+    assert.strictEqual(r.status, 200, r.text);
+    assert.strictEqual((await request(h.base, 'GET', `/api/v1/credentials/${FRAN}`, { tok: live })).body.provider, 'anthropic', 'still the default after a per-provider update');
     // A body that names another provider than the route is refused; an unknown provider is a miss.
     r = await request(h.base, 'PUT', `/api/v1/credentials/${FRAN}/deepseek`, { tok: live, body: { provider: 'anthropic', key: ANTHROPIC_KEY } });
     assert.deepStrictEqual([r.status, r.body.code], [422, 'input.invalid']);
