@@ -57,6 +57,11 @@ function grantedScopes(claims) {
     for (const s of list) if (typeof s === 'string' && SCOPE_RE.test(s)) out.add(s);
     const project = claims.project_slug || claims.project;
     if (typeof project === 'string' && /^[a-z0-9][a-z0-9._-]{0,63}$/.test(project)) out.add(`project:${project}`);
+    // A run that names its project in its namespace grant (project:demo or project.demo) may read that project's scope.
+    for (const n of Array.isArray(claims.ns) ? claims.ns : []) {
+        const m = /^project[:.]([a-z0-9][a-z0-9._-]{0,63})$/.exec(String(n));
+        if (m) out.add(`project:${m[1]}`);
+    }
     return out;
 }
 
@@ -502,8 +507,9 @@ function memoryRouter({ memory, auth, config, clock = { now: () => Date.now() },
                     now: clock.now(),
                     log,
                 });
-                if (!SUBJECT_RE.test(String(claims.subject_id || ''))) throw new AiError(401, 'token.invalid', 'the person token has no usr_ subject');
-                req.principal = { kind: 'user', sub: claims.sub, subject: { type: 'user', id: claims.subject_id }, claims };
+                const subject = SUBJECT_RE.test(String(claims.subject_id || '')) ? claims.subject_id : (SUBJECT_RE.test(String(claims.sub || '')) ? claims.sub : '');
+                if (!subject) throw new AiError(401, 'token.invalid', 'the person token has no usr_ subject');
+                req.principal = { kind: 'user', sub: claims.sub, subject: { type: 'user', id: subject }, claims };
                 return next();
             } catch (err) {
                 return http.sendProblem(res, err.status || 401, err.code || 'token.invalid', { detail: err.detail || 'invalid token', ctx });
