@@ -99,7 +99,7 @@ function routePinRequest(value, principal, wf) {
     return { provider, model };
 }
 
-function createRuns({ db, registry, engine, cache, quotas, config, clock = { now: () => Date.now() }, log = console, userModules = null, credentials = null, tiers = null, projectSecrets = null, pool = null }) {
+function createRuns({ db, registry, engine, cache, quotas, config, clock = { now: () => Date.now() }, log = console, userModules = null, credentials = null, tiers = null, projectSecrets = null, pool = null, runBudgets = null }) {
     const inflight = new Map();     // run id -> { controller, promise, release, caller }
     const queue = [];               // run ids waiting for the worker
     let active = 0;
@@ -247,8 +247,15 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             if (wf.key !== 'ai.complete') throw new AiError(422, 'input.invalid', 'a project provider is used for ai.complete only');
             if (!projectSecrets || !projectSecrets.available()) throw new AiError(503, 'project_secret.unavailable', 'project secrets are not configured on this service');
         }
+        // The budget a Codes run token carries (Codes C3): a run that is over its budget is refused before
+        // any provider call. The budget lives here, not in the token, so the holder of the token cannot raise it.
+        if (runBudgets && principal.jti) {
+            const refusal = await runBudgets.refuse(principal.jti);
+            if (refusal) throw refusal;
+        }
         const ctx = {
             requesterType: requester.type, requesterId: requester.id,
+            ...(principal.jti ? { runJti: principal.jti } : {}),
             actorKey: subjectKey(body.on_behalf_of), targetKey: entityKey(body.target), attributionKey: entityKey(body.attribution), workflowKey: wf.key,
             ...(app ? { appRun: true, projectId: app.projectId, sandbox: app.sandbox } : {}),
             ...(pinned ? { routePin: pinned } : {}),
@@ -426,6 +433,9 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             });
             if (!done.changes) return;       // cancelled while finishing
             if (r.provider && reserved) await quotas.account(ctx, reserved, { provider: r.provider, model: r.model, tokensIn: r.usage.input, tokensOut: r.usage.output, tokensCached: r.usage.cached, cost: r.cost, attempts: logged, runId: id, traceId: row.trace_id, hold });
+            // What the run spent goes on the budget of its run token (Codes C3): the same tokens and cost the
+            // quota accounting counts, so the next request of a run over its budget is refused.
+            if (runBudgets && ctx.runJti) await runBudgets.add(ctx.runJti, { tokens: r.usage.input + r.usage.output, cost: r.cost });
             if (r.fallbackUsed) await registry.audit('system', 'run.fallback', 'run', id, { trace: row.trace_id, metadata: { workflow: row.workflow_key, provider: r.provider, route: r.route && r.route.key } });
             // Output shaped by someone's preferences, or kept for nobody (history off), is never cached for reuse.
             if (scope && row.cache_key && !r.synthetic && wf.cache_mode !== 'none' && preferences.history !== false && !preferenceLines(preferences)) {
@@ -449,6 +459,8 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             // ones included) into provider_stats_daily/placement_state: a run that answered nothing still
             // tells the router a provider was unhealthy.
             if (reserved && logged.some((e) => e.status !== 'skipped')) await quotas.account(ctx, reserved, { provider: 'mixed', model: '', tokensIn: spent.ti, tokensOut: spent.tout, cost: spent.c, attempts: logged, writeUsage: Boolean(spent.ti || spent.tout), runId: id, traceId: row.trace_id, hold });
+            // A run that broke still spent (a refused turn, a half-written answer): it goes on the budget too.
+            if (runBudgets && ctx.runJti) await runBudgets.add(ctx.runJti, { tokens: Number(spent.ti) + Number(spent.tout), cost: Number(spent.c) });
         } finally {
             inflight.delete(id);
         }

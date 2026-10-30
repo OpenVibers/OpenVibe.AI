@@ -21,7 +21,7 @@ const ovServe = require('openvibe-shared/serve');
 const home = require('./home');
 const pkg = require('../package.json');
 
-function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, credentials = null, vault = null, benchEvents = null }) {
+function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, credentials = null, vault = null, benchEvents = null, runBudgets = null }) {
     const app = express();
     app.disable('x-powered-by');
     app.set('trust proxy', 'loopback');
@@ -110,6 +110,8 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
     app.use(require('./api/messages').messagesRouter({ runs, auth, config, log }));
     app.use(require('./api/attribution-quotas').attributionQuotasRouter({ db, quotas, auth, clock, sendError: (res, err, ctx) => sendError(res, err, ctx, log) }));
     if (credentials) app.use(require('./credentials').credentialsRouter({ credentials, auth, registry, sendError: (res, err, ctx) => sendError(res, err, ctx, log) }));
+    // The budget of a Codes run token (Codes C3): Codes registers it when it mints the token.
+    if (runBudgets) app.use(require('./api/run-budgets').runBudgetsRouter({ runBudgets, auth, log, sendError: (res, err, ctx) => sendError(res, err, ctx, log) }));
     app.use(adminRouter({ db, registry, pool, quotas, cache, runs, auth, ops, log }));
     // The operator console (/console, /auth/*): Network staff, server-rendered, no scripts (server/console).
     // Person sessions are separate, read-only and open one run receipt each (server/person-session.js).

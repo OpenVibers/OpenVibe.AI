@@ -17,6 +17,7 @@ const { createFetcher } = require('./fetcher');
 const { createEngine } = require('./workflows/engine');
 const { createCache } = require('./cache');
 const { createQuotas } = require('./quota');
+const { createRunBudgets } = require('./run-budgets');
 const { createFreeAllowance } = require('./free-allowance');
 const { createTiers } = require('./govern');
 const { createRuns } = require('./runs');
@@ -46,6 +47,8 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     // with the tiers on, its counter is in their Valkey store.
     const freeAllowance = createFreeAllowance(db, { cardsFor: pool.rateCardsFor, clock, store: tiers.freeStore });
     const quotas = createQuotas(db, { clock, registry, freeAllowance, tiers });
+    // The budget a Codes run token carries (Codes C3), and what that run has spent.
+    const runBudgets = createRunBudgets(db, { clock });
     const cache = createCache(db, { clock });
     const fetcher = createFetcher(config);
     // MegaSource (server/research/): the DeepSeek key resolves by name from this environment; tests hand in their own.
@@ -59,7 +62,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     // A person's own provider keys (WS-O task 2): stored by the service holding their consent, used by their runs only.
     const credentials = require('./credentials').createCredentials({ db, config, clock });
     const projectSecrets = require('./project-secrets').createProjectSecrets({ config, env, fetchImpl });
-    const runs = createRuns({ db, registry, engine, cache, quotas, config, clock, log, userModules, credentials, tiers, projectSecrets, pool });
+    const runs = createRuns({ db, registry, engine, cache, quotas, config, clock, log, userModules, credentials, tiers, projectSecrets, pool, runBudgets });
     await seed({ registry, quotas, config, env, db });
     const interrupted = await runs.recoverInterrupted();
     if (interrupted) log.warn(`[ai] marked ${interrupted} interrupted run(s) failed (run.interrupted); callers can retry them`);
@@ -71,7 +74,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     const auth = createAuth({ config, log });
     // The Events consumer side: a signed bench.rating.changed webhook, subscribed at boot (server/bench/events.js).
     const benchEvents = createBenchEvents({ bench, config, log, fetchImpl, clientSecret: env.OV_OAUTH_CLIENT_SECRET });
-    const app = createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, vault, benchEvents });
+    const app = createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, vault, benchEvents, runBudgets });
     let jwks = null;
     let keyLoaded = Promise.resolve(null);
     if (!keys.pinned && config.nodeEnv !== 'test') {

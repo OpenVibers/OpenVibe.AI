@@ -79,8 +79,8 @@ function createLiveStream(res) {
         sentAny: () => any,
         finished: (i) => finishedIdx.has(i),
         fail(message, code) {
-            const status = /^(input|validation)\./.test(code || '') ? 400 : /quota|allowance|budget/.test(code || '') ? 429 : 503;
-            write({ error: { message: String(message || 'error').slice(0, 1000), type: status === 400 ? 'invalid_request_error' : status === 429 ? 'rate_limit_error' : 'api_error', code: code || null, param: null } });
+            const status = code === 'ai.run_budget_reached' ? 402 : /^(input|validation)\./.test(code || '') ? 400 : /quota|allowance|budget/.test(code || '') ? 429 : 503;
+            write({ error: { message: String(message || 'error').slice(0, 1000), type: status === 400 ? 'invalid_request_error' : status === 429 ? 'rate_limit_error' : status === 402 ? 'insufficient_quota' : 'api_error', code: code || null, param: null } });
             return out.done();
         },
         done() { if (alive()) { res.write('data: [DONE]\n\n'); res.end(); } },
@@ -89,7 +89,7 @@ function createLiveStream(res) {
 }
 
 function openaiError(res, status, message, code, type) {
-    res.status(status).json({ error: { message: String(message || 'error').slice(0, 1000), type: type || (status === 401 || status === 403 ? 'authentication_error' : status === 429 ? 'rate_limit_error' : status >= 500 ? 'api_error' : 'invalid_request_error'), code: code || null, param: null } });
+    res.status(status).json({ error: { message: String(message || 'error').slice(0, 1000), type: type || (status === 401 || status === 403 ? 'authentication_error' : status === 429 ? 'rate_limit_error' : status === 402 ? 'insufficient_quota' : status >= 500 ? 'api_error' : 'invalid_request_error'), code: code || null, param: null } });
 }
 
 function openaiRouter({ runs, auth, config, log = console }) {
@@ -155,7 +155,7 @@ function openaiRouter({ runs, auth, config, log = console }) {
         }
         if (run.status === 'failed' || run.status === 'cancelled') {
             const code = (run.error && run.error.code) || 'run.failed';
-            const status = /^(input|validation)\./.test(code) ? 400 : /quota|allowance|budget/.test(code) ? 429
+            const status = code === 'ai.run_budget_reached' ? 402 : /^(input|validation)\./.test(code) ? 400 : /quota|allowance|budget/.test(code) ? 429
                 : code === 'project_secret.refused' ? 403 : code === 'credential.endpoint_refused' ? 422 : 503;
             return openaiError(res, status, (run.error && run.error.detail) || code, code);
         }
