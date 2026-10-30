@@ -32,8 +32,7 @@ function createRunBudgets(db, { clock = { now: () => Date.now() } } = {}) {
     const getRow = db.prepare('SELECT * FROM run_budgets WHERE jti = ?');
     const put = db.prepare(`INSERT INTO run_budgets (jti, budget_usd, budget_tokens, spent_usd, spent_tokens, expires_at, created_at, updated_at)
         VALUES (?, ?, ?, 0, 0, ?, ?, ?)
-        ON CONFLICT (jti) DO UPDATE SET budget_usd = excluded.budget_usd, budget_tokens = excluded.budget_tokens,
-            expires_at = excluded.expires_at, updated_at = excluded.updated_at`);
+        ON CONFLICT (jti) DO NOTHING`);
     const bump = db.prepare('UPDATE run_budgets SET spent_usd = spent_usd + ?, spent_tokens = spent_tokens + ?, updated_at = ? WHERE jti = ?');
     const drop = db.prepare('DELETE FROM run_budgets WHERE jti = ?');
 
@@ -70,8 +69,13 @@ function createRunBudgets(db, { clock = { now: () => Date.now() } } = {}) {
         const tokens = asLimit(budgetTokens);
         if (usd == null && tokens == null) return null;
         const exp = Math.round(Number(expiresAt)) || (nowSec() + 7200);
+        // Set once: the first registration wins. The same numbers again are an idempotent retry; other numbers are a
+        // conflict the caller is told about, never an update.
         await put.run(jti, usd, tokens == null ? null : Math.round(tokens), exp, nowIso(), nowIso());
-        return await getRow.get(jti);   // the row as it is stored: a budget that expired already is still a budget
+        const row = await getRow.get(jti);   // the row as it is stored: a budget that expired already is still a budget
+        const same = row && Number(row.budget_usd == null ? -1 : row.budget_usd) === (usd == null ? -1 : usd)
+            && Number(row.budget_tokens == null ? -1 : row.budget_tokens) === (tokens == null ? -1 : Math.round(tokens));
+        return same ? row : { ...row, conflict: true };
     }
 
     /**
