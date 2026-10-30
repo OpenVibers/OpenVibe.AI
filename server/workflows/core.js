@@ -111,6 +111,34 @@ const workflows = [
         steps: [{ kind: 'complete', route: 'default.chat' }], cache_mode: 'none',
     },
     {
+        // The Anthropic-compatible endpoint (POST /v1/messages, server/api/messages.js): the caller's Messages API request,
+        // tools and streaming included, passed to an upstream that speaks Anthropic's format; the run keeps its usage,
+        // cost and explain but not the prompt (passthrough). The output is the message it answered with.
+        key: 'ai.messages', name: 'Messages API (Anthropic-compatible)', namespace: 'ai',
+        input_schema: OBJ({
+            messages: { type: 'array', minItems: 1, maxItems: 500, items: { type: 'object', required: ['role'], properties: {
+                role: { enum: ['user', 'assistant'] },
+                content: { anyOf: [STR(400000), { type: 'array', maxItems: 500 }, { type: 'null' }] },
+            } } },
+            system: { anyOf: [STR(400000), { type: 'array', maxItems: 500, items: { type: 'object' } }] },
+            tools: { type: 'array', maxItems: 128, items: { type: 'object' } },
+            tool_choice: { type: 'object' },
+            max_tokens: { type: 'integer', minimum: 1, maximum: 64000 },
+            stop_sequences: { type: 'array', maxItems: 8, items: STR(200) },
+            temperature: { type: ['number', 'null'], minimum: 0, maximum: 1 },
+            top_p: { type: ['number', 'null'], minimum: 0, maximum: 1 },
+            top_k: { type: ['integer', 'null'], minimum: 0 },
+            metadata: { type: 'object' },
+        }, ['messages', 'max_tokens']),
+        output_schema: OBJ({
+            id: STR(200), type: STR(20), role: STR(20), model: { type: ['string', 'null'] },
+            content: { type: 'array', minItems: 1, maxItems: 500, items: { type: 'object' } },
+            stop_reason: { type: ['string', 'null'] }, stop_sequence: { type: ['string', 'null'] }, usage: { type: 'object' },
+        }, ['content']),
+        metadata: { passthrough: true },
+        steps: [{ kind: 'messages', route: 'default.messages' }], cache_mode: 'none',
+    },
+    {
         // Off until AI_IMAGE_MODEL seeds route default.image: without it a run answers 503 route.unavailable.
         key: 'ai.image', name: 'Generate an image', namespace: 'ai',
         input_schema: OBJ({ prompt: STR(4000), size: { type: 'string', pattern: '^[0-9]{3,4}x[0-9]{3,4}$' }, n: { type: 'integer', minimum: 1, maximum: 4 } }, ['prompt']),

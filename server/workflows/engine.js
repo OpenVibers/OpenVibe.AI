@@ -213,6 +213,27 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
         return { output: { choices: c.choices, system_fingerprint: c.system_fingerprint || null, model: exec.model }, exec, route };
     }
 
+    /**
+     * messages: the caller's Anthropic Messages API request as they wrote it (ai.messages, POST /v1/messages), to an
+     * upstream that speaks that format. The run's output is the message (consumed by server/api/messages.js).
+     */
+    async function messagesStep(step, input, wf, run, ctx) {
+        const route = await routeFor(step.route || 'default.messages');
+        const req = {
+            messages: input.messages,
+            maxTokens: Math.max(1, Math.round(input.max_tokens || route.max_output_tokens || 1024)),
+            timeoutMs: Math.max(route.timeout_ms || 0, 120000),
+            ...(typeof ctx.onDelta === 'function' ? { onDelta: ctx.onDelta } : {}),
+        };
+        for (const k of ['system', 'tools', 'tool_choice', 'stop_sequences', 'temperature', 'top_p', 'top_k', 'metadata']) {
+            if (input[k] !== undefined) req[k] = input[k];
+        }
+        const exec = await pool.execute(route, 'messages', req, { ...ctx, routeKey: route.key, routeVersion: route.version, promptHash: sha256({ m: input.messages, t: input.tools || null }) });
+        const m = exec.result.message;
+        if (!m || !Array.isArray(m.content)) throw new AiError(502, 'output.empty', 'the provider answered, but not with a message');
+        return { output: { ...m, model: m.model || exec.model }, exec, route };
+    }
+
     async function transcribeStep(step, input, wf, run, ctx) {
         const route = await routeFor(step.route || 'live.stt');
         // Read where it lies (the loopback reader), one window at a time: start_sec seeks with a range request, and
@@ -277,7 +298,7 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
         return { cited: [], gaps: gaps.slice(0, 20), read: (output && output.sources ? output.sources.length : 0) };
     }
 
-    const STEP = { llm: llmStep, passthrough: passthroughStep, complete: completeStep, transcribe: transcribeStep, embed: embedStep, image: imageStep, media_analysis: mediaAnalysis.step, research: researchStep };
+    const STEP = { llm: llmStep, passthrough: passthroughStep, complete: completeStep, messages: messagesStep, transcribe: transcribeStep, embed: embedStep, image: imageStep, media_analysis: mediaAnalysis.step, research: researchStep };
 
     /**
      * Run a workflow. ctx: { signal, logRequest, debugRaw, inputHash }

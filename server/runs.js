@@ -231,11 +231,13 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         }
         const options = body.options && typeof body.options === 'object' ? body.options : {};
         // A person's own key (WS-O task 2): only the service that stored it, within its daily budget; never cached.
+        // A person's own key: the default one, or the provider the run names (Codes C3: one credential per provider).
         const credentialSubject = body.credential && typeof body.credential === 'object' ? String(body.credential.subject || '') : null;
+        const credentialProvider = body.credential && typeof body.credential === 'object' && body.credential.provider != null ? String(body.credential.provider) : null;
         if (credentialSubject !== null) {
             if (!credentials) throw new AiError(503, 'credentials.unavailable', 'person credentials are not configured on this service');
             if (requester.type !== 'service') throw new AiError(403, 'capability.denied', 'only the service that stored a credential runs with it');
-            await credentials.admit(requester.id, credentialSubject);
+            await credentials.admit(requester.id, credentialSubject, credentialProvider);
         }
         // An app's own provider (ADR-056 project secret): only on ai.complete, only for an app; its key spends the
         // project's money at its provider, so no tier budget holds it (the app's quotas still count it).
@@ -266,7 +268,8 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             target: body.target ? JSON.stringify(body.target) : null, target_key: ctx.targetKey,
             input: null, input_hash: inputHash, idempotency_key: idem, trace_id: trace, request_id: requestId, retry_of: retryOf,
             options: JSON.stringify({ cache: options.cache !== false && credentialSubject === null && !projectProvider && !pinned, debug: Boolean(options.debug), input_retained: kept.full,
-                ...(credentialSubject !== null ? { credential_subject: credentialSubject } : {}), ...(projectProvider ? { project_provider: projectProvider } : {}), ...(pinned ? { pinned_offer: pinned } : {}) }), created_at: now,
+                ...(credentialSubject !== null ? { credential_subject: credentialSubject } : {}), ...(credentialProvider !== null ? { credential_provider: credentialProvider } : {}),
+                ...(projectProvider ? { project_provider: projectProvider } : {}), ...(pinned ? { pinned_offer: pinned } : {}) }), created_at: now,
         };
         base.input = stableStringify(kept.value);
 
@@ -397,7 +400,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             if (preferences.history === false) {
                 await db.prepare("UPDATE runs SET input = 'null', cache_key = NULL, options = (COALESCE(options, '{}')::jsonb || jsonb_build_object('input_retained', false, 'history', false))::text WHERE id = ?").run(id);
             }
-            const credential = opts.credential_subject ? await credentials.forRun(row.requester_id, opts.credential_subject)
+            const credential = opts.credential_subject ? await credentials.forRun(row.requester_id, opts.credential_subject, opts.credential_provider || null)
                 : opts.project_provider ? await projectCredential(opts.project_provider, ctx) : null;
             const r = await engine.execute(wf, row, input, { signal: controller.signal, logRequest, debugRaw: Boolean(config.debugRawLog && opts.debug), inputHash: row.input_hash, preferences,
                 // A developer app's run (ADR-014): the provider pool excludes a person's byok key, and the run is

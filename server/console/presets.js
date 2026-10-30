@@ -16,6 +16,10 @@ const PRESETS = [
     { id: 'xai', name: 'xAI', kind: 'openai', base_url: 'https://api.x.ai/v1', model: '', keys: 'https://console.x.ai/' },
     { id: 'openai', name: 'OpenAI', kind: 'openai', base_url: 'https://api.openai.com/v1', model: 'gpt-5-mini', keys: 'https://platform.openai.com/api-keys' },
     { id: 'anthropic', name: 'Anthropic', kind: 'anthropic', base_url: 'https://api.anthropic.com/v1', model: '', keys: 'https://console.anthropic.com/settings/keys' },
+    // Anthropic-format endpoints of providers that also speak the OpenAI format (Codes C3): POST /v1/messages reaches
+    // these as they are, an OpenAI-shaped record never is converted.
+    { id: 'deepseek-anthropic', name: 'DeepSeek (Anthropic format)', kind: 'anthropic', base_url: 'https://api.deepseek.com/anthropic', model: 'deepseek-chat', keys: 'https://platform.deepseek.com/api_keys' },
+    { id: 'minimax-anthropic', name: 'MiniMax (Anthropic format)', kind: 'anthropic', base_url: 'https://api.minimax.io/anthropic', model: 'MiniMax-M2', keys: 'https://platform.minimax.io/user-center/basic-information/interface-key' },
     { id: 'custom', name: 'Another OpenAI-compatible API', kind: 'openai', base_url: '', model: '', keys: null },
 ];
 

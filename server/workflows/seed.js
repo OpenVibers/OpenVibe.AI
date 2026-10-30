@@ -6,7 +6,7 @@
  *              AI_MODEL), http-seam (AI_HTTP_SEAM_URL), whisper (WHISPER_*), local (AI_LOCAL_LLM_URL)
  *              — records whose origin is 'seed' follow the environment; admin-edited ones are left alone
  *   models     the configured default model
- *   routes     live.<role> for Live's roles, live.stt, live.creative (AI_CREATIVE_MODEL), default.chat|json|embedding and media.local|paid
+ *   routes     live.<role> for Live's roles, live.stt, live.creative (AI_CREATIVE_MODEL), default.chat|json|messages|embedding and media.local|paid
  *              as capability pools ordered by openvibe-sdk/placement; and the historical
  *              product route keys as explicit aliases of default.json
  *   templates, workflows   from server/workflows/{live,core,products,media,chat}.js — a code change becomes a
@@ -134,6 +134,10 @@ async function seed({ registry, quotas, config, env = process.env, db }) {
     // embeddings without a local model), an unavailable sole provider still answers the explicit 503.
     await registry.seedVersioned('route', 'live.stt', pool(600000, { 'capability': 'transcribe', constraints: { objective: 'balanced' } }));
     await registry.seedVersioned('route', 'default.chat', pool(30000, { max_output_tokens: 800 }));
+    // POST /v1/messages (Codes C3): only providers that speak Anthropic's Messages API join this pool — the shared
+    // provider when it is Anthropic's own API, DeepSeek's and MiniMax's Anthropic-compatible endpoints, and any record an
+    // admin adds as kind anthropic. The others are skipped as unsupported, never converted.
+    await registry.seedVersioned('route', 'default.messages', pool(120000, { constraints: { objective: 'correctness', latency_class: 'interactive' }, max_output_tokens: 8192 }));
     await registry.seedVersioned('route', 'default.json', pool(60000, { options: { temperature: 0.3 }, max_output_tokens: 2400, response_format: 'json' }));
     await registry.seedVersioned('route', 'default.embedding', pool(30000, { 'capability': 'embed', constraints: { objective: 'balanced' } }));
     // media.analyze (WS-O task 5): the local model when there is one; the paid route is used only under a media.paid budget.
