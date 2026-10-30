@@ -23,6 +23,7 @@
 const express = require('express');
 const { CAPS } = require('../auth');
 const { appAttribution } = require('../apps');
+const { credentialFor } = require('./credential');
 
 const FIELDS = ['system', 'tools', 'tool_choice', 'stop_sequences', 'temperature', 'top_p', 'top_k', 'metadata'];
 const MAX_TOKENS = 64000;
@@ -105,18 +106,6 @@ function replay(res, message, run) {
     });
     res.emit('message_delta', { type: 'message_delta', delta: { stop_reason: message.stop_reason || 'end_turn', stop_sequence: message.stop_sequence || null }, usage: { output_tokens: u.output_tokens != null ? u.output_tokens : (run.usage && run.usage.tokens_out) || 0 } });
     res.emit('message_stop', { type: 'message_stop' });
-}
-
-/** x-openvibe-credential: <provider> or <provider>:<subject>, or nothing (the router picks). */
-function credentialFor(req) {
-    const raw = String(req.get('x-openvibe-credential') || '').trim();
-    if (!raw) return {};
-    const m = /^([a-z]+)(?::(.+))?$/.exec(raw);
-    if (!m) return { status: 400, error: 'x-openvibe-credential must be <provider> or <provider>:<subject>' };
-    const provider = m[1];
-    const subject = m[2] || (req.principal && req.principal.claims && req.principal.claims.on_behalf_of) || null;
-    if (!subject) return { status: 400, error: `x-openvibe-credential ${provider} needs the person whose key it is: send <provider>:<subject>, or use a token that acts for them (on_behalf_of)` };
-    return { credential: { subject, provider } };
 }
 
 function messagesRouter({ runs, auth, config, log = console }) {
