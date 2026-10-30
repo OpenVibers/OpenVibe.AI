@@ -161,6 +161,21 @@ route('post', '/research', {
     responses: { 201: json('Finished', ref('RunResponse')), 202: json('Still running', ref('RunResponse')), 200: json('Replay', ref('RunResponse')), ...errors() },
 });
 
+// ── The budget of a run token (Codes C3) ────────────────────────────────────────────────────
+route('put', '/run-budgets/{jti}', {
+    operationId: 'putRunBudget', summary: "Register the budget of a run token", tags: ['runs'], security: SERVICE,
+    description: "ai.run.create. The budget the service that minted a run token gives it: OpenVibe.AI counts every request of that token against it and refuses the request after the budget is spent (402 ai.run_budget_reached). A token without a budget is never capped.",
+    parameters: [path('jti', str(), "The run token's own id")],
+    requestBody: body({ type: 'object', properties: { budget_usd: nullable('number'), budget_tokens: nullable('integer'), expires_at: nullable('integer') } }),
+    responses: { 200: json('The budget', { type: 'object', required: ['jti'], properties: { jti: str(), budget_usd: nullable('number'), budget_tokens: nullable('integer'), expires_at: integer() } }), ...errors([401, 403, 422]) },
+});
+route('get', '/run-budgets/{jti}', {
+    operationId: 'getRunBudget', summary: 'What a run token may spend, and what it has spent', tags: ['runs'], security: SERVICE,
+    description: 'ai.run.create. The counter of one run token: the budget it carries and what the run spent against it.',
+    parameters: [path('jti', str(), "The run token's own id")],
+    responses: { 200: json('The budget and the spend', { type: 'object', required: ['jti'], properties: { jti: str(), budget_usd: nullable('number'), budget_tokens: nullable('integer'), spent_usd: nullable('number'), spent_tokens: nullable('integer'), expires_at: nullable('integer'), reached: { type: 'boolean' } } }), ...errors([401, 403, 422]) },
+});
+
 // ── Action Center ────────────────────────────────────────────────────────────────────────────
 route('get', '/actions', {
     operationId: 'listActions', summary: 'The Action Center items for one person', tags: ['actions'], security: SERVICE,

@@ -41,7 +41,7 @@ function errorType(status) {
 }
 
 function anthropicError(res, status, message, type) {
-    res.status(status).json({ type: 'error', error: { type: type || errorType(status), message: String(message || 'error').slice(0, 1000) } });
+    res.status(status).json({ type: 'error', error: { type: type || errorType(status), message: String(message || 'error').slice(0, 1000), code: status === 402 ? 'ai.run_budget_reached' : null } });
 }
 
 /**
@@ -82,8 +82,8 @@ function createEventStream(res) {
         sentAny: () => any,
         get stopped() { return stopped; },
         fail(message, code) {
-            const status = /^(input|validation)\./.test(code || '') ? 400 : /quota|allowance|budget/.test(code || '') ? 429 : 529;
-            emit('error', { type: 'error', error: { type: errorType(status), message: String(message || 'error').slice(0, 1000) } });
+            const status = code === 'ai.run_budget_reached' ? 402 : /^(input|validation)\./.test(code || '') ? 400 : /quota|allowance|budget/.test(code || '') ? 429 : 529;
+            emit('error', { type: 'error', error: { type: errorType(status), message: String(message || 'error').slice(0, 1000), code: code || null } });
             return out.done();
         },
         done() { if (alive()) res.end(); },
@@ -163,7 +163,7 @@ function messagesRouter({ runs, auth, config, log = console }) {
         }
         if (run.status === 'failed' || run.status === 'cancelled') {
             const code = (run.error && run.error.code) || 'run.failed';
-            const status = /^(input|validation)\./.test(code) ? 400 : /quota|allowance|budget/.test(code) ? 429
+            const status = code === 'ai.run_budget_reached' ? 402 : /^(input|validation)\./.test(code) ? 400 : /quota|allowance|budget/.test(code) ? 429
                 : code === 'credential.unsupported' ? 422 : code === 'credential.not_found' ? 404 : 529;
             return anthropicError(res, status, (run.error && run.error.detail) || code);
         }
