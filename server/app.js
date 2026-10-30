@@ -106,6 +106,8 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
     app.use(actionsRouter({ runs, registry, auth, log }));
     // The OpenAI-compatible endpoint (POST /v1/chat/completions, GET /v1/models): runs of ai.complete.
     app.use(require('./api/openai').openaiRouter({ runs, auth, config, log }));
+    // The Anthropic-compatible endpoint (POST /v1/messages, GET /v1/models): runs of ai.messages (Codes C3).
+    app.use(require('./api/messages').messagesRouter({ runs, auth, config, log }));
     app.use(require('./api/attribution-quotas').attributionQuotasRouter({ db, quotas, auth, clock, sendError: (res, err, ctx) => sendError(res, err, ctx, log) }));
     if (credentials) app.use(require('./credentials').credentialsRouter({ credentials, auth, registry, sendError: (res, err, ctx) => sendError(res, err, ctx, log) }));
     app.use(adminRouter({ db, registry, pool, quotas, cache, runs, auth, ops, log }));

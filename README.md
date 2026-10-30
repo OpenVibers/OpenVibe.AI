@@ -23,7 +23,8 @@ owns publication truth: Wiki, Blog, News, Live, … decide what to publish.
   prompt templates, workflow definitions, runs, the request log (hashes, not prompts), citations, the
   cache, quotas and usage, and the audit log, in AI's own PostgreSQL database (`ov_ai`, ADR-035; schema in
   [migrations/](migrations/))
-- people's own provider keys (`ai.credential.manage`), encrypted at rest, and per-streamer
+- people's own provider keys (`ai.credential.manage`), encrypted at rest, one per provider (Codes C3: `anthropic`,
+  `openai`, `deepseek`, `minimax`, `openrouter` or a `custom` endpoint), and per-streamer
   attribution quotas (`ai.quota.attribution.manage`)
 - a person's own computer as their provider (credential provider `node`, contracts 0.220.0): a model on their own
   machine (Ollama, LM Studio, llama.cpp through the OpenVibe Node), reached through OpenVibe.Bot with `bot.machine.ai`
@@ -55,7 +56,7 @@ owns publication truth: Wiki, Blog, News, Live, … decide what to publish.
 
 Implemented here (the service manifest's `capabilities`, audience `openvibe.ai`; routes under
 [API](#api)): `ai.run.create`, `ai.run.read`, `ai.workflow.manage`, `ai.provider.manage`,
-`ai.usage.read`, `ai.credential.manage` (`/api/v1/credentials/:subject`),
+`ai.usage.read`, `ai.credential.manage` (`/api/v1/credentials/:subject[/:provider]`),
 `ai.quota.attribution.manage` (per-streamer quotas) and `ai.app.run` (developer apps, ADR-014; public,
 registered since openvibe-contracts 0.109.0). A service token's `ns`
 claim limits which workflow namespaces it may run; an app token is fixed to its project's.
@@ -201,6 +202,29 @@ coding agents, Codes' harnesses) points its base URL at `https://ai.openvibe.ser
     not https answers 400, and a first-party service token naming a provider answers 403.
   - Production app runs that use the router are limited to free and local capacity (see Developer apps). Today that is
     a small local model without tools, so a coding agent's loop needs its project's own provider.
+
+## Anthropic-compatible endpoint
+
+`POST /v1/messages` and `GET /v1/models` (`server/api/messages.js`), so a client built for Anthropic's Messages API
+(Claude Code, an SDK) points `ANTHROPIC_BASE_URL` at `https://ai.openvibe.services` and works (Codes C3).
+
+- **Tokens:** the same Network tokens as `POST /v1/chat/completions`: an app's (`ai.app.run`; its project pays and owns the
+  run) or a first-party service's (`ai.run.create`).
+- **Request:** Anthropic's Messages API as written: `messages`, `system`, `tools`, `tool_choice`, `stop_sequences`,
+  `temperature`, `top_p`, `top_k`, `max_tokens`, `metadata`, `stream`.
+- **The person's own key:** `x-openvibe-credential: <provider>` uses that person's credential for that provider
+  (`anthropic`, `deepseek`, `minimax`, `openrouter` or a `custom` endpoint) instead of the router. The person is
+  `<provider>:<subject>`, or the token's `on_behalf_of` (an agent acting for them). Without the header the router picks an
+  upstream that speaks Anthropic's format (Anthropic, DeepSeek's and MiniMax's Anthropic-compatible endpoints); an
+  OpenAI-format provider is never converted.
+- **Answer:** a `message` (`id`, `role`, `model`, `content`, `stop_reason`, `usage`), and the run id in
+  `X-OpenVibe-Run-Id`.
+- **Streaming:** `stream: true` answers Anthropic's own server-sent events as they arrive (`message_start`,
+  `content_block_start`, `content_block_delta`, `content_block_stop`, `message_delta`, `message_stop`, `ping`); the run
+  still ends with the whole message.
+- **Each request is a run** of workflow `ai.messages` (step kind `messages`): the run's quota, free allowance, cost,
+  audit and explain apply, and the prompt is not kept. Errors are Anthropic's shape
+  (`{ "type": "error", "error": { "type", "message" } }`).
 
 ## Developer apps
 
@@ -697,7 +721,7 @@ ai.openvibe.network notice from OpenVibe.Sites.
 Part of the [OpenVibe network](https://openvibe.network). Built in the open by [OpenVibers](https://github.com/OpenVibers).
 
 <!-- versions:start -->
-- openvibe-contracts: v0.229.0
+- openvibe-contracts: v0.241.0
 - openvibe-sdk: v0.67.0
 - openvibe-shared: v4.48.0
 <!-- versions:end -->

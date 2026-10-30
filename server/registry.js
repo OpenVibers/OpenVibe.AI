@@ -15,7 +15,7 @@ const { provenance } = require('./providers/rate-cards');
 
 const PROVIDER_KINDS = ['stub', 'openai', 'responses', 'anthropic', 'http', 'whisper'];
 const BILLING_PROFILES = ['metered', 'subscription', 'payg', 'free', 'byok'];
-const FEATURES = ['chat', 'complete', 'generate', 'summarize', 'classify', 'extract', 'enrich', 'embed', 'vision', 'json', 'tools', 'transcribe', 'image'];
+const FEATURES = ['chat', 'complete', 'messages', 'generate', 'summarize', 'classify', 'extract', 'enrich', 'embed', 'vision', 'json', 'tools', 'transcribe', 'image'];
 const LIFECYCLE = ['draft', 'active', 'deprecated', 'archived'];
 const KEY_RE = /^[a-z][a-z0-9_-]*(\.[a-z0-9_-]+)*$/;
 const flag = (v) => v === true || v === 1 || /^(1|true|yes|on)$/i.test(String(v == null ? '' : v));
@@ -350,7 +350,7 @@ function createRegistry(db, { clock = { now: () => Date.now() }, env = process.e
         schemas.assertSchema(w.output_schema, 'output_schema');
         if (!Array.isArray(w.steps) || !w.steps.length) throw new AiError(422, 'ai.invalid', 'workflow needs at least one step');
         for (const s of w.steps) {
-            if (!s || !['llm', 'passthrough', 'complete', 'transcribe', 'embed', 'image', 'media_analysis', 'research'].includes(s.kind)) throw new AiError(422, 'ai.invalid', 'step kind must be llm, passthrough, complete, transcribe, embed, image, media_analysis or research');
+            if (!s || !['llm', 'passthrough', 'complete', 'messages', 'transcribe', 'embed', 'image', 'media_analysis', 'research'].includes(s.kind)) throw new AiError(422, 'ai.invalid', 'step kind must be llm, passthrough, complete, messages, transcribe, embed, image, media_analysis or research');
             if ((s.kind === 'llm' || (s.kind === 'media_analysis' && s.template)) && !(s.template && await latestAny('templates', s.template))) throw new AiError(422, 'ai.invalid', `step references unknown template ${s.template}`);
         }
         if (!['none', 'private', 'service'].includes(w.cache_mode)) throw new AiError(422, 'ai.invalid', 'cache_mode must be none, private or service');

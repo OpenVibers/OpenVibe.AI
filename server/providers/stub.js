@@ -179,12 +179,55 @@ function createStubProvider(record = { key: 'stub', metadata: {} }, { stats = nu
         return { completion: { choices: [{ index: 0, message: { role: 'assistant', content: text }, finish_reason: 'stop' }] }, text, model: req.model || 'stub-1', synthetic: true, usage: { input: inTok, output: approxTokens(text), cached: 0, estimated: true } };
     }
 
+    /** messages: an Anthropic-shaped answer, streamed as Anthropic's own events when asked (POST /v1/messages). */
+    async function messages(req) {
+        const msgs = Array.isArray(req.messages) ? req.messages : [];
+        const last = msgs[msgs.length - 1] || {};
+        const rnd = seeded(`messages:${JSON.stringify(msgs).slice(-2000)}`);
+        const inTok = msgs.reduce((n, m) => n + approxTokens(typeof m.content === 'string' ? m.content : JSON.stringify(m.content || '')), 0)
+            + approxTokens((Array.isArray(req.system) ? req.system : []).map(x => x && x.text).join(''));
+        const hasResult = Array.isArray(last.content) && last.content.some(c => c && c.type === 'tool_result');
+        const tool = Array.isArray(req.tools) && req.tools.length && !hasResult && !(req.tool_choice && req.tool_choice.type === 'none') ? req.tools[0] : null;
+        const model = req.model || 'stub-1';
+        const digest = crypto.createHash('sha256').update(JSON.stringify(msgs)).digest('hex').slice(0, 24);
+        let content;
+        let stop;
+        if (tool && tool.name) {
+            content = [{ type: 'tool_use', id: `toolu_${digest}`, name: tool.name, input: tool.input_schema ? synthesize(tool.input_schema, rnd, 0, 'input') : {} }];
+            stop = 'tool_use';
+        } else {
+            const text = hasResult ? `(synthetic) the tool answered: ${String(last.content.find(c => c && c.type === 'tool_result').content || '').slice(0, 80)}` : `(synthetic) ${phrase(rnd, 8)}`;
+            content = [{ type: 'text', text }];
+            stop = 'end_turn';
+        }
+        const outTok = approxTokens(JSON.stringify(content));
+        const message = { id: `msg_${digest}`, type: 'message', role: 'assistant', model, content, stop_reason: stop, stop_sequence: null,
+            usage: { input_tokens: inTok, output_tokens: outTok, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } };
+        if (typeof req.onDelta === 'function') {
+            req.onDelta({ event: 'message_start', data: { type: 'message_start', message: { ...message, content: [], stop_reason: null, usage: { ...message.usage, output_tokens: 0 } } } });
+            content.forEach((block, index) => {
+                if (block.type === 'text') {
+                    req.onDelta({ event: 'content_block_start', data: { type: 'content_block_start', index, content_block: { type: 'text', text: '' } } });
+                    for (const piece of block.text.split(/(?<= )/)) req.onDelta({ event: 'content_block_delta', data: { type: 'content_block_delta', index, delta: { type: 'text_delta', text: piece } } });
+                } else {
+                    req.onDelta({ event: 'content_block_start', data: { type: 'content_block_start', index, content_block: { ...block, input: {} } } });
+                    req.onDelta({ event: 'content_block_delta', data: { type: 'content_block_delta', index, delta: { type: 'input_json_delta', partial_json: JSON.stringify(block.input || {}) } } });
+                }
+                req.onDelta({ event: 'content_block_stop', data: { type: 'content_block_stop', index } });
+            });
+            req.onDelta({ event: 'message_delta', data: { type: 'message_delta', delta: { stop_reason: stop, stop_sequence: null }, usage: { output_tokens: outTok } } });
+            req.onDelta({ event: 'message_stop', data: { type: 'message_stop' } });
+        }
+        return { message, text: content.filter(c => c.type === 'text').map(c => c.text).join(''), model, synthetic: true, usage: { input: inTok, output: outTok, cached: 0, estimated: true } };
+    }
+
     const adapter = {
         key: record.key,
         kind: 'stub',
         synthetic: true,
         supports: () => true,
         complete,
+        messages,
         transcribe: async (req) => await run('transcribe', req),
         embed: async (req) => await run('embed', req),
         image: async (req) => await run('image', req),

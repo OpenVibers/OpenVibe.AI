@@ -5,6 +5,8 @@
  *
  *   sseEvents(body)       async iterator of the JSON objects in `data:` lines, until `data: [DONE]` (a web
  *                         ReadableStream or any async iterable of bytes)
+ *   sseFrames(body)       async iterator of { event, data } for a stream that names its events (`event: message_start`),
+ *                         as Anthropic's Messages API does, until the stream ends
  *   createAccumulator()   add(choiceDelta) for each chunk's choices; result() → the choices as a non-streamed answer
  *                         (content concatenated, tool calls assembled by index with their arguments joined)
  */
@@ -27,6 +29,48 @@ async function* sseEvents(body) {
             yield obj;
         }
     }
+}
+
+/**
+ * Server-sent events that carry their own name, as Anthropic's Messages API does:
+ *
+ *   event: content_block_delta
+ *   data: {"type":"content_block_delta",...}
+ *
+ * Yields { event, data } per frame (data parsed, null when it is not JSON). The frame's `event:` line wins; a stream that
+ * sends only `data:` (some Anthropic-compatible endpoints) is named by the data object's own `type`.
+ */
+async function* sseFrames(body) {
+    const dec = new TextDecoder();
+    let buf = '';
+    let event = null;
+    let data = [];
+    const flush = () => {
+        const out = { event, data: null };
+        const raw = data.join('\n').trim();
+        if (raw && raw !== '[DONE]') { try { out.data = JSON.parse(raw); } catch { out.data = null; } }
+        event = null;
+        data = [];
+        return raw === '[DONE]' ? null : out;
+    };
+    for await (const part of body) {
+        buf += dec.decode(part, { stream: true });
+        let i;
+        while ((i = buf.indexOf('\n')) >= 0) {
+            const line = buf.slice(0, i).replace(/\r$/, '');
+            buf = buf.slice(i + 1);
+            if (line === '') {
+                const frame = flush();
+                if (frame === null) return;
+                if (frame.event || frame.data) yield frame;
+                continue;
+            }
+            if (line.startsWith('event:')) event = line.slice(6).trim();
+            else if (line.startsWith('data:')) data.push(line.slice(5).trimStart());
+        }
+    }
+    const last = flush();
+    if (last && (last.event || last.data)) yield last;
 }
 
 function createAccumulator() {
@@ -62,4 +106,4 @@ function createAccumulator() {
     };
 }
 
-module.exports = { sseEvents, createAccumulator };
+module.exports = { sseEvents, sseFrames, createAccumulator };

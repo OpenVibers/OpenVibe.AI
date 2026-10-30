@@ -14,6 +14,7 @@ const SRC = (n) => Array.from({ length: n }, (_, i) => ({ source_type: 'news.art
 const PASS = { role: 'chat', kind: 'chat_global', system: [{ text: 'You summarize chat.', cache: true }], user: 'Summarize: hi all', max_tokens: 80 };
 
 const EXAMPLES = {
+    'ai.messages': { max_tokens: 64, messages: [{ role: 'user', content: 'Say hello' }] },
     'live.translate': { text: 'こんにちは、みなさん', from: 'ja', to: 'en', context: 'chat' },
     'live.paste.describe_image': { title: 'my screenshot', image: { data_url: PNG } },
     'live.paste.summarize_text': { title: 'notes', content: 'A list of things to buy: eggs, milk.' },

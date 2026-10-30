@@ -21,3 +21,15 @@ description = "Made-up provider key in test/provider-responses.test.js (asserts 
 condition = "AND"
 paths = ['''^test/provider-responses\.test\.js$''']
 regexes = ['''^sk-resp-secret-0123456789$''']
+
+[[allowlists]]
+description = "Made-up provider keys in test/credentials.test.js (Codes C3: one key per provider, the AAD, the upgrade of an old row and the 'a key is never in a log line' test; placeholders, not secrets)"
+condition = "AND"
+paths = ['''^test/credentials\.test\.js$''']
+regexes = ['''^sk-test-deepseek-0123456789$''', '''^sk-ant-test-0123456789FGHI$''', '''^sk-test-gus-0123456789ABCD$''', '''^sk-test-helen-0123456789JKLM$''', '''^sk-test-ivan-LEAKME-0123456789$''']
+
+[[allowlists]]
+description = "Made-up provider key in test/messages-api.test.js (the person's own Anthropic key on POST /v1/messages; a placeholder, not a secret)"
+condition = "AND"
+paths = ['''^test/messages-api\.test\.js$''']
+regexes = ['''^sk-ant-test-person-0123456789$''']

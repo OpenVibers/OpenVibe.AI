@@ -45,7 +45,7 @@ function tmpDir() {
 // A boot on a dir used before is a restart on the same database: its database stays open.
 const restartable = new Map();
 
-async function boot({ env = {}, dir, clock, fetchImpl, credentialFetch, research, machineModels } = {}) {
+async function boot({ env = {}, dir, clock, fetchImpl, credentialFetch, research, machineModels, log } = {}) {
     const reuse = dir !== undefined;
     if (dir === undefined) dir = tmpDir();
     const fullEnv = {
@@ -59,7 +59,7 @@ async function boot({ env = {}, dir, clock, fetchImpl, credentialFetch, research
     if (reuse) restartable.set(dir, testdb);
     // Research reads a canned web (test/fixtures/research-fetch.js) unless a test brings its own: no test reaches the internet.
     const researcher = research || require('../server/research').createResearch({ config: config.research, env: {}, fetchImpl: require('./fixtures/research-fetch').createResearchFetch().fetchImpl, log: silent });
-    const h = await start({ config, db: testdb.db, env: fullEnv, log: silent, clock, fetchImpl, credentialFetch, research: researcher, machineModels });
+    const h = await start({ config, db: testdb.db, env: fullEnv, log: log || silent, clock, fetchImpl, credentialFetch, research: researcher, machineModels });
     const base = `http://127.0.0.1:${h.server.address().port}`;
     return { ...h, base, dir, env: fullEnv, testdb, stop: async () => { await h.close(); if (!reuse) await testdb.close(); } };
 }

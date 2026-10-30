@@ -43,6 +43,9 @@ function rateLimited(err) {
     return (err && err.status === 429) || (err && err.code === 'provider.rate_limited');
 }
 
+/** The model a person's credential uses when they stored none, per provider (executeWithCredential). */
+const CREDENTIAL_DEFAULT_MODEL = { anthropic: 'claude-haiku-4-5-20251001', openai: 'gpt-4o-mini', deepseek: 'deepseek-chat', minimax: 'MiniMax-M2', openrouter: 'openrouter/auto' };
+
 function createProviderPool({ db, registry, config, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, credentialFetch = null, machineModels = null, bench = null }) {
     // A person's own machine as their model (credential provider node, server/machines.js).
     const machines = machineModels || require('../machines').createMachineModels({ config, env, fetchImpl });
@@ -333,9 +336,12 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
      * declares `complete`, so without this the pool had no offer for /v1/chat/completions (2026-10-15).
      */
     async function offeredCapabilities(p) {
-        if (!p.capabilities.includes('chat') || p.capabilities.includes('complete')) return p.capabilities;
+        if (!p.capabilities.includes('chat')) return p.capabilities;
+        const extra = ['complete', 'messages'].filter(f => !p.capabilities.includes(f));
+        if (!extra.length) return p.capabilities;
         const entry = await adapter(p.key);
-        return entry && entry.adapter && entry.adapter.supports('complete') ? [...p.capabilities, 'complete'] : p.capabilities;
+        const serves = extra.filter(f => entry && entry.adapter && entry.adapter.supports(f));
+        return serves.length ? [...p.capabilities, ...serves] : p.capabilities;
     }
 
     async function candidates(route, features, operation, ctx = {}) {
@@ -419,19 +425,34 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         // Text operations are all chat completions on the person's provider (templated workflows use generate).
         // A project's own provider (ADR-056 secret, ai.complete) passes a Chat Completions request through as written.
         const completing = operation === 'complete' && cred.provider === 'openai';
-        if (!completing && !['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich'].includes(operation)) throw new AiError(422, 'credential.unsupported', `a person's own key is used for text only, not ${operation}`);
+        // Codes C3: POST /v1/messages on the person's own key. Only a provider that speaks Anthropic's Messages API serves
+        // it — Anthropic itself, DeepSeek and MiniMax (their own Anthropic-compatible endpoints) and a custom endpoint.
+        const messaging = operation === 'messages';
+        const anthropicFormat = ['anthropic', 'deepseek', 'minimax', 'custom'].includes(cred.provider);
+        if (messaging && !anthropicFormat) throw new AiError(422, 'credential.unsupported', `the ${cred.provider} credential does not speak the Messages API`);
+        if (!messaging && !completing && !['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich'].includes(operation)) throw new AiError(422, 'credential.unsupported', `a person's own key is used for text only, not ${operation}`);
         const guardedFetch = credentialFetch || require('./guarded-fetch').guardedFetch;
         // The person's model for this role: the run's input.role, else the Live role its route names (live.director).
         const wanted = ctx.role || ((/^live\.(chat|vision|director|summary|legacy)$/.exec(ctx.routeKey || '') || [])[1]) || null;
         const role = wanted && cred.models[wanted] ? wanted : null;
-        const model = (req.image && cred.models.vision) || (role && cred.models[role]) || cred.models.chat || (cred.provider === 'anthropic' ? 'claude-haiku-4-5-20251001' : 'gpt-4o-mini');
+        // On the person's Anthropic key the model the caller asked for is theirs to choose; elsewhere the model they stored
+        // is the one their provider serves (a Claude Code model name does not exist at DeepSeek).
+        const model = messaging
+            ? ((cred.provider === 'anthropic' || cred.provider === 'custom') && req.model) || cred.models.chat || CREDENTIAL_DEFAULT_MODEL[cred.provider] || 'claude-haiku-4-5-20251001'
+            : (req.image && cred.models.vision) || (role && cred.models[role]) || cred.models.chat || CREDENTIAL_DEFAULT_MODEL[cred.provider] || 'gpt-4o-mini';
         const record = { key: cred.providerKey, kind: cred.provider, base_url: cred.base_url, capabilities: cred.capabilities || ['chat', 'json', 'vision'], timeout_ms: 60000 };
-        const a = cred.provider === 'anthropic' ? createAnthropicProvider(record, { apiKey: cred.apiKey, fetchImpl: guardedFetch }) : createOpenAiProvider(record, { apiKey: cred.apiKey, fetchImpl: guardedFetch });
+        const a = anthropicFormat ? createAnthropicProvider(record, { apiKey: cred.apiKey, fetchImpl: guardedFetch }) : createOpenAiProvider(record, { apiKey: cred.apiKey, fetchImpl: guardedFetch });
         const base = { operation, provider_key: cred.providerKey, model_key: model, route_key: ctx.routeKey || null, route_version: ctx.routeVersion || null, fallback: 0, prompt_hash: ctx.promptHash || null };
+        // An upstream's error text is kept in the request log and the run's error; a provider that echoes the key (in a
+        // 401 body, a URL) must not put it there, or in a log line, or in an answer.
+        const scrub = (text) => {
+            const t = String(text == null ? '' : text);
+            return cred.apiKey ? t.split(String(cred.apiKey)).join('[redacted]') : t;
+        };
         const timeoutMs = Math.max(1000, Math.min(req.timeoutMs || 60000, 120000));
-        const call = completing ? a.complete : a.chat;
+        const call = messaging ? a.messages : completing ? a.complete : a.chat;
         let streamed = false;
-        const onDelta = completing && typeof req.onDelta === 'function' ? (d) => { streamed = true; req.onDelta(d); } : null;
+        const onDelta = (completing || messaging) && typeof req.onDelta === 'function' ? (d) => { streamed = true; req.onDelta(d); } : null;
         let lastErr = null;
         for (let attempt = 0; attempt <= config.providerRetries; attempt++) {
             if (ctx.signal && ctx.signal.aborted) throw new AiError(409, 'run.cancelled', 'run was cancelled');
@@ -450,14 +471,14 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             } catch (err) {
                 lastErr = err;
                 if (ctx.signal && ctx.signal.aborted) throw new AiError(409, 'run.cancelled', 'run was cancelled');
-                if (ctx.logRequest) ctx.logRequest({ ...base, status: err && err.code === 'provider.timeout' ? 'timeout' : 'error', latency_ms: Date.now() - t0, error: String(err && err.message || err).slice(0, 500) });
-                if (err && err.code === 'EADDRNOTPUBLIC') throw new AiError(422, 'credential.endpoint_refused', err.message);
-                if (streamed) throw new AiError(502, 'provider.stream_broken', `the answer broke off after it began streaming: ${String(err && err.message || err).slice(0, 200)}`);
+                if (ctx.logRequest) ctx.logRequest({ ...base, status: err && err.code === 'provider.timeout' ? 'timeout' : 'error', latency_ms: Date.now() - t0, error: scrub(err && err.message || err).slice(0, 500) });
+                if (err && err.code === 'EADDRNOTPUBLIC') throw new AiError(422, 'credential.endpoint_refused', scrub(err.message));
+                if (streamed) throw new AiError(502, 'provider.stream_broken', `the answer broke off after it began streaming: ${scrub(err && err.message || err).slice(0, 200)}`);
                 if (attempt < config.providerRetries && retryable(err)) { await sleep(config.retryDelayMs, ctx.signal).catch(() => {}); continue; }
                 break;
             }
         }
-        throw new AiError(502, 'credential.provider_failed', `the person's own provider did not answer: ${String(lastErr && lastErr.message || lastErr).slice(0, 200)}`);
+        throw new AiError(502, 'credential.provider_failed', `the person's own provider did not answer: ${scrub(lastErr && lastErr.message || lastErr).slice(0, 200)}`);
     }
 
     /**
