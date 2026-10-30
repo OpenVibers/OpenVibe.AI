@@ -135,6 +135,12 @@ route('get', '/memory/profile', {
     parameters: [query('scope', str()), query('on_behalf_of', str())],
     responses: { 200: json('The cached profile', memoryResult), 503: problem, ...errors([401, 403]) },
 });
+route('get', '/memory/reads', {
+    operationId: 'listMemoryReads', summary: 'The person’s own read log', tags: ['memory'], security: memorySecurity,
+    description: 'ai.memory.read. The person’s own token only: who read their memory, for what, in which scopes, how many notes and when. The answer never carries the note ids and never the text, only the count of what was read.',
+    parameters: [query('limit', integer({ minimum: 1, maximum: 200 }), 'How many reads at most (50 by default)')],
+    responses: { 200: json('The reads', memoryResult), 503: problem, ...errors([401, 403]) },
+});
 route('get', '/memory/search', {
     operationId: 'searchMemoryForAgent', summary: 'An agent reads active memory in its granted scopes', tags: ['memory'], security: memorySecurity,
     description: 'ai.memory.read plus on_behalf_of. Active items only, at most 8, in the scopes the token’s grant names (user always; project:* only when granted). The read is audited in memory_reads with item ids, never text.',
