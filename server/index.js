@@ -74,14 +74,16 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     // NODE_ENV=test (tests pin a PEM or point the URL at a stub and let the client fetch on first use).
     const keys = createNetworkKeys({ config });
     const auth = createAuth({ config, log });
+    // The person's memory (Memory M2a): sealed item text, the profile cache and the agent-read audit.
+    const memory = require('./memory').createMemory({ db, config, clock, log, registry, pool });
     // The Events consumer side: a signed bench.rating.changed webhook, subscribed at boot (server/bench/events.js).
-    const accountData = accountDataLib.create({ db, log });
+    const accountData = accountDataLib.create({ db, log, memory });
     const accountSend = env.OV_OAUTH_CLIENT_SECRET ? createNetworkSender({
         networkInternalUrl: config.networkInternalUrl, clientId: config.console.clientId,
         clientSecret: env.OV_OAUTH_CLIENT_SECRET, fetch: fetchImpl,
     }) : null;
     const benchEvents = createBenchEvents({ bench, accountData, accountSend, config, log, fetchImpl, clientSecret: env.OV_OAUTH_CLIENT_SECRET });
-    const app = createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, vault, benchEvents, runBudgets });
+    const app = createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, vault, benchEvents, runBudgets, memory });
     let jwks = null;
     let keyLoaded = Promise.resolve(null);
     if (!keys.pinned && config.nodeEnv !== 'test') {
@@ -144,7 +146,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         if (!givenDb) await db.close();
     }
 
-    return { config, db, registry, pool, quotas, tiers, cache, fetcher, engine, runs, keys, keyLoaded, auth, app, server, bench, benchEvents, close };
+    return { config, db, registry, pool, quotas, tiers, cache, fetcher, engine, runs, keys, keyLoaded, auth, app, server, bench, benchEvents, memory, close };
 }
 
 if (require.main === module) {

@@ -20,7 +20,7 @@ function mountOf(layer) {
 }
 
 /** ":param" as OpenAPI writes it, "{param}". */
-const templated = (p) => String(p).replace(/:([A-Za-z_][A-Za-z0-9_]*)/g, '{$1}');
+const templated = (p) => String(p).replace(/\\:/g, '\u0000').replace(/:([A-Za-z_][A-Za-z0-9_]*)/g, '{$1}').replace(/\u0000/g, ':');
 
 /** Every "METHOD /path" the app answers, routers included. */
 function mounted(app) {
