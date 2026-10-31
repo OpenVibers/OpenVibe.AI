@@ -13,6 +13,7 @@
  */
 const { postJson, ProviderError, deadline, describeAbort, schemaInstruction } = require('./common');
 const { sseFrames } = require('./stream');
+const usageParser = require('./usage');
 
 const DEFAULT_BASE_URL = 'https://api.anthropic.com/v1';
 const TEXT_OPS = ['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich'];
@@ -72,11 +73,7 @@ function messagesBody(req) {
     return body;
 }
 
-const usageOf = (message) => {
-    const u = (message && message.usage) || {};
-    const cached = u.cache_read_input_tokens || 0;
-    return { input: (u.input_tokens || 0) + cached + (u.cache_creation_input_tokens || 0), output: u.output_tokens || 0, cached };
-};
+const usageOf = (message) => usageParser.anthropicUsage((message && message.usage) || {});
 const textOf = (message) => (message && Array.isArray(message.content) ? message.content : []).filter(c => c && c.type === 'text').map(c => c.text).join('').trim();
 
 /**
@@ -153,9 +150,7 @@ function createAnthropicProvider(record, { apiKey = '', fetchImpl = globalThis.f
         const tool = content.find(c => c.type === 'tool_use');
         if (tool && tool.input) { jsonOut = tool.input; if (!text) text = JSON.stringify(tool.input); }
         if (!jsonOut && req.json && (!jsonMode || jsonMode === 'format') && isCurrentClaude(req.model)) { try { jsonOut = JSON.parse(text); } catch { /* the engine repairs it */ } }
-        const u = j.usage || {};
-        const cached = u.cache_read_input_tokens || 0;
-        return { text, json: jsonOut, model: j.model || req.model, usage: { input: (u.input_tokens || 0) + cached + (u.cache_creation_input_tokens || 0), output: u.output_tokens || 0, cached } };
+        return { text, json: jsonOut, model: j.model || req.model, usage: usageParser.anthropicUsage(j.usage || {}) };
     }
 
     /** POST /v1/messages as the caller wrote it → { message, text, model, usage }. */

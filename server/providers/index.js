@@ -28,6 +28,7 @@ const { createStubProvider } = require('./stub');
 const { createOpenAiProvider } = require('./openai');
 const { createResponsesProvider } = require('./responses');
 const { createAnthropicProvider } = require('./anthropic');
+const { createGeminiProvider } = require('./gemini');
 const { createHttpSeamProvider } = require('./http');
 const { createWhisperProvider } = require('./whisper');
 const rates = require('./rate-cards');
@@ -108,6 +109,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             case 'openai': return createOpenAiProvider(p, { apiKey, fetchImpl });
             case 'responses': return createResponsesProvider(p, { apiKey, fetchImpl });
             case 'anthropic': return createAnthropicProvider(p, { apiKey, fetchImpl });
+            case 'gemini': return createGeminiProvider(p, { apiKey, fetchImpl });
             case 'http': return createHttpSeamProvider(p, { apiKey, fetchImpl });
             case 'whisper': return createWhisperProvider(p, { config });
             default: throw new Error(`unknown provider kind ${p.kind}`);
@@ -697,7 +699,10 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         // A streamed answer (/v1/chat/completions, stream: true) is the caller's once a delta has gone out: a failure
         // after that is final, never retried or handed to a fallback whose words would follow the first one's.
         let streamed = false;
-        const onDelta = typeof req.onDelta === 'function' ? (d) => { streamed = true; req.onDelta(d); } : null;
+        // L40: the time to the first token, when the answer streams.
+        let attemptStart = 0;
+        let ttftMs = null;
+        const onDelta = typeof req.onDelta === 'function' ? (d) => { streamed = true; if (ttftMs === null && attemptStart) ttftMs = Date.now() - attemptStart; req.onDelta(d); } : null;
         // L36 Y1: a run on behalf of a person tries the person's OWN keys first, for the providers that can serve the
         // request. With only_my_keys it never falls back; otherwise the network is the fallback and the explain says so.
         const prefs = ctx.selfPreferences || {};
@@ -757,6 +762,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                     { providers, paid_by: null, attempts: selfAttempts, explain: { objective: 'own-keys', reasons: ['only_my_keys: no network fallback'], paid_by: null, selected: null, candidates: [], attempts: selfAttempts, prefer: preferState ? { ...preferState, why: preferState.why || 'you have no key for it, and only_my_keys never falls back to the network' } : null } });
             }
         }
+
         let { order: list, explain } = await candidates(route, features, operation, ctx);
         // L36 Y3: free_first puts the free tiers ahead of metered ones for this person's fallback. Own-key attempts above
         // are already free to them, so this only reorders the network.
@@ -874,6 +880,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                 if (ctx.signal && ctx.signal.aborted) throw new AiError(409, 'run.cancelled', 'run was cancelled');
                 const started = clock.now();
                 const t0 = Date.now();
+                attemptStart = t0;
                 try {
                     const fn = a[operation];
                     if (typeof fn !== 'function') throw new ProviderError(`${operation} not implemented`, { code: 'provider.unsupported' });
@@ -908,7 +915,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                     attempts.push({ key: 'openvibe', provider: c.provider, model: result.model || model, why: chosen || (fallback ? 'the next network provider after an earlier attempt failed' : 'the first network offer for this route'), status: 'ok', error: null });
                     warm.remember(warmSubject(ctx, route), leadingText(req), c.provider);
                     explain.attempts = attempts;
-                    return { result, provider: c.provider, providerKind: p.kind, model: result.model || model, fallbackUsed: fallback || selfAttempts.some(a => a.status !== 'skipped'), usage, cost, latencyMs: latency, synthetic: Boolean(result.synthetic || a.synthetic), tried, startedAt: started, explain };
+                    return { result, provider: c.provider, providerKind: p.kind, model: result.model || model, fallbackUsed: fallback || selfAttempts.some(a => a.status !== 'skipped'), usage, cost, latencyMs: latency, ttftMs, synthetic: Boolean(result.synthetic || a.synthetic), tried, startedAt: started, explain };
                 } catch (err) {
                     lastErr = err;
                     if (ctx.signal && ctx.signal.aborted) {

@@ -65,6 +65,11 @@ function load(env = process.env) {
         memoryKey: String(env.AI_MEMORY_KEY || '').trim(),
         // The store's own maintenance (server/memory/jobs.js): owner by owner, with a per-run cap. Off in test mode
         // (the way the JWKS client is) and off while a provider is in a drill, so a drill never spends the budget.
+        // The AI ledger (L40): the fee the OpenVibe key carries, and the roll-up job (off in test mode, off while a
+        // provider is in a drill).
+        usage: {
+            feeRate: Number(env.AI_KEY_FEE_RATE || 0) || 0,
+        },
         memoryJobs: {
             enabled: bool(env.AI_MEMORY_JOBS, nodeEnv !== 'test'),
             intervalMs: int(env.AI_MEMORY_JOB_INTERVAL_MS, 15 * 60 * 1000),

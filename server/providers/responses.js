@@ -13,6 +13,7 @@
  * transcription: those stay with the `openai` kind.
  */
 const { ProviderError, postJson, schemaInstruction } = require('./common');
+const usageParser = require('./usage');
 
 const DEFAULT_BASE_URL = 'https://api.openai.com/v1';
 const TEXT_OPS = ['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich'];
@@ -84,8 +85,7 @@ function createResponsesProvider(record, { apiKey = '', fetchImpl = globalThis.f
             const body = buildBody({ ...req, baseUrl }, jsonMode);
             try {
                 const j = await postJson(`${baseUrl}/responses`, headers(), body, { signal: req.signal, timeoutMs: req.timeoutMs, fetchImpl });
-                const u = j.usage || {};
-                return { text: outputText(j), json: null, model: j.model || req.model, usage: { input: u.input_tokens || 0, output: u.output_tokens || 0, cached: (u.input_tokens_details && u.input_tokens_details.cached_tokens) || 0 } };
+                return { text: outputText(j), json: null, model: j.model || req.model, usage: usageParser.responsesUsage(j.usage || {}) };
             } catch (e) {
                 // Gateways without structured-output support: schema -> json_object -> prose.
                 if (e instanceof ProviderError && e.status === 400 && jsonMode && /text\.format|json_schema|json_object|schema|strict/i.test(e.message)) {
