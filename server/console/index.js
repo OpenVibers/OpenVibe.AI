@@ -46,6 +46,7 @@ const { staff: staffMap } = require('openvibe-contracts');
 const { createSessions, sameString, random } = require('./session');
 const sso = require('./sso');
 const q = require('./queries');
+const catalog = require('../providers/catalog');
 const { CSP, esc, pages } = require('./views');
 
 /** Network staff capability -> AI capability held by a console session (documented in README "Operator console"). */
@@ -88,6 +89,8 @@ const NOTICES = {
     provider_added: 'Provider added. Point a route at it below, or on the route\'s page.',
     provider_key: 'Key replaced. Runs use it from now on.',
     model_added: 'Model registered.',
+    models_synced: 'Model list read. New models are listed switched off: turn on the ones routes may use.',
+    model_status: 'Model switched.',
     route_used: 'Route changed: new runs use the provider and model you chose (the previous one is kept as a fallback).',
     route_default: 'Route back to its default.',
     circuit_reset: 'Circuit reset: the provider will be tried again.',
@@ -343,6 +346,9 @@ function consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, e
             auth_mode: preset.kind === 'anthropic' ? 'x-api-key' : 'bearer', secret_ref: `vault:${key}`, default_model: String(b.default_model || preset.model || '').trim() || null,
             capabilities: caps, timeout_ms: 60000, priority: 50, billing_profile: 'metered', metadata: { added_from: 'console', preset: preset.id },
         }, { ...who(req), origin: 'admin' });
+        // Its model list, read right away (best effort: a provider whose list cannot be read is still added).
+        const added = await registry.getProvider(key);
+        await catalog.sync({ registry, provider: added, apiKey: resolveSecret(added.secret_ref, env), fetchImpl, actor: who(req).actor }).catch(() => null);
         res.redirect(303, '/console/providers?done=provider_added');
     }));
     r.post('/console/providers/:key/key', needs(CAPS.providerManage), wrap(async (req, res) => {
@@ -354,6 +360,24 @@ function consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, e
         else await registry.upsertProvider({ key: p.key }, { ...who(req), origin: 'admin' });   // a new updated_at: the pool rebuilds its adapter
         await registry.audit(who(req).actor, 'provider.key_replaced', 'provider', p.key, { trace: who(req).trace });
         res.redirect(303, '/console/providers?done=provider_key');
+    }));
+    // Read the provider's own model list into the catalogue (L33): new models land switched off, prices stay a person's.
+    r.post('/console/providers/:key/sync', needs(CAPS.providerManage), wrap(async (req, res) => {
+        const p = await registry.getProvider(req.params.key);
+        if (!p) throw new AiError(404, 'ai.not_found', 'no such provider');
+        const apiKey = resolveSecret(p.secret_ref, env);
+        if (!apiKey && p.auth_mode !== 'none') throw new AiError(422, 'ai.invalid', `${p.key} has no key to read its model list with`);
+        const out = await catalog.sync({ registry, provider: p, apiKey, fetchImpl, actor: who(req).actor });
+        await registry.audit(who(req).actor, 'provider.models_synced', 'provider', p.key, { trace: who(req).trace, metadata: { added: out.added.length, updated: out.updated.length, missing: out.missing.length } });
+        res.redirect(303, '/console/providers?done=models_synced');
+    }));
+    // Turn one model on or off (a model routes may use, or not).
+    r.post('/console/models/:provider/:model/status', needs(CAPS.providerManage), wrap(async (req, res) => {
+        const m = await registry.getModel(req.params.provider, req.params.model);
+        if (!m) throw new AiError(404, 'ai.not_found', 'no such model');
+        const status = (req.body || {}).status === 'active' ? 'active' : 'disabled';
+        await registry.upsertModel({ provider_key: m.provider_key, model_key: m.model_key, status }, who(req));
+        res.redirect(303, '/console/providers?done=model_status');
     }));
     r.post('/console/providers/:key/models', needs(CAPS.providerManage), wrap(async (req, res) => {
         const p = await registry.getProvider(req.params.key);
