@@ -12,8 +12,10 @@
  *
  * /api/health and /api/ready are probes. The operator/admin API and the attribution-quota API are
  * internal (staff/service tokens): they stay out. Credentials are deliberately not documented at all
- * — no credential, provider secret or secret reference field appears in this document. The
- * OpenAI-compatible /v1/chat/completions and /v1/models are outside /api and stay out of it too.
+ * — no credential, provider secret or secret reference field appears in this document. The person's
+ * own /api/v1/me/* routes (their provider keys, and the preferences that route them) are person-only
+ * and carry a key on PUT, so they stay out for the same reason. The OpenAI-compatible
+ * /v1/chat/completions and /v1/models are outside /api and stay out of it too.
  *
  * Request fields are what server/api/runs.js and server/api/actions.js read; the run properties are
  * server/runs.js decode(). Nothing is inferred.

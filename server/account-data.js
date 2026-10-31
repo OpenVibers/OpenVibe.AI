@@ -3,8 +3,10 @@
  * Account export and deletion → AI (ADR-033; openvibe-sdk/account-data). What AI holds about a person:
  *
  * - their console and person sessions (Console sign-in and the AI chat), erased;
- * - the provider credentials they brought (server/credentials.js): the encrypted key, its hint and the budget, erased
- *   with them (the key itself is never exported, only its hint);
+ * - the provider credentials they brought (server/credentials.js), including the keys they hold themselves (owner
+ *   `self`, L36): the encrypted key, its hint, status and the budget, erased with them (the key itself is never
+ *   exported, only its hint and health);
+ * - their ai.me-preferences (server/person-preferences.js): how their runs route. Their own settings, so they go;
  * - their runs: the workflows AI ran for them (runs.on_behalf_of is their SubjectRef) and the requests, citations and
  *   private cache entries under them. Those are the person's own content, so they go with the account (ADR-033);
  * - the free-allowance usage the allowance ledger counts (server/free-allowance.js) and the usage counters: kept,
@@ -27,7 +29,10 @@ const TABLES = [
     { table: 'console_sessions', subject: 'subject', file: 'console-sessions.json', columns: ['username', 'created_at', 'expires_at', 'revoked_at'], order: 'created_at' },
     { table: 'person_sessions', subject: 'subject', file: 'person-sessions.json', columns: ['username', 'created_at', 'expires_at', 'revoked_at'], order: 'created_at' },
     { table: 'subject_credentials', subject: 'subject', file: 'provider-credentials.json', order: 'updated_at',
-        columns: ['owner', 'subject', 'provider', 'base_url', 'machine', 'key_hint', 'models', 'budget_usd_day', 'is_default', 'spend_key', 'created_at', 'updated_at', 'last_used_at'] },
+        columns: ['owner', 'subject', 'provider', 'base_url', 'machine', 'key_hint', 'models', 'budget_usd_day', 'is_default', 'spend_key', 'status', 'checked_at', 'last_error', 'models_count', 'created_at', 'updated_at', 'last_used_at'] },
+    // L36 Y3: how the person's runs route (only_my_keys, free_first, the price ceiling and the defaults). Their own
+    // settings, so they go with the account; the row holds no key.
+    { table: 'ai_person_preferences', subject: 'subject', file: 'ai-preferences.json', columns: ['preferences', 'created_at', 'updated_at'], order: 'created_at' },
     // Memory M2a: the rows are deleted by owner here; the decrypted items are added by extraExport below. The text is
     // never exported sealed (it would be unreadable to the person) and the generic table export stays out of it.
     { table: 'memory_items', subject: 'owner', value: (usr) => `user:${usr}`, file: null, erase: 'delete' },

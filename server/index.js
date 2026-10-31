@@ -61,10 +61,14 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     require('./usage-samples').init(db, { ...config.billing, clientId: config.console.clientId, networkUrl: config.networkInternalUrl, log });
     // ai.preferences (read) and ai.usage_summary (written): Network user modules (server/user-modules.js).
     const userModules = require('./user-modules').createUserModules({ db, config, env, fetchImpl, clock, log });
-    // A person's own provider keys (WS-O task 2): stored by the service holding their consent, used by their runs only.
-    const credentials = require('./credentials').createCredentials({ db, config, clock });
+    // A person's own provider keys (WS-O task 2; L36 Y1): stored by the service holding their consent, or by the
+    // person themselves (owner `self`), used by their runs only. The test seam (a fake fetch) is for tests; production
+    // reaches a custom endpoint through the guarded fetcher's egress rules.
+    const credentials = require('./credentials').createCredentials({ db, config, clock, fetchImpl: credentialFetch });
+    // A person's ai.preferences (L36 Y3): only_my_keys, free_first, a price ceiling and a default model per kind.
+    const preferences = require('./person-preferences').createPreferences({ db, clock });
     const projectSecrets = require('./project-secrets').createProjectSecrets({ config, env, fetchImpl });
-    const runs = createRuns({ db, registry, engine, cache, quotas, config, clock, log, userModules, credentials, tiers, projectSecrets, pool, runBudgets });
+    const runs = createRuns({ db, registry, engine, cache, quotas, config, clock, log, userModules, credentials, preferences, tiers, projectSecrets, pool, runBudgets });
     await seed({ registry, quotas, config, env, db });
     const interrupted = await runs.recoverInterrupted();
     if (interrupted) log.warn(`[ai] marked ${interrupted} interrupted run(s) failed (run.interrupted); callers can retry them`);
@@ -86,7 +90,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         clientSecret: env.OV_OAUTH_CLIENT_SECRET, fetch: fetchImpl,
     }) : null;
     const benchEvents = createBenchEvents({ bench, accountData, accountSend, config, log, fetchImpl, clientSecret: env.OV_OAUTH_CLIENT_SECRET });
-    const app = createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, vault, benchEvents, runBudgets, memory });
+    const app = createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, vault, benchEvents, runBudgets, memory });
     let jwks = null;
     let keyLoaded = Promise.resolve(null);
     if (!keys.pinned && config.nodeEnv !== 'test') {

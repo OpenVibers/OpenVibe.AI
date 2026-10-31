@@ -137,3 +137,37 @@ t.test('their runs, quota and module marker go; the spend ledger and the audit t
         assert.ok(confirmation.body.retained.usage_counters >= 1, 'the kept ledger is counted as retained');
     } finally { await h.stop(); await stub.close(); }
 });
+
+t.test('L36: the person\'s self credentials export without the key, and deletion erases them with their preferences', async () => {
+    const stub = await startNetworkStub();
+    const h = await boot({ env: { AI_EVENTS_SECRET: SECRET, AI_EVENTS_SUBSCRIBE: '0', OV_NETWORK_INTERNAL_URL: stub.url, OV_OAUTH_CLIENT_SECRET: 'ai-secret' } });
+    try {
+        const SECRET_KEY = 'sk-self-ada-0123456789LEAK';
+        const sealed = `v2:${Buffer.alloc(12).toString('base64')}:${Buffer.alloc(16).toString('base64')}:${Buffer.from(SECRET_KEY).toString('base64')}`;
+        await h.db.exec(`INSERT INTO subject_credentials (owner, subject, provider, key_enc, key_hint, models, status, checked_at, last_error, models_count, created_at, updated_at)
+            VALUES ('self', $1, 'anthropic', $2, '…LEAK', '{"chat":"m"}', 'ok', '2026-10-31T09:00:00.000Z', NULL, 3, '2026-10-01', '2026-10-02')`, [A, sealed]);
+        await h.db.exec(`INSERT INTO ai_person_preferences (subject, preferences, created_at, updated_at)
+            VALUES ($1, '{"only_my_keys":true,"free_first":false,"price_ceiling_usd_per_mtok":5,"defaults":{"text":"auto","code":"auto","vision":"auto","image":"auto"}}', '2026-10-01', '2026-10-02')`, [A]);
+        const deliver = async (event) => {
+            const body = JSON.stringify({ event, seq: 1 });
+            const res = await fetch(`${h.base}/internal/events`, { method: 'POST', body, headers: { 'Content-Type': 'application/json', ...signDeliveryHeaders(body, SECRET) } });
+            return { status: res.status, json: await res.json().catch(() => null) };
+        };
+
+        const r = await deliver(ev('evt_01JZ0000000000000000000E03', 'network.account.export_requested', { export_id: 'exp_01JZ0000000000000000000EX3', subject: A }));
+        assert.deepStrictEqual([r.status, r.json.outcome], [200, 'exported']);
+        const part = stub.calls.find((c) => c.url === '/internal/account-exports/exp_01JZ0000000000000000000EX3/parts');
+        const files = Object.fromEntries(part.body.files.map((f) => [f.name, f.content]));
+        const cred = files['provider-credentials.json'].find((c) => c.owner === 'self');
+        assert.deepStrictEqual([cred.provider, cred.key_hint, cred.status, cred.models_count, cred.checked_at], ['anthropic', '…LEAK', 'ok', 3, '2026-10-31T09:00:00.000Z']);
+        assert.ok(!('key_enc' in cred) && !JSON.stringify(part.body).includes(SECRET_KEY), 'the key is never exported');
+        assert.strictEqual(files['ai-preferences.json'][0].preferences.includes('only_my_keys'), true, 'the preferences export');
+
+        const d = await deliver(ev('evt_01JZ0000000000000000000D03', 'network.account.deleted', { deletion_id: 'del_01JZ0000000000000000000DX3', subject: A, aliases: [] }));
+        assert.deepStrictEqual([d.status, d.json.outcome], [200, 'erased']);
+        assert.strictEqual(Number(await h.db.value("SELECT count(*)::int FROM subject_credentials WHERE owner = 'self' AND subject = $1", [A])), 0, 'the self key is erased');
+        assert.strictEqual(Number(await h.db.value('SELECT count(*)::int FROM ai_person_preferences WHERE subject = $1', [A])), 0, 'the preferences are erased');
+    } finally { await h.stop(); await stub.close(); }
+});
+
+t.run();

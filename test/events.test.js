@@ -102,6 +102,21 @@ t.test('a failing outbox prune is caught, not left as an unhandled rejection', a
     }
 });
 
+t.test('a refused own key queues ai.credential.failed, never the key (L36 Y8)', async () => {
+    const events = require('../server/events');
+    const subject = 'usr_01JAB2C3D4E5F6G7H8J9K0MNPQ';
+    const env = await events.credentialFailed({ subject, provider: 'anthropic', error: 'the provider refused the key (401)' });
+    assert.ok(env && env.event_id, 'the event was queued');
+    const ev = (await queued()).find((e) => e.event_id === env.event_id);
+    assert.strictEqual(ev.event_type, 'ai.credential.failed');
+    assert.deepStrictEqual(ev.on_behalf_of, { type: 'user', id: subject });
+    assert.deepStrictEqual([ev.payload.subject, ev.payload.provider, ev.payload.status], [subject, 'anthropic', 'failing']);
+    let known = true;
+    try { contracts.resolve('ai.credential.failed@1'); } catch { known = false; }
+    if (known) valid(ev);   // the schema arrives with openvibe-contracts 0.257.0
+    assert.ok(!JSON.stringify(ev).includes('sk-'), 'no key');
+});
+
 t.test('close() stops the ai.run.* relay (unsent rows stay in the outbox)', async () => {
     const events = require('../server/events');
     const pending = (await events.status()).pending;

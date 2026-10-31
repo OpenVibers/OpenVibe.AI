@@ -1,9 +1,11 @@
 'use strict';
 /**
  * Person sessions for the run receipt page (GET /runs/:id): a random 256-bit cookie id, stored as its
- * SHA-256; like the console's sessions, the cookie itself is never written down. A person session is
- * read-only and only opens runs whose on_behalf_of is its subject; it grants no capability and never
- * opens the operator console.
+ * SHA-256; like the console's sessions, the cookie itself is never written down. In the run pages a
+ * person session only opens runs whose on_behalf_of is its subject. It is the person's own sign-in on
+ * AI's site, so behind a same-origin check it also reaches their own /api/v1/me/* settings
+ * (server/me.js: their provider keys and routing preferences) — never a service route, and it grants
+ * no capability and never opens the operator console.
  *
  *   cookie  `__Host-ovai_person` (plain `ovai_person` over http in development): host-only, Path=/,
  *           HttpOnly, SameSite=Lax, Secure when BASE_URL is https, Max-Age = AI_PERSON_SESSION_TTL_MIN.

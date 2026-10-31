@@ -26,6 +26,13 @@ owns publication truth: Wiki, Blog, News, Live, … decide what to publish.
 - people's own provider keys (`ai.credential.manage`), encrypted at rest, one per provider (Codes C3: `anthropic`,
   `openai`, `deepseek`, `minimax`, `openrouter` or a `custom` endpoint), and per-streamer
   attribution quotas (`ai.quota.attribution.manage`)
+- **"Your AI" (L36 Y1/Y3/Y8):** the person's own keys under the reserved owner `self` for every console provider
+  (Anthropic, OpenAI, Gemini, DeepSeek, Mistral, xAI, Groq, Cerebras, Together, Fireworks, OpenRouter, MiniMax and a
+  custom endpoint), tested on save (its models, or one token) with status, `models_count` and a redacted `last_error`;
+  their `only_my_keys`, `free_first`, price ceiling and default model per kind of work; a run `on_behalf_of` a person
+  tries their keys first, `explain.paid_by` and the attempts name who paid and why each failed, and a 401/403 marks the
+  key failing and publishes `ai.credential.failed` (`/api/v1/me/*`, `server/me.js`; only the person's own token or
+  AI-site session, never a service token or `on_behalf_of`)
 - a person's own computer as their provider (credential provider `node`, contracts 0.220.0): a model on their own
   machine (Ollama, LM Studio, llama.cpp through the OpenVibe Node), reached through OpenVibe.Bot with `bot.machine.ai`
   for that person only, free and with no key (`server/machines.js`; Bot on this host by default, `OV_BOT_INTERNAL_URL`);
@@ -58,7 +65,8 @@ Implemented here (the service manifest's `capabilities`, audience `openvibe.ai`;
 [API](#api)): `ai.run.create`, `ai.run.read`, `ai.workflow.manage`, `ai.provider.manage`,
 `ai.usage.read`, `ai.credential.manage` (`/api/v1/credentials/:subject[/:provider]`),
 `ai.quota.attribution.manage` (per-streamer quotas), `ai.memory.read` and `ai.memory.write` (Memory M2a,
-`/api/v1/memory/*`) and `ai.app.run` (developer apps, ADR-014; public,
+`/api/v1/memory/*`), `ai.me.read` and `ai.me.manage` ("Your AI", `/api/v1/me/*`: a person's own keys and
+routing preferences; only the person's own token or AI-site session) and `ai.app.run` (developer apps, ADR-014; public,
 registered since openvibe-contracts 0.109.0). A service token's `ns`
 claim limits which workflow namespaces it may run; an app token is fixed to its project's.
 
@@ -114,6 +122,7 @@ idempotent replay):
 | `GET /api/v1/actions?subject=usr_…` — one person's Action Center items (`common.action-list-result@1`, runs whose `on_behalf_of` is that person) | `ai.actions.read` (first-party service) |
 | `POST /api/v1/memory/items:batch`, `GET/PATCH/DELETE /api/v1/memory/items[/:id]`, `DELETE /api/v1/memory/items?source=`, `GET /api/v1/memory/profile` | `ai.memory.read` / `ai.memory.write` (the person's own token, or a service acting `on_behalf_of` them) |
 | `GET /api/v1/memory/search?q=&scopes=` — active items only, at most 8, in the grant's scopes, audited | `ai.memory.read` plus `on_behalf_of` |
+| `GET/PUT/DELETE /api/v1/me/credentials[/:provider]`, `POST /api/v1/me/credentials/:provider/test`, `GET/PUT /api/v1/me/ai/preferences` | `ai.me.read` / `ai.me.manage` — the person's own token or AI-site session only; a service token or `on_behalf_of` is refused |
 | `GET /api/v1/workflows\|templates\|routes[/:key]` | `ai.run.create`, `ai.workflow.manage` or `ai.usage.read` |
 | `GET /api/v1/routes?operation=generate` | the same read: every route's `offers` (`{provider, model}`), plus the operation's deduplicated `offers` |
 | `POST /api/v1/{templates,workflows,routes}/:key/versions`, `…/versions/:v/status` | `ai.workflow.manage` |
