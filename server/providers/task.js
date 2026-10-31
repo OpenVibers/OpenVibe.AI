@@ -212,4 +212,33 @@ function reasonFor(entry, task) {
     return 'the cheapest' + withCaps;
 }
 
-module.exports = { detectTask, capabilitiesOf, hardNeeds, rank, reasonFor, workKind, leadingText, tokensOf, tierRank, TIER_RANK, DEFAULT_TIER };
+
+/**
+ * The soft preference a request may carry (L37): { provider, model }. The model may be left out, and a string
+ * "provider/model" is read as the same thing. Nothing here fails: an unknown id is simply never matched.
+ */
+function preferredTarget(raw) {
+    if (!raw) return null;
+    let provider = null;
+    let model = null;
+    if (typeof raw === 'string') {
+        const at = raw.indexOf('/');
+        provider = (at === -1 ? raw : raw.slice(0, at)).trim();
+        model = at === -1 ? null : raw.slice(at + 1).trim();
+    } else if (typeof raw === 'object') {
+        provider = raw.provider != null ? String(raw.provider).trim() : null;
+        model = raw.model != null ? String(raw.model).trim() : null;
+    }
+    if (!provider && !model) return null;
+    return { provider: provider || null, model: model || null };
+}
+
+/** Does this candidate answer to the preference? The provider always, and the model when one was named. */
+function preferMatches(provider, model, prefer) {
+    if (!prefer) return false;
+    if (prefer.provider && String(provider || '') !== prefer.provider) return false;
+    if (prefer.model && String(model || '') !== prefer.model) return false;
+    return Boolean(prefer.provider || prefer.model);
+}
+
+module.exports = { preferredTarget, preferMatches, detectTask, capabilitiesOf, hardNeeds, rank, reasonFor, workKind, leadingText, tokensOf, tierRank, TIER_RANK, DEFAULT_TIER };
