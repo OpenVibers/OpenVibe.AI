@@ -57,7 +57,7 @@ owns publication truth: Wiki, Blog, News, Live, … decide what to publish.
 - provider APIs configured by the operator (OpenAI-compatible, OpenAI Responses, Anthropic, the HTTP seam), whisper.cpp
   and the local model server `openvibe-llm.service` on this host
 - `openvibe-contracts` v0.252.0, `openvibe-sdk` v0.75.0 (service tokens, events outbox, redact),
-  `openvibe-shared` v4.62.0, pinned by release tarball
+  `openvibe-shared` v4.64.0, pinned by release tarball
 
 ## Capabilities
 
@@ -748,7 +748,7 @@ ai.openvibe.network notice from OpenVibe.Sites.
 Part of the [OpenVibe network](https://openvibe.network). Built in the open by [OpenVibers](https://github.com/OpenVibers).
 
 <!-- versions:start -->
-- openvibe-contracts: v0.252.0
+- openvibe-contracts: v0.257.0
 - openvibe-sdk: v0.75.0
-- openvibe-shared: v4.62.0
+- openvibe-shared: v4.64.0
 <!-- versions:end -->
