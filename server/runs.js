@@ -99,7 +99,7 @@ function routePinRequest(value, principal, wf) {
     return { provider, model };
 }
 
-function createRuns({ db, registry, engine, cache, quotas, config, clock = { now: () => Date.now() }, log = console, userModules = null, credentials = null, tiers = null, projectSecrets = null, pool = null, runBudgets = null }) {
+function createRuns({ db, registry, engine, cache, quotas, config, clock = { now: () => Date.now() }, log = console, userModules = null, credentials = null, preferences: personPreferences = null, tiers = null, projectSecrets = null, pool = null, runBudgets = null }) {
     const inflight = new Map();     // run id -> { controller, promise, release, caller }
     const queue = [];               // run ids waiting for the worker
     let active = 0;
@@ -247,6 +247,11 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             if (wf.key !== 'ai.complete') throw new AiError(422, 'input.invalid', 'a project provider is used for ai.complete only');
             if (!projectSecrets || !projectSecrets.available()) throw new AiError(503, 'project_secret.unavailable', 'project secrets are not configured on this service');
         }
+        // L36 Y1: a run on behalf of a person tries that person's OWN keys first (owner `self`). When they hold one,
+        // the run is uncached and no network budget or tier holds it: their own key is free to them, and a $0 balance
+        // must never block it. If it falls back to the network, the usage is still recorded after the fact.
+        const personSubject = body.on_behalf_of && body.on_behalf_of.type === 'user' && typeof body.on_behalf_of.id === 'string' ? body.on_behalf_of.id : null;
+        const selfKeys = Boolean(credentials && personSubject && credentialSubject === null && !projectProvider && !pinned && await credentials.hasSelf(personSubject));
         // The budget a Codes run token carries (Codes C3): a run that is over its budget is refused before
         // any provider call. The budget lives here, not in the token, so the holder of the token cannot raise it.
         if (runBudgets && principal.jti) {
@@ -274,23 +279,25 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             source_service: requester.type === 'service' ? requester.id : null,
             target: body.target ? JSON.stringify(body.target) : null, target_key: ctx.targetKey,
             input: null, input_hash: inputHash, idempotency_key: idem, trace_id: trace, request_id: requestId, retry_of: retryOf,
-            options: JSON.stringify({ cache: options.cache !== false && credentialSubject === null && !projectProvider && !pinned, debug: Boolean(options.debug), input_retained: kept.full,
+            options: JSON.stringify({ cache: options.cache !== false && credentialSubject === null && !projectProvider && !pinned && !selfKeys, debug: Boolean(options.debug), input_retained: kept.full,
                 ...(credentialSubject !== null ? { credential_subject: credentialSubject } : {}), ...(credentialProvider !== null ? { credential_provider: credentialProvider } : {}),
+                ...(selfKeys ? { self_subject: personSubject } : {}),
                 ...(projectProvider ? { project_provider: projectProvider } : {}), ...(pinned ? { pinned_offer: pinned } : {}) }), created_at: now,
         };
         base.input = stableStringify(kept.value);
 
         // Cache (scoped; never crosses requester/actor/target/attribution)
         // A pinned run is never served from (or written to) the shared cache: the caller asked for THIS model,
-        // and another model's answer under the same prompt would silently break the pin.
-        const scope = options.cache === false || credentialSubject !== null || projectProvider || pinned ? null : cache.scopeFor(wf.cache_mode, ctx);
+        // and another model's answer under the same prompt would silently break the pin. A run that may use the
+        // person's own key is never cached either: their key must be used, and the answer is theirs, not the scope's.
+        const scope = options.cache === false || credentialSubject !== null || projectProvider || pinned || selfKeys ? null : cache.scopeFor(wf.cache_mode, ctx);
         let cacheKey = null;
         if (scope) {
             cacheKey = cache.keyFor({ scope, workflowKey: wf.key, workflowVersion: wf.version, templateVersion: base.template_version, routeKey: base.route_key, routeVersion: base.route_version, inputHash });
             const hit = await cache.get(cacheKey, scope);
             if (hit) {
                 await db.tx(async () => {
-                    const cacheExplain = { objective: 'cache', reasons: ["the answer was already in this scope's cache; no provider was called"], selected: null, candidates: [] };
+                    const cacheExplain = { objective: 'cache', reasons: ["the answer was already in this scope's cache; no provider was called"], paid_by: 'cache', selected: null, candidates: [], attempts: [] };
                     await db.prepare(`INSERT INTO runs (id, workflow_key, workflow_version, template_key, template_version, route_key, route_version, status, requester_type, requester_id, on_behalf_of, attribution,
                         source_service, target, target_key, input, input_hash, output, model_key, cache_key, cached_from, retry_of, idempotency_key, trace_id, request_id, options, explain, created_at, started_at, finished_at, citations_count)
                         VALUES (@id, @workflow_key, @workflow_version, @template_key, @template_version, @route_key, @route_version, 'cached', @requester_type, @requester_id, @on_behalf_of, @attribution,
@@ -315,10 +322,12 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         admit(caller);
         // A run with a person's own key spends their money, not the shared quotas (its own budget was checked above).
         // The tier budgets (server/govern.js, AI_GOVERN_TIERS) hold first, so a run they refuse is not counted by reserve().
-        const hold = credentialSubject !== null || projectProvider || !tiers ? null : await tiers.admit(ctx, id);
+        // L36 Y1: a run that may use the person's own key holds neither — their key is free to them, and a $0 balance
+        // anywhere must never block it. If it falls back to the network, the usage is recorded after the run.
+        const hold = credentialSubject !== null || projectProvider || selfKeys || !tiers ? null : await tiers.admit(ctx, id);
         let reserved;
         try {
-            reserved = credentialSubject !== null ? null : await quotas.reserve(ctx);
+            reserved = credentialSubject !== null || selfKeys ? null : await quotas.reserve(ctx);
         } catch (err) { if (hold) await tiers.release(hold); throw err; }
 
         try {
@@ -375,7 +384,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         return {
             providerKey: `project:${ctx.projectId}`, provider: 'openai', base_url: spec.base_url, apiKey: value, models: { chat: spec.model },
             capabilities: ['chat', 'json', 'vision', 'tools'],
-            explain: { objective: null, reasons: [`the project's own provider at ${new URL(spec.base_url).origin} (project secret ${spec.secret}, ${environment})`], selected: `project:${ctx.projectId}`, candidates: [] },
+            explain: { objective: null, reasons: [`the project's own provider at ${new URL(spec.base_url).origin} (project secret ${spec.secret}, ${environment})`], paid_by: 'project', selected: `project:${ctx.projectId}`, candidates: [], attempts: [] },
         };
     }
 
@@ -409,6 +418,16 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             }
             const credential = opts.credential_subject ? await credentials.forRun(row.requester_id, opts.credential_subject, opts.credential_provider || null)
                 : opts.project_provider ? await projectCredential(opts.project_provider, ctx) : null;
+            // L36 Y1/Y8: the person's own keys, and what their preferences say about the network fallback. A provider
+            // refusing one (401/403) marks it failing and publishes ai.credential.failed, never the key.
+            const selfSubject = opts.self_subject || null;
+            const selfCredentials = selfSubject && credentials ? await credentials.selfForAllRuns(selfSubject) : null;
+            const selfPreferences = selfSubject && personPreferences ? await personPreferences.get(selfSubject) : null;
+            const onCredentialFailed = credentials ? async (failure) => {
+                if (!failure || !failure.owner || !failure.subject || !failure.provider) return;
+                const changed = await credentials.markFailed(failure.owner, failure.subject, failure.provider, failure.error);
+                if (changed) await events.credentialFailed({ subject: failure.subject, provider: failure.provider, error: failure.error, owner: failure.owner });
+            } : undefined;
             const r = await engine.execute(wf, row, input, { signal: controller.signal, logRequest, debugRaw: Boolean(config.debugRawLog && opts.debug), inputHash: row.input_hash, preferences,
                 // A developer app's run (ADR-014): the provider pool excludes a person's byok key, and the run is
                 // limited to free and local capacity when it is a sandbox run or when no tier budget governs its
@@ -417,6 +436,8 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                 // Who asked, for a step that must not call the caller back (research: Search's own web ladder).
                 requesterType: ctx.requesterType, requesterId: ctx.requesterId,
                 ...(ctx.routePin ? { routePin: ctx.routePin } : {}),
+                ...(onCredentialFailed ? { onCredentialFailed } : {}),
+                ...(selfSubject ? { selfSubject, selfCredentials: selfCredentials || [], selfPreferences } : {}),
                 ...(credential ? { credential, role: input && typeof input.role === 'string' ? input.role : null } : {}),
                 ...(typeof ctx.onDelta === 'function' ? { onDelta: ctx.onDelta } : {}) });
             if (controller.signal.aborted) throw new AiError(409, 'run.cancelled', 'cancelled');
@@ -432,7 +453,10 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                 return d;
             });
             if (!done.changes) return;       // cancelled while finishing
-            if (r.provider && reserved) await quotas.account(ctx, reserved, { provider: r.provider, model: r.model, tokensIn: r.usage.input, tokensOut: r.usage.output, tokensCached: r.usage.cached, cost: r.cost, attempts: logged, runId: id, traceId: row.trace_id, hold });
+            // A self-key run has no reservation and no tier hold; if it fell back to the network, its usage is still
+            // recorded (the fallback is named in explain). A run that used the person's own key spends nothing here.
+            const usedOwnKey = String(r.provider || '').startsWith('byo:self:');
+            if (r.provider && (reserved || (opts.self_subject && !usedOwnKey))) await quotas.account(ctx, reserved, { provider: r.provider, model: r.model, tokensIn: r.usage.input, tokensOut: r.usage.output, tokensCached: r.usage.cached, cost: r.cost, attempts: logged, runId: id, traceId: row.trace_id, hold });
             // What the run spent goes on the budget of its run token (Codes C3): the same tokens and cost the
             // quota accounting counts, so the next request of a run over its budget is refused.
             if (runBudgets && ctx.runJti) await runBudgets.add(ctx.runJti, { tokens: r.usage.input + r.usage.output, cost: r.cost });

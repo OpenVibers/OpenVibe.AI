@@ -7,7 +7,7 @@
   "runtime": "node 22, express, postgresql",
   "port": 4700,
   "domain": "ai.openvibe.services (the old ai.openvibe.network address was retired on 2026-10-10); the service runs on openvibe-ovh (/opt/openvibe.ai, unit openvibe-ai) on 127.0.0.1:4700 behind nginx; OpenVibe.Live and OpenVibe.Network call it on loopback",
-  "contracts": "openvibe-contracts v0.252.0",
+  "contracts": "openvibe-contracts v0.252.0 (the ai.me.* schemas arrive in v0.257.0; the person routes also work without them until this pin moves)",
   "sdk": "openvibe-sdk v0.75.0",
   "shared": "openvibe-shared v4.62.0",
   "capabilities": [
@@ -17,7 +17,12 @@
     "ai.provider.manage",
     "ai.usage.read",
     "ai.credential.manage",
-    "ai.quota.attribution.manage"
+    "ai.quota.attribution.manage",
+    "ai.actions.read",
+    "ai.memory.read",
+    "ai.memory.write",
+    "ai.me.read",
+    "ai.me.manage"
   ],
   "capabilitiesRegistered": true,
   "providers": [
@@ -39,6 +44,7 @@
     "scoped cache",
     "citations or explicit gaps on every run",
     "people's own provider keys, encrypted at rest",
+    "Your AI (L36): the person's own keys under owner self for every console provider, tested on save (models, or one token) with status/last_error/models_count; only_my_keys, free_first and a price ceiling per person; a run on_behalf_of a person tries their keys first and explain names paid_by and every attempt; a 401/403 marks the key failing and publishes ai.credential.failed",
     "media.analyze: local-first recording analysis with windowed speech-to-text",
     "ai.run.* events through the SDK outbox",
     "ai.preferences and ai.usage_summary user modules",

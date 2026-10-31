@@ -58,6 +58,9 @@ function load(env = process.env) {
         issuer: trimUrl(env.OV_NETWORK_ISSUER || env.OV_NETWORK_URL || 'https://openvibe.network'),
         // A person's own provider keys (server/credentials.js): AES-256-GCM, 64 hex characters; unset = credentials off.
         credentialsKey: String(env.AI_CREDENTIALS_KEY || '').trim(),
+        // Test-on-save for a person's own key (L36 Y1): a model list, else one token, within this budget. Ten seconds in
+        // production; a test may shorten it.
+        credentialTestTimeoutMs: Math.max(50, Math.min(60000, int(env.AI_CREDENTIAL_TEST_TIMEOUT_MS, 10000))),
         // The person's memory (server/memory/): AES-256-GCM with a key of its own, so it can rotate apart from credentials.
         memoryKey: String(env.AI_MEMORY_KEY || '').trim(),
         // The store's own maintenance (server/memory/jobs.js): owner by owner, with a per-run cap. Off in test mode

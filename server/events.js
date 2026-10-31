@@ -88,6 +88,25 @@ async function runChanged(row) {
     return env;
 }
 
+/**
+ * L36 Y8: a provider refused one of a person's own keys (401/403) during a run. The key's status is already
+ * `failing` (server/credentials.js markFailed); this tells the products that may show it. The payload never carries
+ * the key, only a redacted reason. No-op while publishing is off, like every other event.
+ */
+async function credentialFailed({ subject, provider, error, owner = null }) {
+    if (!svc || !dbRef || !subject || !provider) return null;
+    const env = await svc.emitIn(dbRef, {
+        event_type: 'ai.credential.failed',
+        actor: { type: 'service', id: 'ai' },
+        on_behalf_of: { type: 'user', id: subject },
+        subject: { type: 'credential', id: `${subject}:${provider}` },
+        visibility: 'internal',
+        priority: 'important',
+        payload: { subject, provider, status: 'failing', checked_at: iso(Date.now()), error: String(error || 'the provider refused the key').slice(0, 500) },
+    });
+    dbRef.afterCommit(() => svc && svc.kick());
+    return env;
+}
 async function status() {
     if (!svc) return { enabled: false };
     const s = await svc.status();
@@ -106,4 +125,4 @@ async function stop() {
 }
 function _reset() { if (svc) svc.stop(); svc = null; queued = 0; }
 
-module.exports = { init, runChanged, payloadOf, status, stop, _reset };
+module.exports = { init, runChanged, credentialFailed, payloadOf, status, stop, _reset };

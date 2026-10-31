@@ -44,7 +44,39 @@ function rateLimited(err) {
 }
 
 /** The model a person's credential uses when they stored none, per provider (executeWithCredential). */
-const CREDENTIAL_DEFAULT_MODEL = { anthropic: 'claude-haiku-5-5', openai: 'gpt-4o-mini', deepseek: 'deepseek-chat', minimax: 'MiniMax-M2', openrouter: 'openrouter/auto' };
+const { CREDENTIAL_PROVIDERS, PROVIDER_KIND, DEFAULT_MODEL } = require('../credentials');
+const CREDENTIAL_DEFAULT_MODEL = { ...DEFAULT_MODEL, anthropic: 'claude-haiku-5-5', openai: 'gpt-4o-mini', deepseek: 'deepseek-chat', minimax: 'MiniMax-M2', openrouter: 'openrouter/auto' };
+
+/** The key as explain names it, never the key itself (L36 Y1/Y7). */
+const paidByOf = (cred) => `your ${cred.provider} key …${String(cred.hint || '').slice(-4) || '????'}`;
+/** The kind of work a run does, for the person's ai.me-preferences.defaults. */
+function workKind(operation, req, ctx = {}) {
+    if (operation === 'image') return 'image';
+    if (req && req.image) return 'vision';
+    const hint = `${ctx.workflowKey || ''} ${ctx.routeKey || ''}`;
+    return /\b(code|coding|codes|build|design|program|developer)\b/i.test(hint) ? 'code' : 'text';
+}
+/** Can one stored key serve this operation? (executeWithCredential's own rule, checked before it is called.) */
+function credentialCanServe(provider, operation, req) {
+    if (!CREDENTIAL_PROVIDERS.includes(provider)) return false;
+    const text = ['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich'];
+    if (text.includes(operation)) return true;
+    if (operation === 'messages') return PROVIDER_KIND[provider] === 'anthropic' || provider === 'custom';
+    if (operation === 'complete') return PROVIDER_KIND[provider] === 'openai' || provider === 'custom';
+    return false;
+}
+/** The model a self key should use for this run: the person's default for the kind, else their stored model. */
+function selfModelFor(cred, operation, req, ctx, prefs) {
+    const kind = workKind(operation, req, ctx);
+    const choice = prefs && prefs.defaults ? prefs.defaults[kind] : 'auto';
+    const stored = cred.models || {};
+    const role = ctx.role || ((/^live\.(chat|vision|director|summary|legacy)$/.exec(ctx.routeKey || '') || [])[1]) || null;
+    const model = (choice && choice !== 'auto') ? choice
+        : (req.image && stored.vision) || (role && stored[role]) || stored[kind] || stored.chat
+            || CREDENTIAL_DEFAULT_MODEL[cred.provider] || 'gpt-4o-mini';
+    const why = choice && choice !== 'auto' ? `your default ${kind} model` : (stored[kind] || stored.chat ? 'the model you stored for this key' : "the provider's default");
+    return { model, kind, why };
+}
 
 function createProviderPool({ db, registry, config, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, credentialFetch = null, machineModels = null, bench = null }) {
     // A person's own machine as their model (credential provider node, server/machines.js).
@@ -411,8 +443,10 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             if (ctx.logRequest) ctx.logRequest({ ...base, model_key: result.model, status: 'ok', output_hash: sha256(result.text || ''), tokens_in: usage.input, tokens_out: usage.output, tokens_cached: 0, tokens_estimated: 0, cost_usd: 0, latency_ms: latency });
             return { result: { text: result.text, json: null, model: result.model, usage }, provider: cred.providerKey, providerKind: 'node', model: result.model, fallbackUsed: false, usage, cost: 0, latencyMs: latency, synthetic: false, tried: [], startedAt: t0,
                 explain: { objective: 'own-machine', reasons: [cred.machine === 'any' ? 'the fastest of the person\'s own machines that answered, by their choice' : 'the person\'s own machine, by their choice'],
+                    paid_by: 'your machine',
                     selected: { provider: 'node', machine: result.machine || cred.machine, model: result.model },
-                    candidates: (result.tried || []).map((x) => ({ provider: 'node', machine: x.machine, skipped: x.error })) } };
+                    candidates: (result.tried || []).map((x) => ({ provider: 'node', machine: x.machine, skipped: x.error })),
+                    attempts: [{ key: 'your machine', provider: 'node', model: result.model, why: 'your own machine', status: 'ok', error: null }] } };
         } catch (err) {
             if (ctx.logRequest) ctx.logRequest({ ...base, status: 'error', latency_ms: Date.now() - t0, error: String(err && err.message || err).slice(0, 500) });
             if (ctx.signal && ctx.signal.aborted) throw new AiError(409, 'run.cancelled', 'run was cancelled');
@@ -426,11 +460,11 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         // A project's own provider (ADR-056 secret, ai.complete) passes a Chat Completions request through as written.
         // The OpenAI-format providers: a Chat Completions request is passed through as written (Codes C3: OpenRouter
         // speaks that format too, so a person's OpenRouter key answers it as well).
-        const completing = operation === 'complete' && ['openai', 'openrouter'].includes(cred.provider);
+        const completing = operation === 'complete' && (PROVIDER_KIND[cred.provider] === 'openai' || cred.provider === 'custom');
         // Codes C3: POST /v1/messages on the person's own key. Only a provider that speaks Anthropic's Messages API serves
         // it — Anthropic itself, DeepSeek and MiniMax (their own Anthropic-compatible endpoints) and a custom endpoint.
         const messaging = operation === 'messages';
-        const anthropicFormat = ['anthropic', 'deepseek', 'minimax', 'custom'].includes(cred.provider);
+        const anthropicFormat = PROVIDER_KIND[cred.provider] === 'anthropic' || cred.provider === 'anthropic' || cred.provider === 'custom';
         if (messaging && !anthropicFormat) throw new AiError(422, 'credential.unsupported', `the ${cred.provider} credential does not speak the Messages API`);
         if (!messaging && !completing && !['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich'].includes(operation)) throw new AiError(422, 'credential.unsupported', `a person's own key is used for text only, not ${operation}`);
         const guardedFetch = credentialFetch || require('./guarded-fetch').guardedFetch;
@@ -439,9 +473,9 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         const role = wanted && cred.models[wanted] ? wanted : null;
         // On the person's Anthropic key the model the caller asked for is theirs to choose; elsewhere the model they stored
         // is the one their provider serves (a Claude Code model name does not exist at DeepSeek).
-        const model = messaging
+        const model = ctx.defaultModel || (messaging
             ? ((cred.provider === 'anthropic' || cred.provider === 'custom') && req.model) || cred.models.chat || CREDENTIAL_DEFAULT_MODEL[cred.provider] || 'claude-haiku-4-5-20251001'
-            : (req.image && cred.models.vision) || (role && cred.models[role]) || cred.models.chat || CREDENTIAL_DEFAULT_MODEL[cred.provider] || 'gpt-4o-mini';
+            : (req.image && cred.models.vision) || (role && cred.models[role]) || cred.models.chat || CREDENTIAL_DEFAULT_MODEL[cred.provider] || 'gpt-4o-mini');
         const record = { key: cred.providerKey, kind: cred.provider, base_url: cred.base_url, capabilities: cred.capabilities || ['chat', 'json', 'vision'], timeout_ms: 60000 };
         const a = anthropicFormat ? createAnthropicProvider(record, { apiKey: cred.apiKey, fetchImpl: guardedFetch }) : createOpenAiProvider(record, { apiKey: cred.apiKey, fetchImpl: guardedFetch });
         const base = { operation, provider_key: cred.providerKey, model_key: model, route_key: ctx.routeKey || null, route_version: ctx.routeVersion || null, fallback: 0, prompt_hash: ctx.promptHash || null };
@@ -450,6 +484,12 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         const scrub = (text) => {
             const t = String(text == null ? '' : text);
             return cred.apiKey ? t.split(String(cred.apiKey)).join('[redacted]') : t;
+        };
+        const paidBy = paidByOf(cred);
+        const explain = cred.explain || {
+            objective: 'own-key', reasons: ['your own key: no shared provider is called'],
+            paid_by: paidBy, selected: `${cred.provider}/${model}`, candidates: [],
+            attempts: [{ key: paidBy, provider: cred.provider, model, why: 'your own key', status: 'ok', error: null }],
         };
         const timeoutMs = Math.max(1000, Math.min(req.timeoutMs || 60000, 120000));
         const call = messaging ? a.messages : completing ? a.complete : a.chat;
@@ -468,12 +508,16 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                     ctx.logRequest({ ...base, model_key: result.model || model, status: 'ok', output_hash: sha256(result.json || result.text || ''), tokens_in: usage.input || 0, tokens_out: usage.output || 0,
                         tokens_cached: usage.cached || 0, tokens_estimated: usage.estimated ? 1 : 0, cost_usd: cost, latency_ms: latency });
                 }
-                return { result, provider: cred.providerKey, providerKind: cred.provider, model: result.model || model, fallbackUsed: false, usage, cost, latencyMs: latency, synthetic: false, tried: [], startedAt: t0,
-                    ...(cred.explain ? { explain: cred.explain } : {}) };
+                return { result, provider: cred.providerKey, providerKind: cred.provider, model: result.model || model, fallbackUsed: false, usage, cost, latencyMs: latency, synthetic: false, tried: [],
+                    startedAt: t0, explain: { ...explain, selected: `${cred.provider}/${result.model || model}` } };
             } catch (err) {
                 lastErr = err;
                 if (ctx.signal && ctx.signal.aborted) throw new AiError(409, 'run.cancelled', 'run was cancelled');
                 if (ctx.logRequest) ctx.logRequest({ ...base, status: err && err.code === 'provider.timeout' ? 'timeout' : 'error', latency_ms: Date.now() - t0, error: scrub(err && err.message || err).slice(0, 500) });
+                // L36 Y8: the provider refused the key (401/403). The key becomes failing and the event says so.
+                if (err && (err.status === 401 || err.status === 403) && typeof ctx.onCredentialFailed === 'function') {
+                    await ctx.onCredentialFailed({ owner: cred.owner || null, subject: cred.subject || null, provider: cred.provider, providerKey: cred.providerKey, error: scrub(err.message) });
+                }
                 if (err && err.code === 'EADDRNOTPUBLIC') throw new AiError(422, 'credential.endpoint_refused', scrub(err.message));
                 if (streamed) throw new AiError(502, 'provider.stream_broken', `the answer broke off after it began streaming: ${scrub(err && err.message || err).slice(0, 200)}`);
                 if (attempt < config.providerRetries && retryable(err)) { await sleep(config.retryDelayMs, ctx.signal).catch(() => {}); continue; }
@@ -511,6 +555,30 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         return explain.bench || null;
     }
 
+    /** The providers that could serve this request, for the ai.needs_key answer (L36 Y1). */
+    async function servingProviders(route, features, operation, req, selfList = []) {
+        const out = new Set();
+        const add = (key) => { if (CREDENTIAL_PROVIDERS.includes(key)) out.add(key); };
+        const scope = route.constraints && route.constraints.provider_scope;
+        if (route.primary && route.primary.provider) {
+            for (const c of [route.primary, ...(route.fallbacks || [])]) if (c && c.provider) add(c.provider);
+        } else {
+            for (const p of await registry.listProviders()) {
+                if (p.key === 'stub' || !appOffered({}, p)) continue;
+                if (scope === 'local' && !isLocalProvider(p)) continue;
+                if (scope === 'paid' && isFreeProvider(p)) continue;
+                const caps = await offeredCapabilities(p);
+                if (features.some(f => !caps.includes(f))) continue;
+                add(p.key);
+            }
+        }
+        for (const c of selfList) if (credentialCanServe(c.provider, operation, req)) add(c.provider);
+        // A route whose network providers are all unknown to the credential table still names the console's providers:
+        // that is what the person can add under Your AI.
+        if (!out.size) for (const id of CREDENTIAL_PROVIDERS) if (credentialCanServe(id, operation, req)) out.add(id);
+        return [...out].sort();
+    }
+
     async function execute(route, operation, req, ctx = {}) {
         if (ctx.credential) return await executeWithCredential(ctx.credential, operation, req, ctx);
         const features = [operation];
@@ -523,7 +591,62 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         // after that is final, never retried or handed to a fallback whose words would follow the first one's.
         let streamed = false;
         const onDelta = typeof req.onDelta === 'function' ? (d) => { streamed = true; req.onDelta(d); } : null;
+        // L36 Y1: a run on behalf of a person tries the person's OWN keys first, for the providers that can serve the
+        // request. With only_my_keys it never falls back; otherwise the network is the fallback and the explain says so.
+        const prefs = ctx.selfPreferences || {};
+        const selfAttempts = [];
+        const selfList = Array.isArray(ctx.selfCredentials) ? ctx.selfCredentials : [];
+        if (selfList.length || (ctx.selfSubject && prefs.only_my_keys)) {
+            const order = [...selfList].sort((a, b) => {
+                const rank = (x) => (x.status === 'failing' ? 2 : x.status === 'untested' ? 1 : 0);
+                return rank(a) - rank(b) || String(a.provider).localeCompare(String(b.provider));
+            });
+            for (const cred of order) {
+                if (!credentialCanServe(cred.provider, operation, req)) {
+                    selfAttempts.push({ key: paidByOf(cred), provider: cred.provider, model: null, why: 'your own key', status: 'skipped', error: `this key cannot serve ${operation}` });
+                    continue;
+                }
+                const pick = selfModelFor(cred, operation, req, ctx, prefs);
+                const key = paidByOf(cred);
+                try {
+                    const out = await executeWithCredential(cred, operation, req, { ...ctx, defaultModel: pick.model });
+                    const attempts = [...selfAttempts, { key, provider: cred.provider, model: pick.model, why: pick.why, status: 'ok', error: null }];
+                    return {
+                        ...out, fallbackUsed: false,
+                        explain: {
+                            objective: 'own-keys', reasons: ['your own keys are tried before the network\'s providers'],
+                            paid_by: key, selected: `${cred.provider}/${pick.model}`, candidates: [], attempts,
+                        },
+                    };
+                } catch (err) {
+                    const detail = String(err && (err.detail || err.message) || err).slice(0, 300);
+                    selfAttempts.push({ key, provider: cred.provider, model: pick.model, why: pick.why, status: 'failed', error: detail });
+                }
+            }
+            if (prefs.only_my_keys) {
+                const providers = await servingProviders(route, features, operation, req, selfList);
+                const names = providers.length ? providers.join(', ') : 'any provider that can serve this request';
+                throw new AiError(422, 'ai.needs_key',
+                    `only_my_keys is on and none of your keys could serve this request; add a key for ${names} under Your AI`,
+                    { providers, paid_by: null, attempts: selfAttempts, explain: { objective: 'own-keys', reasons: ['only_my_keys: no network fallback'], paid_by: null, selected: null, candidates: [], attempts: selfAttempts } });
+            }
+        }
         let { order: list, explain } = await candidates(route, features, operation, ctx);
+        // L36 Y3: free_first puts the free tiers ahead of metered ones for this person's fallback. Own-key attempts above
+        // are already free to them, so this only reorders the network.
+        if (prefs.free_first && ctx.selfSubject) {
+            const free = new Map();
+            for (const c of list) {
+                if (c.provider === 'stub') { free.set(c.provider, true); continue; }
+                const p = await registry.getProvider(c.provider);
+                free.set(c.provider, !p || isFreeProvider(p));
+            }
+            list = [...list].sort((a, b) => Number(free.get(b.provider)) - Number(free.get(a.provider)));
+        }
+        const attempts = [...selfAttempts];
+        explain.paid_by = 'openvibe';
+        explain.attempts = attempts;
+        explain.reasons = [...(explain.reasons || []), ...(selfAttempts.length ? ['your own keys did not answer; the network is the fallback'] : [])];
         // A first-party service's generate run may name one offer from GET /api/v1/routes. The run then
         // tries that offer alone: no fallback to another model, so the caller gets the model it asked for
         // or an explicit failure. server/runs.js validates the pin against this same offer list first.
@@ -544,10 +667,24 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             const model = c.model || (p && p.default_model) || null;
             const fallback = i > 0;
             const base = { operation, provider_key: c.provider, model_key: model, route_key: ctx.routeKey || null, route_version: ctx.routeVersion || null, fallback: fallback ? 1 : 0, prompt_hash: ctx.promptHash || null, input_hash: ctx.inputHash || null };
+            // L36 Y3: a price ceiling caps the network's fallback; the person's own keys are never capped (above).
+            if (prefs.price_ceiling_usd_per_mtok != null) {
+                const cards = await rateCardsFor(c.provider, model);
+                const outputPrice = cards ? Number(rates.pricesOf(cards).out) || 0 : 0;
+                if (outputPrice > Number(prefs.price_ceiling_usd_per_mtok)) {
+                    const whyPrice = `over_price_ceiling (${outputPrice} > ${prefs.price_ceiling_usd_per_mtok} USD/Mtok)`;
+                    statFor(c.provider).skipped++;
+                    tried.push({ provider: c.provider, skipped: 'over_price_ceiling' });
+                    attempts.push({ key: 'openvibe', provider: c.provider, model, why: 'the router chose it', status: 'skipped', error: whyPrice });
+                    if (ctx.logRequest) ctx.logRequest({ ...base, status: 'skipped', skip_reason: 'over_price_ceiling' });
+                    continue;
+                }
+            }
             const why = await skipReason(p, a, features);
             if (why) {
                 statFor(c.provider).skipped++;
                 tried.push({ provider: c.provider, skipped: why });
+                attempts.push({ key: 'openvibe', provider: c.provider, model, why: 'the router chose it', status: 'skipped', error: why });
                 if (ctx.logRequest) ctx.logRequest({ ...base, status: 'skipped', skip_reason: why });
                 continue;
             }
@@ -588,7 +725,10 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                         });
                     }
                     explain.selected = c.provider;
-                    return { result, provider: c.provider, providerKind: p.kind, model: result.model || model, fallbackUsed: fallback, usage, cost, latencyMs: latency, synthetic: Boolean(result.synthetic || a.synthetic), tried, startedAt: started, explain };
+                    explain.paid_by = 'openvibe';
+                    attempts.push({ key: 'openvibe', provider: c.provider, model: result.model || model, why: fallback ? 'the next network provider after an earlier attempt failed' : 'the first network offer for this route', status: 'ok', error: null });
+                    explain.attempts = attempts;
+                    return { result, provider: c.provider, providerKind: p.kind, model: result.model || model, fallbackUsed: fallback || selfAttempts.some(a => a.status !== 'skipped'), usage, cost, latencyMs: latency, synthetic: Boolean(result.synthetic || a.synthetic), tried, startedAt: started, explain };
                 } catch (err) {
                     lastErr = err;
                     if (ctx.signal && ctx.signal.aborted) {
@@ -609,9 +749,12 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             if (lastErr && lastErr.code === 'media.unreadable') unreadable = lastErr;
             if (!callerFault(lastErr) && !rateLimited(lastErr)) await recordFailure(c.provider, lastErr);
             tried.push({ provider: c.provider, error: String(lastErr && lastErr.message || lastErr).slice(0, 200) });
+            attempts.push({ key: 'openvibe', provider: c.provider, model: lastErr && lastErr.model || model, why: fallback ? 'the next network provider after an earlier attempt failed' : 'the first network offer for this route', status: lastErr && lastErr.code === 'provider.timeout' ? 'timeout' : 'failed', error: String(lastErr && lastErr.message || lastErr).slice(0, 300) });
             log.warn(`[ai] ${operation} via ${c.provider}/${model || '-'} failed: ${lastErr && lastErr.message}`);
         }
         explain.selected = null;
+        explain.paid_by = 'openvibe';
+        explain.attempts = attempts;
         // The media itself could not be read: no provider will do better, and the caller should hear why (and not
         // retry as if a provider were down).
         if (unreadable) {
