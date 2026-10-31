@@ -186,6 +186,7 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
             temperature: input.temperature == null ? null : input.temperature,
             timeoutMs: input.timeout_ms || route.timeout_ms || ROLE_TIMEOUT[input.role] || 25000,
             cacheKey: input.cache_key || null,
+            prefer: ctx.prefer || null,
         };
         const exec = await pool.execute(route, 'chat', req, { ...ctx, routeKey: route.key, routeVersion: route.version, promptHash: sha256({ s: sys, m: messages }) });
         let json = exec.result.json || null;
@@ -205,6 +206,7 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
             maxTokens: Math.max(1, Math.round(input.max_tokens || route.max_output_tokens || 1024)),
             temperature: input.temperature == null ? null : input.temperature,
             timeoutMs: Math.max(route.timeout_ms || 0, 120000),
+            prefer: ctx.prefer || null,
             ...(typeof ctx.onDelta === 'function' ? { onDelta: ctx.onDelta } : {}),
         };
         const exec = await pool.execute(route, 'complete', req, { ...ctx, routeKey: route.key, routeVersion: route.version, promptHash: sha256({ m: openai.messages, t: openai.tools || null }) });
@@ -223,6 +225,7 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
             messages: input.messages,
             maxTokens: Math.max(1, Math.round(input.max_tokens || route.max_output_tokens || 1024)),
             timeoutMs: Math.max(route.timeout_ms || 0, 120000),
+            prefer: ctx.prefer || null,
             ...(typeof ctx.onDelta === 'function' ? { onDelta: ctx.onDelta } : {}),
         };
         for (const k of ['system', 'tools', 'tool_choice', 'stop_sequences', 'temperature', 'top_p', 'top_k', 'metadata']) {

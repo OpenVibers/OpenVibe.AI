@@ -140,6 +140,8 @@ function messagesRouter({ runs, auth, config, log = console }) {
         const input = { messages: b.messages, max_tokens: Math.min(b.max_tokens, MAX_TOKENS) };
         for (const k of FIELDS) if (b[k] !== undefined && b[k] !== null) input[k] = b[k];
         let body = { workflow: 'ai.messages', input };
+        // L37: the soft preference (provider, and a model if the caller wants one). A wish, not a pin.
+        if (b.prefer) body = { ...body, prefer: b.prefer };
         if (req.principal.kind === 'app') body = { ...body, attribution: appAttribution(req.principal) };
         const own = credentialFor(req);
         if (own.error) return anthropicError(res, own.status, own.error);
