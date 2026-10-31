@@ -121,6 +121,8 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
     // the person's Network token or their AI site session (same origin) reaches them; a service token is refused.
     if (credentials && preferences) {
         app.use(require('./me').meRouter({ credentials, preferences, auth, registry, config, clock, log, personSessions, sendError: (res, err, ctx) => sendError(res, err, ctx, log) }));
+        // The same settings as a page for people (GET /you, plain forms on AI's own person session).
+        app.use(require('./you-page').youPageRouter({ credentials, preferences, personSessions, config, log }));
     }
     app.use(consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, env, clock, fetchImpl, log, vault, personSessions }));
     app.use(runPageRouter({ runs, personSessions, log }));
