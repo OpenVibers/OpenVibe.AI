@@ -138,6 +138,10 @@ function load(env = process.env) {
             costWeight: float(env.AI_PLACEMENT_COST_WEIGHT, 0.5),
             latencyWeight: float(env.AI_PLACEMENT_LATENCY_WEIGHT, 0.5),
         },
+        // L36 Y7: the task-aware router's fallback chain tries at most this many providers.
+        routing: {
+            maxAttempts: Math.max(1, int(env.AI_ROUTING_MAX_ATTEMPTS, 3)),
+        },
         // Configurable local HTTP seam: POST {operation, request} JSON to this URL.
         httpSeamUrl: trimUrl(env.AI_HTTP_SEAM_URL),
         // A local model server speaking the OpenAI API (llama.cpp's llama-server, Ollama's /v1): the provider `local`,

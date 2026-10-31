@@ -19,6 +19,7 @@
 const { ids } = require('openvibe-contracts');
 const { AiError, sha256, stableStringify, parseJson, iso } = require('./util');
 const { preferenceLines } = require('./user-modules');
+const { preferredTarget } = require('./providers/task');
 const schemas = require('./schemas');
 const events = require('./events');
 const usageRecord = require('./usage-record');
@@ -243,6 +244,8 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         // An app's own provider (ADR-056 project secret): only on ai.complete, only for an app; its key spends the
         // project's money at its provider, so no tier budget holds it (the app's quotas still count it).
         const projectProvider = body.project_provider == null ? null : projectProviderOf(body.project_provider);
+        // L37: the soft preference (a provider, and a model if the caller wants one). It is a wish, not a pin.
+        const prefer = preferredTarget(body.prefer);
         if (projectProvider) {
             if (!app) throw new AiError(403, 'capability.denied', 'only a developer app names its project\'s own provider');
             if (wf.key !== 'ai.complete') throw new AiError(422, 'input.invalid', 'a project provider is used for ai.complete only');
@@ -283,7 +286,8 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             options: JSON.stringify({ cache: options.cache !== false && credentialSubject === null && !projectProvider && !pinned && !selfKeys, debug: Boolean(options.debug), input_retained: kept.full,
                 ...(credentialSubject !== null ? { credential_subject: credentialSubject } : {}), ...(credentialProvider !== null ? { credential_provider: credentialProvider } : {}),
                 ...(selfKeys ? { self_subject: personSubject } : {}),
-                ...(projectProvider ? { project_provider: projectProvider } : {}), ...(pinned ? { pinned_offer: pinned } : {}) }), created_at: now,
+                ...(projectProvider ? { project_provider: projectProvider } : {}), ...(pinned ? { pinned_offer: pinned } : {}),
+                ...(prefer ? { prefer } : {}) }), created_at: now,
         };
         base.input = stableStringify(kept.value);
 
@@ -512,6 +516,8 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                 // Who asked, for a step that must not call the caller back (research: Search's own web ladder).
                 requesterType: ctx.requesterType, requesterId: ctx.requesterId,
                 ...(ctx.routePin ? { routePin: ctx.routePin } : {}),
+                // L37: the soft preference the caller made (provider, and a model if it named one).
+                prefer: opts.prefer || null,
                 ...(onCredentialFailed ? { onCredentialFailed } : {}),
                 ...(selfSubject ? { selfSubject, selfCredentials: selfCredentials || [], selfPreferences } : {}),
                 ...(credential ? { credential, role: input && typeof input.role === 'string' ? input.role : null } : {}),
