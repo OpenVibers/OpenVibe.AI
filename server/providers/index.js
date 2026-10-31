@@ -44,7 +44,7 @@ function rateLimited(err) {
 }
 
 /** The model a person's credential uses when they stored none, per provider (executeWithCredential). */
-const CREDENTIAL_DEFAULT_MODEL = { anthropic: 'claude-haiku-4-5-20251001', openai: 'gpt-4o-mini', deepseek: 'deepseek-chat', minimax: 'MiniMax-M2', openrouter: 'openrouter/auto' };
+const CREDENTIAL_DEFAULT_MODEL = { anthropic: 'claude-haiku-5-5', openai: 'gpt-4o-mini', deepseek: 'deepseek-chat', minimax: 'MiniMax-M2', openrouter: 'openrouter/auto' };
 
 function createProviderPool({ db, registry, config, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, credentialFetch = null, machineModels = null, bench = null }) {
     // A person's own machine as their model (credential provider node, server/machines.js).

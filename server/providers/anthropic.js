@@ -11,17 +11,32 @@
  * ping). DeepSeek and MiniMax publish Anthropic-compatible endpoints, so the same adapter serves them at another
  * base_url.
  */
-const { postJson, ProviderError, deadline, describeAbort } = require('./common');
+const { postJson, ProviderError, deadline, describeAbort, schemaInstruction } = require('./common');
 const { sseFrames } = require('./stream');
 
 const DEFAULT_BASE_URL = 'https://api.anthropic.com/v1';
 const TEXT_OPS = ['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich'];
 const MESSAGES_FIELDS = ['system', 'tools', 'tool_choice', 'stop_sequences', 'temperature', 'top_p', 'top_k', 'metadata'];
 
-function buildBody({ model, system, messages, image, json, maxTokens, temperature }) {
+/**
+ * The current Claude models (4.6 and later, the 5 family): sampling settings (temperature, top_p, top_k) are refused
+ * with a 400, a forced tool choice ({type: 'tool' | 'any'}) is refused on Fable 5.1, Opus 5.5 and Sonnet 5.5, JSON
+ * comes from structured outputs (output_config.format) and depth from output_config.effort. Older models and the
+ * Anthropic-format endpoints of other providers (DeepSeek, MiniMax) keep the shapes they take.
+ */
+const CURRENT_CLAUDE = /^claude-(fable|mythos|opus|sonnet|haiku)-(5|4-[6-9])\b/i;
+const isCurrentClaude = (model) => CURRENT_CLAUDE.test(String(model || ''));
+const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+
+/** jsonMode: 'format' (structured outputs), 'tool' (a forced tool, older models) or 'prose' (the schema in the system prompt). */
+function buildBody({ model, system, messages, image, json, maxTokens, temperature, effort }, jsonMode) {
+    const current = isCurrentClaude(model);
+    const mode = json ? (jsonMode || (current ? 'format' : 'tool')) : null;
     const body = { model, max_tokens: Math.max(1, maxTokens) };
-    if (system && system.length) {
-        body.system = system.map(x => (x.cache ? { type: 'text', text: x.text, cache_control: { type: 'ephemeral' } } : { type: 'text', text: x.text }));
+    const sys = [...(system || [])];
+    if (mode === 'prose') sys.push({ text: schemaInstruction(json) });
+    if (sys.length) {
+        body.system = sys.map(x => (x.cache ? { type: 'text', text: x.text, cache_control: { type: 'ephemeral' } } : { type: 'text', text: x.text }));
     }
     body.messages = messages.map((m, i) => {
         const last = i === messages.length - 1;
@@ -31,8 +46,12 @@ function buildBody({ model, system, messages, image, json, maxTokens, temperatur
         if (last && image && m.role === 'user') content.push({ type: 'image', source: { type: 'base64', media_type: image.mediaType, data: image.base64 } });
         return { role: m.role, content };
     });
-    if (temperature != null) body.temperature = temperature;
-    if (json) {
+    if (temperature != null && !current) body.temperature = temperature;
+    const output = {};
+    if (current && EFFORTS.includes(effort)) output.effort = effort;
+    if (mode === 'format') output.format = { type: 'json_schema', schema: json.schema };
+    if (Object.keys(output).length) body.output_config = output;
+    if (mode === 'tool') {
         body.tools = [{ name: json.name || 'result', description: json.description || 'Return the result.', input_schema: json.schema }];
         body.tool_choice = { type: 'tool', name: json.name || 'result' };
     }
@@ -44,6 +63,12 @@ function messagesBody(req) {
     const body = { model: req.model, max_tokens: Math.max(1, Number(req.maxTokens) || 1024) };
     if (Array.isArray(req.messages)) body.messages = req.messages;
     for (const k of MESSAGES_FIELDS) if (req[k] !== undefined && req[k] !== null) body[k] = req[k];
+    // A request written for another model, routed to a current Claude model: drop what it refuses rather than fail.
+    if (isCurrentClaude(req.model)) {
+        for (const k of ['temperature', 'top_p', 'top_k']) delete body[k];
+        const tc = body.tool_choice;
+        if (tc && (tc.type === 'tool' || tc.type === 'any')) body.tool_choice = { type: 'auto', ...(tc.disable_parallel_tool_use ? { disable_parallel_tool_use: true } : {}) };
+    }
     return body;
 }
 
@@ -113,12 +138,21 @@ function createAnthropicProvider(record, { apiKey = '', fetchImpl = globalThis.f
         : { 'anthropic-version': '2023-06-01' });
 
     async function chat(req) {
-        const j = await postJson(`${baseUrl}/messages`, headers(), buildBody(req), { signal: req.signal, timeoutMs: req.timeoutMs, fetchImpl });
+        // Structured output steps down when an endpoint refuses it: output_config.format (or the forced tool) -> the
+        // schema in the system prompt, whose prose JSON the engine repairs.
+        let jsonMode = null, j;
+        for (;;) {
+            try { j = await postJson(`${baseUrl}/messages`, headers(), buildBody(req, jsonMode), { signal: req.signal, timeoutMs: req.timeoutMs, fetchImpl }); break; } catch (e) {
+                if (req.json && jsonMode !== 'prose' && e instanceof ProviderError && e.status === 400 && /output_config|format|schema|tool_choice|tool/i.test(e.message)) { jsonMode = 'prose'; continue; }
+                throw e;
+            }
+        }
         const content = j.content || [];
         let text = content.filter(c => c.type === 'text').map(c => c.text).join('').trim();
         let jsonOut = null;
         const tool = content.find(c => c.type === 'tool_use');
         if (tool && tool.input) { jsonOut = tool.input; if (!text) text = JSON.stringify(tool.input); }
+        if (!jsonOut && req.json && (!jsonMode || jsonMode === 'format') && isCurrentClaude(req.model)) { try { jsonOut = JSON.parse(text); } catch { /* the engine repairs it */ } }
         const u = j.usage || {};
         const cached = u.cache_read_input_tokens || 0;
         return { text, json: jsonOut, model: j.model || req.model, usage: { input: (u.input_tokens || 0) + cached + (u.cache_creation_input_tokens || 0), output: u.output_tokens || 0, cached } };
@@ -176,4 +210,4 @@ function createAnthropicProvider(record, { apiKey = '', fetchImpl = globalThis.f
     return adapter;
 }
 
-module.exports = { createAnthropicProvider, buildBody, messagesBody, DEFAULT_BASE_URL };
+module.exports = { createAnthropicProvider, buildBody, messagesBody, isCurrentClaude, DEFAULT_BASE_URL };
