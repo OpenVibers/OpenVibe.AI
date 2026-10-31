@@ -31,7 +31,7 @@ const { createAnthropicProvider } = require('./anthropic');
 const { createHttpSeamProvider } = require('./http');
 const { createWhisperProvider } = require('./whisper');
 const rates = require('./rate-cards');
-const { detectTask, capabilitiesOf, hardNeeds, rank, reasonFor, workKind, leadingText } = require('./task');
+const { detectTask, capabilitiesOf, hardNeeds, rank, reasonFor, workKind, leadingText, preferredTarget, preferMatches } = require('./task');
 const { createWarmCache } = require('./warm-cache');
 
 /** 4xx that the request itself caused (bad image, schema, max_tokens...), as opposed to auth, rate or availability. */
@@ -439,6 +439,18 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         return Number(meta.timeout_ms) || Number(p.timeout_ms) || 0;
     }
 
+    /**
+     * What the catalogue knows about the model a caller asked for (L37): the provider, and what the model can do.
+     * A model the catalogue never described is not refused: the provider decides.
+     */
+    async function preferredModel(provider, model, task) {
+        const entry = provider ? await adapter(provider) : null;
+        const p = entry && entry.record;
+        const row = model ? await registry.getModel(provider, model) : null;
+        const caps = capabilitiesOf(row, p);
+        return { known: Boolean(entry), provider, model, caps, missing: hardNeeds(caps, task) };
+    }
+
     /** The health the pool left a candidate with: 0 up, 1 degraded, 2 down. */
     function healthRank(excluded) {
         const why = String(excluded || '');
@@ -486,7 +498,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         if (stub) order.push(stub);
         const view = ranked.ranked.map((e) => ({ provider: e.provider, model: e.model, why: reasonFor(e, task), cost: Number.isFinite(e.price) ? e.price : null, tier: e.tier }));
         const reasons = new Map(ranked.order.map((e) => [e.provider + ':' + (e.model || ''), reasonFor(e, task)]));
-        return { order, ranked: view, reasons };
+        return { order, ranked: view, reasons, keepOrder };
     }
 
     async function skipReason(p, a, features) {
@@ -675,6 +687,11 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         if (req.openai && Array.isArray(req.openai.tools) && req.openai.tools.length) features.push('tools');
         // L36 Y7: the task, read off the request itself: what it needs, what it wants out, how heavy it is.
         const task = detectTask({ operation, req, ctx, route });
+        // L37: a soft preference. The caller names a provider (and a model if it wants one). It never disables the
+        // person's own keys, never overrides only_my_keys, never beats the price ceiling, and never forces a model
+        // that fails a hard need. An unknown id is ignored, never an error.
+        const prefer = preferredTarget(req.prefer);
+        const preferState = prefer ? { provider: prefer.provider, model: prefer.model, honoured: false, why: '' } : null;
         const tried = [];
         let unreadable = null;   // a candidate could not read the caller's media (whisper's ffmpeg): no other will either
         // A streamed answer (/v1/chat/completions, stream: true) is the caller's once a delta has gone out: a failure
@@ -689,23 +706,42 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         if (selfList.length || (ctx.selfSubject && prefs.only_my_keys)) {
             const order = [...selfList].sort((a, b) => {
                 const rank = (x) => (x.status === 'failing' ? 2 : x.status === 'untested' ? 1 : 0);
-                return rank(a) - rank(b) || String(a.provider).localeCompare(String(b.provider));
+                // L37: the person's own key for the provider they asked for answers first, at no fee.
+                const want = (x) => (prefer && prefer.provider && String(x.provider) === prefer.provider) ? 0 : 1;
+                return want(a) - want(b) || rank(a) - rank(b) || String(a.provider).localeCompare(String(b.provider));
             });
             for (const cred of order) {
                 if (!credentialCanServe(cred.provider, operation, req)) {
                     selfAttempts.push({ key: paidByOf(cred), provider: cred.provider, model: null, why: 'your own key', status: 'skipped', error: `this key cannot serve ${operation}` });
                     continue;
                 }
-                const pick = selfModelFor(cred, operation, req, ctx, prefs);
+                let pick = selfModelFor(cred, operation, req, ctx, prefs);
+                // L37: the model they named, when it can do this job. A model that cannot is never forced.
+                if (prefer && prefer.model && (!prefer.provider || String(cred.provider) === prefer.provider)) {
+                    const check = await preferredModel(prefer.provider || cred.provider, prefer.model, task);
+                    if (check.missing.length) {
+                        if (preferState && !preferState.why) preferState.why = check.missing.includes('no_vision') ? 'the model you named cannot see' : 'the model you named cannot do this job';
+                    } else {
+                        pick = { model: prefer.model, why: 'your own ' + cred.provider + ' key, with the model you asked for' };
+                    }
+                }
                 const key = paidByOf(cred);
                 try {
                     const out = await executeWithCredential(cred, operation, req, { ...ctx, defaultModel: pick.model });
                     const attempts = [...selfAttempts, { key, provider: cred.provider, model: pick.model, why: pick.why, status: 'ok', error: null }];
+                    // L37: the preference was honoured when their own key for that provider answered.
+                    if (preferState && prefer.provider && String(cred.provider) === prefer.provider) {
+                        preferState.honoured = true;
+                        preferState.why = 'your own ' + cred.provider + ' key answered, as you asked';
+                    } else if (preferState && !preferState.honoured && !preferState.why) {
+                        preferState.why = 'your ' + cred.provider + ' key answered instead: you have no key for the one you asked for';
+                    }
                     return {
                         ...out, fallbackUsed: false,
                         explain: {
                             objective: 'own-keys', reasons: ['your own keys are tried before the network\'s providers'],
                             paid_by: key, selected: `${cred.provider}/${pick.model}`, candidates: [], attempts,
+                            prefer: preferState ? { ...preferState } : null,
                         },
                     };
                 } catch (err) {
@@ -718,7 +754,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                 const names = providers.length ? providers.join(', ') : 'any provider that can serve this request';
                 throw new AiError(422, 'ai.needs_key',
                     `only_my_keys is on and none of your keys could serve this request; add a key for ${names} under Your AI`,
-                    { providers, paid_by: null, attempts: selfAttempts, explain: { objective: 'own-keys', reasons: ['only_my_keys: no network fallback'], paid_by: null, selected: null, candidates: [], attempts: selfAttempts } });
+                    { providers, paid_by: null, attempts: selfAttempts, explain: { objective: 'own-keys', reasons: ['only_my_keys: no network fallback'], paid_by: null, selected: null, candidates: [], attempts: selfAttempts, prefer: preferState ? { ...preferState, why: preferState.why || 'you have no key for it, and only_my_keys never falls back to the network' } : null } });
             }
         }
         let { order: list, explain } = await candidates(route, features, operation, ctx);
@@ -750,6 +786,28 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         list = ranked.order;
         explain.task = task;
         explain.ranked = ranked.ranked;
+        // L37: the soft preference. The provider (and model) the caller asked for goes first, when it can do the
+        // job; a pinned route keeps its own order (the pin is the admin's decision).
+        if (preferState) {
+            if (prefer.provider && !(await registry.getProvider(prefer.provider))) preferState.why = 'no provider by that name';
+            else if (prefer.model) {
+                // L37: the model they named cannot do this job: it is never forced.
+                const check = await preferredModel(prefer.provider, prefer.model, task);
+                if (check.missing.length) preferState.why = check.missing.includes('no_vision') ? 'the model you named cannot see' : 'the model you named cannot do this job';
+            }
+            if (ranked.keepOrder) {
+                preferState.why = 'this route is pinned; the pin decides';
+            } else {
+                const at = list.findIndex((c) => preferMatches(c.provider, c.model, prefer));
+                if (at > 0) {
+                    const [chosen] = list.splice(at, 1);
+                    list.unshift(chosen);
+                } else if (at < 0 && !preferState.why) {
+                    preferState.why = 'no ' + (prefer.provider || 'provider') + (prefer.model ? '/' + prefer.model : '') + ' offer could serve this request';
+                }
+            }
+            explain.prefer = preferState;
+        }
         const attempts = [...selfAttempts];
         explain.paid_by = 'openvibe';
         explain.attempts = attempts;
@@ -784,6 +842,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                 const outputPrice = cards ? Number(rates.pricesOf(cards).out) || 0 : 0;
                 if (outputPrice > Number(prefs.price_ceiling_usd_per_mtok)) {
                     const whyPrice = `over_price_ceiling (${outputPrice} > ${prefs.price_ceiling_usd_per_mtok} USD/Mtok)`;
+                    if (preferState && preferMatches(c.provider, model, prefer)) { preferState.honoured = false; preferState.why = 'it is over your price ceiling'; }
                     statFor(c.provider).skipped++;
                     tried.push({ provider: c.provider, skipped: 'over_price_ceiling' });
                     attempts.push({ key: 'openvibe', provider: c.provider, model, why: chosen || 'the router chose it', status: 'skipped', error: whyPrice });
@@ -841,6 +900,11 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                     }
                     explain.selected = c.provider;
                     explain.paid_by = 'openvibe';
+                    // L37: the preference was honoured when the offer it named answered.
+                    if (preferState && preferMatches(c.provider, model, prefer)) {
+                        preferState.honoured = true;
+                        preferState.why = 'the ' + c.provider + ' offer answered, as you asked';
+                    }
                     attempts.push({ key: 'openvibe', provider: c.provider, model: result.model || model, why: chosen || (fallback ? 'the next network provider after an earlier attempt failed' : 'the first network offer for this route'), status: 'ok', error: null });
                     warm.remember(warmSubject(ctx, route), leadingText(req), c.provider);
                     explain.attempts = attempts;
