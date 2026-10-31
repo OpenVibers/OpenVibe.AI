@@ -112,7 +112,10 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     if (listen && config.memoryJobs && config.memoryJobs.enabled) memoryJobs.start();
     if (listen) {
         server = await new Promise((resolve, reject) => {
-            const s = app.listen(config.port, config.host, () => resolve(s));
+            // Socket activation (2026-10-31): systemd's .socket unit holds the listener across restarts, so a deploy
+            // queues requests in the kernel instead of answering 502. Without the socket unit, the usual listen.
+            const socketActivated = process.env.LISTEN_FDS === '1' && Number(process.env.LISTEN_PID) === process.pid;
+            const s = app.listen(...(socketActivated ? [{ fd: 3 }] : [config.port, config.host]), () => resolve(s));
             s.on('error', reject);
         });
         server.keepAliveTimeout = 65000;
