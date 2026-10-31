@@ -21,6 +21,7 @@ const { AiError, sha256, stableStringify, parseJson, iso } = require('./util');
 const { preferenceLines } = require('./user-modules');
 const schemas = require('./schemas');
 const events = require('./events');
+const usageRecord = require('./usage-record');
 const usageSamples = require('./usage-samples');
 
 const TERMINAL = new Set(['succeeded', 'failed', 'cancelled', 'cached']);
@@ -312,6 +313,8 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                         readings: [{ attempt: 0, kind: 'in', model: hit.model_key || null, quantity: 0, cost: 0, freeAllowanceUsed: 0 }] });
                     await events.runChanged(await getRow(id));
                 });
+                // A cache hit is still a run: its record says so (no tokens, no money).
+                await publishUsage({ row: await getRow(id), outcome: 'cached' });
                 await registry.audit(principal.sub, 'run.create', 'run', id, { trace, metadata: { workflow: wf.key, version: wf.version, status: 'cached', cached_from: hit.run_id } });
                 return { run: await get(id), created: true, promise: null };
             }
@@ -388,6 +391,79 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         };
     }
 
+    /**
+     * The record of a run (plan L40): the tokens (the cache read and the cache write counted apart), the money and
+     * who paid. It is published as one ai.call.recorded@1 event; OpenVibe.Report keeps the ledger. The record never
+     * carries the prompt or the answer.
+     */
+    async function publishUsage({ row, outcome, usage = {}, provider = null, model = null, attempts = 0, latencyMs = null, ttftMs = null }) {
+        try {
+            const opts = parseJson(row.options, {});
+            const payer = await payerOf({ row, providerKey: provider, opts });
+            const tokens = {
+                input: Math.max(0, (usage.input || 0) - (usage.cached || 0) - (usage.cache_write || 0)),
+                output: usage.output || 0, reasoning: usage.reasoning || 0,
+                cache_read: usage.cached || 0, cache_write: usage.cache_write || 0,
+            };
+            const cards = provider ? await pool.rateCardsFor(provider, model) : null;
+            const prices = usageRecord.pricesOf(cards);
+            const money = usageRecord.moneyOf({ prices, tokens, paidBy: payer.paid_by, feeRate: (config.usage && config.usage.feeRate) || 0 });
+            const rec = usageRecord.recordOf({
+                system: 'ai', run_id: row.id, subject: subjectOf(row), attribution: attributionOf(row), surface: row.workflow_key || '',
+                provider: payer.provider || provider || null, model: model || null, effort: opts.effort || null,
+                paid_by: payer.paid_by, paid_by_detail: payer.detail,
+                input: tokens.input, output: tokens.output, reasoning: tokens.reasoning, cache_read: tokens.cache_read,
+                cache_write: tokens.cache_write, cache_write_ttl: usage.cache_write_ttl || null,
+                images: usage.images || 0, audio_seconds: usage.audio_seconds || 0, video_seconds: usage.video_seconds || 0,
+                list_cost_usd: money.list_cost_usd, charged_usd: money.charged_usd, fee_usd: money.fee_usd, cache_saved_usd: money.cache_saved_usd,
+                price_source: prices.source, price_date: prices.date,
+                latency_ms: latencyMs, ttft_ms: ttftMs, attempts, outcome,
+                at: row.finished_at || new Date(clock.now()).toISOString(),
+            });
+            // The event (ai.call.recorded) is queued in its own transaction, like every other event here.
+            await db.tx(async () => { await events.callRecorded(rec); });
+        } catch (err) {
+            log.warn(`[runs] ${row.id}: the usage record was not written: ${err && err.message}`);
+        }
+    }
+
+    /** The person the run was for, when there is one (a run on behalf of a service has none). */
+    const subjectOf = (row) => {
+        const o = parseJson(row.on_behalf_of, null);
+        return o && o.type === 'user' && o.id ? o.id : null;
+    };
+
+    /** The site or app the run came from, as '<type>:<id>' (empty when nothing is known). */
+    const attributionOf = (row) => {
+        const a = parseJson(row.attribution, null);
+        if (!a) return '';
+        if (typeof a === 'string') return a;
+        const kind = a.service || a.type || '';
+        return a.id ? `${kind}:${a.id}` : kind;
+    };
+
+    /**
+     * Who paid for this run (L40): the person's own key, the OpenVibe key, their plan, their own machine, a free
+     * tier, the network's allowance or an organisation's key. A person's own key is never charged here.
+     */
+    async function payerOf({ row, providerKey, opts }) {
+        if (opts.credential_subject) {
+            const cred = await credentials.get(row.requester_id, opts.credential_subject, opts.credential_provider || null).catch(() => null);
+            if (cred && cred.provider === 'node') return { paid_by: 'own_machine', detail: cred.machine || 'node', provider: 'node' };
+            const name = (cred && cred.provider) || 'own';
+            const hint = cred && cred.key_hint ? String(cred.key_hint) : '';
+            return { paid_by: 'own_key', detail: hint ? `${name} ...${hint}` : name, provider: name };
+        }
+        if (opts.project_provider) return { paid_by: 'org_key', detail: `project:${opts.project_provider.project_id || ''}`, provider: providerKey };
+        const p = providerKey ? await registry.getProvider(providerKey) : null;
+        const profile = (p && p.billing_profile) || 'metered';
+        const name = providerKey || (p && p.key) || null;
+        if (profile === 'subscription') return { paid_by: 'plan', detail: (p && (p.pool_key || p.key)) || name, provider: name };
+        if (profile === 'free') return { paid_by: 'free_tier', detail: (p && (p.pool_key || p.key)) || name, provider: name };
+        if (profile === 'byok') return { paid_by: 'own_key', detail: name, provider: name };
+        if (p && p.metadata && p.metadata.allowance === 'network') return { paid_by: 'network_allowance', detail: name, provider: name };
+        return { paid_by: 'openvibe_key', detail: name, provider: name };
+    }
     async function execute(id, { controller, reserved, scope, ctx, input, hold = null }) {
         const row = await getRow(id);
         if (!row || row.status !== 'queued') { inflight.delete(id); return; }
@@ -457,6 +533,8 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             // recorded (the fallback is named in explain). A run that used the person's own key spends nothing here.
             const usedOwnKey = String(r.provider || '').startsWith('byo:self:');
             if (r.provider && (reserved || (opts.self_subject && !usedOwnKey))) await quotas.account(ctx, reserved, { provider: r.provider, model: r.model, tokensIn: r.usage.input, tokensOut: r.usage.output, tokensCached: r.usage.cached, cost: r.cost, attempts: logged, runId: id, traceId: row.trace_id, hold });
+            // The record of the run (L40): the tokens with the cache apart, the money and who paid.
+            await publishUsage({ row: await getRow(id), outcome: 'succeeded', usage: r.usage, provider: r.provider, model: r.model, attempts, latencyMs: r.latencyMs, ttftMs: r.ttftMs });
             // What the run spent goes on the budget of its run token (Codes C3): the same tokens and cost the
             // quota accounting counts, so the next request of a run over its budget is refused.
             if (runBudgets && ctx.runJti) await runBudgets.add(ctx.runJti, { tokens: r.usage.input + r.usage.output, cost: r.cost });
@@ -478,7 +556,11 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                     .run(cancelled ? 'cancelled' : 'failed', code, extra ? `${detail} ${extra}` : detail, attempts, explain, iso(clock.now()), id);
                 if (f.changes) await events.runChanged(await getRow(id));
             });
-            const spent = await db.prepare("SELECT COALESCE(SUM(tokens_in),0)::bigint ti, COALESCE(SUM(tokens_out),0)::bigint tout, COALESCE(SUM(cost_usd),0) c FROM requests WHERE run_id = ? AND status = 'ok'").get(id);
+            const spent = await db.prepare("SELECT COALESCE(SUM(tokens_in),0)::bigint ti, COALESCE(SUM(tokens_out),0)::bigint tout, COALESCE(SUM(tokens_cached),0)::bigint tc, COALESCE(SUM(cost_usd),0) c FROM requests WHERE run_id = ? AND status = 'ok'").get(id);
+            // A run that broke still spent: its record says what it cost and who paid (L40).
+            await publishUsage({ row: await getRow(id), outcome: cancelled ? 'cancelled' : 'failed',
+                usage: { input: Number(spent.ti) || 0, output: Number(spent.tout) || 0, cached: Number(spent.tc) || 0 },
+                provider: logged.length ? logged[logged.length - 1].provider_key : null, model: null, attempts });
             // Account the spent tokens/cost as before, but always roll up the finished attempts (the failed
             // ones included) into provider_stats_daily/placement_state: a run that answered nothing still
             // tells the router a provider was unhealthy.

@@ -107,6 +107,48 @@ async function credentialFailed({ subject, provider, error, owner = null }) {
     dbRef.afterCommit(() => svc && svc.kick());
     return env;
 }
+
+/**
+ * Queue the ledger's record of one AI call (ai.call.recorded@1). MUST be awaited inside the transaction that
+ * wrote the record, so the event and the row commit together. The payload carries the tokens, the money and the
+ * ids: never a prompt, never an answer.
+ */
+function callPayload(rec) {
+    return {
+        subject: rec.subject || null, attribution: rec.attribution || '', surface: rec.surface || '', system: rec.system,
+        provider: rec.provider || null, model: rec.model || null, effort: rec.effort || null,
+        paid_by: rec.paid_by, paid_by_detail: rec.paid_by_detail || null,
+        input: rec.tokens_input, output: rec.tokens_output, reasoning: rec.tokens_reasoning,
+        cache_read: rec.tokens_cache_read, cache_write: rec.tokens_cache_write, cache_write_ttl: rec.cache_write_ttl || null,
+        images: rec.images, audio_seconds: rec.audio_seconds, video_seconds: rec.video_seconds,
+        list_cost_usd: rec.list_cost_usd, charged_usd: rec.charged_usd, fee_usd: rec.fee_usd, cache_saved_usd: rec.cache_saved_usd,
+        price_source: rec.price_source, price_date: rec.price_date || null,
+        latency_ms: rec.latency_ms, ttft_ms: rec.ttft_ms, attempts: rec.attempts, outcome: rec.outcome,
+        run_id: rec.run_id || null, turn_id: rec.turn_id || null, at: rec.at,
+    };
+}
+
+/**
+ * Queue the record of one AI call (ai.call.recorded@1). MUST be awaited inside a transaction, like every other
+ * event here: a no-op while publishing is off.
+ */
+async function callRecorded(rec) {
+    if (!svc || !rec) return null;
+    const payload = callPayload(rec);
+    const env = await svc.emitIn(dbRef, {
+        event_type: 'ai.call.recorded',
+        actor: { type: 'service', id: 'ai' },
+        subject: rec.run_id ? { type: 'run', id: rec.run_id } : { type: 'user', id: rec.subject || 'anonymous' },
+        visibility: 'internal',
+        priority: 'low',
+        payload,
+    });
+    queued++;
+    dbRef.afterCommit(() => svc && svc.kick());
+    return env;
+}
+
+
 async function status() {
     if (!svc) return { enabled: false };
     const s = await svc.status();
@@ -125,4 +167,6 @@ async function stop() {
 }
 function _reset() { if (svc) svc.stop(); svc = null; queued = 0; }
 
-module.exports = { init, runChanged, credentialFailed, payloadOf, status, stop, _reset };
+module.exports = { init, runChanged, credentialFailed, callRecorded, callPayload, payloadOf, status, stop, _reset };
+
+

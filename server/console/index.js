@@ -391,7 +391,9 @@ function consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, e
             provider_key: p.key, model_key: String(b.model_key || '').trim(), display_name: String(b.display_name || '').trim() || null, type: 'chat',
             supports: { json: true, vision: !!b.vision, tools: !!b.tools, streaming: true },
             // Prices are the person's, typed from the provider's own price page (which they name), checked today.
-            ...(price(b.cost_in) != null || price(b.cost_out) != null ? { cost: { in_per_mtok: price(b.cost_in) ?? null, out_per_mtok: price(b.cost_out) ?? null, ...(source ? { source, verified_at: new Date(clock.now()).toISOString().slice(0, 10) } : {}) } } : {}),
+            // The cache prices are optional (L40): nobody typed them means the record says 'no cache price' and the
+            // cache tokens are priced at the plain input price.
+            ...(price(b.cost_in) != null || price(b.cost_out) != null ? { cost: { in_per_mtok: price(b.cost_in) ?? null, out_per_mtok: price(b.cost_out) ?? null, cached_per_mtok: price(b.cost_cache_read) ?? null, cache_write_per_mtok: price(b.cost_cache_write) ?? null, ...(source ? { source, verified_at: new Date(clock.now()).toISOString().slice(0, 10) } : {}) } } : {}),
         }, who(req));
         res.redirect(303, '/console/providers?done=model_added');
     }));

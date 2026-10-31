@@ -95,7 +95,7 @@ t.test('OpenAI adapter steps down json_schema -> json_object on a gateway that r
     assert.ok(!systems[0].includes('JSON Schema'), 'not while structured output carries it');
     assert.ok(systems[1].includes('matches this JSON Schema exactly') && systems[1].includes('{"type":"object"}'), systems[1]);
     assert.strictEqual(r.text, '{"a":1}');
-    assert.deepStrictEqual(r.usage, { input: 7, output: 3, cached: 2 });
+    assert.deepStrictEqual(r.usage, { input: 7, output: 3, reasoning: 0, cached: 2, cache_write: 0, cache_write_ttl: null });
     assert.ok(a.supports('embed') && a.supports('vision'));
     await srv.close();
 });
@@ -120,7 +120,7 @@ t.test('Anthropic adapter returns tool JSON and counts cache reads', async () =>
     const a = createAnthropicProvider({ key: 'a', base_url: srv.url, capabilities: [] }, { apiKey: 'ak' });
     const r = await a.chat(req({ json: { name: 'r', schema: { type: 'object' } } }));
     assert.deepStrictEqual(r.json, { ok: true });
-    assert.deepStrictEqual(r.usage, { input: 16, output: 2, cached: 10 });
+    assert.deepStrictEqual(r.usage, { input: 16, output: 2, reasoning: 0, cached: 10, cache_write: 1, cache_write_ttl: '5m' });
     assert.strictEqual(a.supports('embed'), false);
     await srv.close();
 });

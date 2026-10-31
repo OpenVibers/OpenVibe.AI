@@ -217,6 +217,7 @@ function providers({ staff, csrf, rows, models, canManage, stubFallback, notice,
 <form class="inline" method="post" action="/console/providers/${enc(p.key)}/models">${csrfField(csrf)}<label>Model <input type="text" name="model_key" required maxlength="200" placeholder="deepseek-flash" spellcheck="false"></label>
 <label><input type="checkbox" name="vision" value="1"> reads pictures</label> <label><input type="checkbox" name="tools" value="1"> tools</label>
 <label>$ in / Mtok <input type="number" name="cost_in" step="0.0001" min="0" class="num"></label> <label>$ out / Mtok <input type="number" name="cost_out" step="0.0001" min="0" class="num"></label>
+<label>$ cache read / Mtok <input type="number" name="cost_cache_read" step="0.0001" min="0" class="num"></label> <label>$ cache write / Mtok <input type="number" name="cost_cache_write" step="0.0001" min="0" class="num"></label>
 <label>from the price page <input type="url" name="price_source" placeholder="https://…/pricing"></label><button type="submit">Register model</button></form></details></td></tr>` : '');
     return layout({
         title: 'Providers', section: 'providers', staff, csrf, notice, error, body: html`<h1>Providers and models</h1>
@@ -232,12 +233,12 @@ ${canManage ? html`<td><form class="inline" method="post" action="/console/provi
 ${p.health.state !== 'closed' || p.health.consecutive_failures ? html` <form class="inline" method="post" action="/console/providers/${enc(p.key)}/reset">${csrfField(csrf)}<button type="submit">Reset circuit<span class="sr-only"> of ${p.key}</span></button></form>` : ''}</td>` : ''}
 </tr>${manageRow(p)}`), 'no providers.')}
 ${canManage ? '' : html`<p class="muted">Enabling, disabling and circuit resets need <code>ai.provider.manage</code> (the owner's <code>staff.secrets.manage</code>).</p>`}
-${table('Models', ['Provider', 'Model', 'Type', 'Status', 'Strength', 'Context / max output', 'Cost per Mtok (in / out / cached)', 'Supports'], models.map((m) => html`<tr>
+${table('Models', ['Provider', 'Model', 'Type', 'Status', 'Strength', 'Context / max output', 'Cost per Mtok (in / out / cached / cache write)', 'Supports'], models.map((m) => html`<tr>
 <td><code>${m.provider_key}</code></td><td><code>${m.model_key}</code>${m.display_name && m.display_name !== m.model_key ? html`<br><span class="muted">${m.display_name}</span>` : ''}</td><td>${m.type}</td>
 <td>${badge(m.status)}${m.metadata && m.metadata.missing_since ? html`<br><span class="muted">no longer listed since ${when(m.metadata.missing_since)}</span>` : ''}${canManage ? html`<form class="inline" method="post" action="/console/models/${enc(m.provider_key)}/${enc(m.model_key)}/status">${csrfField(csrf)}<input type="hidden" name="status" value="${m.status === 'active' ? 'disabled' : 'active'}"><button type="submit">${m.status === 'active' ? 'Turn off' : 'Turn on'}<span class="sr-only"> ${m.model_key}</span></button></form>` : ''}</td>
 <td>${m.metadata && m.metadata.tier ? html`${m.metadata.tier}${m.metadata.reasoning ? ', thinks first' : ''}${m.metadata.note ? html`<br><span class="muted">${m.metadata.note}</span>` : ''}` : '—'}</td>
 <td>${m.context_window ? n(m.context_window) : '—'} / ${m.max_output ? n(m.max_output) : '—'}</td>
-<td>${m.cost.in_per_mtok != null ? usd(m.cost.in_per_mtok) : '—'} / ${m.cost.out_per_mtok != null ? usd(m.cost.out_per_mtok) : '—'} / ${m.cost.cached_per_mtok != null ? usd(m.cost.cached_per_mtok) : '—'}</td>
+<td>${m.cost.in_per_mtok != null ? usd(m.cost.in_per_mtok) : '—'} / ${m.cost.out_per_mtok != null ? usd(m.cost.out_per_mtok) : '—'} / ${m.cost.cached_per_mtok != null ? usd(m.cost.cached_per_mtok) : '—'} / ${m.cost.cache_write_per_mtok != null ? usd(m.cost.cache_write_per_mtok) : '—'}</td>
 <td>${Object.entries(m.supports).filter(([, v]) => v).map(([k]) => k).join(', ') || '—'}</td></tr>`), 'no models registered (providers use their default model).')}`,
     });
 }

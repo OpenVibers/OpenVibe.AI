@@ -122,6 +122,8 @@ function createRegistry(db, { clock = { now: () => Date.now() }, env = process.e
             context_window: r.context_window, max_output: r.max_output,
             // The price and its platform.rate-card@1 terms (migrations/0004); a NULL date or source is unknown, never filled in.
             cost: { in_per_mtok: r.cost_in_per_mtok, out_per_mtok: r.cost_out_per_mtok, cached_per_mtok: r.cost_cached_per_mtok,
+                // The cache write price is optional (L40): it is only in the shape once somebody typed it.
+                ...(r.cost_cache_write_per_mtok == null ? {} : { cache_write_per_mtok: r.cost_cache_write_per_mtok }),
                 free_allowance: r.free_allowance == null ? 0 : Number(r.free_allowance), reset_period: r.reset_period || 'month',
                 effective_from: r.effective_from ?? null, source: r.source ?? null, verified_at: r.verified_at ?? null },
             supports: { json: !!r.supports_json, tools: !!r.supports_tools, streaming: !!r.supports_streaming, vision: !!r.supports_vision },
@@ -150,19 +152,20 @@ function createRegistry(db, { clock = { now: () => Date.now() }, env = process.e
         const sup = input.supports || (prev && prev.supports) || {};
         const t = now();
         await db.prepare(`INSERT INTO models (provider_key, model_key, display_name, type, status, context_window, max_output, cost_in_per_mtok, cost_out_per_mtok, cost_cached_per_mtok,
-                free_allowance, reset_period, effective_from, source, verified_at,
+                cost_cache_write_per_mtok, free_allowance, reset_period, effective_from, source, verified_at,
                 supports_json, supports_tools, supports_streaming, supports_vision, metadata, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(provider_key, model_key) DO UPDATE SET display_name = excluded.display_name, type = excluded.type, status = excluded.status,
               context_window = excluded.context_window, max_output = excluded.max_output, cost_in_per_mtok = excluded.cost_in_per_mtok,
               cost_out_per_mtok = excluded.cost_out_per_mtok, cost_cached_per_mtok = excluded.cost_cached_per_mtok,
+              cost_cache_write_per_mtok = excluded.cost_cache_write_per_mtok,
               free_allowance = excluded.free_allowance, reset_period = excluded.reset_period, effective_from = excluded.effective_from,
               source = excluded.source, verified_at = excluded.verified_at, supports_json = excluded.supports_json,
               supports_tools = excluded.supports_tools, supports_streaming = excluded.supports_streaming, supports_vision = excluded.supports_vision,
               metadata = excluded.metadata, updated_at = excluded.updated_at`)
             .run(input.provider_key, input.model_key, input.display_name || (prev && prev.display_name) || input.model_key, type, status,
                 input.context_window ?? (prev && prev.context_window) ?? null, input.max_output ?? (prev && prev.max_output) ?? null,
-                cost.in_per_mtok ?? null, cost.out_per_mtok ?? null, cost.cached_per_mtok ?? null,
+                cost.in_per_mtok ?? null, cost.out_per_mtok ?? null, cost.cached_per_mtok ?? null, cost.cache_write_per_mtok ?? null,
                 terms.free_allowance ?? 0, terms.reset_period || 'month', terms.effective_from || null, terms.source || null, terms.verified_at || null,
                 sup.json === false ? 0 : 1, sup.tools ? 1 : 0, sup.streaming ? 1 : 0, sup.vision ? 1 : 0,
                 JSON.stringify(input.metadata || (prev && prev.metadata) || {}), t, t);

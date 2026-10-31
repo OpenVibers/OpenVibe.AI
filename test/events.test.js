@@ -14,6 +14,13 @@ const live = token('live', ALL);
 let h;
 const queued = async () => (await h.db.prepare('SELECT envelope FROM event_outbox ORDER BY id').all()).map((r) => (typeof r.envelope === 'string' ? (typeof r.envelope === 'string' ? (typeof r.envelope === 'string' ? JSON.parse(r.envelope) : r.envelope) : r.envelope) : r.envelope));
 const valid = (env) => { const r = contracts.validate(`${env.event_type}@1`, env.payload); assert.ok(r.valid, `${env.event_type}: ${JSON.stringify(r.errors)}`); };
+// The ai.call.recorded schema rides with the contracts release that is not out yet: until it is, the shape is checked here.
+const validUsage = (env) => {
+    const r = (() => { try { return contracts.validate('ai.call.recorded@1', env.payload); } catch { return null; } })();
+    if (r) { assert.ok(r.valid, 'ai.call.recorded: ' + JSON.stringify(r.errors)); return; }
+    for (const f of ['system', 'surface', 'paid_by', 'input', 'output', 'reasoning', 'cache_read', 'cache_write', 'list_cost_usd', 'charged_usd', 'fee_usd', 'cache_saved_usd', 'attempts', 'outcome', 'at'])
+        assert.ok(env.payload[f] !== undefined && env.payload[f] !== null, 'the record has ' + f);
+};
 
 t.test('boot with events on', async () => {
     h = await boot({ dir: tmpDir(), env: { AI_STUB_FALLBACK: 'true' } });   // a dir: the database outlives h.stop()
@@ -24,8 +31,13 @@ t.test('a run queues ai.run.queued then ai.run.succeeded, valid and without the 
     const r = await request(h.base, 'POST', '/api/v1/runs?wait=5000', { tok: live, body: { workflow: 'ai.generate', input: { prompt: 'secret prompt words' } } });
     assert.strictEqual(r.status, 201, r.text);
     const evs = (await queued()).filter((e) => e.payload.run_id === r.body.run.id);
-    assert.deepStrictEqual(evs.map((e) => e.event_type), ['ai.run.queued', 'ai.run.succeeded']);
-    evs.forEach(valid);
+    // The run announces itself twice (queued, succeeded) and leaves one usage record (L40).
+    assert.deepStrictEqual(evs.map((e) => e.event_type), ['ai.run.queued', 'ai.run.succeeded', 'ai.call.recorded']);
+    evs.filter((e) => e.event_type.startsWith('ai.run.')).forEach(valid);
+    const usage = evs.find((e) => e.event_type === 'ai.call.recorded');
+    validUsage(usage);
+    assert.ok(usage.payload.input >= 0 && usage.payload.cache_read >= 0, 'the record counts the tokens');
+    assert.strictEqual(typeof usage.payload.paid_by, 'string', 'the record says who paid');
     assert.strictEqual(evs[0].visibility, 'internal');
     assert.deepStrictEqual(evs[1].payload.requester, { type: 'service', id: 'live' });
     assert.strictEqual(evs[1].payload.finished_at !== null, true);
