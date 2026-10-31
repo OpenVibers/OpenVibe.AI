@@ -63,6 +63,8 @@ async function fakeFetch(url, opts = {}) {
         return json(200, { access_token: userToken(c), refresh_token: `rt_${crypto.randomBytes(6).toString('hex')}`, token_type: 'Bearer', expires_in: 3600 });
     }
     if (u === `${NETWORK}/oauth/revoke`) { revoked.push(JSON.parse(String(opts.body)).token); return json(200, { revoked: true }); }
+    // The added provider's own model list (L33: read when it is added, and again from its row).
+    if (u === 'https://api.cheap.test/v1/models') return json(200, { data: [{ id: 'cheap-1' }, { id: 'cheap-pro-reasoner' }] });
     return globalThis.fetch(url, opts);
 }
 
@@ -400,6 +402,19 @@ t.test('owner: add a provider with its key (kept encrypted), replace the key, re
     assert.strictEqual(x.status, 303, x.text);
     const m = await h.registry.getModel('cheapapi', 'cheap-2');
     assert.deepStrictEqual([m.cost.in_per_mtok, m.cost.out_per_mtok, m.supports.tools], [0.1, 0.4, true]);
+    // Its model list was read when it was added: listed, described, switched off until a person turns one on (L33).
+    const listed = await h.registry.getModel('cheapapi', 'cheap-pro-reasoner');
+    assert.ok(listed && listed.status === 'disabled' && listed.metadata.tier === 'strong' && listed.metadata.reasoning, 'read on add, described, off');
+    x = await get('/console/providers', cookies.owner);
+    assert.ok(x.text.includes('action="/console/providers/cheapapi/sync"') && x.text.includes('action="/console/models/cheapapi/cheap-pro-reasoner/status"'), 'the page offers the list and the switch');
+    x = await post('/console/providers/cheapapi/sync', cookies.owner, { _csrf: csrf.owner });
+    assert.strictEqual(x.status, 303, x.text);
+    assert.match(x.headers.get('location'), /done=models_synced$/);
+    assert.strictEqual((await auditRows("action = 'provider.models_synced' AND target_id = 'cheapapi' AND actor = ?", people.owner)).length, 1);
+    x = await post('/console/models/cheapapi/cheap-pro-reasoner/status', cookies.owner, { status: 'active', _csrf: csrf.owner });
+    assert.strictEqual(x.status, 303);
+    assert.strictEqual((await h.registry.getModel('cheapapi', 'cheap-pro-reasoner')).status, 'active', 'turned on');
+    assert.strictEqual((await post('/console/models/cheapapi/cheap-pro-reasoner/status', cookies.admin, { status: 'disabled', _csrf: csrf.admin })).status, 403, 'only the owner switches models');
     // Point default.json at it: a new version, the previous primary kept as the first fallback; then back to the default.
     const before = await h.registry.getRoute('default.json');
     x = await get('/console/routes/default.json', cookies.owner);
