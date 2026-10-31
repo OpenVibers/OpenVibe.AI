@@ -37,7 +37,7 @@
  *   - Two active items that are near each other but disagree (cosine 0.75 to 0.92) are judged by one cheap-tier
  *     call that sees only those two notes, and both are marked `status = 'conflict'` with a `conflict_with` link:
  *     a conflict never reaches an agent. The person settles it (POST /items/:id/settle { keep }).
- *   - The profile is built from at most 60 active notes, newest first, passes noLooks and is at most about a
+ *   - The profile is built from at most 60 active notes, newest first, is stored as written and is at most about a
  *     thousand tokens. It is cached by items_hash and rebuilt at most once an hour per owner and scope.
  *   - The store's own maintenance runs in the background (server/memory/jobs.js): owner by owner, with a per-run
  *     cap, off in test mode and off in a drill.
@@ -47,7 +47,6 @@ const express = require('express');
 const { ids, http, capabilities } = require('openvibe-contracts');
 const { verifyUserToken } = require('openvibe-sdk/auth');
 const { redact, onlySecret } = require('openvibe-sdk/redact');
-const { noLooks } = require('openvibe-sdk/no-looks');
 const { AiError, iso, sha256 } = require('../util');
 const { bearer, isAppClaims, principalSubject } = require('../auth');
 
@@ -56,7 +55,7 @@ const SCOPE_RE = /^(user|project:[a-z0-9][a-z0-9._-]{0,63})$/;
 const SOURCE_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$/;
 const KINDS = ['preference', 'fact', 'project_rule', 'procedure', 'decision', 'lesson'];
 const STATUSES = ['active', 'suggested', 'archived', 'conflict'];
-/** Items from these sources were produced by an AI, so they are suggestions and pass noLooks. */
+/** Items from these sources were produced by an AI, so they are suggestions and are stored as written. */
 const AI_SOURCES = new Set(['actor', 'vibe', 'know']);
 const PROFILE_INTERVAL_MS = 60 * 60 * 1000;
 /* M2c: the meaning of an item. Two items of one owner and scope that say the same thing (cosine at least
@@ -469,12 +468,12 @@ function createMemory({ db, config, clock = { now: () => Date.now() }, log = con
                 ? req.principal.subject.id
                 : String(req.principal.sub || '').replace(/^svc:/, '');
             const source = validateSource(serviceCaller ? serviceSource : (raw.source || 'person'));
-            // A service is an agent: what it writes is a suggestion, and it passes noLooks. A person may mark their own
-            // item as AI-produced too (the Node imports what a coding tool wrote).
+            // A service is an agent: what it writes is a suggestion, stored as written. A person may mark their own item
+            // as AI-produced too (the Node imports what a coding tool wrote).
             const aiMade = serviceCaller || raw.no_looks === true || AI_SOURCES.has(source);
-            let text = aiMade ? noLooks(clean) : clean;
+            let text = clean;
             text = String(text == null ? '' : text);
-            if (!text.trim()) throw new AiError(422, 'input.invalid', `items[${index}].text is empty after no-looks`);
+            if (!text.trim()) throw new AiError(422, 'input.invalid', `items[${index}].text is empty`);
             if (onlySecret(text)) throw new AiError(422, 'memory.secret_only', `items[${index}] is only a secret and is refused`);
             const askedConfidence = raw.confidence == null ? null : Number(raw.confidence);
             const confidence = askedConfidence == null || !Number.isFinite(askedConfidence)
@@ -589,7 +588,7 @@ function createMemory({ db, config, clock = { now: () => Date.now() }, log = con
             const clean = redact(String(body.text)).text;
             if (!clean.trim()) throw new AiError(422, 'input.invalid', 'text is empty');
             if (onlySecret(clean)) throw new AiError(422, 'memory.secret_only', 'an item that is only a secret is refused');
-            nextText = body.no_looks === true ? String(noLooks(clean)) : clean;
+            nextText = clean;
             if (onlySecret(nextText)) throw new AiError(422, 'memory.secret_only', 'an item that is only a secret is refused');
             add('text_enc', seal(nextText, aadFor(owner, row.id, nextScope)));
             add('text_mac', macOf(nextText));
@@ -670,7 +669,6 @@ function createMemory({ db, config, clock = { now: () => Date.now() }, log = con
         const prompt = [
             `Write a short profile of the person from their own memory notes for ${scope}.`,
             'Rules: summarize only what the notes say. Never guess or infer facts about the person.',
-            'Never describe looks, body, clothing, hair, face, pose, age or a guessed gender: no looks, at any time.',
             'Write at most 600 words and do not add a title.',
             '',
             notes,
@@ -682,7 +680,7 @@ function createMemory({ db, config, clock = { now: () => Date.now() }, log = con
         const route = await registry.resolveRoute('default.chat');
         if (!route || route.disabled) throw new AiError(503, 'memory.profile_failed', 'no route is available to build a profile');
         const exec = await pool.execute(route, 'summarize', {
-            system: [{ text: 'You write short, faithful profiles of a person from their own notes. Never guess, never describe looks or a body, and never add a fact the notes do not state.', cache: true }],
+            system: [{ text: 'You write short, faithful profiles of a person from their own notes. Never guess and never add a fact the notes do not state.', cache: true }],
             messages: [{ role: 'user', content: prompt }],
             maxTokens: PROFILE_MAX_TOKENS,
             temperature: 0.2,
@@ -718,7 +716,7 @@ function createMemory({ db, config, clock = { now: () => Date.now() }, log = con
             return { profile: { scope, text: '', items_hash: hash, built_at: builtAt }, rebuilt: true };
         }
         const items = rows.map((r) => ({ kind: r.kind, text: open(r.text_enc, aadFor(owner, r.id, r.scope)) }));
-        const text = String(noLooks(await summarize({ owner, scope, items })) || '').slice(0, PROFILE_MAX_CHARS);
+        const text = String((await summarize({ owner, scope, items })) || '').slice(0, PROFILE_MAX_CHARS);
         const builtAt = iso(now);
         await q(`INSERT INTO memory_profiles (owner, scope, text_enc, items_hash, built_at) VALUES ($1, $2, $3, $4, $5)
             ON CONFLICT (owner, scope) DO UPDATE SET text_enc = excluded.text_enc, items_hash = excluded.items_hash, built_at = excluded.built_at`)

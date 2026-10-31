@@ -328,7 +328,7 @@ t.test('a scope change re-seals the text, and deleting one source leaves the oth
     } finally { await h.stop(); }
 });
 
-t.test('the profile is cached, rebuilt only when items_hash moves and at most once an hour, and passes noLooks', async () => {
+t.test('the profile is cached, rebuilt only when items_hash moves and at most once an hour, and is stored as written', async () => {
     const h = await boot({ env: { AI_MEMORY_KEY: KEY } });
     try {
         let now = Date.parse('2026-10-30T09:00:00.000Z');
@@ -340,7 +340,7 @@ t.test('the profile is cached, rebuilt only when items_hash moves and at most on
         await m.batch({ principal: req.principal, body: { items: [item('one note'), item('two notes')] } }, owner);
         const first = await m.profile(req, owner);
         assert.equal(calls, 1);
-        assert.ok(!first.profile.text.includes('shirtless') && !first.profile.text.includes('man'), `noLooks did not run: ${first.profile.text}`);
+        assert.ok(first.profile.text.includes('shirtless') && first.profile.text.includes('man'), `the profile is stored as written: ${first.profile.text}`);
         assert.equal(first.profile.text.includes('[redacted]'), false);
         const second = await m.profile(req, owner);
         assert.equal(calls, 1, 'the same items_hash is served from the cache');

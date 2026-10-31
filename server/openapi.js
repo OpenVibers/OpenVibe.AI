@@ -131,7 +131,7 @@ route('post', '/memory/items/{id}/settle', {
 });
 route('get', '/memory/profile', {
     operationId: 'getMemoryProfile', summary: 'The cached profile for one scope', tags: ['memory'], security: memorySecurity,
-    description: 'ai.memory.read. Rebuilt by the cheap tier only when items_hash changes, at most once an hour per owner and scope; the result passes noLooks.',
+    description: 'ai.memory.read. Rebuilt by the cheap tier only when items_hash changes, at most once an hour per owner and scope; the result is stored as written.',
     parameters: [query('scope', str()), query('on_behalf_of', str())],
     responses: { 200: json('The cached profile', memoryResult), 503: problem, ...errors([401, 403]) },
 });

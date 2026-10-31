@@ -212,7 +212,7 @@ Memory M2a (spec `research-2026-10-30/memory-m2-spec.md`): a person's own notes,
 (AES-256-GCM, AAD `memory|<owner>|<id>|<scope>`, `m1:`), deduped by an HMAC of the normalized text (HKDF-SHA256, info
 `memory-mac`), and scoped by `user:<usr_…>` on every query. The server redacts every item again with
 `openvibe-sdk/redact` (the Node's shapes and corpus) and refuses an item that is only a secret; what an agent writes is
-a suggestion, and every item a service writes passes `noLooks`. An agent's search is active-only, at most 8 items, in
+a suggestion, and every item is stored as written (AI may describe people). An agent's search is active-only, at most 8 items, in
 the scopes its token's grant names (`user` always; `project:*` when the grant lists it), and leaves a `memory_reads`
 row with ids, never text. The profile cache rebuilds only when its `items_hash` moves, at most once an hour, in-process
 on the service's own chat route (no run row, no person allowance). The account export decrypts the person's items for
@@ -740,6 +740,6 @@ Part of the [OpenVibe network](https://openvibe.network). Built in the open by [
 
 <!-- versions:start -->
 - openvibe-contracts: v0.252.0
-- openvibe-sdk: v0.75.0
+- openvibe-sdk: v0.77.0
 - openvibe-shared: v4.57.1
 <!-- versions:end -->
