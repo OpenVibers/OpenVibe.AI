@@ -2,6 +2,8 @@
 // L36 Y1/Y3/Y7/Y8: the person's own provider keys and how their runs route.
 //   - GET/PUT/DELETE/POST /api/v1/me/credentials and GET/PUT /api/v1/me/ai/preferences are person-only: a service
 //     token (with or without on_behalf_of) is refused, so is another site's cookie session;
+//   - a token minted for openvibe.network (every site's session) may read but never write; a write needs aud
+//     openvibe.ai, and a cookie write needs Origin or Sec-Fetch-Site;
 //   - a key is sealed with the AAD self|subject|provider and never returned, logged or put in an error;
 //   - test on save lists models, falls back to a one-token request, records 401 and a timeout;
 //   - a run on_behalf_of a person tries their self key first, only_my_keys never falls back, and the explain names
@@ -19,6 +21,7 @@ const DANA = 'usr_01JAB2C3D4E5F6G7H8J9K0MNPX';
 const API_KEY = 'sk-test-dana-0123456789WXYZ';
 const ANTHROPIC_KEY = 'sk-ant-test-0123456789ABCD';
 const person = token('dana', ALL, { sub: DANA, actorType: 'user' });
+const siteSession = token('dana-site', ALL, { sub: DANA, actorType: 'user', extra: { aud: ['openvibe.network', 'openvibe.design'] } });
 const service = token('live', [...ALL, 'ai.me.read', 'ai.me.manage']);
 const serviceOnBehalf = token('live', [...ALL, 'ai.me.read', 'ai.me.manage'], { extra: { on_behalf_of: DANA } });
 const calls = [];
@@ -59,10 +62,37 @@ t.test('the person routes refuse a service token, an on_behalf_of token, and ano
     const raw = crypto.randomBytes(32).toString('base64url');
     const hash = crypto.createHash('sha256').update(raw).digest('hex');
     await h.db.exec("INSERT INTO person_sessions (id_hash, subject, username, created_at, expires_at) VALUES ($1, $2, 'dana', '2026-10-01', '2030-10-01')", [hash, DANA]);
-    let r = await request(h.base, 'GET', '/api/v1/me/credentials', { headers: { Cookie: `ovai_person=${raw}`, 'Sec-Fetch-Site': 'same-origin' } });
-    assert.strictEqual(r.status, 200, r.text);
+    const prefsBody = { only_my_keys: false, free_first: true, price_ceiling_usd_per_mtok: null, defaults: { text: 'auto', code: 'auto', vision: 'auto', image: 'auto' } };
+    let r = await request(h.base, 'GET', '/api/v1/me/credentials', { headers: { Cookie: `ovai_person=${raw}` } });
+    assert.strictEqual(r.status, 200, 'a read with no Origin or Sec-Fetch-Site still works');
+    // A write with the cookie but neither header is not proof of same-origin: refused.
+    r = await request(h.base, 'PUT', '/api/v1/me/ai/preferences', { headers: { Cookie: `ovai_person=${raw}` }, body: prefsBody });
+    assert.deepStrictEqual([r.status, r.body.code], [403, 'capability.denied'], 'a write needs an origin signal');
+    r = await request(h.base, 'PUT', '/api/v1/me/ai/preferences', { headers: { Cookie: `ovai_person=${raw}`, 'Sec-Fetch-Site': 'same-origin' }, body: prefsBody });
+    assert.strictEqual(r.status, 200, 'a same-origin cookie write works');
     r = await request(h.base, 'GET', '/api/v1/me/credentials', { headers: { Cookie: `ovai_person=${raw}`, Origin: 'https://evil.example', 'Sec-Fetch-Site': 'cross-site' } });
     assert.deepStrictEqual([r.status, r.body.code], [403, 'capability.denied'], 'another site cannot spend the session');
+});
+
+t.test('a site session token may read but never write; a token for openvibe.ai may write', async () => {
+    let r = await request(h.base, 'GET', '/api/v1/me/credentials', { tok: siteSession });
+    assert.strictEqual(r.status, 200, 'a site token reads the hints');
+    r = await request(h.base, 'GET', '/api/v1/me/ai/preferences', { tok: siteSession });
+    assert.strictEqual(r.status, 200, 'a site token reads the settings');
+    const prefsBody = { only_my_keys: false, free_first: true, price_ceiling_usd_per_mtok: null, defaults: { text: 'auto', code: 'auto', vision: 'auto', image: 'auto' } };
+    const writes = [
+        ['PUT', '/api/v1/me/credentials/anthropic', { provider: 'anthropic', key: API_KEY }],
+        ['DELETE', '/api/v1/me/credentials/anthropic', undefined],
+        ['POST', '/api/v1/me/credentials/anthropic/test', undefined],
+        ['PUT', '/api/v1/me/ai/preferences', prefsBody],
+    ];
+    for (const [method, path, body] of writes) {
+        r = await request(h.base, method, path, { tok: siteSession, body });
+        assert.deepStrictEqual([r.status, r.body.code], [403, 'capability.denied'], `${method} ${path} refused a site session token: ${r.text}`);
+    }
+    // A token whose aud explicitly names openvibe.ai reaches the writes.
+    r = await request(h.base, 'PUT', '/api/v1/me/ai/preferences', { tok: person, body: prefsBody });
+    assert.strictEqual(r.status, 200, r.text);
 });
 
 t.test('store a key: sealed with self|subject|provider, a four-character hint, never the key', async () => {

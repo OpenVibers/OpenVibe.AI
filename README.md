@@ -122,7 +122,7 @@ idempotent replay):
 | `GET /api/v1/actions?subject=usr_…` — one person's Action Center items (`common.action-list-result@1`, runs whose `on_behalf_of` is that person) | `ai.actions.read` (first-party service) |
 | `POST /api/v1/memory/items:batch`, `GET/PATCH/DELETE /api/v1/memory/items[/:id]`, `DELETE /api/v1/memory/items?source=`, `GET /api/v1/memory/profile` | `ai.memory.read` / `ai.memory.write` (the person's own token, or a service acting `on_behalf_of` them) |
 | `GET /api/v1/memory/search?q=&scopes=` — active items only, at most 8, in the grant's scopes, audited | `ai.memory.read` plus `on_behalf_of` |
-| `GET/PUT/DELETE /api/v1/me/credentials[/:provider]`, `POST /api/v1/me/credentials/:provider/test`, `GET/PUT /api/v1/me/ai/preferences` | `ai.me.read` / `ai.me.manage` — the person's own token or AI-site session only; a service token or `on_behalf_of` is refused |
+| `GET/PUT/DELETE /api/v1/me/credentials[/:provider]`, `POST /api/v1/me/credentials/:provider/test`, `GET/PUT /api/v1/me/ai/preferences` | `ai.me.read` / `ai.me.manage` — the person's own token or AI-site session only; a service token or `on_behalf_of` is refused. A site session token (audience `openvibe.network`) may read these hints and settings but never write them: a write needs a token whose `aud` includes `openvibe.ai`, or AI's own same-origin session |
 | `GET /api/v1/workflows\|templates\|routes[/:key]` | `ai.run.create`, `ai.workflow.manage` or `ai.usage.read` |
 | `GET /api/v1/routes?operation=generate` | the same read: every route's `offers` (`{provider, model}`), plus the operation's deduplicated `offers` |
 | `POST /api/v1/{templates,workflows,routes}/:key/versions`, `…/versions/:v/status` | `ai.workflow.manage` |

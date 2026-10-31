@@ -15,6 +15,12 @@
  * `on_behalf_of`, whatever capabilities it holds (memory rule, AI #204/#205): a Codes run token holds ai.run.create,
  * so a capability check alone would admit an agent. `ai.me.*` are person capabilities, never a service's.
  *
+ * Writes are stricter than reads. A user token must carry audience `openvibe.ai` explicitly: a token minted for
+ * `openvibe.network` is every OpenVibe site's session, and a site's server holding it must not be able to point a
+ * person's prompts at its own endpoint or delete their keys. Such a token may still read (hints and settings only).
+ * AI's own person session must prove same-origin for a write: with neither Origin nor Sec-Fetch-Site the write is
+ * refused, so a site cannot use the cookie with a bare request. Reads keep accepting that cookie as before.
+ *
  * The key is never returned (a four-character hint only), never logged and never put in an error.
  */
 const express = require('express');
@@ -26,11 +32,24 @@ const { bearer } = require('./auth');
 const SUBJECT_RE = /^usr_[0-9A-HJKMNP-TV-Z]{26}$/;
 const NON_PERSON = /^(svc|app|mod|node):/;
 
-/** The same-origin check for the person-session cookie (the console's csrfOk rule, without a form token). */
-function sameOrigin(req, config) {
+/** The audience a write needs: a token minted for AI itself, never a site's `openvibe.network` session. */
+const WRITE_AUDIENCE = 'openvibe.ai';
+
+function audiencesOf(claims) {
+    const aud = claims && claims.aud;
+    return (Array.isArray(aud) ? aud : aud == null ? [] : [aud]).map(String);
+}
+
+/**
+ * The same-origin check for the person-session cookie (the console's csrfOk rule, without a form token).
+ * A write with neither Origin nor Sec-Fetch-Site is refused: a site can make a bare request with the cookie, so the
+ * absence of both is not proof of same-origin. A read may keep the old rule (it returns hints and settings only).
+ */
+function sameOrigin(req, config, { write = false } = {}) {
     const site = req.headers['sec-fetch-site'];
-    if (site && site !== 'same-origin' && site !== 'none') return false;
     const origin = req.headers.origin;
+    if (!site && !origin) return !write;
+    if (site && site !== 'same-origin' && site !== 'none') return false;
     if (origin) {
         try { return new URL(origin).origin === new URL(config.baseUrl).origin; } catch { return false; }
     }
@@ -44,6 +63,7 @@ function meRouter({ credentials, preferences, auth, registry, config, clock = { 
     function guard(req, res, next) {
         return Promise.resolve().then(async () => {
             const ctx = req.ov;
+            const write = req.method !== 'GET' && req.method !== 'HEAD';
             const token = bearer(req);
             if (token) {
                 // A service, app, module or node token is a principal whatever capabilities it holds. Checked first so
@@ -64,15 +84,20 @@ function meRouter({ credentials, preferences, auth, registry, config, clock = { 
                     return http.sendProblem(res, 403, 'capability.denied', { detail: "a principal token is not accepted on the person's own route", ctx });
                 }
                 if (claims.on_behalf_of != null) return http.sendProblem(res, 403, 'capability.denied', { detail: 'a token acting on behalf of someone is not the person themselves', ctx });
+                // A token minted for openvibe.network is every OpenVibe site's session: it may read hints and settings,
+                // but a write needs a token whose aud explicitly names AI itself.
+                if (write && !audiencesOf(claims).includes(WRITE_AUDIENCE)) {
+                    return http.sendProblem(res, 403, 'capability.denied', { detail: 'a write needs a user token for audience openvibe.ai; a site session token may only read these settings', ctx });
+                }
                 const subject = SUBJECT_RE.test(String(claims.subject_id || '')) ? claims.subject_id : (SUBJECT_RE.test(String(claims.sub || '')) ? claims.sub : '');
                 if (!subject) return http.sendProblem(res, 401, 'token.invalid', { detail: 'the person token has no usr_ subject', ctx });
                 req.principal = { kind: 'user', sub: claims.sub, subject: { type: 'user', id: subject }, claims };
                 return next();
             }
             // The person session AI already issues for a run receipt. Cookie auth needs the same origin, so another
-            // site cannot spend a person's keys with their cookie.
+            // site cannot spend a person's keys with their cookie; a write also needs the origin signal to be present.
             if (!personSessions) return http.sendProblem(res, 401, 'token.missing', { detail: "the person's own token or session is required", ctx });
-            if (!sameOrigin(req, config)) return http.sendProblem(res, 403, 'capability.denied', { detail: 'the person session is only used from ' + new URL(config.baseUrl).origin, ctx });
+            if (!sameOrigin(req, config, { write })) return http.sendProblem(res, 403, 'capability.denied', { detail: 'the person session is only used from ' + new URL(config.baseUrl).origin + (write ? ', with an Origin or Sec-Fetch-Site header' : ''), ctx });
             const session = await personSessions.read(req);
             if (!session) return http.sendProblem(res, 401, 'token.missing', { detail: "the person's own token or session is required", ctx });
             if (!SUBJECT_RE.test(String(session.subject || ''))) return http.sendProblem(res, 401, 'token.invalid', { detail: 'the session has no usr_ subject', ctx });
