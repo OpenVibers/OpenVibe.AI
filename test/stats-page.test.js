@@ -22,10 +22,12 @@ t.test('no samples: 200 without auth, text/html, a short public cache and an hon
     assert.match(r.headers.get('content-type'), /^text\/html/);
     assert.strictEqual(r.headers.get('cache-control'), require('openvibe-shared/cache-policy').htmlHeaders());
     assert.match(r.headers.get('cache-control'), /^public, max-age=\d+/);
-    assert.ok(r.headers.get('content-security-policy'), 'the console CSP (no scripts)');
+    assert.ok(r.headers.get('content-security-policy').includes("connect-src 'self' https://openvibe.network"), 'the home CSP: the Frame reads the Network');
     assert.match(r.text, /no provider calls in the last 7 days/);
     assert.doesNotMatch(r.text, /<table/);
-    assert.doesNotMatch(r.text, /<script/i);
+    // The site's own Frame and type (domain sweep, 2026-11-01: it was the operator console's bare light page).
+    assert.ok(r.text.includes('<div id="navbar-mount"></div>') && r.text.includes('/shared/showcase.css'), 'the Frame and the site stylesheet');
+    assert.strictEqual((r.text.match(/<h1[\s>]/g) || []).length, 1, 'one heading');
 });
 
 t.test('seeded stats: one row per provider and model with p50, p95, success rate, price and allowance', async () => {
@@ -49,6 +51,8 @@ t.test('seeded stats: one row per provider and model with p50, p95, success rate
     assert.match(cells[6], /in \$3\.0000 · cached \$0\.3000 · out \$15\.0000 per 1M tokens/);
     assert.match(cells[7], /in 1,000,000 tokens \/ month/);
     for (const h2 of ['Provider', 'Model', 'Capability', 'p50', 'p95', 'Success rate', 'Price', 'Free allowance']) assert.ok(r.text.includes(`<th scope="col">${h2}</th>`), h2);
+    // On a phone each row is a card: every cell names its column.
+    for (const label of ['Provider', 'Model', 'Capability', 'p50', 'p95', 'Success rate', 'Price', 'Free allowance']) assert.ok(rows[0].includes(`data-label="${label}"`), label);
     assert.match(r.text, /last 7 UTC days \(\d{4}-\d{2}-\d{2} to \d{4}-\d{2}-\d{2}\)/);
 });
 

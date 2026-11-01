@@ -613,22 +613,7 @@ function allowance(cards) {
     return free.map(([k, c], i) => html`${i ? ' · ' : ''}<span class="nowrap">${k} ${n(c.free_allowance)} tokens${c.reset_period === 'none' ? '' : ` / ${c.reset_period}`}</span>`);
 }
 
-/**
- * Public price and latency per provider and model: provider_stats_daily totals (quotas.statsFor) and the
- * rate cards only. Nothing here is per caller; rows: { provider, model, capability, requests, ok, p50, p95, cards }.
- */
-function stats({ days, from, to, rows, canonical = null }) {
-    return layout({
-        // In search, as the sitemap and robots.txt say: it was noindex,nofollow from the console's layout.
-        title: 'Price and latency', site: 'stats', robots: 'index,follow', canonical,
-        description: `Price and latency of every AI model OpenVibe.AI called in the last ${days} days: p50 and p95 latency, success rate, price per million tokens and the free allowance.`,
-        body: html`<h1>Price and latency</h1>
-<p class="muted">Every provider and model AI called in the last ${days} UTC days (${from} to ${to}). Latency is the upper bound of a fixed latency bucket, the slowest day in the window; prices are per million tokens from the current rate cards.</p>
-${table(`Providers and models, ${from} to ${to}`, ['Provider', 'Model', 'Capability', 'p50', 'p95', 'Success rate', 'Price', 'Free allowance'], rows.map((r) => html`<tr>
-<td><code>${r.provider}</code></td><td>${r.model ? html`<code>${r.model}</code>` : '—'}</td><td>${r.capability || '—'}</td>
-<td class="nowrap">${ms(r.p50)}</td><td class="nowrap">${ms(r.p95)}</td><td class="nowrap">${rate(r.ok, r.requests)}</td><td>${price(r.cards)}</td><td>${allowance(r.cards)}</td></tr>`),
-        `no provider calls in the last ${days} days, so there is nothing to measure yet.`)}`,
-    });
-}
+/** The price and latency cells, as plain HTML strings for the public /stats page (server/home.js renderStats). */
+const statsFormat = { ms, rate, price: (cards) => render(price(cards)), allowance: (cards) => render(allowance(cards)) };
 
-module.exports = { CSP, html, esc, safeUrl, pages: { signIn, message, overview, providers, providerNew, definitions, definition, runs, run, runReceipt, quotas, usage, cache, audit, stats } };
+module.exports = { CSP, html, esc, safeUrl, statsFormat, pages: { signIn, message, overview, providers, providerNew, definitions, definition, runs, run, runReceipt, quotas, usage, cache, audit } };

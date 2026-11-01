@@ -225,7 +225,6 @@ const HOME_STYLE = `<style>
 @media (max-width:599px){
 .ai-num ul{display:flex;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;gap:8px;margin:0 -16px;padding:0 16px 2px}.ai-num ul::-webkit-scrollbar{display:none}.ai-num li{flex:0 0 auto;width:148px}
 #get .sc-grid{display:flex;flex-wrap:nowrap;overflow-x:auto;scroll-snap-type:x mandatory;scroll-padding-inline:16px;scrollbar-width:none;gap:10px;margin:0 -16px;padding:0 16px 4px}#get .sc-grid::-webkit-scrollbar{display:none}#get .sc-grid>*{flex:0 0 80%;min-width:0;scroll-snap-align:start}
-#models tbody tr:nth-child(n+6){display:none}
 .ai-fold>summary span{display:none}
 }
 /* Touch targets on phones (fleet audit, 2026-10-29): touch pointers only. */
@@ -240,6 +239,73 @@ const FOOTER = { service: 'ai', variant: 'full', mount: '#ov-footer', brandName:
 // The page's type: shell.page sets no font and showcase.css styles only its own sections, so without these rules
 // /updates fell back to the browser's Times New Roman (domain sweep, 2026-11-01). Zero specificity: any site rule wins.
 const UPDATES_FONT = "<style>:where(body){font-family:var(--ov-font,'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif)}:where(main.page){display:block;max-width:880px;margin:0 auto;padding:24px max(16px,env(safe-area-inset-right,0px)) 56px max(16px,env(safe-area-inset-left,0px))}:where(.ov-updates h1){font-size:clamp(1.6rem,5.4vw,2.2rem);line-height:1.15;margin:0 0 10px;text-wrap:balance}</style>";
+
+// /stats in the site's own Frame and type. A table on a wide screen; on a phone each row is a card that names its
+// numbers (the labels come from the cells' data-label), so nothing scrolls sideways and nothing is left out.
+const STATS_STYLE = `<style>
+.st-head{margin-top:clamp(20px,4vw,44px);padding-top:0}.st-head h1{font-size:clamp(28px,6vw,44px);line-height:1.1;letter-spacing:-.8px;margin:0 0 12px;font-weight:800;text-wrap:balance}
+.st-table td,.st-table th{vertical-align:top}.st-table code{white-space:nowrap}.st-table .nowrap{white-space:nowrap}.st-table td[data-label="Free allowance"] .nowrap{white-space:normal}
+.st-table td[data-label="Model"] code{font-weight:700;color:var(--text-primary,#e6edf7)}
+.st-caps{display:flex;flex-wrap:wrap;gap:4px}.st-caps span{padding:1px 8px;border-radius:999px;font-size:12px;line-height:1.6;border:1px solid var(--border,#1f2d47);color:var(--text-secondary,#96a7c2)}
+.st-ok{color:var(--success-text,var(--success,#22c55e))}.st-none{color:var(--text-muted,#7386a3)}
+.st-empty{padding:18px;border-radius:14px;border:1px dashed var(--border,#1f2d47);color:var(--text-secondary,#96a7c2)}
+@media (min-width:821px){.st-table{min-width:860px}.st-table td[data-label="Capability"]{min-width:200px}}
+@media (max-width:820px){
+.st-wrap{border:0;border-radius:0;overflow:visible}
+.st-table,.st-table tbody{display:block}
+.st-table thead{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.st-table tr{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) minmax(0,1fr);gap:12px 14px;margin:0 0 12px;padding:16px;border:1px solid var(--border,#1f2d47);border-radius:16px;background:var(--bg-secondary,#101828)}
+.st-table tr:last-child>*{border-bottom:0}
+.st-table td{display:block;padding:0;border:0;min-width:0}
+.st-table td::before{content:attr(data-label);display:block;margin-bottom:3px;font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--text-muted,#7386a3)}
+.st-table td[data-label="Model"]{order:-2;grid-column:1/-1;font-size:16px}.st-table td[data-label="Model"]::before{display:none}
+.st-table td[data-label="Model"] code{white-space:normal;overflow-wrap:anywhere}
+.st-table td[data-label="Provider"]{order:-1;grid-column:1/-1}.st-table td[data-label="Provider"]::before{display:inline;margin-right:6px}
+.st-table td[data-label="Capability"],.st-table td[data-label="Price"],.st-table td[data-label="Free allowance"]{grid-column:1/-1}
+}
+</style>`;
+
+/**
+ * /stats: price and latency of every model OpenVibe.AI called in the window, from provider_stats_daily and the rate
+ * cards only: nothing here is per caller. rows: { provider, model, capability, requests, ok, p50, p95, cards }, most
+ * answered first. The cells are the console's own formatters (views.statsFormat), so the numbers read the same there.
+ */
+function renderStats({ siteUrl, days, from, to, rows = [] }) {
+    const { statsFormat: f } = require('./console/views');
+    const site = String(siteUrl).replace(/\/+$/, '');
+    const list = rows.slice().sort((a, b) => (Number(b.ok) || 0) - (Number(a.ok) || 0) || (Number(b.requests) || 0) - (Number(a.requests) || 0));
+    const caps = (c) => { const l = String(c || '').split(/,\s*/).filter(Boolean); return l.length ? `<span class="st-caps">${l.map((x) => `<span>${esc(x)}</span>`).join(' ')}</span>` : '—'; };
+    const rate = (r) => { const s = f.rate(r.ok, r.requests); return Number(r.ok) > 0 ? `<span class="st-ok">${esc(s)}</span>` : `<span class="st-none">${esc(s)}</span>`; };
+    const caption = `Providers and models, ${from} to ${to}`;
+    const table = list.length
+        ? `<div class="sc-table-wrap st-wrap" role="region" tabindex="0" aria-labelledby="h-rows"><table class="sc-table st-table"><caption class="sr-only">${esc(caption)}</caption>
+<thead><tr>${['Provider', 'Model', 'Capability', 'p50', 'p95', 'Success rate', 'Price', 'Free allowance'].map((h) => `<th scope="col">${h}</th>`).join('')}</tr></thead><tbody>
+${list.map((r) => `<tr><td data-label="Provider"><code>${esc(r.provider)}</code></td><td data-label="Model">${r.model ? `<code>${esc(r.model)}</code>` : '—'}</td><td data-label="Capability">${caps(r.capability)}</td>`
+        + `<td data-label="p50" class="nowrap">${esc(f.ms(r.p50))}</td><td data-label="p95" class="nowrap">${esc(f.ms(r.p95))}</td><td data-label="Success rate">${rate(r)}</td>`
+        + `<td data-label="Price">${f.price(r.cards)}</td><td data-label="Free allowance">${f.allowance(r.cards)}</td></tr>`).join('\n')}
+</tbody></table></div>`
+        : `<p class="st-empty">Nothing to measure yet: no provider calls in the last ${esc(days)} days.</p>`;
+    return shell.page({
+        name: SITE_NAME, service: 'ai', lang: 'en',
+        title: 'Price and latency',
+        siteName: SITE_NAME,
+        description: `Price and latency of every AI model OpenVibe.AI called in the last ${days} days: p50 and p95 latency, success rate, price per million tokens and the free allowance.`,
+        canonical: `${site}/stats`,
+        robots: 'index,follow',
+        navbar: { service: 'ai', apiBase: NETWORK_URL, links: NAV_LINKS, history: { type: 'page', title: SITE_NAME } },
+        footer: FOOTER, home: '/', navLinks: NAV_LINKS,
+        head: [appIcon.headTags({ site: 'ai' }), `<link rel="stylesheet" href="${ovServe.url(showcase.STYLESHEET)}">`, HOME_STYLE, STATS_STYLE].join('\n'),
+        body: `<div id="navbar-mount"></div>
+<main id="main" class="page">
+<section class="sc-sec st-head"><p class="sc-eyebrow">Prices and latency</p><h1>What each model costs, and how fast it answered</h1>
+<p class="sc-lede">Every provider and model AI called in the last ${esc(days)} UTC days (${esc(from)} to ${esc(to)}). Latency is the upper bound of a fixed latency bucket, the slowest day in the window; prices are per million tokens from the current rate cards. Nothing here is per caller.</p></section>
+${numbers({ days, rows })}
+<section class="sc-sec" aria-labelledby="h-rows"><h2 id="h-rows">${esc(caption)}</h2>
+${table}
+<p class="sc-note">Apps on the router get free and local capacity; a project can name its own provider for anything bigger. <a href="/">How OpenVibe.AI works</a>.</p></section>
+</main>`,
+    });
+}
 
 /** /updates: what shipped on this site (the network's shared update log, openvibe-shared/frame updatesBody). */
 function renderUpdates({ siteUrl }) {
@@ -356,4 +422,4 @@ function renderNotFound() {
         '<h1>Not found</h1>', `<p>Nothing is here. <a href="/">${SITE_NAME}</a> · <a href="/stats">Prices and latency</a> · <a href="${NETWORK_URL}">OpenVibe</a></p>`, '</body>', '</html>'].join('\n');
 }
 
-module.exports = { renderHome, renderUpdates, llmsTxt, llmsFullTxt, PUBLIC_PAGES, HOME_CSP, SITE_NAME, renderNotFound, FAQ, DESCRIPTION };
+module.exports = { renderHome, renderUpdates, renderStats, llmsTxt, llmsFullTxt, PUBLIC_PAGES, HOME_CSP, SITE_NAME, renderNotFound, FAQ, DESCRIPTION };

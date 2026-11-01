@@ -179,7 +179,8 @@ t.test('the CSPs let Cloudflare Web Analytics load and report (it injects its be
     assert.match(HOME_CSP, /script-src [^;]*https:\/\/static\.cloudflareinsights\.com/);
     assert.match(HOME_CSP, /connect-src [^;]*https:\/\/cloudflareinsights\.com/);
     const stats = await request(h.base, 'GET', '/stats', { headers: { Accept: BROWSER } });
-    assert.match(stats.headers.get('content-security-policy'), /script-src https:\/\/static\.cloudflareinsights\.com; connect-src https:\/\/cloudflareinsights\.com/);
+    // /stats is a Frame page now (2026-11-01), under the home's CSP.
+    assert.strictEqual(stats.headers.get('content-security-policy'), HOME_CSP);
 });
 
 t.test('a browser gets a page for a path nothing serves; an API client the problem document; /favicon.ico is the icon', async () => {
