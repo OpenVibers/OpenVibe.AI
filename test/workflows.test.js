@@ -52,6 +52,7 @@ const EXAMPLES = {
     'moderation.classify': { text: 'you absolute potato, gg', context: 'arena chat' },
     'rent.screen_listing': { listing: { title: 'Bright room near the river', kind: 'room', price: 650, currency: 'EUR', period: 'month', city: 'Porto', country: 'PT', description: 'I am abroad for work; send the deposit by wire and I will mail the keys.' } },
     'food.suggest_recipes': { pantry: ['rice', 'onions', 'canned tomatoes'], people: 2, sources: [{ source_type: 'food.food', source_id: 'lentils', title: 'Lentils, dried', content: '{"id":"lentils","unit":"kg"}' }] },
+    'chat.vibe.listen': { audio: { data_url: 'data:audio/ogg;base64,T2dnUw==', mime: 'audio/ogg' }, language: 'en' },
     'chat.member.reply': { ai_name: 'Pantry', persona: 'A cheerful cook who keeps it cheap.', room: 'Kim and Lee\'s kitchen', memory: 'Lee is vegetarian.', context: 'Pantry: rice, onions, canned tomatoes, lentils.', context_source: 'OpenVibe.Food household', transcript: 'kim: home late tonight\nlee: same', asked_by: 'kim', message: '@Pantry what can we cook in 20 minutes?' },
     'food.read_pantry_photo': { image: { data_url: PNG }, kind: 'receipt', foods: ['Large Eggs (1 dozen)', 'Whole Milk (1 gallon)'] },
     'pics.describe_image': { image: { data_url: PNG }, title: 'The coast' },
@@ -101,7 +102,7 @@ t.test('boot seeds every required workflow key', async () => {
     h = await boot({ env: { OV_MEDIA_INTERNAL_URL: mediaBase, AI_IMAGE_MODEL: 'gpt-image-1' } });
     const keys = (await h.registry.listWorkflows()).map(w => w.key);
     for (const k of ['wiki.generate_space', 'wiki.generate_page', 'blog.draft_post', 'blog.write_digest', 'blog.write_satire', 'news.summarize_story', 'news.compare_perspectives', 'reviews.summarize_entity', 'deals.enrich_deal',
-        'coupons.extract_coupon', 'trade.summarize_market_context', 'codes.generate_docs', 'games.generate_lore', 'moderation.classify', 'tools.describe', 'food.suggest_recipes', 'food.read_pantry_photo', 'pics.describe_image', 'rent.screen_listing', 'chat.member.reply', 'chat.member.turn',
+        'coupons.extract_coupon', 'trade.summarize_market_context', 'codes.generate_docs', 'games.generate_lore', 'moderation.classify', 'tools.describe', 'food.suggest_recipes', 'food.read_pantry_photo', 'pics.describe_image', 'rent.screen_listing', 'chat.member.reply', 'chat.member.turn', 'chat.vibe.listen',
         'live.translate', 'live.stream.describe_frame', 'live.stream.summarize', 'live.viewers.reply', 'live.chat.insight', 'live.hero.slogans', 'live.stream.recap', 'network.site_copy']) {
         assert.ok(keys.includes(k), `missing ${k}`);
     }

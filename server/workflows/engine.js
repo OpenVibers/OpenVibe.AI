@@ -8,7 +8,8 @@
  *                answer (structured JSON, or prose repaired like Live did), postprocess hook
  *   passthrough  the caller supplies system/messages (Live features whose prompt Live still renders);
  *                routed by role (route_prefix.role) or a fixed route
- *   transcribe   fetch the media (allow-listed hosts only) and run speech-to-text
+ *   transcribe   fetch the media (allow-listed hosts only), or take inline audio (a data URL, written to a
+ *                private temp file deleted in the same call), and run speech-to-text
  *   embed        embeddings
  *   media_analysis  local-first media analysis: FFmpeg signals, scenes, local speech-to-text, highlights and
  *                an overview from a local model (or extractive; paid only with a budget). See media-analysis.js.
@@ -25,6 +26,8 @@
  * no output ever reads as verified when it is not.
  */
 const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const { AiError, sha256, parseJsonLoose } = require('../util');
 const { render } = require('../templates');
 const { preferenceLines } = require('../user-modules');
@@ -32,6 +35,23 @@ const schemas = require('../schemas');
 const { PREPARE, POSTPROCESS } = require('./hooks');
 
 const ROLE_TIMEOUT = { chat: 20000, vision: 30000, director: 25000, summary: 30000, legacy: 30000 };
+const INLINE_AUDIO_MAX = 1024 * 1024;
+
+/**
+ * Inline audio ({ audio: { data_url } }) -> a private temp file the transcribe step deletes. Chat's short spoken
+ * messages come this way, so the bytes never need a URL (and never touch storage beyond this call).
+ */
+function inlineAudioFile(audio) {
+    const raw = audio && audio.data_url;
+    const mm = /^data:(audio\/[a-z0-9.+-]+);base64,([A-Za-z0-9+/=\s]+)$/i.exec(String(raw || ''));
+    if (!mm) throw new AiError(422, 'input.invalid', 'audio.data_url must be a base64 data:audio/* URL');
+    const bytes = Buffer.from(mm[2], 'base64');
+    if (!bytes.length) throw new AiError(422, 'input.invalid', 'the inline audio is empty');
+    if (bytes.length > INLINE_AUDIO_MAX) throw new AiError(413, 'source.too_large', 'inline audio is too large');
+    const file = path.join(os.tmpdir(), `openvibe-ai-audio-${Date.now()}-${Math.floor(Math.random() * 1e6)}`);
+    fs.writeFileSync(file, bytes, { mode: 0o600 });
+    return file;
+}
 
 /** Every string in every `gaps` array of an output, in order, without repeats. */
 function collectGaps(v, out = []) {
@@ -241,9 +261,11 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
         const route = await routeFor(step.route || 'live.stt');
         // Read where it lies (the loopback reader), one window at a time: start_sec seeks with a range request, and
         // timestamps are offset by start_sec unless offset_sec says otherwise. AI_MEDIA_STREAM=0 downloads first.
-        const streamed = !config.mediaAnalysis || config.mediaAnalysis.stream !== false;
+        // Inline audio (a short spoken message) needs no fetch: it becomes a private temp file, deleted below.
+        const inline = input.audio && input.audio.data_url ? inlineAudioFile(input.audio) : null;
+        const streamed = !inline && (!config.mediaAnalysis || config.mediaAnalysis.stream !== false);
         const handle = streamed ? await reader().register(fetcher.mediaUrlOf(input)) : null;
-        const file = handle ? handle.url : (await fetcher.loadMediaToFile(input, { signal: ctx.signal })).file;
+        const file = inline || (handle ? handle.url : (await fetcher.loadMediaToFile(input, { signal: ctx.signal })).file);
         try {
             const startSec = Number(input.start_sec) || 0;
             const offsetSec = input.offset_sec != null ? Number(input.offset_sec) : startSec;

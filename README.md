@@ -531,6 +531,10 @@ the service boots without Valkey; with it on, production refuses to boot without
   the tools Chat runs) passed through like `ai.complete` (the prompt is not kept) on route `chat.member`, so Chat's grant
   and quota apply and a person's own key reaches only their provider; the choices come back with any tool calls, and
   Chat sends the results in its next turn.
+  `chat.vibe.listen` is the Dock's voice on browsers without speech recognition: Chat sends a short recording
+  (audio/webm, audio/ogg or audio/mp4, at most 1 MB) inline as a data URL, the existing `transcribe` step runs it on
+  route `live.stt` (whisper.cpp/Parakeet), and the text comes back. The input is never retained (`retain_input:
+  false`); the engine writes it to a private temp file and deletes it in the same call.
 - **Space's spaces** ([server/workflows/space.js](server/workflows/space.js), namespace `space`): `space.app.build`
   is the AI builder of OpenVibe.Space. From what a person asks for (and a space's current files when changing one),
   it returns a working space: name, description, the instructions its AI follows, the SDK features it uses, and up to
