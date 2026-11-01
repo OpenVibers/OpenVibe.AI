@@ -48,8 +48,9 @@ function inlineAudioFile(audio) {
     const bytes = Buffer.from(mm[2], 'base64');
     if (!bytes.length) throw new AiError(422, 'input.invalid', 'the inline audio is empty');
     if (bytes.length > INLINE_AUDIO_MAX) throw new AiError(413, 'source.too_large', 'inline audio is too large');
-    const file = path.join(os.tmpdir(), `openvibe-ai-audio-${Date.now()}-${Math.floor(Math.random() * 1e6)}`);
-    fs.writeFileSync(file, bytes, { mode: 0o600 });
+    // An unguessable name, created only if nothing is there yet (never through a planted file or link).
+    const file = path.join(os.tmpdir(), `openvibe-ai-audio-${require('crypto').randomBytes(12).toString('hex')}`);
+    fs.writeFileSync(file, bytes, { mode: 0o600, flag: 'wx' });
     return file;
 }
 
