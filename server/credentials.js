@@ -156,7 +156,7 @@ async function balanceOf(provider, base, key, fetchImpl, timeoutMs) {
     } catch { return null; }
 }
 
-function createCredentials({ db, config, clock = { now: () => Date.now() }, fetchImpl = null }) {
+function createCredentials({ db, config, clock = { now: () => Date.now() }, fetchImpl = null, grants = null }) {
     // subject_credentials is in migrations/0001_initial.sql (ADR-035); 0011 added the node machine, 0014 the provider
     // dimension (is_default, spend_key, one row per provider), 0019 the health of a key.
     const iso = (ms) => new Date(ms).toISOString();
@@ -305,11 +305,41 @@ function createCredentials({ db, config, clock = { now: () => Date.now() }, fetc
         return gone;
     }
 
+    /**
+     * Where the person allows this service to use their own key (plan L55 C3). The detail is meant to be shown to
+     * the person: it names the page and carries the two values the page needs.
+     */
+    function allowHint(service, provider) {
+        const base = String(config.baseUrl || 'https://ai.openvibe.services').replace(/\/+$/, '');
+        const q = new URLSearchParams({ allow: String(service || ''), provider: String(provider || '') });
+        return `allow ${service} to use your ${provider} key at ${base}/you?${q.toString()}`;
+    }
+
+    /**
+     * The row a run may use for a person (plan L55 C3): the service's own row, or — when the person allowed this
+     * service for that provider — the person's own key. The consent is the person's, and it is checked here, once,
+     * where the key is chosen.
+     */
+    async function resolveForRun(owner, subject, provider = null) {
+        const own = await getRow(owner, subject, provider);
+        if (own) return { row: own, own: true };
+        if (!grants || provider === null) return { row: null, own: false };
+        const self = await getRow(SELF_OWNER, subject, provider);
+        if (!self) return { row: null, own: false };
+        if (!await grants.allows(subject, owner, provider)) return { row: null, own: false, refused: true };
+        return { row: self, own: false };
+    }
+
     /** Checks a run may use the credential (exists, within budget); throws AiError otherwise. */
     async function admit(owner, subject, provider = null) {
         if (provider !== null && !PROVIDERS.includes(provider)) throw new AiError(404, 'credential.not_found', 'no credential stored for that provider');
-        const r = await getRow(owner, subject, provider);
-        if (!r) throw new AiError(404, 'credential.not_found', provider ? `no ${provider} credential stored for that subject` : 'no credential stored for that subject');
+        const found = await resolveForRun(owner, subject, provider);
+        const r = found.row;
+        if (!r) {
+            // The person holds the key, but this service is not allowed to use it (L55 C3): say where to allow it.
+            if (found.refused) throw new AiError(403, 'ai.credential_not_allowed', allowHint(owner, provider));
+            throw new AiError(404, 'credential.not_found', provider ? `no ${provider} credential stored for that subject` : 'no credential stored for that subject');
+        }
         if (r.provider === 'node') return;   // the person's own machine: no key, no spend
         secretKey();
         if (r.budget_usd_day != null && r.budget_usd_day > 0 && await spentToday(r) >= r.budget_usd_day) {
@@ -321,7 +351,17 @@ function createCredentials({ db, config, clock = { now: () => Date.now() }, fetc
     /** The decrypted credential for one execution: { providerKey, owner, provider, base_url, apiKey|machine, models, hint }. */
     async function forRun(owner, subject, provider = null) {
         if (provider !== null && !PROVIDERS.includes(provider)) throw new AiError(404, 'credential.not_found', 'no credential stored for that provider');
-        const r = await getRow(owner, subject, provider);
+        let r = await getRow(owner, subject, provider);
+        if (!r && provider !== null) {
+            // The service holds no credential of its own: the person's own key, if they allowed this service (L55 C3).
+            const found = await resolveForRun(owner, subject, provider);
+            if (found.row) {
+                const self = await selfForRun(subject, provider);
+                if (self) return self;
+            } else if (found.refused) {
+                throw new AiError(403, 'ai.credential_not_allowed', allowHint(owner, provider));
+            }
+        }
         if (!r) throw new AiError(404, 'credential.not_found', provider ? `the ${provider} credential was deleted` : 'the credential was deleted');
         await db.prepare('UPDATE subject_credentials SET last_used_at = ? WHERE owner = ? AND subject = ? AND provider = ?').run(iso(clock.now()), owner, subject, r.provider);
         const providerKey = r.spend_key || providerKeyFor(owner, subject);
@@ -490,9 +530,35 @@ function createCredentials({ db, config, clock = { now: () => Date.now() }, fetc
         };
     }
 
+    /**
+     * The providers a person allowed this service for, that they also hold a key for. Names only: no key, no hint,
+     * no count (plan L55 C3).
+     */
+    async function allowedProvidersWithKey(subject, service) {
+        if (!grants) return [];
+        const allowed = await grants.allowedProviders(subject, service);
+        if (!allowed.length) return [];
+        const have = new Set((await selfRows(subject)).map((r) => r.provider));
+        if (allowed.includes('*')) return [...have].sort();
+        return allowed.filter((p) => have.has(p)).sort();
+    }
+
+    /**
+     * Did this run use the person's own key with the person's consent (plan L55 C3)? { service, subject,
+     * provider } when it did, null when the service used a credential of its own (nothing to consent to) or when the
+     * person did not allow it.
+     */
+    async function consentUse(owner, subject, provider) {
+        if (!grants || !provider) return null;
+        if (await getRow(owner, subject, provider)) return null;
+        if (!await getRow(SELF_OWNER, subject, provider)) return null;
+        return (await grants.allows(subject, owner, provider)) ? { service: owner, subject, provider } : null;
+    }
+
     return {
         put, get, remove, admit, forRun, spentToday, providerKeyFor,
         listSelf, hasSelf, selfForRun, selfForAllRuns, putSelf, removeSelf, testSelf, markFailed,
+        allowedProvidersWithKey, consentUse,
     };
 }
 
@@ -533,6 +599,22 @@ function credentialsRouter({ credentials, auth, registry, sendError }) {
             const gone = await credentials.remove(o, req.params.subject);
             if (gone) await registry.audit(req.principal.sub, 'credential.delete', 'credential', `${o}:${req.params.subject}`, { trace: req.ov && req.ov.traceId });
             res.status(gone ? 204 : 404).end();
+        } catch (err) { sendError(res, err, req.ov); }
+    });
+    /**
+     * GET /api/v1/allowed-keys/:subject (ai.run.create): which providers this person allowed THIS service to use
+     * their own key for, and that they hold a key for. Names only, never key material. A person who did not allow
+     * this service gets nothing at all: 404, and no word about their keys.
+     */
+    const runGuard = auth.requireCap('ai.run.create');
+    r.get('/api/v1/allowed-keys/:subject', runGuard, async (req, res) => {
+        try {
+            const o = owner(req);
+            const subject = String(req.params.subject || '');
+            if (!/^usr_[0-9A-HJKMNP-TV-Z]{26}$/.test(subject)) throw new AiError(404, 'credential.not_found', 'no keys are available to this service for that person');
+            const providers = await credentials.allowedProvidersWithKey(subject, o);
+            if (!providers.length) throw new AiError(404, 'credential.not_found', 'no keys are available to this service for that person');
+            res.set('Cache-Control', 'no-store').json({ subject, service: o, providers });
         } catch (err) { sendError(res, err, req.ov); }
     });
     r.delete('/api/v1/credentials/:subject/:provider', guard, async (req, res) => {

@@ -56,7 +56,7 @@ function sameOrigin(req, config, { write = false } = {}) {
     return true;
 }
 
-function meRouter({ credentials, preferences, auth, registry, config, clock = { now: () => Date.now() }, log = console, personSessions = null, sendError }) {
+function meRouter({ credentials, preferences, grants, auth, registry, config, clock = { now: () => Date.now() }, log = console, personSessions = null, sendError }) {
     const r = express.Router();
 
     /** Authenticate a person, never a principal. Sets req.principal = { kind: 'user', subject }. */
@@ -136,6 +136,24 @@ function meRouter({ credentials, preferences, auth, registry, config, clock = { 
         await audit(req, 'credential.self.test', { provider: req.params.provider, ok: out.ok, models_count: out.models_count });
         return out;
     }));
+    // L55 C3: the apps the person allows to use their own key. The person's own list: names only, no key material.
+    r.get('/api/v1/me/key-apps', guard, run(async (req) => ({ apps: grants ? await grants.list(personOf(req)) : [] })));
+    r.put('/api/v1/me/key-apps/:service', guard, run(async (req) => {
+        const provider = req.body && req.body.provider != null ? String(req.body.provider) : '*';
+        const out = grants ? await grants.allow(personOf(req), req.params.service, provider) : null;
+        if (!out) throw new AiError(503, 'credentials.unavailable', 'key grants are not configured on this service');
+        await audit(req, 'key_grant.allow', { service: out.service, provider: out.provider });
+        return out;
+    }));
+    r.delete('/api/v1/me/key-apps/:service', guard, async (req, res) => {
+        try {
+            if (!grants) throw new AiError(503, 'credentials.unavailable', 'key grants are not configured on this service');
+            const provider = req.query && req.query.provider ? String(req.query.provider) : null;
+            const gone = await grants.remove(personOf(req), req.params.service, provider);
+            if (gone) await audit(req, 'key_grant.remove', { service: String(req.params.service || '').toLowerCase(), provider: provider || '*' });
+            res.status(gone ? 204 : 404).end();
+        } catch (err) { sendError(res, err, req.ov); }
+    });
     r.get('/api/v1/me/ai/preferences', guard, run(async (req) => await preferences.get(personOf(req))));
     r.put('/api/v1/me/ai/preferences', guard, run(async (req) => {
         const out = await preferences.put(personOf(req), req.body || {});

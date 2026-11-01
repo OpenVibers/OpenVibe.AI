@@ -348,6 +348,14 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             });
         } catch (err) { if (hold) await tiers.release(hold); throw err; }
         await registry.audit(principal.sub, retryOf ? 'run.retry' : 'run.create', 'run', id, { trace, metadata: { workflow: wf.key, version: wf.version, target: ctx.targetKey, retry_of: retryOf, ...(pinned ? { pinned_offer: pinned } : {}) } });
+        // L55 C3: a service running on a person's own key (the person allowed it for that provider) is audited: who,
+        // which service, which provider, which run. The key itself is never in the row.
+        if (credentialSubject && requester.type === 'service' && credentials) {
+            const consent = await credentials.consentUse(requester.id, credentialSubject, credentialProvider).catch(() => null);
+            if (consent) {
+                await registry.audit(principal.sub, 'credential.self.use', 'credential', `${consent.service}:${consent.subject}:${consent.provider}`, { trace, metadata: { service: consent.service, subject: consent.subject, provider: consent.provider, run_id: id } });
+            }
+        }
 
         const controller = new AbortController();
         let release;

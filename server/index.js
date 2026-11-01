@@ -64,7 +64,10 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     // A person's own provider keys (WS-O task 2; L36 Y1): stored by the service holding their consent, or by the
     // person themselves (owner `self`), used by their runs only. The test seam (a fake fetch) is for tests; production
     // reaches a custom endpoint through the guarded fetcher's egress rules.
-    const credentials = require('./credentials').createCredentials({ db, config, clock, fetchImpl: credentialFetch });
+    // L55 C3: the apps a person allows to use their own key (per app, per provider or for all). The person's
+    // choice; nothing uses a person's key without it.
+    const grants = require('./key-grants').createKeyGrants({ db, clock });
+    const credentials = require('./credentials').createCredentials({ db, config, clock, fetchImpl: credentialFetch, grants });
     // A person's ai.preferences (L36 Y3): only_my_keys, free_first, a price ceiling and a default model per kind.
     const preferences = require('./person-preferences').createPreferences({ db, clock });
     const projectSecrets = require('./project-secrets').createProjectSecrets({ config, env, fetchImpl });
@@ -90,7 +93,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         clientSecret: env.OV_OAUTH_CLIENT_SECRET, fetch: fetchImpl,
     }) : null;
     const benchEvents = createBenchEvents({ bench, accountData, accountSend, config, log, fetchImpl, clientSecret: env.OV_OAUTH_CLIENT_SECRET });
-    const app = createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, vault, benchEvents, runBudgets, memory });
+    const app = createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, grants, vault, benchEvents, runBudgets, memory });
     let jwks = null;
     let keyLoaded = Promise.resolve(null);
     if (!keys.pinned && config.nodeEnv !== 'test') {
