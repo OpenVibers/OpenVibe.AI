@@ -167,7 +167,10 @@ t.test('the public vhost proxies the home, its files and exactly the developer-a
         for (const hdr of ['X-Real-IP $remote_addr', 'X-Forwarded-For $remote_addr', 'CF-Connecting-IP $remote_addr']) assert.ok(block.includes(hdr), hdr);
     }
     const rest = conf.indexOf('location /api/ {');
-    assert.ok(conf.slice(rest, conf.indexOf('}', rest)).includes('return 403;'), 'the rest of the API stays host-local');
+    const apiRest = conf.slice(rest, conf.indexOf('\n    }', rest));
+    assert.ok(apiRest.includes('default_type application/problem+json;'), 'an unknown API path answers a problem document');
+    assert.ok(/return 404 /.test(apiRest), 'with a 404');
+    assert.ok(!apiRest.includes('proxy_pass'), 'the rest of the API stays host-local');
     assert.ok(!conf.includes('$proxy_add_x_forwarded_for'));
 });
 
