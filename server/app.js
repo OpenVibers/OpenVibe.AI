@@ -21,7 +21,7 @@ const ovServe = require('openvibe-shared/serve');
 const home = require('./home');
 const pkg = require('../package.json');
 
-function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, credentials = null, preferences = null, vault = null, benchEvents = null, runBudgets = null, memory = null }) {
+function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, credentials = null, preferences = null, grants = null, vault = null, benchEvents = null, runBudgets = null, memory = null }) {
     const app = express();
     app.disable('x-powered-by');
     app.set('trust proxy', 'loopback');
@@ -119,10 +119,10 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
     const personSessions = createPersonSessions({ db, config, clock });
     // The person's own AI settings (L36 Y1/Y3): their keys under owner `self`, and their routing preferences. Only
     // the person's Network token or their AI site session (same origin) reaches them; a service token is refused.
-    if (credentials && preferences) {
-        app.use(require('./me').meRouter({ credentials, preferences, auth, registry, config, clock, log, personSessions, sendError: (res, err, ctx) => sendError(res, err, ctx, log) }));
+    if (credentials && preferences && grants) {
+        app.use(require('./me').meRouter({ credentials, preferences, grants, auth, registry, config, clock, log, personSessions, sendError: (res, err, ctx) => sendError(res, err, ctx, log) }));
         // The same settings as a page for people (GET /you, plain forms on AI's own person session).
-        app.use(require('./you-page').youPageRouter({ credentials, preferences, personSessions, config, log }));
+        app.use(require('./you-page').youPageRouter({ credentials, preferences, grants, personSessions, config, log }));
     }
     app.use(consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, env, clock, fetchImpl, log, vault, personSessions }));
     app.use(runPageRouter({ runs, personSessions, log }));

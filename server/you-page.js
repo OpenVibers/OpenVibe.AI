@@ -113,7 +113,21 @@ function signedOut({ siteUrl }) {
 <p style="margin-top:20px"><a class="you-btn is-go" href="/auth/person/login?next=${encodeURIComponent('/you')}">Sign in to see yours</a></p>` });
 }
 
-function page({ siteUrl, keys = [], prefs = {}, ok = '', error = '' }) {
+/** The app names a grant may name, for a person who reads the list. */
+const APP_NAMES = { actor: 'OpenVibe.Actor', codes: 'OpenVibe.Codes', chat: 'OpenVibe.Chat', live: 'OpenVibe.Live', vision: 'OpenVibe.Vision' };
+const appName = (id) => APP_NAMES[id] || id;
+/** The link a service sends: /you?allow=<app>&provider=<provider>. Only a confirm button follows it; a POST changes it. */
+function allowRequest(query) {
+    const q = query || {};
+    const service = String(q.allow || '').trim().toLowerCase();
+    if (!/^[a-z][a-z0-9._-]{1,39}$/.test(service)) return null;
+    const raw = String(q.provider == null ? '*' : q.provider).trim().toLowerCase();
+    const provider = raw === '*' || raw === '' ? '*' : (/^[a-z][a-z0-9._-]{0,39}$/.test(raw) ? raw : null);
+    if (!provider) return null;
+    return { service, provider };
+}
+
+function page({ siteUrl, keys = [], prefs = {}, apps = [], allow = null, ok = '', error = '' }) {
     const mine = new Map(keys.map((k) => [k.provider, k]));
     const working = keys.filter((k) => k.status === 'ok').length;
     const keyForm = (id, k) => `<form method="post" action="/you/keys/${esc(id)}"><label>${k ? 'New key' : 'Key'}<input type="password" name="key" required minlength="8" maxlength="400" autocomplete="off" spellcheck="false" placeholder="${id === 'anthropic' ? 'sk-ant-…' : 'sk-…'}"></label>${id === 'custom' ? `<label>Base URL<input type="url" name="base_url" required placeholder="https://…/v1" autocomplete="off"></label>` : ''}<button class="you-btn is-go" type="submit">Save</button>${keysUrl(id) ? `<a class="you-btn" href="${esc(keysUrl(id))}" rel="noopener" target="_blank">Get a key ↗</a>` : ''}</form>`;
@@ -132,6 +146,13 @@ ${note ? `<div class="you-key-n">${note}</div>` : ''}
     const toAdd = known.filter((id) => !mine.has(id));
     const addCard = (id) => `<li><details><summary>${esc(providerName(id))}<span>Add</span></summary>${keyForm(id, null)}</details></li>`;
     const only = prefs.only_my_keys === true;
+    // L55 C3: the apps the person allowed to use their own key, and the one that is asking.
+    const appRow = (g) => `<li class="you-key"><div class="you-key-t"><b>${esc(appName(g.service))}</b><span class="you-pill">${g.provider === '*' ? 'all your keys' : esc(providerName(g.provider))}</span></div>
+<div class="you-acts"><form method="post" action="/you/apps/remove"><input type="hidden" name="service" value="${esc(g.service)}"><input type="hidden" name="provider" value="${esc(g.provider)}"><button class="you-btn" type="submit">Remove</button></form></div>
+<div class="you-key-n">allowed ${esc(g.created_at ? ago(g.created_at) : 'just now')}</div></li>`;
+    const appList = apps.length ? `<ul class="you-keys">${apps.map(appRow).join('')}</ul>` : '<p class="you-empty">No app may use your keys yet. An app that needs one asks you here, and never takes it by itself.</p>';
+    const allowBlock = allow ? `<section aria-labelledby="you-allow"><h2 id="you-allow">Let ${esc(appName(allow.service))} use your ${allow.provider === '*' ? 'keys' : esc(providerName(allow.provider)) + ' key'}?</h2><p class="you-sub">${esc(appName(allow.service))} asked to run your work on your own key, so the call costs you nothing. No other app may use it, and you can take it away at any time.</p>
+<form method="post" action="/you/apps/allow"><input type="hidden" name="service" value="${esc(allow.service)}"><input type="hidden" name="provider" value="${esc(allow.provider)}"><button class="you-btn is-go" type="submit">Allow</button></form></section>` : '';
     const body = `<p class="you-eye">Your AI</p><h1>Your keys, on every OpenVibe site.</h1>
 <p class="you-lede">A key saved here works on every OpenVibe site and agent, with no fee, ever. It is sealed the moment it arrives; only its last four characters are ever shown again.</p>
 <ul class="you-state"><li><b>${keys.length}</b> ${keys.length === 1 ? 'key' : 'keys'}${keys.length ? `, ${working} working` : ''}</li><li>${only ? '<b>Only your keys</b>' : 'Your keys first'}</li><li>Free tiers first: <b>${prefs.free_first === false ? 'off' : 'on'}</b></li></ul>
@@ -140,6 +161,7 @@ ${ok ? `<p class="you-note is-ok" role="status">${esc(ok)}</p>` : ''}${error ? `
 ${saved.length ? `<ul class="you-keys">${saved.map(row).join('')}</ul>` : '<p class="you-empty">No keys yet. Add one below: Anthropic, OpenAI, Google or DeepSeek are good first ones.</p>'}
 <h3 style="margin:22px 0 10px;font-size:15px">Add a key</h3>
 <ul class="you-new">${toAdd.map(addCard).join('')}</ul></section>
+${allowBlock}
 <section aria-labelledby="you-pay"><h2 id="you-pay">How your AI is paid</h2><p class="you-sub">For every site and agent that runs AI for you.</p>
 <form class="you-pay" method="post" action="/you/preferences">
 <fieldset><legend>When none of your keys can do a job</legend>
@@ -150,12 +172,14 @@ ${saved.length ? `<ul class="you-keys">${saved.map(row).join('')}</ul>` : '<p cl
 <label>Most per million tokens (USD)<input type="number" name="price_ceiling_usd_per_mtok" min="0" max="1000" step="0.01" value="${prefs.price_ceiling_usd_per_mtok == null ? '' : esc(prefs.price_ceiling_usd_per_mtok)}" placeholder="No limit"></label>
 <button class="you-btn is-go" type="submit">Save</button></div>
 </form></section>
+<section aria-labelledby="you-apps"><h2 id="you-apps">Apps that may use my keys</h2><p class="you-sub">Only the apps you allow here may run on your own key. Nothing uses it by default, and a key never leaves OpenVibe.AI.</p>
+${appList}</section>
 <section aria-labelledby="you-cost"><h2 id="you-cost">What it cost</h2><p class="you-sub">Tokens, how much came from cache, what each call cost and whose key paid, across every site: <a href="https://openvibe.report/you">on openvibe.report</a>.</p></section>
 <p class="you-fine">Removing a key deletes it from OpenVibe.AI. Keys are personal: one serves your own work and nobody else&rsquo;s. Sites and agents that run AI for you use these settings; the ones you have not opened never see your keys.</p>`;
     return frame({ siteUrl, title: 'Your AI', body });
 }
 
-function youPageRouter({ credentials, preferences, personSessions, config, log = console }) {
+function youPageRouter({ credentials, preferences, grants, personSessions, config, log = console }) {
     const r = express.Router();
     const form = express.urlencoded({ extended: false, limit: '4kb' });
     const site = new URL(config.baseUrl).origin;
@@ -190,8 +214,12 @@ function youPageRouter({ credentials, preferences, personSessions, config, log =
         headers(res);
         const viewer = personSessions ? await personSessions.read(req) : null;
         if (!viewer) return res.type('html').send(signedOut({ siteUrl: config.baseUrl }));
-        const [keys, prefs] = await Promise.all([credentials.listSelf(viewer.subject).catch(() => []), preferences.get(viewer.subject).catch(() => ({}))]);
-        res.type('html').send(page({ siteUrl: config.baseUrl, keys, prefs, ok: String(req.query.ok || '').slice(0, 200), error: String(req.query.error || '').slice(0, 200) }));
+        const [keys, prefs, apps] = await Promise.all([
+            credentials.listSelf(viewer.subject).catch(() => []),
+            preferences.get(viewer.subject).catch(() => ({})),
+            grants.list(viewer.subject).catch(() => []),
+        ]);
+        res.type('html').send(page({ siteUrl: config.baseUrl, keys, prefs, apps, allow: allowRequest(req.query), ok: String(req.query.ok || '').slice(0, 200), error: String(req.query.error || '').slice(0, 200) }));
     });
     r.post('/you/keys/:provider', ...guard(async (req, res, subject) => {
         const id = req.params.provider;
@@ -209,6 +237,23 @@ function youPageRouter({ credentials, preferences, personSessions, config, log =
     r.post('/you/keys/:provider/remove', ...guard(async (req, res, subject) => {
         const gone = await credentials.removeSelf(subject, req.params.provider);
         back(res, gone ? { ok: `Removed your ${providerName(req.params.provider)} key.` } : { error: 'There was no key to remove.' });
+    }));
+    // L55 C3: the person allows an app to use their own key (one provider, or all of them). A POST on this site
+    // only; the link an app sends (/you?allow=...) only shows the button.
+    r.post('/you/apps/allow', ...guard(async (req, res, subject) => {
+        const body = req.body || {};
+        const service = String(body.service || '').trim().toLowerCase();
+        const provider = String(body.provider == null ? '*' : body.provider).trim().toLowerCase() || '*';
+        if (!/^[a-z][a-z0-9._-]{1,39}$/.test(service)) return back(res, { error: 'That is not an app name.' });
+        await grants.allow(subject, service, provider);
+        back(res, { ok: `${appName(service)} may use your ${provider === '*' ? 'keys' : providerName(provider) + ' key'} now.` });
+    }));
+    r.post('/you/apps/remove', ...guard(async (req, res, subject) => {
+        const body = req.body || {};
+        const service = String(body.service || '').trim().toLowerCase();
+        const provider = body.provider == null || body.provider === '' ? null : String(body.provider).trim().toLowerCase();
+        const gone = await grants.remove(subject, service, provider);
+        back(res, { ok: gone ? `${appName(service)} may not use your keys any more.` : 'There was nothing to take away.' });
     }));
     r.post('/you/preferences', ...guard(async (req, res, subject) => {
         const b = req.body || {};

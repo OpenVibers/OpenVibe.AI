@@ -33,6 +33,8 @@ const TABLES = [
     // L36 Y3: how the person's runs route (only_my_keys, free_first, the price ceiling and the defaults). Their own
     // settings, so they go with the account; the row holds no key.
     { table: 'ai_person_preferences', subject: 'subject', file: 'ai-preferences.json', columns: ['preferences', 'created_at', 'updated_at'], order: 'created_at' },
+    // L55 C3: the apps the person allowed to use their own key. Names only: no key, no hint, no material of any kind.
+    { table: 'ai_key_grants', subject: 'subject', file: 'key-grants.json', columns: ['service', 'provider', 'created_at'], order: 'created_at' },
     // Memory M2a: the rows are deleted by owner here; the decrypted items are added by extraExport below. The text is
     // never exported sealed (it would be unreadable to the person) and the generic table export stays out of it.
     { table: 'memory_items', subject: 'owner', value: (usr) => `user:${usr}`, file: null, erase: 'delete' },
