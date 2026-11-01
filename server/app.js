@@ -157,9 +157,9 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
             const now = clock.now();
             const rows = await statsRows();
             res.setHeader('Cache-Control', cachePolicy.htmlHeaders());
-            res.setHeader('Content-Security-Policy', views.CSP);
-            res.type('html').send(views.pages.stats({
-                days: STATS_DAYS, rows, canonical: `${String(config.baseUrl || '').replace(/\/+$/, '')}/stats`,
+            res.setHeader('Content-Security-Policy', home.HOME_CSP);
+            res.type('html').send(home.renderStats({ siteUrl: config.baseUrl,
+                days: STATS_DAYS, rows,
                 from: new Date(now - STATS_DAYS * 86400000).toISOString().slice(0, 10), to: new Date(now).toISOString().slice(0, 10),
             }));
         } catch (e) { next(e); }
