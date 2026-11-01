@@ -79,6 +79,14 @@ function route(method, p, operation) {
     (PATHS[p] = PATHS[p] || {})[method] = operation;
 }
 
+// ── The apps a person allows to use their own key (L55 C3) ───────────────────────────────────
+route('get', '/allowed-keys/{subject}', {
+    operationId: 'allowedKeys', summary: 'Which providers this person allowed this service to use their own key for', tags: ['keys'], security: SERVICE,
+    description: 'ai.run.create. The providers this person allowed THIS service to use their own key for, and that they hold a key for: names only, never key material. A person who allowed this service nothing gets 404, and nothing at all about their keys.',
+    parameters: [path('subject', str({ pattern: '^usr_[0-9A-HJKMNP-TV-Z]{26}$' }))],
+    responses: { 200: json('The provider names', ref('AllowedKeys')), 404: problem, ...errors([401, 403]) },
+});
+
 // ── Memory (Memory M2a) ──────────────────────────────────────────────────────────────────────
 const memoryItem = ref('MemoryItem');
 const memoryBody = ref('MemoryWriteRequest');
@@ -322,6 +330,9 @@ function openapi() {
                     items: arrayOf(ref('MemoryItem')), item: ref('MemoryItem'), profile: ref('MemoryProfile'),
                     deleted: integer({ minimum: 0 }), count: integer({ minimum: 0 }),
                 } },
+                AllowedKeys: { type: 'object', required: ['subject', 'service', 'providers'], properties: {
+                    subject: str({ pattern: '^usr_[0-9A-HJKMNP-TV-Z]{26}$' }), service: str(), providers: arrayOf(str({ maxLength: 40 })),
+                }, additionalProperties: false },
                 MemoryWriteRequest: { type: 'object', properties: {
                     items: arrayOf(ref('MemoryItemWrite')), on_behalf_of: str(), text: str(), kind: str(), scope: str(), status: str(), source: str(),
                 } },
