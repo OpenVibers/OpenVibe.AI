@@ -15,6 +15,9 @@ const { AiError } = require('./util');
 const SUBJECT_RE = /^usr_[0-9A-HJKMNP-TV-Z]{26}$/;
 // A service (an app on the network): actor, codes, chat, live…
 const SERVICE_RE = /^[a-z][a-z0-9._-]{1,39}$/;
+// The apps a person may allow to use their key: OpenVibe's own, the ones that run models for a person. A link naming
+// any other app is not offered (a crafted link cannot ask for consent to an app that is not ours).
+const APPS = Object.freeze(['actor', 'codes', 'chat', 'live', 'vision']);
 // The provider names a grant may name, plus '*' for all of them.
 const PROVIDER_RE = /^[a-z][a-z0-9._-]{0,39}$/;
 
@@ -32,7 +35,7 @@ function createKeyGrants({ db, clock = { now: () => Date.now() } } = {}) {
     async function allow(subject, service, provider = '*') {
         if (!SUBJECT_RE.test(String(subject || ''))) throw new AiError(400, 'input.invalid', 'subject must be a usr_ subject');
         const svc = String(service || '').trim().toLowerCase();
-        if (!SERVICE_RE.test(svc)) throw new AiError(422, 'input.invalid', 'service is not an app name');
+        if (!SERVICE_RE.test(svc) || !APPS.includes(svc)) throw new AiError(422, 'input.invalid', 'service is not an OpenVibe app that may use a key');
         const p = providerOf(provider);
         const at = iso(clock.now());
         await db.prepare(
@@ -82,4 +85,4 @@ function createKeyGrants({ db, clock = { now: () => Date.now() } } = {}) {
     return { allow, remove, list, allows, allowedProviders };
 }
 
-module.exports = { createKeyGrants, SUBJECT_RE, SERVICE_RE };
+module.exports = { createKeyGrants, SUBJECT_RE, SERVICE_RE, APPS };

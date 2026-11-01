@@ -120,7 +120,8 @@ const appName = (id) => APP_NAMES[id] || id;
 function allowRequest(query) {
     const q = query || {};
     const service = String(q.allow || '').trim().toLowerCase();
-    if (!/^[a-z][a-z0-9._-]{1,39}$/.test(service)) return null;
+    // Only OpenVibe's own apps are offered: a link naming anything else shows no button (server/key-grants.js APPS).
+    if (!/^[a-z][a-z0-9._-]{1,39}$/.test(service) || !require('./key-grants').APPS.includes(service)) return null;
     const raw = String(q.provider == null ? '*' : q.provider).trim().toLowerCase();
     const provider = raw === '*' || raw === '' ? '*' : (/^[a-z][a-z0-9._-]{0,39}$/.test(raw) ? raw : null);
     if (!provider) return null;
@@ -244,7 +245,7 @@ function youPageRouter({ credentials, preferences, grants, personSessions, confi
         const body = req.body || {};
         const service = String(body.service || '').trim().toLowerCase();
         const provider = String(body.provider == null ? '*' : body.provider).trim().toLowerCase() || '*';
-        if (!/^[a-z][a-z0-9._-]{1,39}$/.test(service)) return back(res, { error: 'That is not an app name.' });
+        if (!/^[a-z][a-z0-9._-]{1,39}$/.test(service) || !require('./key-grants').APPS.includes(service)) return back(res, { error: 'That is not an OpenVibe app that may use a key.' });
         await grants.allow(subject, service, provider);
         back(res, { ok: `${appName(service)} may use your ${provider === '*' ? 'keys' : providerName(provider) + ' key'} now.` });
     }));

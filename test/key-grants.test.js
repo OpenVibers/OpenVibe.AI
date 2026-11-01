@@ -126,6 +126,13 @@ t.test('the person\'s own list names the apps, never the keys', async () => {
     assert.ok(!list.text.includes(DANA_KEY));
 });
 
+t.test('only OpenVibe\'s own apps may be allowed: a crafted name is refused and the page offers no button', async () => {
+    const odd = await request(h.base, 'PUT', '/api/v1/me/key-apps/evil-app', { tok: person, body: { provider: '*' } });
+    assert.strictEqual(odd.status, 422);
+    const { APPS } = require('../server/key-grants');
+    assert.deepStrictEqual(APPS, ['actor', 'codes', 'chat', 'live', 'vision']);
+});
+
 t.test('the person\'s own list is theirs alone: a service is refused', async () => {
     const res = await request(h.base, 'GET', '/api/v1/me/key-apps', { tok: actor });
     assert.strictEqual(res.status, 403);
