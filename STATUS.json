@@ -9,7 +9,7 @@
   "domain": "ai.openvibe.services (the old ai.openvibe.network address was retired on 2026-10-10); the service runs on openvibe-ovh (/opt/openvibe.ai, unit openvibe-ai) on 127.0.0.1:4700 behind nginx; OpenVibe.Live and OpenVibe.Network call it on loopback",
   "contracts": "openvibe-contracts v0.262.0 (the ai.me.* schemas arrive in v0.257.0; the person routes also work without them until this pin moves)",
   "sdk": "openvibe-sdk v0.75.0",
-  "shared": "openvibe-shared v4.86.0",
+  "shared": "openvibe-shared v4.87.0",
   "capabilities": [
     "ai.run.create",
     "ai.run.read",
