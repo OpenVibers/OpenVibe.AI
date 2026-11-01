@@ -248,7 +248,8 @@ function renderUpdates({ siteUrl }) {
         robots: 'index, follow',
         navbar: { service: 'ai', apiBase: NETWORK_URL, links: NAV_LINKS, history: { type: 'page', title: SITE_NAME } },
         footer: FOOTER, home: '/', navLinks: NAV_LINKS,
-        head: appIcon.headTags({ site: 'ai' }),
+        // The site's stylesheet: without it /updates fell back to the browser's serif (domain sweep, 2026-11-01).
+        head: [appIcon.headTags({ site: 'ai' }), `<link rel="stylesheet" href="${ovServe.url(showcase.STYLESHEET)}">`].join('\n'),
         body: `<div id="navbar-mount"></div>
 <main id="main" class="page">
 ${frame.updatesBody({ service: 'ai', siteName: SITE_NAME })}
