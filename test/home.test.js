@@ -183,13 +183,22 @@ t.test('the CSPs let Cloudflare Web Analytics load and report (it injects its be
     assert.strictEqual(stats.headers.get('content-security-policy'), HOME_CSP);
 });
 
-t.test('a browser gets a page for a path nothing serves; an API client the problem document; /favicon.ico is the icon', async () => {
+t.test('a browser that asks for a missing page gets the site 404 page; an API client the problem document', async () => {
     const page = await request(h.base, 'GET', '/no-such-page', { headers: { Accept: BROWSER } });
     assert.strictEqual(page.status, 404);
-    assert.ok(page.text.includes('<html lang="en">') && page.text.includes('<title>Not found') && page.text.includes('rel="icon"'));
+    assert.match(page.headers.get('content-type'), /^text\/html/);
+    assert.ok(page.text.includes('<h1>Page not found</h1>'));
+    assert.ok(page.text.includes('There is no page at this address on ai.openvibe.services. The link may be old or mistyped.'));
+    assert.ok(page.text.includes('id="navbar-mount"'), 'the page is in the site Frame');
+    assert.ok(page.text.includes('<meta name="robots" content="noindex, follow">'));
+    assert.strictEqual(page.headers.get('x-robots-tag'), 'noindex');
+    assert.ok(page.text.includes('class="sc-btn sc-primary" href="/"'), 'home is the first way back');
     const api = await request(h.base, 'GET', '/api/v1/no-such-thing', { headers: { Accept: BROWSER } });
     assert.strictEqual(api.status, 404);
     assert.match(api.headers.get('content-type'), /json/);
+    const notHtml = await request(h.base, 'GET', '/no-such-page', { headers: { Accept: 'application/json' } });
+    assert.strictEqual(notHtml.status, 404);
+    assert.match(notHtml.headers.get('content-type'), /json/);
     const icon = await request(h.base, 'GET', '/favicon.ico');
     assert.strictEqual(icon.status, 200);
     assert.match(icon.headers.get('content-type'), /^image\/svg\+xml/);
