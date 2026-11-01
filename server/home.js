@@ -414,12 +414,35 @@ function llmsTxt({ siteUrl }) {
     ].join('\n');
 }
 
-/** The page a browser gets for a path nothing serves: a real document (language, title, the app icon), not JSON. */
-function renderNotFound() {
-    return ['<!doctype html>', '<html lang="en">', '<head>', '<meta charset="utf-8">', '<meta name="viewport" content="width=device-width, initial-scale=1">',
-        `<title>Not found · ${SITE_NAME}</title>`, '<meta name="robots" content="noindex">', appIcon.headTags({ site: 'ai' }), '</head>',
-        '<body style="font-family:system-ui,sans-serif;margin:3rem auto;max-width:36rem;padding:0 1rem;line-height:1.5">',
-        '<h1>Not found</h1>', `<p>Nothing is here. <a href="/">${SITE_NAME}</a> · <a href="/stats">Prices and latency</a> · <a href="${NETWORK_URL}">OpenVibe</a></p>`, '</body>', '</html>'].join('\n');
+/**
+ * The page a browser gets for a path nothing serves: the site's own Frame, one way back, and no clue
+ * about what was asked for. An API client keeps the problem document (server/app.js).
+ */
+function renderNotFound({ siteUrl = 'https://ai.openvibe.services' } = {}) {
+    const host = String(siteUrl).replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+    return shell.page({
+        name: SITE_NAME, service: 'ai', lang: 'en',
+        title: `Page not found · ${SITE_NAME}`,
+        siteName: SITE_NAME,
+        description: `There is no page at this address on ${host}.`,
+        robots: 'noindex, follow',
+        navbar: { service: 'ai', apiBase: NETWORK_URL, links: NAV_LINKS, history: { type: 'page', title: SITE_NAME } },
+        footer: FOOTER, home: '/', navLinks: NAV_LINKS,
+        head: [
+            appIcon.headTags({ site: 'ai' }),
+            `<link rel="stylesheet" href="${ovServe.url(showcase.STYLESHEET)}">`,
+        ].join('\n'),
+        body: `<div id="navbar-mount"></div>
+<main id="main" class="page">
+<h1>Page not found</h1>
+<p>There is no page at this address on ${esc(host)}. The link may be old or mistyped.</p>
+<div class="sc-actions">
+<a class="sc-btn sc-primary" href="/">${SITE_NAME} home</a>
+<a class="sc-btn" href="/stats">Prices and latency</a>
+<a class="sc-btn" href="${GUIDE}">Developer guide</a>
+</div>
+</main>`,
+    });
 }
 
 module.exports = { renderHome, renderUpdates, renderStats, llmsTxt, llmsFullTxt, PUBLIC_PAGES, HOME_CSP, SITE_NAME, renderNotFound, FAQ, DESCRIPTION };
