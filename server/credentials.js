@@ -386,6 +386,13 @@ function createCredentials({ db, config, clock = { now: () => Date.now() }, fetc
 
     /** A person's own credential for one provider (no key returned to the caller; server-side use only). */
     async function selfForRun(subject, provider) {
+        if (provider === 'node') {
+            // Their own computer (plan L55 C3): the machine and the model, no key. Only an app they allowed reaches it.
+            const n = await getRow(SELF_OWNER, subject, 'node');
+            if (!n) return null;
+            await db.prepare('UPDATE subject_credentials SET last_used_at = ? WHERE owner = ? AND subject = ? AND provider = ?').run(iso(clock.now()), SELF_OWNER, subject, 'node');
+            return { providerKey: n.spend_key || providerKeyFor(SELF_OWNER, subject, 'node'), owner: SELF_OWNER, subject, provider: 'node', machine: n.machine, models: JSON.parse(n.models || '{}'), hint: '' };
+        }
         if (!CREDENTIAL_PROVIDERS.includes(provider)) return null;
         const r = await getRow(SELF_OWNER, subject, provider);
         if (!r) return null;
@@ -431,6 +438,28 @@ function createCredentials({ db, config, clock = { now: () => Date.now() }, fetc
                 providerKeyFor(SELF_OWNER, subject, provider), prev ? prev.created_at : at, at);
         await testSelf(subject, provider);
         return selfView(await getRow(SELF_OWNER, subject, provider));
+    }
+
+    /**
+     * The person's own computer as their model (plan L55 C3), kept with their keys: machine any (whichever of theirs is
+     * on with the model, the fastest first) or one dev_ id, and the model. No key, nothing sealed, nothing spent. It is
+     * never a fallback for other work (selfRows leaves it out): an app the person allowed asks for it by name
+     * (x-openvibe-credential: node).
+     */
+    async function getSelfNode(subject) {
+        if (!SUBJECT_RE.test(String(subject))) return null;
+        const r = await getRow(SELF_OWNER, subject, 'node');
+        return r ? { machine: r.machine, model: (JSON.parse(r.models || '{}')).chat || null, last_used_at: r.last_used_at || null, updated_at: r.updated_at } : null;
+    }
+    async function putSelfNode(subject, { machine = 'any', model } = {}) {
+        const m = String(model || '').trim();
+        if (!m || m.length > 120 || /\s/.test(m)) throw new AiError(422, 'input.invalid', 'Name the model as your computer lists it, for example qwen3:8b.');
+        await put(SELF_OWNER, subject, { provider: 'node', machine, models: { chat: m } }, 'node');
+        return await getSelfNode(subject);
+    }
+    async function removeSelfNode(subject) {
+        if (!SUBJECT_RE.test(String(subject))) return false;
+        return (await db.prepare('DELETE FROM subject_credentials WHERE owner = ? AND subject = ? AND provider = ?').run(SELF_OWNER, subject, 'node')).changes > 0;
     }
 
     async function removeSelf(subject, provider) {
@@ -539,6 +568,7 @@ function createCredentials({ db, config, clock = { now: () => Date.now() }, fetc
         const allowed = await grants.allowedProviders(subject, service);
         if (!allowed.length) return [];
         const have = new Set((await selfRows(subject)).map((r) => r.provider));
+        if (await getRow(SELF_OWNER, subject, 'node')) have.add('node');   // their own computer (L55 C3)
         if (allowed.includes('*')) return [...have].sort();
         return allowed.filter((p) => have.has(p)).sort();
     }
@@ -557,7 +587,7 @@ function createCredentials({ db, config, clock = { now: () => Date.now() }, fetc
 
     return {
         put, get, remove, admit, forRun, spentToday, providerKeyFor,
-        listSelf, hasSelf, selfForRun, selfForAllRuns, putSelf, removeSelf, testSelf, markFailed,
+        listSelf, hasSelf, selfForRun, selfForAllRuns, putSelf, removeSelf, testSelf, markFailed, getSelfNode, putSelfNode, removeSelfNode,
         allowedProvidersWithKey, consentUse,
     };
 }

@@ -15,6 +15,12 @@
  *   POST /you/keys/:provider/test          test it now
  *   POST /you/keys/:provider/remove        forget it
  *   POST /you/preferences                  only_my_keys, free_first, price_ceiling_usd_per_mtok
+ *   POST /you/computer                     a model on your own computer (model; any of your computers)
+ *   POST /you/computer/remove              forget it
+ *
+ * Your computer (plan L55 C3): a model the person runs at home, reached through OpenVibe.Bot and their OpenVibe Node,
+ * kept here like a key but with no key: the model, and any of their computers that lets their AI use its models. An
+ * app uses it only when the person allows that app below (provider node), and it never stands in for a key.
  */
 const express = require('express');
 const shell = require('openvibe-shared/shell');
@@ -27,7 +33,9 @@ const SITE_NAME = 'OpenVibe.AI';
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 // The order people look for them in: the big labs, then the fast and cheap, then the routers, then their own.
 const ORDER = ['anthropic', 'openai', 'gemini', 'deepseek', 'mistral', 'xai', 'groq', 'cerebras', 'together', 'fireworks', 'openrouter', 'minimax', 'custom'];
-const NAMES = { deepseek: 'DeepSeek', minimax: 'MiniMax', custom: 'Another OpenAI-compatible API' };
+const NAMES = { deepseek: 'DeepSeek', minimax: 'MiniMax', custom: 'Another OpenAI-compatible API', node: 'Your computer' };
+// What an app is allowed to use, in words: all your keys, one key, or your computer's models.
+const useWords = (provider) => (provider === '*' ? 'keys' : provider === 'node' ? 'computer\'s models' : `${providerName(provider)} key`);
 const providerName = (id) => NAMES[id] || (byId(CREDENTIAL_PRESET[id]) || {}).name || id;
 const keysUrl = (id) => (byId(CREDENTIAL_PRESET[id]) || {}).keys || null;
 const ago = (iso) => {
@@ -69,7 +77,7 @@ const STYLE = `<style>
 .you-add summary::-webkit-details-marker{display:none}
 .you-add form{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;margin-top:10px}
 .you-add label{display:grid;gap:4px;flex:1 1 220px;font-size:12.5px;font-weight:700;color:var(--text-secondary,#96a7c2)}
-.you input[type=password],.you input[type=url],.you input[type=number]{min-height:42px;box-sizing:border-box;width:100%;padding:0 12px;border-radius:10px;border:1px solid var(--border,#1f2d47);background:var(--bg-primary,#0b1220);color:var(--text-primary,#e6edf7);font:inherit;font-size:15px}
+.you input[type=password],.you input[type=url],.you input[type=number],.you input[type=text]{min-height:42px;box-sizing:border-box;width:100%;padding:0 12px;border-radius:10px;border:1px solid var(--border,#1f2d47);background:var(--bg-primary,#0b1220);color:var(--text-primary,#e6edf7);font:inherit;font-size:15px}
 .you-pay{display:grid;gap:10px;padding:16px;border-radius:16px;border:1px solid var(--border,#1f2d47);background:var(--bg-secondary,#101828)}
 .you-pay fieldset{margin:0;padding:0;border:0;display:grid;gap:8px}
 .you-pay legend{margin-bottom:6px;font-weight:700}
@@ -79,6 +87,11 @@ const STYLE = `<style>
 .you-opt span{display:grid;gap:2px}.you-opt small{color:var(--text-secondary,#96a7c2);font-size:13px}
 .you-row{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:flex-end}
 .you-row>label:not(.you-opt){display:grid;gap:4px;font-size:12.5px;font-weight:700;color:var(--text-secondary,#96a7c2)}
+.you-pc-form{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;margin-top:12px}
+.you-pc-form label{display:grid;gap:4px;flex:1 1 220px;font-size:12.5px;font-weight:700;color:var(--text-secondary,#96a7c2)}
+.you-pcs{margin:0;padding-left:20px;color:var(--text-secondary,#96a7c2);font-size:14px;line-height:1.75}
+.you-pcs b{color:var(--text-primary,#e6edf7)}
+.you code{padding:1px 6px;border-radius:6px;background:var(--bg-primary,#0b1220);font-size:13px}
 .you-new{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px}
 .you-new>li{padding:12px 14px;border-radius:14px;border:1px solid var(--border,#1f2d47);background:var(--bg-secondary,#101828)}
 .you-new>li:has(details[open]){grid-column:1/-1}
@@ -128,7 +141,24 @@ function allowRequest(query) {
     return { service, provider };
 }
 
-function page({ siteUrl, keys = [], prefs = {}, apps = [], allow = null, ok = '', error = '' }) {
+/** Your computer: the saved model and where it runs, the form, and which of your computers can answer now. */
+function computerSection(pc, machines) {
+    const models = [...new Set(machines.flatMap((m) => m.models))].slice(0, 60);
+    const onNow = machines.filter((m) => m.online);
+    const line = (m) => `<li><b>${esc(m.name)}</b>${m.online ? '' : ' <span class="you-pill">away</span>'}${m.models.length ? ` · ${esc(m.models.slice(0, 6).join(', '))}${m.models.length > 6 ? ` and ${m.models.length - 6} more` : ''}` : ' · no models listed'}${m.tools ? '' : ' · <span class="you-pill">update OpenVibe Node to v0.36.0 for agents</span>'}</li>`;
+    const where = machines.length
+        ? `<ul class="you-pcs">${machines.map(line).join('')}</ul>`
+        : '<p class="you-empty">None of your computers lets OpenVibe use its models yet. On the computer, run a model server (Ollama, LM Studio or llama.cpp) and OpenVibe Node with <code>--ai</code>, then turn on &ldquo;Let my AI use this computer&rsquo;s models&rdquo; at <a href="https://openvibe.bot/machines">openvibe.bot/machines</a>.</p>';
+    const saved = pc ? `<ul class="you-keys"><li class="you-key"><div class="you-key-t"><b>Any of your computers</b><span class="you-pill${onNow.some((m) => m.models.includes(pc.model)) ? ' is-ok' : ''}">${esc(pc.model || 'no model')}</span></div>
+<div class="you-acts"><form method="post" action="/you/computer/remove"><button class="you-btn" type="submit">Remove</button></form></div>
+<div class="you-key-n">${onNow.some((m) => m.models.includes(pc.model)) ? 'On now, with this model' : 'None of your computers with this model is on right now'}${pc.last_used_at ? ` · used ${esc(ago(pc.last_used_at))}` : ''}</div></li></ul>` : '';
+    const form = `<form class="you-pc-form" method="post" action="/you/computer"><label>Model${pc ? ' (change it)' : ''}<input type="text" name="model" required maxlength="120" pattern="\\S+" list="you-pc-models" autocomplete="off" spellcheck="false" placeholder="${esc(models[0] || 'qwen3:8b')}" value="${esc(pc && pc.model ? pc.model : '')}"></label><datalist id="you-pc-models">${models.map((m) => `<option value="${esc(m)}">`).join('')}</datalist><button class="you-btn is-go" type="submit">Save</button></form>`;
+    return `<section aria-labelledby="you-pc"><h2 id="you-pc">Your computer</h2><p class="you-sub">A model you run at home answers your own work: no key, nothing spent, and the conversation stays between OpenVibe and your machine. Whichever of your computers is on with the model answers, the fastest first. Only the apps you allow below may use it.</p>
+${saved}${form}
+<h3 style="margin:18px 0 8px;font-size:15px">Your computers</h3>${where}</section>`;
+}
+
+function page({ siteUrl, keys = [], prefs = {}, apps = [], allow = null, ok = '', error = '', pc = null, machines = [] }) {
     const mine = new Map(keys.map((k) => [k.provider, k]));
     const working = keys.filter((k) => k.status === 'ok').length;
     const keyForm = (id, k) => `<form method="post" action="/you/keys/${esc(id)}"><label>${k ? 'New key' : 'Key'}<input type="password" name="key" required minlength="8" maxlength="400" autocomplete="off" spellcheck="false" placeholder="${id === 'anthropic' ? 'sk-ant-…' : 'sk-…'}"></label>${id === 'custom' ? `<label>Base URL<input type="url" name="base_url" required placeholder="https://…/v1" autocomplete="off"></label>` : ''}<button class="you-btn is-go" type="submit">Save</button>${keysUrl(id) ? `<a class="you-btn" href="${esc(keysUrl(id))}" rel="noopener" target="_blank">Get a key ↗</a>` : ''}</form>`;
@@ -148,11 +178,11 @@ ${note ? `<div class="you-key-n">${note}</div>` : ''}
     const addCard = (id) => `<li><details><summary>${esc(providerName(id))}<span>Add</span></summary>${keyForm(id, null)}</details></li>`;
     const only = prefs.only_my_keys === true;
     // L55 C3: the apps the person allowed to use their own key, and the one that is asking.
-    const appRow = (g) => `<li class="you-key"><div class="you-key-t"><b>${esc(appName(g.service))}</b><span class="you-pill">${g.provider === '*' ? 'all your keys' : esc(providerName(g.provider))}</span></div>
+    const appRow = (g) => `<li class="you-key"><div class="you-key-t"><b>${esc(appName(g.service))}</b><span class="you-pill">${g.provider === '*' ? 'all your keys' : g.provider === 'node' ? 'your computer' : esc(providerName(g.provider))}</span></div>
 <div class="you-acts"><form method="post" action="/you/apps/remove"><input type="hidden" name="service" value="${esc(g.service)}"><input type="hidden" name="provider" value="${esc(g.provider)}"><button class="you-btn" type="submit">Remove</button></form></div>
 <div class="you-key-n">allowed ${esc(g.created_at ? ago(g.created_at) : 'just now')}</div></li>`;
     const appList = apps.length ? `<ul class="you-keys">${apps.map(appRow).join('')}</ul>` : '<p class="you-empty">No app may use your keys yet. An app that needs one asks you here, and never takes it by itself.</p>';
-    const allowBlock = allow ? `<section aria-labelledby="you-allow"><h2 id="you-allow">Let ${esc(appName(allow.service))} use your ${allow.provider === '*' ? 'keys' : esc(providerName(allow.provider)) + ' key'}?</h2><p class="you-sub">${esc(appName(allow.service))} asked to run your work on your own key, so the call costs you nothing. No other app may use it, and you can take it away at any time.</p>
+    const allowBlock = allow ? `<section aria-labelledby="you-allow"><h2 id="you-allow">Let ${esc(appName(allow.service))} use your ${esc(useWords(allow.provider))}?</h2><p class="you-sub">${esc(appName(allow.service))} asked to run your work on ${allow.provider === 'node' ? 'a model on your own computer' : 'your own key'}, so the call costs you nothing. No other app may use it, and you can take it away at any time.</p>${allow.provider === 'node' && !pc ? '<p class="you-sub">Add the model under &ldquo;Your computer&rdquo; first, then allow it here.</p>' : ''}
 <form method="post" action="/you/apps/allow"><input type="hidden" name="service" value="${esc(allow.service)}"><input type="hidden" name="provider" value="${esc(allow.provider)}"><button class="you-btn is-go" type="submit">Allow</button></form></section>` : '';
     const body = `<p class="you-eye">Your AI</p><h1>Your keys, on every OpenVibe site.</h1>
 <p class="you-lede">A key saved here works on every OpenVibe site and agent, with no fee, ever. It is sealed the moment it arrives; only its last four characters are ever shown again.</p>
@@ -163,6 +193,7 @@ ${saved.length ? `<ul class="you-keys">${saved.map(row).join('')}</ul>` : '<p cl
 <h3 style="margin:22px 0 10px;font-size:15px">Add a key</h3>
 <ul class="you-new">${toAdd.map(addCard).join('')}</ul></section>
 ${allowBlock}
+${computerSection(pc, machines)}
 <section aria-labelledby="you-pay"><h2 id="you-pay">How your AI is paid</h2><p class="you-sub">For every site and agent that runs AI for you.</p>
 <form class="you-pay" method="post" action="/you/preferences">
 <fieldset><legend>When none of your keys can do a job</legend>
@@ -180,7 +211,7 @@ ${appList}</section>
     return frame({ siteUrl, title: 'Your AI', body });
 }
 
-function youPageRouter({ credentials, preferences, grants, personSessions, config, log = console }) {
+function youPageRouter({ credentials, preferences, grants, personSessions, config, log = console, machines = null }) {
     const r = express.Router();
     const form = express.urlencoded({ extended: false, limit: '4kb' });
     const site = new URL(config.baseUrl).origin;
@@ -215,12 +246,14 @@ function youPageRouter({ credentials, preferences, grants, personSessions, confi
         headers(res);
         const viewer = personSessions ? await personSessions.read(req) : null;
         if (!viewer) return res.type('html').send(signedOut({ siteUrl: config.baseUrl }));
-        const [keys, prefs, apps] = await Promise.all([
+        const [keys, prefs, apps, pc, mine] = await Promise.all([
             credentials.listSelf(viewer.subject).catch(() => []),
             preferences.get(viewer.subject).catch(() => ({})),
             grants.list(viewer.subject).catch(() => []),
+            credentials.getSelfNode ? credentials.getSelfNode(viewer.subject).catch(() => null) : null,
+            machines && machines.mine ? machines.mine(viewer.subject).catch(() => []) : [],
         ]);
-        res.type('html').send(page({ siteUrl: config.baseUrl, keys, prefs, apps, allow: allowRequest(req.query), ok: String(req.query.ok || '').slice(0, 200), error: String(req.query.error || '').slice(0, 200) }));
+        res.type('html').send(page({ siteUrl: config.baseUrl, keys, prefs, apps, pc, machines: mine, allow: allowRequest(req.query), ok: String(req.query.ok || '').slice(0, 200), error: String(req.query.error || '').slice(0, 200) }));
     });
     r.post('/you/keys/:provider', ...guard(async (req, res, subject) => {
         const id = req.params.provider;
@@ -247,7 +280,16 @@ function youPageRouter({ credentials, preferences, grants, personSessions, confi
         const provider = String(body.provider == null ? '*' : body.provider).trim().toLowerCase() || '*';
         if (!/^[a-z][a-z0-9._-]{1,39}$/.test(service) || !require('./key-grants').APPS.includes(service)) return back(res, { error: 'That is not an OpenVibe app that may use a key.' });
         await grants.allow(subject, service, provider);
-        back(res, { ok: `${appName(service)} may use your ${provider === '*' ? 'keys' : providerName(provider) + ' key'} now.` });
+        back(res, { ok: `${appName(service)} may use your ${useWords(provider)} now.` });
+    }));
+    // Your computer (L55 C3): the model, on any of the person's computers. No key: nothing to seal or test here.
+    r.post('/you/computer', ...guard(async (req, res, subject) => {
+        const saved = await credentials.putSelfNode(subject, { machine: 'any', model: String((req.body || {}).model || '').trim() });
+        back(res, { ok: `Saved: ${saved.model}, on whichever of your computers is on with it.` });
+    }));
+    r.post('/you/computer/remove', ...guard(async (req, res, subject) => {
+        const gone = await credentials.removeSelfNode(subject);
+        back(res, gone ? { ok: 'Removed your computer\'s model. No app can use it now.' } : { error: 'There was nothing to remove.' });
     }));
     r.post('/you/apps/remove', ...guard(async (req, res, subject) => {
         const body = req.body || {};

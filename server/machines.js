@@ -130,7 +130,21 @@ function createMachineModels({ config, env = process.env, fetchImpl = globalThis
         return { text: said.trim(), message, finish: typeof d.finish_reason === 'string' ? d.finish_reason : (calls ? 'tool_calls' : 'stop'), model: d.model || model, usage: { input: u.prompt_tokens || 0, output: u.completion_tokens || 0, cached: 0 } };
     }
 
-    return { enabled, chat };
+    /**
+     * The person's computers that let their AI use their models, for their own settings page: name, whether it is on,
+     * its models and whether its Node can pass tools. [] when Bot cannot be reached.
+     */
+    async function mine(subject, signal = null) {
+        if (!enabled || !SUBJECT_RE.test(String(subject))) return [];
+        const list = await listed(subject, signal || AbortSignal.timeout(5000)).catch(() => []);
+        return list.filter((m) => m && MACHINE_RE.test(String(m.id)) && m.ai_models !== false && m.computer && m.computer.ai).map((m) => ({
+            id: m.id, name: String(m.name || 'A computer').slice(0, 80), online: !!m.online,
+            models: Array.isArray(m.computer.ai.models) ? m.computer.ai.models.filter((x) => typeof x === 'string').slice(0, 40) : [],
+            tools: m.computer.ai.tools === true,
+        }));
+    }
+
+    return { enabled, chat, mine };
 }
 
 module.exports = { createMachineModels };
