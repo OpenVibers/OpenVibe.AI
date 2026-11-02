@@ -58,6 +58,10 @@ t.test('the home: numbers and the model table come from the /stats rows; nothing
     const html = renderHome({ siteUrl: SITE, stats: { days: 7, rows } });
     assert.match(html, /<b>1,010<\/b><span>calls answered in the last 7 days<\/span>/);
     assert.match(html, /<b>2<\/b><span>models answered them<\/span>/);
+    // On a phone each model is a card: every cell carries its column's name (2026-11-02: the table scrolled sideways
+    // with rows a screen tall).
+    assert.ok(/<td data-label="Provider">[\s\S]*?<td data-label="Price">/.test(html), 'each cell names its column');
+    assert.ok(/@media \(max-width:600px\)\{#models[^\n]*table\.sc-table\{min-width:0;/.test(html), 'and the phone layout undoes the table width');
     assert.match(html, /<b>99\.4%<\/b><span>of provider calls succeeded<\/span>/);
     assert.ok(html.indexOf('gpt-5-nano') < html.indexOf('qwen2.5-1.5b-instruct'), 'most used first');
     assert.ok(!html.includes('never-answered'), 'a model with no answer is left out');
