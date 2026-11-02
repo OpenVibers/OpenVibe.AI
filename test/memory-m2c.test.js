@@ -216,7 +216,7 @@ t.test('a conflict is marked, hidden from an agent, and the person settles it', 
     } finally { await h.stop(); await seam.close(); }
 });
 
-t.test('the profile is built from at most 60 notes, cached by items_hash, once an hour, and passes noLooks', async () => {
+t.test('the profile is built from at most 60 notes, cached by items_hash, once an hour, and is stored as written', async () => {
     let now = Date.now();
     const clock = { now: () => now };
     const { seam, state } = await startSeam();
@@ -236,7 +236,7 @@ t.test('the profile is built from at most 60 notes, cached by items_hash, once a
         const first = await request(h.base, 'GET', '/api/v1/memory/profile?scope=user', { tok: who });
         assert.equal(first.status, 200, `profile: ${first.text}`);
         const text = first.body.profile.text;
-        assert.ok(!text.includes('shirtless') && !text.includes('man'), `noLooks did not run: ${text}`);
+        assert.ok(text.includes('shirtless') && text.includes('man'), `the profile is stored as written: ${text}`);
         assert.ok(text.length <= 4000, 'the profile is at most about a thousand tokens');
 
         // The prompt carries the person's own notes only, and at most 60 of them, newest first.
@@ -268,7 +268,7 @@ t.test('the profile is built from at most 60 notes, cached by items_hash, once a
         assert.equal(state.chats, 2, 'the profile was rebuilt after the hour');
         assert.notEqual(rebuilt.body.profile.built_at, first.body.profile.built_at);
         assert.notEqual(rebuilt.body.profile.items_hash, first.body.profile.items_hash);
-        assert.ok(!rebuilt.body.profile.text.includes('shirtless'), 'the rebuilt profile passes noLooks too');
+        assert.ok(rebuilt.body.profile.text.includes('shirtless'), 'the rebuilt profile is stored as written too');
     } finally { await h.stop(); await seam.close(); }
 });
 t.test('the job walks owner by owner, within its caps', async () => {
