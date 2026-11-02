@@ -153,7 +153,7 @@ function sections({ siteUrl, stats }) {
             { icon: 'ov:account', title: 'Your project\'s runs', text: 'Runs belong to your project: another project can never read them. Usage is metered per project, with a free allowance first.' },
             { icon: 'ov:code', title: 'Open source', text: 'AGPL-3.0, built in the open. Every guarantee on this page has a test in the repository.' },
         ],
-    }) + models(stats)
+    }).replace('<div class="sc-grid">', '<div class="sc-grid" role="region" aria-label="What you get" tabindex="0">') + models(stats)
     + '<section class="sc-sec" id="build" aria-labelledby="h-build"><details class="ai-fold"><summary><h2 id="h-build">Build with it</h2><span>the OpenAI SDK, curl, four steps, sandbox and production</span></summary>'
     + showcase.code({
         id: 'openai',

@@ -38,6 +38,7 @@ t.test('GET / as a browser: the home page, its CSP and a private cache', async (
     assert.match(r.headers.get('vary'), /Accept/);
     assert.strictEqual((r.text.match(/<h1\b/g) || []).length, 1, 'exactly one h1');
     assert.ok(r.text.includes('Many models, one API.'), 'the hero');
+    assert.ok(r.text.includes('<div class="sc-grid" role="region" aria-label="What you get" tabindex="0">'), 'the sideways rail is reachable by keyboard');
     assert.ok(r.text.includes('point it at /v1 for Chat Completions with tools'), 'the OpenAI-compatible endpoint is on the home');
     assert.ok(r.text.includes('Your project&#39;s own provider') || r.text.includes("Your project's own provider"), 'the project\'s own provider row');
     assert.ok(!r.text.includes('metered models under a project budget'), 'production app runs are free-only until project budgets open');
