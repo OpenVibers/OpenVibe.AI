@@ -12,8 +12,13 @@
  * hands over to the next. Never anyone else's machine, never another provider.
  *
  * Off without OV_BOT_INTERNAL_URL or a client secret: a credential with provider node is then refused, never sent
- * elsewhere. → chat({ machine, subject, model, messages, maxTokens, temperature, signal, timeoutMs })
- *   -> { text, model, usage: { input, output, cached }, machine, tried: [{ machine, error }] }
+ * elsewhere. → chat({ machine, subject, model, messages, maxTokens, temperature, signal, timeoutMs, tools, toolChoice })
+ *   -> { text, message, finish, model, usage: { input, output, cached }, machine, tried: [{ machine, error }] }
+ *
+ * Tools (contracts 0.277.0, plan L55 C3): an agent's loop on the person's own model. The command carries the tools and
+ * the calls already made; the machine hands back the calls its model asked for (message.tool_calls) and runs none. Only
+ * a machine whose Node says computer.ai.tools (v0.36.0) is asked: with machine any the others are passed over, and a
+ * named machine without it is refused with what to update.
  */
 const { AiError } = require('./util');
 
@@ -39,7 +44,7 @@ function createMachineModels({ config, env = process.env, fetchImpl = globalThis
     const headersFor = (token, subject) => ({ Authorization: `Bearer ${token}`, 'X-OV-Subject': subject, Accept: 'application/json' });
 
     /** The person's machines that may answer with `model`, the fastest at it first (Bot lists only those switched on). */
-    async function candidates(subject, model, signal) {
+    async function listed(subject, signal) {
         const token = await tokenClient().getToken({ audience: 'openvibe.bot' });
         let res;
         try {
@@ -49,13 +54,19 @@ function createMachineModels({ config, env = process.env, fetchImpl = globalThis
         }
         const body = await res.json().catch(() => null);
         if (!res.ok) throw new AiError(res.status === 403 ? 403 : 502, (body && body.code) || 'machine.refused', String((body && (body.detail || body.title)) || `OpenVibe.Bot answered ${res.status}`).slice(0, 300));
+        return (body && body.machines) || [];
+    }
+
+    async function candidates(subject, model, signal, { tools = false } = {}) {
+        const machines = await listed(subject, signal);
         const speedAt = (m) => {
             const s = m.computer && m.computer.ai_speed;
             return s && s.model === model && Number(s.tokens_per_s) > 0 ? Number(s.tokens_per_s) : 0;
         };
-        return ((body && body.machines) || [])
+        return machines
             .filter((m) => m && MACHINE_RE.test(String(m.id)) && m.online && m.ai_models !== false && m.computer && m.computer.ai
-                && m.computer.ai.ready !== false && Array.isArray(m.computer.ai.models) && m.computer.ai.models.includes(model))
+                && m.computer.ai.ready !== false && Array.isArray(m.computer.ai.models) && m.computer.ai.models.includes(model)
+                && (!tools || m.computer.ai.tools === true))
             .sort((a, b) => speedAt(b) - speedAt(a))
             .map((m) => m.id);
     }
@@ -64,9 +75,17 @@ function createMachineModels({ config, env = process.env, fetchImpl = globalThis
         if (!enabled) throw new AiError(503, 'machine.unavailable', 'a person\'s own machine cannot be reached from this service (OV_BOT_INTERNAL_URL)');
         const { machine, subject, model, signal = null } = args;
         if (!(MACHINE_RE.test(String(machine)) || machine === ANY) || !SUBJECT_RE.test(String(subject))) throw new AiError(422, 'credential.invalid', 'a node credential names a dev_ machine of a usr_ person, or any of theirs');
-        if (machine !== ANY) return { ...(await once(machine, args)), machine, tried: [] };
-        const ids = (await candidates(subject, model, signal)).slice(0, MAX_TRIED);
-        if (!ids.length) throw new AiError(503, 'machine.none', `none of the person's own machines is on with ${String(model).slice(0, 120)} and lets their AI use it`);
+        const tools = Array.isArray(args.tools) && args.tools.length > 0;
+        if (machine !== ANY) {
+            if (tools) {
+                // A Node older than v0.36.0 would drop the tools and answer in words: say what to update instead.
+                const m = (await listed(subject, signal)).find((x) => x && x.id === machine);
+                if (m && m.computer && m.computer.ai && m.computer.ai.tools !== true) throw new AiError(422, 'machine.no_tools', 'this computer\'s OpenVibe Node cannot pass tools to its model yet: update it to v0.36.0 or newer');
+            }
+            return { ...(await once(machine, args)), machine, tried: [] };
+        }
+        const ids = (await candidates(subject, model, signal, { tools })).slice(0, MAX_TRIED);
+        if (!ids.length) throw new AiError(503, 'machine.none', `none of the person's own machines is on with ${String(model).slice(0, 120)} and lets their AI use it${tools ? ', with an OpenVibe Node that can pass tools (v0.36.0 or newer)' : ''}`);
         const tried = [];
         for (const id of ids) {
             try {
@@ -80,8 +99,9 @@ function createMachineModels({ config, env = process.env, fetchImpl = globalThis
         throw new AiError(503, 'machine.none', `none of the person's own machines answered (${tried.map((x) => `${x.machine}: ${x.error}`).join('; ').slice(0, 400)})`);
     }
 
-    async function once(machine, { subject, model, messages, maxTokens = null, temperature = null, signal = null, timeoutMs = 120000 }) {
-        const value = { model, messages, ...(maxTokens ? { max_tokens: Math.min(32768, Math.max(1, Math.round(maxTokens))) } : {}), ...(temperature != null ? { temperature: Math.min(2, Math.max(0, Number(temperature))) } : {}) };
+    async function once(machine, { subject, model, messages, maxTokens = null, temperature = null, signal = null, timeoutMs = 120000, tools = null, toolChoice = null }) {
+        const value = { model, messages, ...(maxTokens ? { max_tokens: Math.min(32768, Math.max(1, Math.round(maxTokens))) } : {}), ...(temperature != null ? { temperature: Math.min(2, Math.max(0, Number(temperature))) } : {}),
+            ...(Array.isArray(tools) && tools.length ? { tools, ...(toolChoice === 'none' || toolChoice === 'auto' ? { tool_choice: toolChoice } : {}) } : {}) };
         const token = await tokenClient().getToken({ audience: 'openvibe.bot' });
         let res;
         try {
@@ -103,10 +123,28 @@ function createMachineModels({ config, env = process.env, fetchImpl = globalThis
         if (!body || body.result !== 'ack') throw new AiError(502, 'machine.failed', `the machine did not answer: ${String((body && (body.reason || body.result)) || 'no answer').slice(0, 200)}`);
         const d = body.data || {};
         const u = d.usage || {};
-        return { text: String((d.message && d.message.content) || '').trim(), model: d.model || model, usage: { input: u.prompt_tokens || 0, output: u.completion_tokens || 0, cached: 0 } };
+        const said = String((d.message && d.message.content) || '');
+        const calls = d.message && Array.isArray(d.message.tool_calls) && d.message.tool_calls.length ? d.message.tool_calls : null;
+        // The whole message too, for a chat completion: the calls the model asked for, if any (none ran on the machine).
+        const message = { role: 'assistant', content: calls && !said.trim() ? null : said, ...(calls ? { tool_calls: calls } : {}) };
+        return { text: said.trim(), message, finish: typeof d.finish_reason === 'string' ? d.finish_reason : (calls ? 'tool_calls' : 'stop'), model: d.model || model, usage: { input: u.prompt_tokens || 0, output: u.completion_tokens || 0, cached: 0 } };
     }
 
-    return { enabled, chat };
+    /**
+     * The person's computers that let their AI use their models, for their own settings page: name, whether it is on,
+     * its models and whether its Node can pass tools. [] when Bot cannot be reached.
+     */
+    async function mine(subject, signal = null) {
+        if (!enabled || !SUBJECT_RE.test(String(subject))) return [];
+        const list = await listed(subject, signal || AbortSignal.timeout(5000)).catch(() => []);
+        return list.filter((m) => m && MACHINE_RE.test(String(m.id)) && m.ai_models !== false && m.computer && m.computer.ai).map((m) => ({
+            id: m.id, name: String(m.name || 'A computer').slice(0, 80), online: !!m.online,
+            models: Array.isArray(m.computer.ai.models) ? m.computer.ai.models.filter((x) => typeof x === 'string').slice(0, 40) : [],
+            tools: m.computer.ai.tools === true,
+        }));
+    }
+
+    return { enabled, chat, mine };
 }
 
 module.exports = { createMachineModels };

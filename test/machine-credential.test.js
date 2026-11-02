@@ -20,6 +20,10 @@ const machineModels = {
     async chat(args) {
         sent.push(args);
         if (refuse) throw new AiError(403, 'bot.agent_not_allowed', 'the owner has not let their AI use this computer\'s models');
+        // With tools and no result yet, the model asks for one (the machine runs none).
+        if (args.tools && args.messages[args.messages.length - 1].role !== 'tool') {
+            return { text: '', message: { role: 'assistant', content: null, tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'web_search', arguments: '{"q":"mutex"}' } }] }, finish: 'tool_calls', model: args.model, usage: { input: 40, output: 12, cached: 0 } };
+        }
         return { text: 'A lock that one thread holds at a time.', model: args.model, usage: { input: 30, output: 9, cached: 0 } };
     },
 };
@@ -70,6 +74,50 @@ t.test('a run with it goes to that machine as the person, costs nothing, and say
     refuse = false;
 });
 
+t.test('an agent\'s loop on the person\'s machine (L55 C3): /v1/chat/completions passes the tools and the calls, and hands back the model\'s calls', async () => {
+    const tools = [{ type: 'function', function: { name: 'web_search', description: 'Search the web', parameters: { type: 'object', properties: { q: { type: 'string' } } } } }];
+    const ask = (messages, extra = {}) => request(h.base, 'POST', '/v1/chat/completions', { tok: chat, headers: { 'x-openvibe-credential': `node:${FRAN}` }, body: { model: 'openvibe', messages, tools, tool_choice: 'auto', ...extra } });
+    const first = [{ role: 'system', content: 'You are an agent.' }, { role: 'user', content: [{ type: 'text', text: 'What is a mutex?' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } }] }];
+    let r = await ask(first);
+    assert.strictEqual(r.status, 200, r.text);
+    const choice = r.body.choices[0];
+    assert.strictEqual(choice.finish_reason, 'tool_calls');
+    assert.deepStrictEqual(choice.message.tool_calls, [{ id: 'call_1', type: 'function', function: { name: 'web_search', arguments: '{"q":"mutex"}' } }]);
+    assert.strictEqual(r.body.x_openvibe.cost_usd, 0, 'nothing spent');
+    let got = sent[sent.length - 1];
+    assert.deepStrictEqual([got.machine, got.subject, got.model, got.toolChoice], [MACHINE, FRAN, 'llama3.1:8b', 'auto']);
+    assert.deepStrictEqual(got.tools, tools, 'the tools as written');
+    assert.deepStrictEqual(got.messages[1], { role: 'user', content: 'What is a mutex?' }, 'text only: the picture part is left out');
+    // The caller ran the tool and sends its result; the model answers in words.
+    r = await ask([...first, choice.message, { role: 'tool', tool_call_id: 'call_1', content: 'A mutex is a lock.' }]);
+    assert.strictEqual(r.status, 200, r.text);
+    assert.strictEqual(r.body.choices[0].message.content, 'A lock that one thread holds at a time.');
+    assert.strictEqual(r.body.choices[0].finish_reason, 'stop');
+    got = sent[sent.length - 1];
+    assert.deepStrictEqual(got.messages.slice(2), [
+        { role: 'assistant', content: '', tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'web_search', arguments: '{"q":"mutex"}' } }] },
+        { role: 'tool', content: 'A mutex is a lock.', tool_call_id: 'call_1' },
+    ]);
+    // Streamed, the whole answer arrives as one delta (the machine cannot stream).
+    const s2 = await request(h.base, 'POST', '/v1/chat/completions', { tok: chat, headers: { 'x-openvibe-credential': `node:${FRAN}` }, body: { model: 'openvibe', messages: first, tools, stream: true } });
+    assert.match(s2.text, /"tool_calls":\[\{"index":0,"id":"call_1"/);
+    assert.match(s2.text, /data: \[DONE\]/);
+});
+
+t.test('machineMessages: the contract\'s shape, at most 200, never starting the newest part on an orphan tool result', async () => {
+    const { machineMessages, machineTools } = require('../server/providers');
+    const many = [{ role: 'system', content: 's' }, { role: 'user', content: 'u' }];
+    for (let i = 0; i < 150; i++) many.push({ role: 'assistant', content: null, tool_calls: [{ id: `c${i}`, type: 'function', function: { name: 'f', arguments: { a: i } } }] }, { role: 'tool', tool_call_id: `c${i}`, content: 'r' });
+    const out = machineMessages(many);
+    assert.ok(out.length <= 200);
+    assert.deepStrictEqual(out.slice(0, 2).map((m) => m.role), ['system', 'user']);
+    assert.strictEqual(out[2].role, 'assistant', 'the newest part starts on a call, not on its result');
+    assert.strictEqual(out[2].tool_calls[0].function.arguments, JSON.stringify({ a: out[2].tool_calls[0].id === 'c0' ? 0 : Number(out[2].tool_calls[0].id.slice(1)) }));
+    assert.deepStrictEqual(machineMessages([{ role: 'developer', content: 'd' }, { role: 'function', content: 'x' }]).map((m) => m.role), ['system', 'user']);
+    assert.strictEqual(machineTools([]), null);
+    assert.strictEqual(machineTools([{ type: 'function', function: { name: 'rm -rf' } }]), null);
+});
+
 t.test('text only: a picture is refused before anything is sent', async () => {
     const before = sent.length;
     const r = await request(h.base, 'POST', '/api/v1/runs?wait=5000', { tok: chat, body: { workflow: 'live.viewers.line', input: { role: 'vision', user: 'what is this?', image_url: 'data:image/png;base64,iVBORw0KGgo=' }, credential: { subject: FRAN } } });
@@ -94,7 +142,7 @@ t.test('server/machines.js: one POST to Bot as the person with a service token; 
     assert.strictEqual(m.enabled, true);
     await assert.rejects(m.chat({ machine: 'dev_nope', subject: FRAN, model: 'm', messages: [] }), (e) => e.status === 422);
     const out = await m.chat({ machine: MACHINE, subject: FRAN, model: 'llama3.1:8b', messages: [{ role: 'user', content: 'hi' }], maxTokens: 99999, temperature: 5, timeoutMs: 1000 });
-    assert.deepStrictEqual(out, { text: 'Hi.', model: 'llama3.1:8b', usage: { input: 12, output: 3, cached: 0 }, machine: MACHINE, tried: [] });
+    assert.deepStrictEqual(out, { text: 'Hi.', message: { role: 'assistant', content: ' Hi. ' }, finish: 'stop', model: 'llama3.1:8b', usage: { input: 12, output: 3, cached: 0 }, machine: MACHINE, tried: [] });
     assert.strictEqual(calls[0].url, `http://bot.test/api/v1/machines/${MACHINE}/commands`);
     assert.strictEqual(calls[0].init.headers.Authorization, 'Bearer svc-openvibe.bot');
     assert.strictEqual(calls[0].init.headers['X-OV-Subject'], FRAN);
@@ -140,6 +188,16 @@ t.test('machine any (contracts 0.221.0): the fastest of the person\'s own machin
     listed = [];
     await assert.rejects(m.chat({ machine: 'any', subject: FRAN, model: 'llama3.1:8b', messages: [] }), (e) => e.status === 503 && e.code === 'machine.none' && /is on with/.test(e.message));
     await assert.rejects(m.chat({ machine: 'anyone', subject: FRAN, model: 'm', messages: [] }), (e) => e.status === 422);
+    // Tools (contracts 0.277.0): only a machine whose Node says it can pass them; a named one without it is refused.
+    listed = list.map((x) => (x.id === id('CC') ? { ...x, computer: { ...x.computer, ai: { ...x.computer.ai, tools: true } } } : x));
+    busy = new Set();
+    asked.length = 0;
+    const tools = [{ type: 'function', function: { name: 'web_search' } }];
+    const withTools = await m.chat({ machine: 'any', subject: FRAN, model: 'llama3.1:8b', messages: [{ role: 'user', content: 'hi' }], tools, toolChoice: 'auto' });
+    assert.deepStrictEqual([asked, withTools.machine], [[id('CC')], id('CC')], 'DD is faster but cannot pass tools');
+    await assert.rejects(m.chat({ machine: id('DD'), subject: FRAN, model: 'llama3.1:8b', messages: [{ role: 'user', content: 'hi' }], tools }), (e) => e.status === 422 && e.code === 'machine.no_tools' && /v0\.36\.0/.test(e.message));
+    listed = [];
+    await assert.rejects(m.chat({ machine: 'any', subject: FRAN, model: 'llama3.1:8b', messages: [], tools }), (e) => e.code === 'machine.none' && /pass tools/.test(e.message));
 });
 
 t.test('close', async () => { await h.close(); });

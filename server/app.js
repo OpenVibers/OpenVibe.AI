@@ -122,7 +122,7 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
     if (credentials && preferences && grants) {
         app.use(require('./me').meRouter({ credentials, preferences, grants, auth, registry, config, clock, log, personSessions, sendError: (res, err, ctx) => sendError(res, err, ctx, log) }));
         // The same settings as a page for people (GET /you, plain forms on AI's own person session).
-        app.use(require('./you-page').youPageRouter({ credentials, preferences, grants, personSessions, config, log }));
+        app.use(require('./you-page').youPageRouter({ credentials, preferences, grants, personSessions, config, log, machines: pool && pool.machines }));
     }
     app.use(consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, env, clock, fetchImpl, log, vault, personSessions }));
     app.use(runPageRouter({ runs, personSessions, log }));

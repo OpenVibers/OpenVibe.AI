@@ -4,7 +4,7 @@
 // sets how their AI is paid. Every POST needs this site's own origin signal; a key never comes back in the page.
 const assert = require('assert');
 const crypto = require('crypto');
-const { boot, suite } = require('./helpers');
+const { boot, suite, request, token, ALL } = require('./helpers');
 const { SELF_OWNER } = require('../server/credentials');
 
 const t = suite('you-page');
@@ -18,13 +18,21 @@ const credentialFetch = async (url) => {
     if (String(url).endsWith('/models')) return json({ data: [{ id: 'm-one' }, { id: 'm-two' }] });
     return json({});
 };
+// The person's computers as Bot lists them to AI (only those that let their AI use their models), and the answers.
+const MACHINE = 'dev_01M5YGM39VC2RRGDQPRD6D4SHD';
+const asked = [];
+const machineModels = {
+    enabled: true,
+    async mine() { return [{ id: MACHINE, name: 'Desk PC', online: true, models: ['qwen3:8b', 'llama3.1:8b'], tools: true }, { id: 'dev_01M5YGM39VC2RRGDQPRD6D4SHE', name: 'Old laptop', online: false, models: ['phi3'], tools: false }]; },
+    async chat(args) { asked.push(args); return { text: 'From your desk.', message: { role: 'assistant', content: 'From your desk.' }, finish: 'stop', model: args.model, usage: { input: 5, output: 3, cached: 0 }, machine: MACHINE, tried: [] }; },
+};
 let h, cookie;
 const page = (path, o = {}) => fetch(h.base + path, { redirect: 'manual', ...o, headers: { ...(o.headers || {}) } }).then(async (r) => ({ status: r.status, headers: r.headers, text: await r.text() }));
 const post = (path, fields, headers = { 'Sec-Fetch-Site': 'same-origin' }) => page(path, { method: 'POST', body: new URLSearchParams(fields).toString(), headers: { 'content-type': 'application/x-www-form-urlencoded', Cookie: cookie, ...headers } });
 const flash = (r) => Object.fromEntries(new URLSearchParams(String(r.headers.get('location') || '').split('?')[1] || ''));
 
 t.test('boot', async () => {
-    h = await boot({ env: { AI_CREDENTIALS_KEY: KEY, AI_CREDENTIAL_TEST_TIMEOUT_MS: '80' }, credentialFetch, log: { log() {}, warn() {}, error() {} } });
+    h = await boot({ env: { AI_CREDENTIALS_KEY: KEY, AI_CREDENTIAL_TEST_TIMEOUT_MS: '80' }, credentialFetch, machineModels, log: { log() {}, warn() {}, error() {} } });
     const raw = crypto.randomBytes(32).toString('base64url');
     await h.db.exec("INSERT INTO person_sessions (id_hash, subject, username, created_at, expires_at) VALUES ($1, $2, 'dana', '2026-10-01', '2030-10-01')", [crypto.createHash('sha256').update(raw).digest('hex'), DANA]);
     cookie = `ovai_person=${raw}`;
@@ -95,6 +103,40 @@ t.test('another site, a missing origin signal or no session cannot change anythi
     assert.match(r.headers.get('location'), /^\/auth\/person\/login/);
     const still = await h.db.prepare('SELECT 1 AS x FROM subject_credentials WHERE owner = ? AND subject = ? AND provider = ?').get(SELF_OWNER, DANA, 'anthropic');
     assert.ok(still, 'the key is still there');
+});
+
+t.test('your computer (L55 C3): a model at home, no key; an app reaches it only once the person allows it', async () => {
+    let r = await page('/you', { headers: { Cookie: cookie } });
+    assert.ok(r.text.includes('<h2 id="you-pc">Your computer</h2>'));
+    assert.ok(r.text.includes('<b>Desk PC</b> · qwen3:8b, llama3.1:8b') && r.text.includes('<b>Old laptop</b> <span class="you-pill">away</span>'), 'its computers and their models');
+    assert.ok(r.text.includes('update OpenVibe Node to v0.36.0'), 'a Node that cannot pass tools says what to update');
+    assert.ok(r.text.includes('<option value="qwen3:8b">'), 'the models to pick from');
+    assert.ok(flash(await post('/you/computer', { model: 'two words' })).error, 'a model name has no spaces');
+    r = await post('/you/computer', { model: 'qwen3:8b' });
+    assert.match(flash(r).ok, /qwen3:8b/);
+    const row = await h.db.prepare('SELECT machine, models, key_enc FROM subject_credentials WHERE owner = ? AND subject = ? AND provider = ?').get(SELF_OWNER, DANA, 'node');
+    assert.deepStrictEqual([row.machine, JSON.parse(row.models).chat, row.key_enc], ['any', 'qwen3:8b', ''], 'any of their computers, the model, nothing sealed');
+    r = await page('/you', { headers: { Cookie: cookie } });
+    assert.ok(r.text.includes('<b>Any of your computers</b><span class="you-pill is-ok">qwen3:8b</span>') && r.text.includes('On now, with this model'));
+    // An app asks for it by name; before the person allows it, AI refuses and says where.
+    const actor = token('actor', ALL);
+    const ask = () => request(h.base, 'POST', '/v1/chat/completions', { tok: actor, headers: { 'x-openvibe-credential': `node:${DANA}` }, body: { model: 'openvibe', messages: [{ role: 'user', content: 'hello' }] } });
+    r = await ask();
+    assert.strictEqual(r.status, 403, r.text);
+    assert.strictEqual(r.body.error.code, 'ai.credential_not_allowed');
+    assert.strictEqual(asked.length, 0, 'nothing reached the computer');
+    r = await page('/you?allow=actor&provider=node', { headers: { Cookie: cookie } });
+    assert.ok(r.text.includes('use your computer&#39;s models?'), 'the ask in words');
+    assert.match(flash(await post('/you/apps/allow', { service: 'actor', provider: 'node' })).ok, /computer's models/);
+    r = await ask();
+    assert.strictEqual(r.status, 200, r.text);
+    assert.strictEqual(r.body.choices[0].message.content, 'From your desk.');
+    assert.deepStrictEqual([asked[0].machine, asked[0].subject, asked[0].model], ['any', DANA, 'qwen3:8b']);
+    assert.strictEqual(r.body.x_openvibe.cost_usd, 0);
+    assert.match(flash(await post('/you/computer/remove', {})).ok, /No app can use it/);
+    r = await ask();
+    assert.ok(r.status === 404 || r.status === 403, r.text);
+    assert.strictEqual(asked.length, 1, 'removed: nothing reaches the computer');
 });
 
 t.test('close', async () => { await h.close(); });
