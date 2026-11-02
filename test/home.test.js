@@ -212,6 +212,14 @@ t.test('a browser that asks for a missing page gets the site 404 page; an API cl
     assert.match(icon.headers.get('content-type'), /^image\/svg\+xml/);
 });
 
+t.test('the hero is one run explained, not the generic aura (MOTION-1)', async () => {
+    const r = await request(h.base, 'GET', '/', { headers: { Accept: BROWSER } });
+    const text = r.text;
+    assert.match(text, /<div class="ai-scene" aria-hidden="true">/);
+    assert.match(text, /Why this model[\s\S]*?deepseek-chat[\s\S]*?The cheapest healthy model/);
+    assert.ok(!/sc-aura-glow/.test(text), 'no generic aura');
+});
+
 t.test('shutdown', async () => { await h.stop(); });
 
 t.run();

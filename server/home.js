@@ -49,6 +49,21 @@ const usd = (v) => { const x = Number(v); return `$${x >= 0.01 || x === 0 ? x.to
 const esc = showcase.esc;
 
 /** The week in numbers, from the /stats rows: runs answered, models that answered, the share of calls that succeeded. */
+/**
+ * The home's picture (MOTION-1, 2026-11-02: it drew the generic aura): one run, explained, which is what the page
+ * promises. The prompt, what the router optimised for, three candidates with their estimated price and measured
+ * latency, the one it picked, and why. The shape of every run's explanation.
+ */
+function runScene() {
+    const cand = (name, price, ms, note, picked) => `<li class="ai-sc-cand${picked ? ' is-on' : ''}"><span class="ai-sc-tick">${picked ? '✓' : ''}</span><code>${name}</code><span>${price}</span><span>${ms}</span>${note ? `<em>${note}</em>` : ''}</li>`;
+    return `<div class="ai-scene" aria-hidden="true">
+<div class="ai-sc-q"><span>model: auto</span><b>Name three uses for a paperclip.</b></div>
+<div class="ai-sc-run"><div class="ai-sc-head"><b>Why this model</b><span>optimised for price, then speed</span></div>
+<ol class="ai-sc-list">${cand('deepseek-chat', '$0.0002', '0.4 s', '', true)}${cand('gpt-4.1-mini', '$0.0011', '0.6 s', '', false)}${cand('local · qwen 7B', 'free', '1.8 s', 'slower', false)}</ol>
+<p class="ai-sc-why">The cheapest healthy model under your latency limit. Answered in 0.42 s for $0.00018.</p></div>
+</div>`;
+}
+
 function numbers(stats) {
     const rows = (stats && stats.rows) || [];
     const ok = rows.reduce((a, r) => a + (Number(r.ok) || 0), 0);
@@ -142,6 +157,7 @@ function sections({ siteUrl, stats }) {
             + 'why it was chosen and what it cost.',
         actions: [{ label: 'Start building', href: PROJECTS_URL, primary: true }, { label: 'See prices and latency', href: '/stats' }],
         note: 'Alpha. OpenVibe.Live and OpenVibe.Network already run their AI here in production; developer apps start in the sandbox, on free and local capacity.',
+        aside: { html: runScene() },
     }) + '<section class="sc-sec sc-part-of"><p class="sc-note">Part of <a href="https://openvibe.services/">OpenVibe Services</a>: the building blocks every OpenVibe product runs on, with one console, one account and one SDK.</p></section>' + numbers(stats) + showcase.features({
         id: 'get',
         title: 'What you get',
@@ -204,6 +220,7 @@ function sections({ siteUrl, stats }) {
 
 // What the kit does not draw: the numbers row, the FAQ cards, and code samples one under another (their lines are long).
 const HOME_STYLE = `<style>
+.ai-scene{position:relative;width:min(100%,370px);margin:0 auto;display:grid;gap:10px}.ai-sc-q{display:grid;gap:4px;padding:12px 14px;border-radius:14px;border:1px solid var(--border,#1f2d47);background:var(--bg-card,var(--bg-secondary,#101828))}.ai-sc-q span{font:600 11.5px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--text-muted,#7386a3)}.ai-sc-q b{font-size:14.5px;color:var(--text-primary,#e6edf7)}.ai-sc-run{display:grid;gap:10px;padding:14px;border-radius:16px;border:1px solid color-mix(in srgb,var(--accent,#3b82f6) 40%,var(--border,#1f2d47));background:var(--bg-card,var(--bg-secondary,#101828));box-shadow:0 12px 30px rgba(0,0,0,.22)}.ai-sc-head{display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap}.ai-sc-head b{font-size:14px;color:var(--text-primary,#e6edf7)}.ai-sc-head span{font-size:12px;color:var(--text-muted,#7386a3)}.ai-sc-list{list-style:none;margin:0;padding:0;display:grid;gap:6px}.ai-sc-cand{display:grid;grid-template-columns:18px minmax(0,1fr) auto auto;gap:10px;align-items:center;padding:8px 10px;border-radius:10px;font-size:12.5px;color:var(--text-secondary,#96a7c2);font-variant-numeric:tabular-nums}.ai-sc-cand code{font-size:12.5px;color:var(--text-primary,#e6edf7);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.ai-sc-cand em{grid-column:2/-1;margin-top:-4px;font-style:normal;font-size:11.5px;color:var(--text-muted,#7386a3)}.ai-sc-cand.is-on{background:color-mix(in srgb,var(--accent,#3b82f6) 14%,transparent)}.ai-sc-tick{color:var(--accent,#3b82f6);font-weight:800}.ai-sc-why{margin:0;font-size:12.5px;color:var(--text-secondary,#96a7c2);border-top:1px solid var(--border,#1f2d47);padding-top:10px}
 .ai-num{margin-top:28px}.ai-num ul{list-style:none;margin:0;padding:0;display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(min(190px,100%),1fr))}
 .ai-num a{display:flex;flex-direction:column;gap:2px;height:100%;padding:14px 16px;border-radius:14px;border:1px solid var(--border,#1f2d47);background:var(--bg-secondary,#101828);color:inherit;text-decoration:none}
 .ai-num a:hover,.ai-num a:focus-visible{border-color:var(--accent,#3b82f6)}.ai-num b{font-size:26px;font-weight:800;letter-spacing:-.5px;line-height:1.15}.ai-num span{font-size:13px;line-height:1.35;color:var(--text-secondary,#96a7c2)}
