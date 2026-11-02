@@ -44,13 +44,14 @@ function mounted(app) {
 
 /**
  * Not public API surface: probes and redirect, the operator/admin API, the attribution-quota API and
- * the credential routes (which must never appear in a public document).
+ * the credential routes (which must never appear in a public document). The person's own /api/v1/me/*
+ * routes are person-only and carry a key on PUT, so they stay out for the same reason.
  */
 const LEFT_OUT = [
     '/api/health', '/api/ready', '/api/v1/openapi.json',
     '/api/v1/status', '/api/v1/providers', '/api/v1/models', '/api/v1/routes', '/api/v1/templates', '/api/v1/workflows',
     '/api/v1/quotas', '/api/v1/usage', '/api/v1/requests', '/api/v1/audit', '/api/v1/cache',
-    '/api/v1/credentials', '/api/v1/attribution-quotas',
+    '/api/v1/credentials', '/api/v1/attribution-quotas', '/api/v1/me',
 ];
 const excluded = (key) => {
     const p = key.split(' ')[1];

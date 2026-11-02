@@ -22,7 +22,7 @@
 
 const UNKNOWN_DATE = '1970-01-01';
 const unverified = (origin) => `urn:openvibe:ai:unverified:${origin}`;
-const KINDS = { in: 'input', cached: 'cached-input', out: 'output' };
+const KINDS = { in: 'input', cached: 'cached-input', out: 'output', cache_write: 'cache-write-input' };
 const RESET_PERIODS = ['day', 'month', 'none'];
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const URI = /^[a-z][a-z0-9+.-]*:[^\s]+$/i;
@@ -91,6 +91,9 @@ function buildCards({ providerKey, model, row = null, pricing = {}, flat = true 
             in: make('in', inRate, 'models', prov),
             cached: row.cost.cached_per_mtok != null ? make('cached', Number(row.cost.cached_per_mtok), 'models', prov)
                 : make('cached', inRate * 0.1, 'derived', allowanceOnly(prov)),
+            // The cache WRITE price (L40) is optional: nobody typed it means the card is unpriced, never a guess.
+            cache_write: row.cost.cache_write_per_mtok != null ? make('cache_write', Number(row.cost.cache_write_per_mtok), 'models', prov)
+                : make('cache_write', 0, 'unpriced', allowanceOnly(prov)),
             out: make('out', Number(row.cost.out_per_mtok) || 0, 'models', prov),
         };
     }
@@ -103,6 +106,7 @@ function buildCards({ providerKey, model, row = null, pricing = {}, flat = true 
         return {
             in: make('in', inRate, best && b.in != null ? 'pricing' : 'unpriced', prov),
             cached: b.cached != null ? make('cached', Number(b.cached), 'pricing', prov) : make('cached', inRate * 0.1, 'derived', allowanceOnly(prov)),
+            cache_write: b.cache_write != null ? make('cache_write', Number(b.cache_write), 'pricing', prov) : make('cache_write', 0, 'unpriced', allowanceOnly(prov)),
             out: make('out', Number(b.out) || 0, best && b.out != null ? 'pricing' : 'unpriced', prov),
         };
     }
@@ -111,6 +115,7 @@ function buildCards({ providerKey, model, row = null, pricing = {}, flat = true 
     return {
         in: has('in') ? make('in', inRate, 'pricing', prov) : make('in', inRate, 'flat', allowanceOnly(prov)),
         cached: has('cached') ? make('cached', Number(best.cached), 'pricing', prov) : make('cached', inRate * 0.1, 'derived', allowanceOnly(prov)),
+        cache_write: has('cache_write') ? make('cache_write', Number(best.cache_write), 'pricing', prov) : make('cache_write', 0, 'unpriced', allowanceOnly(prov)),
         out: has('out') ? make('out', Number(best.out), 'pricing', prov) : make('out', pricing.outputPerMtok, 'flat', allowanceOnly(prov)),
     };
 }
@@ -158,6 +163,8 @@ function usageSince(cards, now) {
 }
 
 const BREAKER_HEALTH = { closed: 'up', half_open: 'degraded', open: 'down' };
+/** Is this card one of the three metered token metrics (input, cached input, output)? */
+const isUsageMetric = (c) => ['input-tokens', 'cached-input-tokens', 'output-tokens'].includes(String(c.metric || '').split(':')[0]);
 
 /**
  * One platform.provider-state@1 for a provider. Each metric counts and forecasts over its own card's period
@@ -169,7 +176,8 @@ const BREAKER_HEALTH = { closed: 'up', half_open: 'degraded', open: 'down' };
 function providerState({ provider, cards, usageRows = [], breaker = 'closed', reserve = null, now }) {
     const periods = {};
     const used = {};
-    for (const c of cards) { periods[c.metric] = cardPeriod(c, now); used[c.metric] = 0; }
+    // Only the three metered token metrics are counted here (the cache write's card is not a usage metric: L40).
+    for (const c of cards) { if (!isUsageMetric(c)) continue; periods[c.metric] = cardPeriod(c, now); used[c.metric] = 0; }
     const firstDay = Object.fromEntries(Object.entries(periods).map(([m, p]) => [m, dayOf(p.start)]));
     for (const r of usageRows) {
         const model = r.model_key || null;

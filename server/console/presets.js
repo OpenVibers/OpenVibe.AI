@@ -28,4 +28,25 @@ const TEXT_CAPS = ['chat', 'generate', 'summarize', 'classify', 'extract', 'enri
 
 const byId = (id) => PRESETS.find((p) => p.id === id) || null;
 
-module.exports = { PRESETS, TEXT_CAPS, byId };
+/**
+ * The providers a person may store their own key for (L36 Y1). One table: each credential provider is a preset
+ * above, so its base URL and wire format (OpenAI-compatible or Anthropic Messages) are the console's, never a
+ * second list. DeepSeek and MiniMax keep their Anthropic-format endpoints (their keys speak Messages there, which is
+ * what a person's stored model expects); `custom` is the preset with an empty base URL, and a person names it.
+ * `node` is not here: it is the person's own machine, not a key (server/credentials.js keeps its old route).
+ */
+const CREDENTIAL_PRESET = {
+    anthropic: 'anthropic', openai: 'openai', gemini: 'gemini', deepseek: 'deepseek-anthropic',
+    mistral: 'mistral', xai: 'xai', groq: 'groq', cerebras: 'cerebras', together: 'together',
+    fireworks: 'fireworks', openrouter: 'openrouter', minimax: 'minimax-anthropic', custom: 'custom',
+};
+const CREDENTIAL_PROVIDERS = Object.keys(CREDENTIAL_PRESET);
+
+/** The console preset behind a credential provider: { id, kind, base_url, model, keys } or null. */
+function credentialProvider(id) {
+    const preset = byId(CREDENTIAL_PRESET[id]);
+    return preset ? { id, kind: preset.kind, base_url: preset.base_url, model: preset.model, keys: preset.keys } : null;
+}
+
+module.exports = { PRESETS, TEXT_CAPS, byId, CREDENTIAL_PROVIDERS, CREDENTIAL_PRESET, credentialProvider };
+

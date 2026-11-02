@@ -212,10 +212,12 @@ function providers({ staff, csrf, rows, models, canManage, stubFallback, notice,
         return h && String(p.secret_ref || '') === `vault:${p.key}` ? html`<br><span class="muted">key ${h.hint}, set ${when(h.updated_at)}</span>` : '';
     };
     const manageRow = (p) => (canManage && p.kind !== 'stub' && p.kind !== 'whisper' ? html`<tr class="sub"><td colspan="10"><details><summary>Key and models for <code>${p.key}</code></summary>
+<form class="inline" method="post" action="/console/providers/${enc(p.key)}/sync">${csrfField(csrf)}<button type="submit">Read its model list</button> <span class="muted">every model it offers, described (what it does, how strong); new ones arrive switched off</span></form>
 <form class="inline" method="post" action="/console/providers/${enc(p.key)}/key">${csrfField(csrf)}<label>New API key <input type="password" name="api_key" required minlength="8" autocomplete="off" spellcheck="false"></label><button type="submit">Replace key</button></form>
 <form class="inline" method="post" action="/console/providers/${enc(p.key)}/models">${csrfField(csrf)}<label>Model <input type="text" name="model_key" required maxlength="200" placeholder="deepseek-flash" spellcheck="false"></label>
 <label><input type="checkbox" name="vision" value="1"> reads pictures</label> <label><input type="checkbox" name="tools" value="1"> tools</label>
 <label>$ in / Mtok <input type="number" name="cost_in" step="0.0001" min="0" class="num"></label> <label>$ out / Mtok <input type="number" name="cost_out" step="0.0001" min="0" class="num"></label>
+<label>$ cache read / Mtok <input type="number" name="cost_cache_read" step="0.0001" min="0" class="num"></label> <label>$ cache write / Mtok <input type="number" name="cost_cache_write" step="0.0001" min="0" class="num"></label>
 <label>from the price page <input type="url" name="price_source" placeholder="https://…/pricing"></label><button type="submit">Register model</button></form></details></td></tr>` : '');
     return layout({
         title: 'Providers', section: 'providers', staff, csrf, notice, error, body: html`<h1>Providers and models</h1>
@@ -231,10 +233,12 @@ ${canManage ? html`<td><form class="inline" method="post" action="/console/provi
 ${p.health.state !== 'closed' || p.health.consecutive_failures ? html` <form class="inline" method="post" action="/console/providers/${enc(p.key)}/reset">${csrfField(csrf)}<button type="submit">Reset circuit<span class="sr-only"> of ${p.key}</span></button></form>` : ''}</td>` : ''}
 </tr>${manageRow(p)}`), 'no providers.')}
 ${canManage ? '' : html`<p class="muted">Enabling, disabling and circuit resets need <code>ai.provider.manage</code> (the owner's <code>staff.secrets.manage</code>).</p>`}
-${table('Models', ['Provider', 'Model', 'Type', 'Status', 'Context / max output', 'Cost per Mtok (in / out / cached)', 'Supports'], models.map((m) => html`<tr>
-<td><code>${m.provider_key}</code></td><td><code>${m.model_key}</code></td><td>${m.type}</td><td>${badge(m.status)}</td>
+${table('Models', ['Provider', 'Model', 'Type', 'Status', 'Strength', 'Context / max output', 'Cost per Mtok (in / out / cached / cache write)', 'Supports'], models.map((m) => html`<tr>
+<td><code>${m.provider_key}</code></td><td><code>${m.model_key}</code>${m.display_name && m.display_name !== m.model_key ? html`<br><span class="muted">${m.display_name}</span>` : ''}</td><td>${m.type}</td>
+<td>${badge(m.status)}${m.metadata && m.metadata.missing_since ? html`<br><span class="muted">no longer listed since ${when(m.metadata.missing_since)}</span>` : ''}${canManage ? html`<form class="inline" method="post" action="/console/models/${enc(m.provider_key)}/${enc(m.model_key)}/status">${csrfField(csrf)}<input type="hidden" name="status" value="${m.status === 'active' ? 'disabled' : 'active'}"><button type="submit">${m.status === 'active' ? 'Turn off' : 'Turn on'}<span class="sr-only"> ${m.model_key}</span></button></form>` : ''}</td>
+<td>${m.metadata && m.metadata.tier ? html`${m.metadata.tier}${m.metadata.reasoning ? ', thinks first' : ''}${m.metadata.note ? html`<br><span class="muted">${m.metadata.note}</span>` : ''}` : '—'}</td>
 <td>${m.context_window ? n(m.context_window) : '—'} / ${m.max_output ? n(m.max_output) : '—'}</td>
-<td>${m.cost.in_per_mtok != null ? usd(m.cost.in_per_mtok) : '—'} / ${m.cost.out_per_mtok != null ? usd(m.cost.out_per_mtok) : '—'} / ${m.cost.cached_per_mtok != null ? usd(m.cost.cached_per_mtok) : '—'}</td>
+<td>${m.cost.in_per_mtok != null ? usd(m.cost.in_per_mtok) : '—'} / ${m.cost.out_per_mtok != null ? usd(m.cost.out_per_mtok) : '—'} / ${m.cost.cached_per_mtok != null ? usd(m.cost.cached_per_mtok) : '—'} / ${m.cost.cache_write_per_mtok != null ? usd(m.cost.cache_write_per_mtok) : '—'}</td>
 <td>${Object.entries(m.supports).filter(([, v]) => v).map(([k]) => k).join(', ') || '—'}</td></tr>`), 'no models registered (providers use their default model).')}`,
     });
 }
@@ -609,22 +613,7 @@ function allowance(cards) {
     return free.map(([k, c], i) => html`${i ? ' · ' : ''}<span class="nowrap">${k} ${n(c.free_allowance)} tokens${c.reset_period === 'none' ? '' : ` / ${c.reset_period}`}</span>`);
 }
 
-/**
- * Public price and latency per provider and model: provider_stats_daily totals (quotas.statsFor) and the
- * rate cards only. Nothing here is per caller; rows: { provider, model, capability, requests, ok, p50, p95, cards }.
- */
-function stats({ days, from, to, rows, canonical = null }) {
-    return layout({
-        // In search, as the sitemap and robots.txt say: it was noindex,nofollow from the console's layout.
-        title: 'Price and latency', site: 'stats', robots: 'index,follow', canonical,
-        description: `Price and latency of every AI model OpenVibe.AI called in the last ${days} days: p50 and p95 latency, success rate, price per million tokens and the free allowance.`,
-        body: html`<h1>Price and latency</h1>
-<p class="muted">Every provider and model AI called in the last ${days} UTC days (${from} to ${to}). Latency is the upper bound of a fixed latency bucket, the slowest day in the window; prices are per million tokens from the current rate cards.</p>
-${table(`Providers and models, ${from} to ${to}`, ['Provider', 'Model', 'Capability', 'p50', 'p95', 'Success rate', 'Price', 'Free allowance'], rows.map((r) => html`<tr>
-<td><code>${r.provider}</code></td><td>${r.model ? html`<code>${r.model}</code>` : '—'}</td><td>${r.capability || '—'}</td>
-<td class="nowrap">${ms(r.p50)}</td><td class="nowrap">${ms(r.p95)}</td><td class="nowrap">${rate(r.ok, r.requests)}</td><td>${price(r.cards)}</td><td>${allowance(r.cards)}</td></tr>`),
-        `no provider calls in the last ${days} days, so there is nothing to measure yet.`)}`,
-    });
-}
+/** The price and latency cells, as plain HTML strings for the public /stats page (server/home.js renderStats). */
+const statsFormat = { ms, rate, price: (cards) => render(price(cards)), allowance: (cards) => render(allowance(cards)) };
 
-module.exports = { CSP, html, esc, safeUrl, pages: { signIn, message, overview, providers, providerNew, definitions, definition, runs, run, runReceipt, quotas, usage, cache, audit, stats } };
+module.exports = { CSP, html, esc, safeUrl, statsFormat, pages: { signIn, message, overview, providers, providerNew, definitions, definition, runs, run, runReceipt, quotas, usage, cache, audit } };

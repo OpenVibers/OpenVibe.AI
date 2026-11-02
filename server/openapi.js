@@ -12,8 +12,10 @@
  *
  * /api/health and /api/ready are probes. The operator/admin API and the attribution-quota API are
  * internal (staff/service tokens): they stay out. Credentials are deliberately not documented at all
- * — no credential, provider secret or secret reference field appears in this document. The
- * OpenAI-compatible /v1/chat/completions and /v1/models are outside /api and stay out of it too.
+ * — no credential, provider secret or secret reference field appears in this document. The person's
+ * own /api/v1/me/* routes (their provider keys, and the preferences that route them) are person-only
+ * and carry a key on PUT, so they stay out for the same reason. The OpenAI-compatible
+ * /v1/chat/completions and /v1/models are outside /api and stay out of it too.
  *
  * Request fields are what server/api/runs.js and server/api/actions.js read; the run properties are
  * server/runs.js decode(). Nothing is inferred.
@@ -76,6 +78,14 @@ const PATHS = {};
 function route(method, p, operation) {
     (PATHS[p] = PATHS[p] || {})[method] = operation;
 }
+
+// ── The apps a person allows to use their own key (L55 C3) ───────────────────────────────────
+route('get', '/allowed-keys/{subject}', {
+    operationId: 'allowedKeys', summary: 'Which providers this person allowed this service to use their own key for', tags: ['keys'], security: SERVICE,
+    description: 'ai.run.create. The providers this person allowed THIS service to use their own key for, and that they hold a key for: names only, never key material. A person who allowed this service nothing gets 404, and nothing at all about their keys.',
+    parameters: [path('subject', str({ pattern: '^usr_[0-9A-HJKMNP-TV-Z]{26}$' }))],
+    responses: { 200: json('The provider names', ref('AllowedKeys')), 404: problem, ...errors([401, 403]) },
+});
 
 // ── Memory (Memory M2a) ──────────────────────────────────────────────────────────────────────
 const memoryItem = ref('MemoryItem');
@@ -320,6 +330,9 @@ function openapi() {
                     items: arrayOf(ref('MemoryItem')), item: ref('MemoryItem'), profile: ref('MemoryProfile'),
                     deleted: integer({ minimum: 0 }), count: integer({ minimum: 0 }),
                 } },
+                AllowedKeys: { type: 'object', required: ['subject', 'service', 'providers'], properties: {
+                    subject: str({ pattern: '^usr_[0-9A-HJKMNP-TV-Z]{26}$' }), service: str(), providers: arrayOf(str({ maxLength: 40 })),
+                }, additionalProperties: false },
                 MemoryWriteRequest: { type: 'object', properties: {
                     items: arrayOf(ref('MemoryItemWrite')), on_behalf_of: str(), text: str(), kind: str(), scope: str(), status: str(), source: str(),
                 } },

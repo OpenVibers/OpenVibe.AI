@@ -62,9 +62,9 @@ t.test('POST /responses with input and instructions; output_text and usage are p
     assert.strictEqual(b.text, undefined);
     assert.strictEqual(r.text, 'hello there');
     assert.strictEqual(r.model, 'gpt-4.1-mini-2025');
-    assert.deepStrictEqual(r.usage, { input: 11, output: 4, cached: 3 });
+    assert.deepStrictEqual(r.usage, { input: 11, output: 4, reasoning: 0, cached: 3, cache_write: 0, cache_write_ttl: null });
     const bare = await createResponsesProvider({ key: 'r' }, { apiKey: KEY, fetchImpl: stubFetch(() => ({ output: [] })).fetchImpl }).chat(req());
-    assert.deepStrictEqual([bare.text, bare.model, bare.usage], ['', 'gpt-4.1-mini', { input: 0, output: 0, cached: 0 }]);
+    assert.deepStrictEqual([bare.text, bare.model, bare.usage], ['', 'gpt-4.1-mini', { input: 0, output: 0, reasoning: 0, cached: 0, cache_write: 0, cache_write_ttl: null }]);
 });
 
 t.test('body: reasoning models, image input, no instructions without a system prompt', () => {
@@ -85,7 +85,7 @@ t.test('a JSON request sets text.format and steps down json_schema -> json_objec
     assert.deepStrictEqual(s.calls[0].body.text, { format: { type: 'json_schema', name: 'r', schema: { type: 'object' }, strict: true } });
     assert.deepStrictEqual(s.calls[1].body.text, { format: { type: 'json_object' } });
     assert.strictEqual(r.text, '{"a":1}');
-    assert.deepStrictEqual(r.usage, { input: 7, output: 3, cached: 0 });
+    assert.deepStrictEqual(r.usage, { input: 7, output: 3, reasoning: 0, cached: 0, cache_write: 0, cache_write_ttl: null });
 });
 
 t.test('a non-2xx maps to the same ProviderError, code, status and retryable flag as openai.js', async () => {

@@ -88,6 +88,67 @@ async function runChanged(row) {
     return env;
 }
 
+/**
+ * L36 Y8: a provider refused one of a person's own keys (401/403) during a run. The key's status is already
+ * `failing` (server/credentials.js markFailed); this tells the products that may show it. The payload never carries
+ * the key, only a redacted reason. No-op while publishing is off, like every other event.
+ */
+async function credentialFailed({ subject, provider, error, owner = null }) {
+    if (!svc || !dbRef || !subject || !provider) return null;
+    const env = await svc.emitIn(dbRef, {
+        event_type: 'ai.credential.failed',
+        actor: { type: 'service', id: 'ai' },
+        on_behalf_of: { type: 'user', id: subject },
+        subject: { type: 'credential', id: `${subject}:${provider}` },
+        visibility: 'internal',
+        priority: 'important',
+        payload: { subject, provider, status: 'failing', checked_at: iso(Date.now()), error: String(error || 'the provider refused the key').slice(0, 500) },
+    });
+    dbRef.afterCommit(() => svc && svc.kick());
+    return env;
+}
+
+/**
+ * Queue the ledger's record of one AI call (ai.call.recorded@1). MUST be awaited inside the transaction that
+ * wrote the record, so the event and the row commit together. The payload carries the tokens, the money and the
+ * ids: never a prompt, never an answer.
+ */
+function callPayload(rec) {
+    return {
+        subject: rec.subject || null, attribution: rec.attribution || '', surface: rec.surface || '', system: rec.system,
+        provider: rec.provider || null, model: rec.model || null, effort: rec.effort || null,
+        paid_by: rec.paid_by, paid_by_detail: rec.paid_by_detail || null,
+        input: rec.tokens_input, output: rec.tokens_output, reasoning: rec.tokens_reasoning,
+        cache_read: rec.tokens_cache_read, cache_write: rec.tokens_cache_write, cache_write_ttl: rec.cache_write_ttl || null,
+        images: rec.images, audio_seconds: rec.audio_seconds, video_seconds: rec.video_seconds,
+        list_cost_usd: rec.list_cost_usd, charged_usd: rec.charged_usd, fee_usd: rec.fee_usd, cache_saved_usd: rec.cache_saved_usd,
+        price_source: rec.price_source, price_date: rec.price_date || null,
+        latency_ms: rec.latency_ms, ttft_ms: rec.ttft_ms, attempts: rec.attempts, outcome: rec.outcome,
+        run_id: rec.run_id || null, turn_id: rec.turn_id || null, at: rec.at,
+    };
+}
+
+/**
+ * Queue the record of one AI call (ai.call.recorded@1). MUST be awaited inside a transaction, like every other
+ * event here: a no-op while publishing is off.
+ */
+async function callRecorded(rec) {
+    if (!svc || !rec) return null;
+    const payload = callPayload(rec);
+    const env = await svc.emitIn(dbRef, {
+        event_type: 'ai.call.recorded',
+        actor: { type: 'service', id: 'ai' },
+        subject: rec.run_id ? { type: 'run', id: rec.run_id } : { type: 'user', id: rec.subject || 'anonymous' },
+        visibility: 'internal',
+        priority: 'low',
+        payload,
+    });
+    queued++;
+    dbRef.afterCommit(() => svc && svc.kick());
+    return env;
+}
+
+
 async function status() {
     if (!svc) return { enabled: false };
     const s = await svc.status();
@@ -106,4 +167,6 @@ async function stop() {
 }
 function _reset() { if (svc) svc.stop(); svc = null; queued = 0; }
 
-module.exports = { init, runChanged, payloadOf, status, stop, _reset };
+module.exports = { init, runChanged, credentialFailed, callRecorded, callPayload, payloadOf, status, stop, _reset };
+
+

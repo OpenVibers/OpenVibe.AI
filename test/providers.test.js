@@ -39,6 +39,46 @@ t.test('Anthropic body: cached system blocks, image block, forced tool for JSON'
     assert.strictEqual(b.tool_choice.name, 'r');
 });
 
+t.test('Anthropic body for the current Claude models: no sampling, structured outputs, effort (L33)', () => {
+    const { messagesBody, isCurrentClaude } = require('../server/providers/anthropic');
+    for (const m of ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5', 'claude-fable-5-1', 'claude-opus-4-8', 'claude-sonnet-4-6']) assert.ok(isCurrentClaude(m), m);
+    for (const m of ['claude-haiku-4-5', 'claude-3-5-sonnet-latest', 'deepseek-chat', 'MiniMax-M2']) assert.ok(!isCurrentClaude(m), m);
+    const b = anthropicBody({ ...req({ model: 'claude-sonnet-5-5', effort: 'low' }), json: { name: 'r', schema: { type: 'object' } } });
+    assert.strictEqual(b.temperature, undefined, 'a current Claude model refuses sampling settings');
+    assert.deepStrictEqual(b.output_config, { effort: 'low', format: { type: 'json_schema', schema: { type: 'object' } } });
+    assert.strictEqual(b.tool_choice, undefined, 'and a forced tool');
+    const old = anthropicBody({ ...req({ model: 'claude-haiku-4-5', effort: 'low' }), json: { name: 'r', schema: { type: 'object' } } });
+    assert.strictEqual(old.temperature, 0.5);
+    assert.strictEqual(old.tool_choice.name, 'r');
+    assert.strictEqual(old.output_config, undefined, 'older models keep the forced tool and their sampling');
+    const prose = anthropicBody({ ...req({ model: 'claude-opus-5-5' }), json: { name: 'r', schema: { type: 'object' } } }, 'prose');
+    assert.ok(prose.output_config === undefined && prose.system.some((x) => /JSON Schema/.test(x.text)), 'the step-down puts the schema in the system prompt');
+    const pass = messagesBody({ model: 'claude-opus-5-5', maxTokens: 100, messages: [], temperature: 0.2, top_p: 0.9, tool_choice: { type: 'tool', name: 'x', disable_parallel_tool_use: true } });
+    assert.ok(pass.temperature === undefined && pass.top_p === undefined, "a caller's sampling is dropped for a model that refuses it");
+    assert.deepStrictEqual(pass.tool_choice, { type: 'auto', disable_parallel_tool_use: true });
+    const kept = messagesBody({ model: 'deepseek-chat', maxTokens: 100, messages: [], temperature: 0.2, tool_choice: { type: 'tool', name: 'x' } });
+    assert.ok(kept.temperature === 0.2 && kept.tool_choice.type === 'tool', 'other endpoints get the request as written');
+});
+
+t.test('Anthropic adapter: structured output, and the schema in the prompt when an endpoint refuses it', async () => {
+    const seen = [];
+    const srv = await seamServer((b) => {
+        seen.push(b.output_config && b.output_config.format ? 'format' : 'prose');
+        if (b.output_config && b.output_config.format) return { status: 400, body: { error: { message: 'output_config.format: schema not supported' } } };
+        return { content: [{ type: 'text', text: '{"ok":true}' }], usage: { input_tokens: 5, output_tokens: 2 }, model: 'claude-sonnet-5-5' };
+    });
+    const a = createAnthropicProvider({ key: 'a', base_url: srv.url, capabilities: [] }, { apiKey: 'ak' });
+    const r = await a.chat(req({ model: 'claude-sonnet-5-5', json: { name: 'r', schema: { type: 'object' } } }));
+    assert.deepStrictEqual(seen, ['format', 'prose']);
+    assert.strictEqual(r.text, '{"ok":true}');
+    await srv.close();
+    const ok = await seamServer(() => ({ content: [{ type: 'text', text: '{"a":1}' }], usage: { input_tokens: 1, output_tokens: 1 }, model: 'claude-opus-5-5' }));
+    const b = createAnthropicProvider({ key: 'b', base_url: ok.url, capabilities: [] }, { apiKey: 'ak' });
+    const r2 = await b.chat(req({ model: 'claude-opus-5-5', json: { name: 'r', schema: { type: 'object' } } }));
+    assert.deepStrictEqual(r2.json, { a: 1 }, 'structured output is parsed');
+    await ok.close();
+});
+
 t.test('OpenAI adapter steps down json_schema -> json_object on a gateway that refuses it', async () => {
     const seen = [];
     const systems = [];
@@ -55,7 +95,7 @@ t.test('OpenAI adapter steps down json_schema -> json_object on a gateway that r
     assert.ok(!systems[0].includes('JSON Schema'), 'not while structured output carries it');
     assert.ok(systems[1].includes('matches this JSON Schema exactly') && systems[1].includes('{"type":"object"}'), systems[1]);
     assert.strictEqual(r.text, '{"a":1}');
-    assert.deepStrictEqual(r.usage, { input: 7, output: 3, cached: 2 });
+    assert.deepStrictEqual(r.usage, { input: 7, output: 3, reasoning: 0, cached: 2, cache_write: 0, cache_write_ttl: null });
     assert.ok(a.supports('embed') && a.supports('vision'));
     await srv.close();
 });
@@ -80,7 +120,7 @@ t.test('Anthropic adapter returns tool JSON and counts cache reads', async () =>
     const a = createAnthropicProvider({ key: 'a', base_url: srv.url, capabilities: [] }, { apiKey: 'ak' });
     const r = await a.chat(req({ json: { name: 'r', schema: { type: 'object' } } }));
     assert.deepStrictEqual(r.json, { ok: true });
-    assert.deepStrictEqual(r.usage, { input: 16, output: 2, cached: 10 });
+    assert.deepStrictEqual(r.usage, { input: 16, output: 2, reasoning: 0, cached: 10, cache_write: 1, cache_write_ttl: '5m' });
     assert.strictEqual(a.supports('embed'), false);
     await srv.close();
 });

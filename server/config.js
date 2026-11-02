@@ -58,10 +58,18 @@ function load(env = process.env) {
         issuer: trimUrl(env.OV_NETWORK_ISSUER || env.OV_NETWORK_URL || 'https://openvibe.network'),
         // A person's own provider keys (server/credentials.js): AES-256-GCM, 64 hex characters; unset = credentials off.
         credentialsKey: String(env.AI_CREDENTIALS_KEY || '').trim(),
+        // Test-on-save for a person's own key (L36 Y1): a model list, else one token, within this budget. Ten seconds in
+        // production; a test may shorten it.
+        credentialTestTimeoutMs: Math.max(50, Math.min(60000, int(env.AI_CREDENTIAL_TEST_TIMEOUT_MS, 10000))),
         // The person's memory (server/memory/): AES-256-GCM with a key of its own, so it can rotate apart from credentials.
         memoryKey: String(env.AI_MEMORY_KEY || '').trim(),
         // The store's own maintenance (server/memory/jobs.js): owner by owner, with a per-run cap. Off in test mode
         // (the way the JWKS client is) and off while a provider is in a drill, so a drill never spends the budget.
+        // The AI ledger (L40): the fee the OpenVibe key carries, and the roll-up job (off in test mode, off while a
+        // provider is in a drill).
+        usage: {
+            feeRate: Number(env.AI_KEY_FEE_RATE || 0) || 0,
+        },
         memoryJobs: {
             enabled: bool(env.AI_MEMORY_JOBS, nodeEnv !== 'test'),
             intervalMs: int(env.AI_MEMORY_JOB_INTERVAL_MS, 15 * 60 * 1000),
@@ -129,6 +137,10 @@ function load(env = process.env) {
             minGain: Math.max(0, Math.min(1, float(env.AI_PLACEMENT_MIN_GAIN, 0.15))),
             costWeight: float(env.AI_PLACEMENT_COST_WEIGHT, 0.5),
             latencyWeight: float(env.AI_PLACEMENT_LATENCY_WEIGHT, 0.5),
+        },
+        // L36 Y7: the task-aware router's fallback chain tries at most this many providers.
+        routing: {
+            maxAttempts: Math.max(1, int(env.AI_ROUTING_MAX_ATTEMPTS, 3)),
         },
         // Configurable local HTTP seam: POST {operation, request} JSON to this URL.
         httpSeamUrl: trimUrl(env.AI_HTTP_SEAM_URL),

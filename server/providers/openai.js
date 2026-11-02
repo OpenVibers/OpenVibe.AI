@@ -16,6 +16,7 @@ const fs = require('fs');
 const path = require('path');
 const { ProviderError, postJson, deadline, describeAbort, approxTokens, schemaInstruction } = require('./common');
 const { sseEvents, createAccumulator } = require('./stream');
+const usageParser = require('./usage');
 
 const DEFAULT_BASE_URL = 'https://api.openai.com/v1';
 const TEXT_OPS = ['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich'];
@@ -65,8 +66,7 @@ function createOpenAiProvider(record, { apiKey = '', fetchImpl = globalThis.fetc
                 const j = await postJson(`${baseUrl}/chat/completions`, headers(), body, { signal: req.signal, timeoutMs: req.timeoutMs, fetchImpl });
                 const msg = j.choices && j.choices[0] && j.choices[0].message;
                 const text = (msg && typeof msg.content === 'string' ? msg.content : '').trim();
-                const u = j.usage || {};
-                return { text, json: null, model: j.model || req.model, usage: { input: u.prompt_tokens || 0, output: u.completion_tokens || 0, cached: (u.prompt_tokens_details && u.prompt_tokens_details.cached_tokens) || 0 } };
+                return { text, json: null, model: j.model || req.model, usage: usageParser.openAiCompatibleUsage(j.usage || {}) };
             } catch (e) {
                 // Gateways without structured-output support: schema -> json_object -> prose.
                 if (e instanceof ProviderError && e.status === 400 && jsonMode && /response_format|json_schema|schema|strict/i.test(e.message)) {
@@ -163,7 +163,7 @@ function createOpenAiProvider(record, { apiKey = '', fetchImpl = globalThis.fetc
             completion: { choices: j.choices, system_fingerprint: j.system_fingerprint || null },
             text: typeof msg.content === 'string' ? msg.content : '',
             model: j.model || req.model,
-            usage: { input: u.prompt_tokens || 0, output: u.completion_tokens || 0, cached: (u.prompt_tokens_details && u.prompt_tokens_details.cached_tokens) || 0 },
+            usage: usageParser.openAiCompatibleUsage(u),
         };
     }
 
@@ -221,7 +221,7 @@ function createOpenAiProvider(record, { apiKey = '', fetchImpl = globalThis.fetc
             completion: { choices, system_fingerprint: fingerprint },
             text: typeof first.content === 'string' ? first.content : '',
             model,
-            usage: { input: inTok, output: outTok, cached: (u.prompt_tokens_details && u.prompt_tokens_details.cached_tokens) || 0, ...(estimated ? { estimated: true } : {}) },
+            usage: { ...usageParser.openAiCompatibleUsage(estimated ? { prompt_tokens: inTok, completion_tokens: outTok } : u), ...(estimated ? { estimated: true } : {}) },
         };
     }
 

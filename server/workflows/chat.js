@@ -65,6 +65,27 @@ const workflows = [
         default_route: 'chat.member', cache_mode: 'none', metadata: { seed: true },
     },
     {
+        key: 'chat.vibe.listen', name: 'Chat: transcribe a short spoken message', namespace: 'chat',
+        description: 'Vibe by voice in the Dock where the browser has no speech recognition: a short recording (audio/webm, audio/ogg or audio/mp4) arrives inline and whisper.cpp/Parakeet on this host (route live.stt) returns the text. The audio is never stored.',
+        input_schema: OBJ({
+            audio: {
+                type: 'object', additionalProperties: false, required: ['data_url'],
+                properties: {
+                    data_url: { type: 'string', maxLength: 1500000 },
+                    mime: { enum: ['audio/webm', 'audio/ogg', 'audio/mp4'] },
+                },
+            },
+            language: { type: 'string', pattern: '^[a-z]{2}$' },
+        }, ['audio']),
+        output_schema: OBJ({
+            text: { type: 'string' },
+            language: STR(8),
+            segments: { type: 'array', items: { type: 'object', required: ['start', 'end', 'text'], properties: { start: { type: 'number' }, end: { type: 'number' }, text: { type: 'string' } } } },
+        }, ['text']),
+        steps: [{ kind: 'transcribe', route: 'live.stt' }],
+        cache_mode: 'none', metadata: { seed: true, retain_input: false },
+    },
+    {
         key: 'chat.member.turn', name: 'Chat: an AI member\'s turn, with tools', namespace: 'chat',
         description: 'One turn of a room\'s AI member as a Chat Completions request with the tools Chat runs (network search, the time, dice, a household\'s pantry); the choices come back with any tool calls. The prompt is not kept.',
         input_schema: core.workflows.find((w) => w.key === 'ai.complete').input_schema,

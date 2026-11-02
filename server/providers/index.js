@@ -28,9 +28,12 @@ const { createStubProvider } = require('./stub');
 const { createOpenAiProvider } = require('./openai');
 const { createResponsesProvider } = require('./responses');
 const { createAnthropicProvider } = require('./anthropic');
+const { createGeminiProvider } = require('./gemini');
 const { createHttpSeamProvider } = require('./http');
 const { createWhisperProvider } = require('./whisper');
 const rates = require('./rate-cards');
+const { detectTask, capabilitiesOf, hardNeeds, rank, reasonFor, workKind, leadingText, preferredTarget, preferMatches } = require('./task');
+const { createWarmCache } = require('./warm-cache');
 
 /** 4xx that the request itself caused (bad image, schema, max_tokens...), as opposed to auth, rate or availability. */
 function callerFault(err) {
@@ -44,13 +47,58 @@ function rateLimited(err) {
 }
 
 /** The model a person's credential uses when they stored none, per provider (executeWithCredential). */
-const CREDENTIAL_DEFAULT_MODEL = { anthropic: 'claude-haiku-4-5-20251001', openai: 'gpt-4o-mini', deepseek: 'deepseek-chat', minimax: 'MiniMax-M2', openrouter: 'openrouter/auto' };
+const { CREDENTIAL_PROVIDERS, PROVIDER_KIND, DEFAULT_MODEL } = require('../credentials');
+const CREDENTIAL_DEFAULT_MODEL = { ...DEFAULT_MODEL, anthropic: 'claude-haiku-5-5', openai: 'gpt-4o-mini', deepseek: 'deepseek-chat', minimax: 'MiniMax-M2', openrouter: 'openrouter/auto' };
+
+/** The key as explain names it, never the key itself (L36 Y1/Y7). */
+const paidByOf = (cred) => `your ${cred.provider} key …${String(cred.hint || '').slice(-4) || '????'}`;
+// The kind of work a run does (the person's ai.me-preferences.defaults has one default per kind)
+// comes from the task detector: server/providers/task.js.
+/** The default per-provider timeout when neither the catalogue nor the provider names one. */
+const DEFAULT_PROVIDER_TIMEOUT_MS = 30000;
+/** The fallback chain's budget when the config does not name one. */
+const DEFAULT_MAX_ATTEMPTS = 3;
+/**
+ * Who the warm-cache memory belongs to: the person, else the app or service that asked, and the route it
+ * asked on (the same prompt on another route is another job, and its cache is a different one).
+ */
+const warmSubject = (ctx = {}, route = null) =>
+    (ctx.selfSubject || (ctx.requesterType ? ctx.requesterType + ':' + ctx.requesterId : null) || 'anonymous') + '|' + String((route && route.key) || '');
+/** The person's own default model for this kind of work, when they named one (L36 Y3). */
+function preferredModelFor(prefs, operation, req, ctx) {
+    const kind = workKind(operation, req, ctx);
+    const choice = prefs && prefs.defaults ? prefs.defaults[kind] : null;
+    return choice && choice !== 'auto' ? choice : null;
+}
+/** Can one stored key serve this operation? (executeWithCredential's own rule, checked before it is called.) */
+function credentialCanServe(provider, operation, req) {
+    if (!CREDENTIAL_PROVIDERS.includes(provider)) return false;
+    const text = ['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich'];
+    if (text.includes(operation)) return true;
+    if (operation === 'messages') return PROVIDER_KIND[provider] === 'anthropic' || provider === 'custom';
+    if (operation === 'complete') return PROVIDER_KIND[provider] === 'openai' || provider === 'custom';
+    return false;
+}
+/** The model a self key should use for this run: the person's default for the kind, else their stored model. */
+function selfModelFor(cred, operation, req, ctx, prefs) {
+    const kind = workKind(operation, req, ctx);
+    const choice = prefs && prefs.defaults ? prefs.defaults[kind] : 'auto';
+    const stored = cred.models || {};
+    const role = ctx.role || ((/^live\.(chat|vision|director|summary|legacy)$/.exec(ctx.routeKey || '') || [])[1]) || null;
+    const model = (choice && choice !== 'auto') ? choice
+        : (req.image && stored.vision) || (role && stored[role]) || stored[kind] || stored.chat
+            || CREDENTIAL_DEFAULT_MODEL[cred.provider] || 'gpt-4o-mini';
+    const why = choice && choice !== 'auto' ? `your default ${kind} model` : (stored[kind] || stored.chat ? 'the model you stored for this key' : "the provider's default");
+    return { model, kind, why };
+}
 
 function createProviderPool({ db, registry, config, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, credentialFetch = null, machineModels = null, bench = null }) {
     // A person's own machine as their model (credential provider node, server/machines.js).
     const machines = machineModels || require('../machines').createMachineModels({ config, env, fetchImpl });
     const cache = new Map();          // key -> { stamp, adapter }
     const stats = {};                 // key -> { calls, failures, ... } (in memory; tests + /api/ready)
+    // L36 Y7: the provider that last answered this prompt, for five minutes (server/providers/warm-cache.js).
+    const warm = createWarmCache({ now: () => clock.now() });
 
     function statFor(key) { return stats[key] || (stats[key] = { calls: 0, ok: 0, failures: 0, skipped: 0 }); }
 
@@ -61,6 +109,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             case 'openai': return createOpenAiProvider(p, { apiKey, fetchImpl });
             case 'responses': return createResponsesProvider(p, { apiKey, fetchImpl });
             case 'anthropic': return createAnthropicProvider(p, { apiKey, fetchImpl });
+            case 'gemini': return createGeminiProvider(p, { apiKey, fetchImpl });
             case 'http': return createHttpSeamProvider(p, { apiKey, fetchImpl });
             case 'whisper': return createWhisperProvider(p, { config });
             default: throw new Error(`unknown provider kind ${p.kind}`);
@@ -369,6 +418,91 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         return { order, explain, placement: result, rateCards: rest.rateCards || [], states: rest.states || [] };   // placement: the platform.placement-result@1 explain is built from (pool routes)
     }
 
+    /**
+     * What the catalogue knows about one candidate (L36 Y7): its capabilities, its prices, its strength tier.
+     */
+    async function describeCandidate(c) {
+        const entry = await adapter(c.provider);
+        const p = entry && entry.record;
+        const model = c.model || (p && p.default_model) || null;
+        const row = model ? await registry.getModel(c.provider, model) : null;
+        const caps = capabilitiesOf(row, p);
+        const prices = await priceFor(c.provider, model);
+        return { provider: c.provider, model, caps, row, record: p, priceIn: Number(prices.in) || 0, priceOut: Number(prices.out) || 0 };
+    }
+
+    /**
+     * The provider's own timeout for one model (L36 Y7): the catalogue's model row first, then the
+     * provider's preset. It is the ceiling: a person can never set a longer one.
+     */
+    async function providerTimeout(p, model) {
+        const row = model ? await registry.getModel(p.key, model) : null;
+        const meta = row && row.metadata ? row.metadata : {};
+        return Number(meta.timeout_ms) || Number(p.timeout_ms) || 0;
+    }
+
+    /**
+     * What the catalogue knows about the model a caller asked for (L37): the provider, and what the model can do.
+     * A model the catalogue never described is not refused: the provider decides.
+     */
+    async function preferredModel(provider, model, task) {
+        const entry = provider ? await adapter(provider) : null;
+        const p = entry && entry.record;
+        const row = model ? await registry.getModel(provider, model) : null;
+        const caps = capabilitiesOf(row, p);
+        return { known: Boolean(entry), provider, model, caps, missing: hardNeeds(caps, task) };
+    }
+
+    /** The health the pool left a candidate with: 0 up, 1 degraded, 2 down. */
+    function healthRank(excluded) {
+        const why = String(excluded || '');
+        if (/health down/.test(why)) return 2;
+        if (/health degraded/.test(why)) return 1;
+        return 0;
+    }
+
+    /**
+     * L36 Y7: pick for the task. The hard needs come first (a model that cannot do the job is never tried),
+     * then fit and cost: a light job takes the cheapest capable model, a heavy one the catalogue's strength
+     * tier first. The explain says what the task was and why every candidate is there.
+     */
+    async function rankCandidates({ list, explain, task, route = null, warmProvider = null, preferred = null, ceiling = null, tierFirst = null, keepOrder = false }) {
+        const byKey = new Map((explain.candidates || []).map((c) => [c.provider + ':' + (c.model || ''), c]));
+        const authority = route && route.constraints ? (route.constraints.authority || null) : null;
+        const entries = [];
+        const rest = [];
+        let stub = null;
+        for (const c of list) {
+            if (c.provider === 'stub') { stub = c; continue; }        // synthetic output is never a candidate
+            const seen = byKey.get(c.provider + ':' + (c.model || ''));
+            const d = await describeCandidate(c);
+            const missing = hardNeeds(d.caps, task);
+            if (missing.length) {
+                // A model that cannot do this job is never tried: it leaves the order with its reason.
+                if (seen) { seen.eligible = false; seen.excluded_reason = missing.join(','); }
+                continue;
+            }
+            const over = ceiling != null && d.priceOut > Number(ceiling);
+            const entry = {
+                provider: c.provider, model: d.model, price: over ? Infinity : d.priceIn,
+                tier: d.caps.tier || 'balanced', health: healthRank(seen && seen.excluded_reason),
+                latency: seen ? seen.latency : null, candidate: c, eligible: !(seen && seen.eligible === false),
+            };
+            // A pinned route keeps its own order (and its skipped candidates where the pin put them).
+            if (keepOrder) { entries.push(entry); continue; }
+            if (!entry.eligible) { rest.push(c); continue; }             // the pool excluded it (health, cost)
+            entries.push(entry);
+        }
+        const ranked = keepOrder
+            ? { order: entries.map((e) => e.candidate), ranked: entries.slice(0, 5) }
+            : rank(entries, { task, warm: warmProvider, preferred, authority, tierFirst });
+        const order = keepOrder ? ranked.order : [...ranked.order.map((e) => ({ provider: e.provider, model: e.model })), ...rest];
+        if (stub) order.push(stub);
+        const view = ranked.ranked.map((e) => ({ provider: e.provider, model: e.model, why: reasonFor(e, task), cost: Number.isFinite(e.price) ? e.price : null, tier: e.tier }));
+        const reasons = new Map(ranked.order.map((e) => [e.provider + ':' + (e.model || ''), reasonFor(e, task)]));
+        return { order, ranked: view, reasons, keepOrder };
+    }
+
     async function skipReason(p, a, features) {
         if (!p || !a) return 'unknown_provider';
         if (p.status !== 'active') return 'disabled';
@@ -411,8 +545,10 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             if (ctx.logRequest) ctx.logRequest({ ...base, model_key: result.model, status: 'ok', output_hash: sha256(result.text || ''), tokens_in: usage.input, tokens_out: usage.output, tokens_cached: 0, tokens_estimated: 0, cost_usd: 0, latency_ms: latency });
             return { result: { text: result.text, json: null, model: result.model, usage }, provider: cred.providerKey, providerKind: 'node', model: result.model, fallbackUsed: false, usage, cost: 0, latencyMs: latency, synthetic: false, tried: [], startedAt: t0,
                 explain: { objective: 'own-machine', reasons: [cred.machine === 'any' ? 'the fastest of the person\'s own machines that answered, by their choice' : 'the person\'s own machine, by their choice'],
+                    paid_by: 'your machine',
                     selected: { provider: 'node', machine: result.machine || cred.machine, model: result.model },
-                    candidates: (result.tried || []).map((x) => ({ provider: 'node', machine: x.machine, skipped: x.error })) } };
+                    candidates: (result.tried || []).map((x) => ({ provider: 'node', machine: x.machine, skipped: x.error })),
+                    attempts: [{ key: 'your machine', provider: 'node', model: result.model, why: 'your own machine', status: 'ok', error: null }] } };
         } catch (err) {
             if (ctx.logRequest) ctx.logRequest({ ...base, status: 'error', latency_ms: Date.now() - t0, error: String(err && err.message || err).slice(0, 500) });
             if (ctx.signal && ctx.signal.aborted) throw new AiError(409, 'run.cancelled', 'run was cancelled');
@@ -426,11 +562,11 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         // A project's own provider (ADR-056 secret, ai.complete) passes a Chat Completions request through as written.
         // The OpenAI-format providers: a Chat Completions request is passed through as written (Codes C3: OpenRouter
         // speaks that format too, so a person's OpenRouter key answers it as well).
-        const completing = operation === 'complete' && ['openai', 'openrouter'].includes(cred.provider);
+        const completing = operation === 'complete' && (PROVIDER_KIND[cred.provider] === 'openai' || cred.provider === 'custom');
         // Codes C3: POST /v1/messages on the person's own key. Only a provider that speaks Anthropic's Messages API serves
         // it — Anthropic itself, DeepSeek and MiniMax (their own Anthropic-compatible endpoints) and a custom endpoint.
         const messaging = operation === 'messages';
-        const anthropicFormat = ['anthropic', 'deepseek', 'minimax', 'custom'].includes(cred.provider);
+        const anthropicFormat = PROVIDER_KIND[cred.provider] === 'anthropic' || cred.provider === 'anthropic' || cred.provider === 'custom';
         if (messaging && !anthropicFormat) throw new AiError(422, 'credential.unsupported', `the ${cred.provider} credential does not speak the Messages API`);
         if (!messaging && !completing && !['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich'].includes(operation)) throw new AiError(422, 'credential.unsupported', `a person's own key is used for text only, not ${operation}`);
         const guardedFetch = credentialFetch || require('./guarded-fetch').guardedFetch;
@@ -439,9 +575,9 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         const role = wanted && cred.models[wanted] ? wanted : null;
         // On the person's Anthropic key the model the caller asked for is theirs to choose; elsewhere the model they stored
         // is the one their provider serves (a Claude Code model name does not exist at DeepSeek).
-        const model = messaging
+        const model = ctx.defaultModel || (messaging
             ? ((cred.provider === 'anthropic' || cred.provider === 'custom') && req.model) || cred.models.chat || CREDENTIAL_DEFAULT_MODEL[cred.provider] || 'claude-haiku-4-5-20251001'
-            : (req.image && cred.models.vision) || (role && cred.models[role]) || cred.models.chat || CREDENTIAL_DEFAULT_MODEL[cred.provider] || 'gpt-4o-mini';
+            : (req.image && cred.models.vision) || (role && cred.models[role]) || cred.models.chat || CREDENTIAL_DEFAULT_MODEL[cred.provider] || 'gpt-4o-mini');
         const record = { key: cred.providerKey, kind: cred.provider, base_url: cred.base_url, capabilities: cred.capabilities || ['chat', 'json', 'vision'], timeout_ms: 60000 };
         const a = anthropicFormat ? createAnthropicProvider(record, { apiKey: cred.apiKey, fetchImpl: guardedFetch }) : createOpenAiProvider(record, { apiKey: cred.apiKey, fetchImpl: guardedFetch });
         const base = { operation, provider_key: cred.providerKey, model_key: model, route_key: ctx.routeKey || null, route_version: ctx.routeVersion || null, fallback: 0, prompt_hash: ctx.promptHash || null };
@@ -450,6 +586,12 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         const scrub = (text) => {
             const t = String(text == null ? '' : text);
             return cred.apiKey ? t.split(String(cred.apiKey)).join('[redacted]') : t;
+        };
+        const paidBy = paidByOf(cred);
+        const explain = cred.explain || {
+            objective: 'own-key', reasons: ['your own key: no shared provider is called'],
+            paid_by: paidBy, selected: `${cred.provider}/${model}`, candidates: [],
+            attempts: [{ key: paidBy, provider: cred.provider, model, why: 'your own key', status: 'ok', error: null }],
         };
         const timeoutMs = Math.max(1000, Math.min(req.timeoutMs || 60000, 120000));
         const call = messaging ? a.messages : completing ? a.complete : a.chat;
@@ -468,12 +610,16 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                     ctx.logRequest({ ...base, model_key: result.model || model, status: 'ok', output_hash: sha256(result.json || result.text || ''), tokens_in: usage.input || 0, tokens_out: usage.output || 0,
                         tokens_cached: usage.cached || 0, tokens_estimated: usage.estimated ? 1 : 0, cost_usd: cost, latency_ms: latency });
                 }
-                return { result, provider: cred.providerKey, providerKind: cred.provider, model: result.model || model, fallbackUsed: false, usage, cost, latencyMs: latency, synthetic: false, tried: [], startedAt: t0,
-                    ...(cred.explain ? { explain: cred.explain } : {}) };
+                return { result, provider: cred.providerKey, providerKind: cred.provider, model: result.model || model, fallbackUsed: false, usage, cost, latencyMs: latency, synthetic: false, tried: [],
+                    startedAt: t0, explain: { ...explain, selected: `${cred.provider}/${result.model || model}` } };
             } catch (err) {
                 lastErr = err;
                 if (ctx.signal && ctx.signal.aborted) throw new AiError(409, 'run.cancelled', 'run was cancelled');
                 if (ctx.logRequest) ctx.logRequest({ ...base, status: err && err.code === 'provider.timeout' ? 'timeout' : 'error', latency_ms: Date.now() - t0, error: scrub(err && err.message || err).slice(0, 500) });
+                // L36 Y8: the provider refused the key (401/403). The key becomes failing and the event says so.
+                if (err && (err.status === 401 || err.status === 403) && typeof ctx.onCredentialFailed === 'function') {
+                    await ctx.onCredentialFailed({ owner: cred.owner || null, subject: cred.subject || null, provider: cred.provider, providerKey: cred.providerKey, error: scrub(err.message) });
+                }
                 if (err && err.code === 'EADDRNOTPUBLIC') throw new AiError(422, 'credential.endpoint_refused', scrub(err.message));
                 if (streamed) throw new AiError(502, 'provider.stream_broken', `the answer broke off after it began streaming: ${scrub(err && err.message || err).slice(0, 200)}`);
                 if (attempt < config.providerRetries && retryable(err)) { await sleep(config.retryDelayMs, ctx.signal).catch(() => {}); continue; }
@@ -511,19 +657,167 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         return explain.bench || null;
     }
 
+    /** The providers that could serve this request, for the ai.needs_key answer (L36 Y1). */
+    async function servingProviders(route, features, operation, req, selfList = []) {
+        const out = new Set();
+        const add = (key) => { if (CREDENTIAL_PROVIDERS.includes(key)) out.add(key); };
+        const scope = route.constraints && route.constraints.provider_scope;
+        if (route.primary && route.primary.provider) {
+            for (const c of [route.primary, ...(route.fallbacks || [])]) if (c && c.provider) add(c.provider);
+        } else {
+            for (const p of await registry.listProviders()) {
+                if (p.key === 'stub' || !appOffered({}, p)) continue;
+                if (scope === 'local' && !isLocalProvider(p)) continue;
+                if (scope === 'paid' && isFreeProvider(p)) continue;
+                const caps = await offeredCapabilities(p);
+                if (features.some(f => !caps.includes(f))) continue;
+                add(p.key);
+            }
+        }
+        for (const c of selfList) if (credentialCanServe(c.provider, operation, req)) add(c.provider);
+        // A route whose network providers are all unknown to the credential table still names the console's providers:
+        // that is what the person can add under Your AI.
+        if (!out.size) for (const id of CREDENTIAL_PROVIDERS) if (credentialCanServe(id, operation, req)) out.add(id);
+        return [...out].sort();
+    }
+
     async function execute(route, operation, req, ctx = {}) {
         if (ctx.credential) return await executeWithCredential(ctx.credential, operation, req, ctx);
         const features = [operation];
         if (req.image) features.push('vision');
         if (req.json) features.push('json');
         if (req.openai && Array.isArray(req.openai.tools) && req.openai.tools.length) features.push('tools');
+        // L36 Y7: the task, read off the request itself: what it needs, what it wants out, how heavy it is.
+        const task = detectTask({ operation, req, ctx, route });
+        // L37: a soft preference. The caller names a provider (and a model if it wants one). It never disables the
+        // person's own keys, never overrides only_my_keys, never beats the price ceiling, and never forces a model
+        // that fails a hard need. An unknown id is ignored, never an error.
+        const prefer = preferredTarget(req.prefer);
+        const preferState = prefer ? { provider: prefer.provider, model: prefer.model, honoured: false, why: '' } : null;
         const tried = [];
         let unreadable = null;   // a candidate could not read the caller's media (whisper's ffmpeg): no other will either
         // A streamed answer (/v1/chat/completions, stream: true) is the caller's once a delta has gone out: a failure
         // after that is final, never retried or handed to a fallback whose words would follow the first one's.
         let streamed = false;
-        const onDelta = typeof req.onDelta === 'function' ? (d) => { streamed = true; req.onDelta(d); } : null;
+        // L40: the time to the first token, when the answer streams.
+        let attemptStart = 0;
+        let ttftMs = null;
+        const onDelta = typeof req.onDelta === 'function' ? (d) => { streamed = true; if (ttftMs === null && attemptStart) ttftMs = Date.now() - attemptStart; req.onDelta(d); } : null;
+        // L36 Y1: a run on behalf of a person tries the person's OWN keys first, for the providers that can serve the
+        // request. With only_my_keys it never falls back; otherwise the network is the fallback and the explain says so.
+        const prefs = ctx.selfPreferences || {};
+        const selfAttempts = [];
+        const selfList = Array.isArray(ctx.selfCredentials) ? ctx.selfCredentials : [];
+        if (selfList.length || (ctx.selfSubject && prefs.only_my_keys)) {
+            const order = [...selfList].sort((a, b) => {
+                const rank = (x) => (x.status === 'failing' ? 2 : x.status === 'untested' ? 1 : 0);
+                // L37: the person's own key for the provider they asked for answers first, at no fee.
+                const want = (x) => (prefer && prefer.provider && String(x.provider) === prefer.provider) ? 0 : 1;
+                return want(a) - want(b) || rank(a) - rank(b) || String(a.provider).localeCompare(String(b.provider));
+            });
+            for (const cred of order) {
+                if (!credentialCanServe(cred.provider, operation, req)) {
+                    selfAttempts.push({ key: paidByOf(cred), provider: cred.provider, model: null, why: 'your own key', status: 'skipped', error: `this key cannot serve ${operation}` });
+                    continue;
+                }
+                let pick = selfModelFor(cred, operation, req, ctx, prefs);
+                // L37: the model they named, when it can do this job. A model that cannot is never forced.
+                if (prefer && prefer.model && (!prefer.provider || String(cred.provider) === prefer.provider)) {
+                    const check = await preferredModel(prefer.provider || cred.provider, prefer.model, task);
+                    if (check.missing.length) {
+                        if (preferState && !preferState.why) preferState.why = check.missing.includes('no_vision') ? 'the model you named cannot see' : 'the model you named cannot do this job';
+                    } else {
+                        pick = { model: prefer.model, why: 'your own ' + cred.provider + ' key, with the model you asked for' };
+                    }
+                }
+                const key = paidByOf(cred);
+                try {
+                    const out = await executeWithCredential(cred, operation, req, { ...ctx, defaultModel: pick.model });
+                    const attempts = [...selfAttempts, { key, provider: cred.provider, model: pick.model, why: pick.why, status: 'ok', error: null }];
+                    // L37: the preference was honoured when their own key for that provider answered.
+                    if (preferState && prefer.provider && String(cred.provider) === prefer.provider) {
+                        preferState.honoured = true;
+                        preferState.why = 'your own ' + cred.provider + ' key answered, as you asked';
+                    } else if (preferState && !preferState.honoured && !preferState.why) {
+                        preferState.why = 'your ' + cred.provider + ' key answered instead: you have no key for the one you asked for';
+                    }
+                    return {
+                        ...out, fallbackUsed: false,
+                        explain: {
+                            objective: 'own-keys', reasons: ['your own keys are tried before the network\'s providers'],
+                            paid_by: key, selected: `${cred.provider}/${pick.model}`, candidates: [], attempts,
+                            prefer: preferState ? { ...preferState } : null,
+                        },
+                    };
+                } catch (err) {
+                    const detail = String(err && (err.detail || err.message) || err).slice(0, 300);
+                    selfAttempts.push({ key, provider: cred.provider, model: pick.model, why: pick.why, status: 'failed', error: detail });
+                }
+            }
+            if (prefs.only_my_keys) {
+                const providers = await servingProviders(route, features, operation, req, selfList);
+                const names = providers.length ? providers.join(', ') : 'any provider that can serve this request';
+                throw new AiError(422, 'ai.needs_key',
+                    `only_my_keys is on and none of your keys could serve this request; add a key for ${names} under Your AI`,
+                    { providers, paid_by: null, attempts: selfAttempts, explain: { objective: 'own-keys', reasons: ['only_my_keys: no network fallback'], paid_by: null, selected: null, candidates: [], attempts: selfAttempts, prefer: preferState ? { ...preferState, why: preferState.why || 'you have no key for it, and only_my_keys never falls back to the network' } : null } });
+            }
+        }
+
         let { order: list, explain } = await candidates(route, features, operation, ctx);
+        // L36 Y3: free_first puts the free tiers ahead of metered ones for this person's fallback. Own-key attempts above
+        // are already free to them, so this only reorders the network.
+        if (prefs.free_first && ctx.selfSubject) {
+            const free = new Map();
+            for (const c of list) {
+                if (c.provider === 'stub') { free.set(c.provider, true); continue; }
+                const p = await registry.getProvider(c.provider);
+                free.set(c.provider, !p || isFreeProvider(p));
+            }
+            list = [...list].sort((a, b) => Number(free.get(b.provider)) - Number(free.get(a.provider)));
+        }
+        // L36 Y7: pick for the task. The hard needs first (a model that cannot do the job is never tried), then
+        // fit and cost: a light job takes the cheapest capable model, a heavy one the catalogue's strength tier.
+        const warmProvider = warm.get(warmSubject(ctx, route), leadingText(req));
+        // L36 Y3: with free_first on, the free tiers lead (the price decides); with it off, the strength tier
+        // leads and the free tiers are the failover, not the first choice.
+        const freeFirst = ctx.selfSubject ? prefs.free_first !== false : true;
+        const ranked = await rankCandidates({
+            list, explain, task, route, warmProvider,
+            preferred: preferredModelFor(prefs, operation, req, ctx),
+            ceiling: prefs.price_ceiling_usd_per_mtok,
+            tierFirst: task.weight === 'heavy' || !freeFirst,
+            // A pinned route keeps its own order: the pin is the admin's decision, not the router's.
+            keepOrder: !(route.capability && operation),
+        });
+        list = ranked.order;
+        explain.task = task;
+        explain.ranked = ranked.ranked;
+        // L37: the soft preference. The provider (and model) the caller asked for goes first, when it can do the
+        // job; a pinned route keeps its own order (the pin is the admin's decision).
+        if (preferState) {
+            if (prefer.provider && !(await registry.getProvider(prefer.provider))) preferState.why = 'no provider by that name';
+            else if (prefer.model) {
+                // L37: the model they named cannot do this job: it is never forced.
+                const check = await preferredModel(prefer.provider, prefer.model, task);
+                if (check.missing.length) preferState.why = check.missing.includes('no_vision') ? 'the model you named cannot see' : 'the model you named cannot do this job';
+            }
+            if (ranked.keepOrder) {
+                preferState.why = 'this route is pinned; the pin decides';
+            } else {
+                const at = list.findIndex((c) => preferMatches(c.provider, c.model, prefer));
+                if (at > 0) {
+                    const [chosen] = list.splice(at, 1);
+                    list.unshift(chosen);
+                } else if (at < 0 && !preferState.why) {
+                    preferState.why = 'no ' + (prefer.provider || 'provider') + (prefer.model ? '/' + prefer.model : '') + ' offer could serve this request';
+                }
+            }
+            explain.prefer = preferState;
+        }
+        const attempts = [...selfAttempts];
+        explain.paid_by = 'openvibe';
+        explain.attempts = attempts;
+        explain.reasons = [...(explain.reasons || []), ...(selfAttempts.length ? ['your own keys did not answer; the network is the fallback'] : [])];
         // A first-party service's generate run may name one offer from GET /api/v1/routes. The run then
         // tries that offer alone: no fallback to another model, so the caller gets the model it asked for
         // or an explicit failure. server/runs.js validates the pin against this same offer list first.
@@ -536,33 +830,57 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             list = [chosen];
             explain.reasons = [`pinned to ${chosen.model ? `${chosen.provider}/${chosen.model}` : chosen.provider} for this run`, ...(explain.reasons || [])];
         }
+        // L36 Y7: the fallback chain stops after three providers.
+        const maxAttempts = (config.routing && config.routing.maxAttempts) || DEFAULT_MAX_ATTEMPTS;
+        let attemptsMade = 0;
         for (let i = 0; i < list.length; i++) {
             const c = list[i];
             const entry = await adapter(c.provider);
             const p = entry && entry.record;
             const a = entry && entry.adapter;
             const model = c.model || (p && p.default_model) || null;
+            const chosen = ranked.reasons.get(c.provider + ':' + (model || '')) || null;
             const fallback = i > 0;
             const base = { operation, provider_key: c.provider, model_key: model, route_key: ctx.routeKey || null, route_version: ctx.routeVersion || null, fallback: fallback ? 1 : 0, prompt_hash: ctx.promptHash || null, input_hash: ctx.inputHash || null };
+            // L36 Y3: a price ceiling caps the network's fallback; the person's own keys are never capped (above).
+            if (prefs.price_ceiling_usd_per_mtok != null) {
+                const cards = await rateCardsFor(c.provider, model);
+                const outputPrice = cards ? Number(rates.pricesOf(cards).out) || 0 : 0;
+                if (outputPrice > Number(prefs.price_ceiling_usd_per_mtok)) {
+                    const whyPrice = `over_price_ceiling (${outputPrice} > ${prefs.price_ceiling_usd_per_mtok} USD/Mtok)`;
+                    if (preferState && preferMatches(c.provider, model, prefer)) { preferState.honoured = false; preferState.why = 'it is over your price ceiling'; }
+                    statFor(c.provider).skipped++;
+                    tried.push({ provider: c.provider, skipped: 'over_price_ceiling' });
+                    attempts.push({ key: 'openvibe', provider: c.provider, model, why: chosen || 'the router chose it', status: 'skipped', error: whyPrice });
+                    if (ctx.logRequest) ctx.logRequest({ ...base, status: 'skipped', skip_reason: 'over_price_ceiling' });
+                    continue;
+                }
+            }
             const why = await skipReason(p, a, features);
             if (why) {
                 statFor(c.provider).skipped++;
                 tried.push({ provider: c.provider, skipped: why });
+                attempts.push({ key: 'openvibe', provider: c.provider, model, why: chosen || 'the router chose it', status: 'skipped', error: why });
                 if (ctx.logRequest) ctx.logRequest({ ...base, status: 'skipped', skip_reason: why });
                 continue;
             }
+            // L36 Y7: the fallback chain stops after three providers.
+            if (attemptsMade >= maxAttempts) break;
+            attemptsMade += 1;
             // An image generation outlasts the shared provider's chat timeout (AI_PROVIDER_TIMEOUT_MS): the route's wins. So does a
             // route that says so (options.outlast_provider_timeout: space.build writes a whole app, a minute or two). Otherwise
             // the provider's timeout stays strict, so a slow provider fails over quickly.
             const outlast = operation === 'image' || Boolean(route.options && route.options.outlast_provider_timeout);
-            const cap = outlast ? Math.max(p.timeout_ms || 0, Number(route.timeout_ms) || 0, operation === 'image' ? 600000 : 0) : (p.timeout_ms || 600000);
-            const timeoutMs = Math.max(1000, Math.min(req.timeoutMs || route.timeout_ms || p.timeout_ms || 30000, cap));
+            const own = await providerTimeout(p, model);
+            const cap = outlast ? Math.max(own, Number(route.timeout_ms) || 0, operation === 'image' ? 600000 : 0) : (own || 600000);
+            const timeoutMs = Math.max(1000, Math.min(req.timeoutMs || route.timeout_ms || own || DEFAULT_PROVIDER_TIMEOUT_MS, cap));
             const retries = config.providerRetries;
             let lastErr = null;
             for (let attempt = 0; attempt <= retries; attempt++) {
                 if (ctx.signal && ctx.signal.aborted) throw new AiError(409, 'run.cancelled', 'run was cancelled');
                 const started = clock.now();
                 const t0 = Date.now();
+                attemptStart = t0;
                 try {
                     const fn = a[operation];
                     if (typeof fn !== 'function') throw new ProviderError(`${operation} not implemented`, { code: 'provider.unsupported' });
@@ -588,7 +906,16 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                         });
                     }
                     explain.selected = c.provider;
-                    return { result, provider: c.provider, providerKind: p.kind, model: result.model || model, fallbackUsed: fallback, usage, cost, latencyMs: latency, synthetic: Boolean(result.synthetic || a.synthetic), tried, startedAt: started, explain };
+                    explain.paid_by = 'openvibe';
+                    // L37: the preference was honoured when the offer it named answered.
+                    if (preferState && preferMatches(c.provider, model, prefer)) {
+                        preferState.honoured = true;
+                        preferState.why = 'the ' + c.provider + ' offer answered, as you asked';
+                    }
+                    attempts.push({ key: 'openvibe', provider: c.provider, model: result.model || model, why: chosen || (fallback ? 'the next network provider after an earlier attempt failed' : 'the first network offer for this route'), status: 'ok', error: null });
+                    warm.remember(warmSubject(ctx, route), leadingText(req), c.provider);
+                    explain.attempts = attempts;
+                    return { result, provider: c.provider, providerKind: p.kind, model: result.model || model, fallbackUsed: fallback || selfAttempts.some(a => a.status !== 'skipped'), usage, cost, latencyMs: latency, ttftMs, synthetic: Boolean(result.synthetic || a.synthetic), tried, startedAt: started, explain };
                 } catch (err) {
                     lastErr = err;
                     if (ctx.signal && ctx.signal.aborted) {
@@ -609,9 +936,12 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             if (lastErr && lastErr.code === 'media.unreadable') unreadable = lastErr;
             if (!callerFault(lastErr) && !rateLimited(lastErr)) await recordFailure(c.provider, lastErr);
             tried.push({ provider: c.provider, error: String(lastErr && lastErr.message || lastErr).slice(0, 200) });
+            attempts.push({ key: 'openvibe', provider: c.provider, model: lastErr && lastErr.model || model, why: chosen || (fallback ? 'the next network provider after an earlier attempt failed' : 'the first network offer for this route'), status: lastErr && lastErr.code === 'provider.timeout' ? 'timeout' : 'failed', error: String(lastErr && lastErr.message || lastErr).slice(0, 300) });
             log.warn(`[ai] ${operation} via ${c.provider}/${model || '-'} failed: ${lastErr && lastErr.message}`);
         }
         explain.selected = null;
+        explain.paid_by = 'openvibe';
+        explain.attempts = attempts;
         // The media itself could not be read: no provider will do better, and the caller should hear why (and not
         // retry as if a provider were down).
         if (unreadable) {

@@ -38,6 +38,7 @@ t.test('GET / as a browser: the home page, its CSP and a private cache', async (
     assert.match(r.headers.get('vary'), /Accept/);
     assert.strictEqual((r.text.match(/<h1\b/g) || []).length, 1, 'exactly one h1');
     assert.ok(r.text.includes('Many models, one API.'), 'the hero');
+    assert.ok(r.text.includes('<div class="sc-grid" role="region" aria-label="What you get" tabindex="0">'), 'the sideways rail is reachable by keyboard');
     assert.ok(r.text.includes('point it at /v1 for Chat Completions with tools'), 'the OpenAI-compatible endpoint is on the home');
     assert.ok(r.text.includes('Your project&#39;s own provider') || r.text.includes("Your project's own provider"), 'the project\'s own provider row');
     assert.ok(!r.text.includes('metered models under a project budget'), 'production app runs are free-only until project budgets open');
@@ -57,6 +58,10 @@ t.test('the home: numbers and the model table come from the /stats rows; nothing
     const html = renderHome({ siteUrl: SITE, stats: { days: 7, rows } });
     assert.match(html, /<b>1,010<\/b><span>calls answered in the last 7 days<\/span>/);
     assert.match(html, /<b>2<\/b><span>models answered them<\/span>/);
+    // On a phone each model is a card: every cell carries its column's name (2026-11-02: the table scrolled sideways
+    // with rows a screen tall).
+    assert.ok(/<td data-label="Provider">[\s\S]*?<td data-label="Price">/.test(html), 'each cell names its column');
+    assert.ok(/@media \(max-width:600px\)\{#models[^\n]*table\.sc-table\{min-width:0;/.test(html), 'and the phone layout undoes the table width');
     assert.match(html, /<b>99\.4%<\/b><span>of provider calls succeeded<\/span>/);
     assert.ok(html.indexOf('gpt-5-nano') < html.indexOf('qwen2.5-1.5b-instruct'), 'most used first');
     assert.ok(!html.includes('never-answered'), 'a model with no answer is left out');
@@ -167,7 +172,10 @@ t.test('the public vhost proxies the home, its files and exactly the developer-a
         for (const hdr of ['X-Real-IP $remote_addr', 'X-Forwarded-For $remote_addr', 'CF-Connecting-IP $remote_addr']) assert.ok(block.includes(hdr), hdr);
     }
     const rest = conf.indexOf('location /api/ {');
-    assert.ok(conf.slice(rest, conf.indexOf('}', rest)).includes('return 403;'), 'the rest of the API stays host-local');
+    const apiRest = conf.slice(rest, conf.indexOf('\n    }', rest));
+    assert.ok(apiRest.includes('default_type application/problem+json;'), 'an unknown API path answers a problem document');
+    assert.ok(/return 404 /.test(apiRest), 'with a 404');
+    assert.ok(!apiRest.includes('proxy_pass'), 'the rest of the API stays host-local');
     assert.ok(!conf.includes('$proxy_add_x_forwarded_for'));
 });
 
@@ -179,16 +187,26 @@ t.test('the CSPs let Cloudflare Web Analytics load and report (it injects its be
     assert.match(HOME_CSP, /script-src [^;]*https:\/\/static\.cloudflareinsights\.com/);
     assert.match(HOME_CSP, /connect-src [^;]*https:\/\/cloudflareinsights\.com/);
     const stats = await request(h.base, 'GET', '/stats', { headers: { Accept: BROWSER } });
-    assert.match(stats.headers.get('content-security-policy'), /script-src https:\/\/static\.cloudflareinsights\.com; connect-src https:\/\/cloudflareinsights\.com/);
+    // /stats is a Frame page now (2026-11-01), under the home's CSP.
+    assert.strictEqual(stats.headers.get('content-security-policy'), HOME_CSP);
 });
 
-t.test('a browser gets a page for a path nothing serves; an API client the problem document; /favicon.ico is the icon', async () => {
+t.test('a browser that asks for a missing page gets the site 404 page; an API client the problem document', async () => {
     const page = await request(h.base, 'GET', '/no-such-page', { headers: { Accept: BROWSER } });
     assert.strictEqual(page.status, 404);
-    assert.ok(page.text.includes('<html lang="en">') && page.text.includes('<title>Not found') && page.text.includes('rel="icon"'));
+    assert.match(page.headers.get('content-type'), /^text\/html/);
+    assert.ok(page.text.includes('<h1>Page not found</h1>'));
+    assert.ok(page.text.includes('There is no page at this address on ai.openvibe.services. The link may be old or mistyped.'));
+    assert.ok(page.text.includes('id="navbar-mount"'), 'the page is in the site Frame');
+    assert.ok(page.text.includes('<meta name="robots" content="noindex, follow">'));
+    assert.strictEqual(page.headers.get('x-robots-tag'), 'noindex');
+    assert.ok(page.text.includes('class="sc-btn sc-primary" href="/"'), 'home is the first way back');
     const api = await request(h.base, 'GET', '/api/v1/no-such-thing', { headers: { Accept: BROWSER } });
     assert.strictEqual(api.status, 404);
     assert.match(api.headers.get('content-type'), /json/);
+    const notHtml = await request(h.base, 'GET', '/no-such-page', { headers: { Accept: 'application/json' } });
+    assert.strictEqual(notHtml.status, 404);
+    assert.match(notHtml.headers.get('content-type'), /json/);
     const icon = await request(h.base, 'GET', '/favicon.ico');
     assert.strictEqual(icon.status, 200);
     assert.match(icon.headers.get('content-type'), /^image\/svg\+xml/);

@@ -33,3 +33,15 @@ description = "Made-up provider key in test/messages-api.test.js (the person's o
 condition = "AND"
 paths = ['''^test/messages-api\.test\.js$''']
 regexes = ['''^sk-ant-test-person-0123456789$''']
+
+[[allowlists]]
+description = "Made-up provider keys in test/me-credentials.test.js (L36: the self vault, test-on-save, the AAD, and the 'a key is never in an answer' test; placeholders, not secrets)"
+condition = "AND"
+paths = ['''^test/me-credentials\.test\.js$''']
+regexes = ['''sk-test-dana-0123456789WXYZ''', '''sk-ant-test-0123456789ABCD''', '''sk-test-custom-0123456789''', '''sk-test-gemini-0123456789''', '''sk-test-ivan-LEAKME-0123456789''']
+
+[[allowlists]]
+description = "Made-up provider key in test/account-data.test.js (L36: the account export must never carry the key; a placeholder, not a secret)"
+condition = "AND"
+paths = ['''^test/account-data\.test\.js$''']
+regexes = ['''sk-self-ada-0123456789LEAK''']

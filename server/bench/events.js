@@ -21,7 +21,7 @@ const { TOPICS: ACCOUNT_TOPICS } = require('openvibe-sdk/account-data');
 
 const TOPIC = 'bench.rating.changed';
 
-function createBenchEvents({ bench, accountData = null, accountSend = null, config, log = console, fetchImpl = globalThis.fetch, clientSecret = process.env.OV_OAUTH_CLIENT_SECRET }) {
+function createBenchEvents({ bench, db = null, accountData = null, accountSend = null, config, log = console, fetchImpl = globalThis.fetch, clientSecret = process.env.OV_OAUTH_CLIENT_SECRET }) {
     const router = express.Router();
     const secrets = (config.events && config.events.secrets) || [];
 

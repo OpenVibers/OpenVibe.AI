@@ -21,7 +21,7 @@ const ovServe = require('openvibe-shared/serve');
 const home = require('./home');
 const pkg = require('../package.json');
 
-function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, credentials = null, vault = null, benchEvents = null, runBudgets = null, memory = null }) {
+function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, credentials = null, preferences = null, grants = null, vault = null, benchEvents = null, runBudgets = null, memory = null }) {
     const app = express();
     app.disable('x-powered-by');
     app.set('trust proxy', 'loopback');
@@ -117,6 +117,13 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
     // The operator console (/console, /auth/*): Network staff, server-rendered, no scripts (server/console).
     // Person sessions are separate, read-only and open one run receipt each (server/person-session.js).
     const personSessions = createPersonSessions({ db, config, clock });
+    // The person's own AI settings (L36 Y1/Y3): their keys under owner `self`, and their routing preferences. Only
+    // the person's Network token or their AI site session (same origin) reaches them; a service token is refused.
+    if (credentials && preferences && grants) {
+        app.use(require('./me').meRouter({ credentials, preferences, grants, auth, registry, config, clock, log, personSessions, sendError: (res, err, ctx) => sendError(res, err, ctx, log) }));
+        // The same settings as a page for people (GET /you, plain forms on AI's own person session).
+        app.use(require('./you-page').youPageRouter({ credentials, preferences, grants, personSessions, config, log }));
+    }
     app.use(consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, env, clock, fetchImpl, log, vault, personSessions }));
     app.use(runPageRouter({ runs, personSessions, log }));
 
@@ -150,9 +157,9 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
             const now = clock.now();
             const rows = await statsRows();
             res.setHeader('Cache-Control', cachePolicy.htmlHeaders());
-            res.setHeader('Content-Security-Policy', views.CSP);
-            res.type('html').send(views.pages.stats({
-                days: STATS_DAYS, rows, canonical: `${String(config.baseUrl || '').replace(/\/+$/, '')}/stats`,
+            res.setHeader('Content-Security-Policy', home.HOME_CSP);
+            res.type('html').send(home.renderStats({ siteUrl: config.baseUrl,
+                days: STATS_DAYS, rows,
                 from: new Date(now - STATS_DAYS * 86400000).toISOString().slice(0, 10), to: new Date(now).toISOString().slice(0, 10),
             }));
         } catch (e) { next(e); }
@@ -230,7 +237,8 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
     // A browser asking for a page that is not here gets a page; an API client the problem document.
     app.use((req, res) => {
         if (req.method === 'GET' && !req.path.startsWith('/api/') && !req.path.startsWith('/v1/') && req.accepts(['application/json', 'text/html']) === 'text/html') {
-            return res.status(404).type('html').set('Content-Security-Policy', home.HOME_CSP).set('Cache-Control', 'no-store').send(home.renderNotFound());
+            return res.status(404).type('html').set('Content-Security-Policy', home.HOME_CSP).set('Cache-Control', 'no-store')
+                .set('X-Robots-Tag', 'noindex').send(home.renderNotFound({ siteUrl: config.baseUrl }));
         }
         return http.sendProblem(res, 404, 'ai.not_found', { detail: `no route ${req.method} ${req.path}`, ctx: req.ov });
     });

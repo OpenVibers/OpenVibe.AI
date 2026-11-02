@@ -19,8 +19,10 @@
 const { ids } = require('openvibe-contracts');
 const { AiError, sha256, stableStringify, parseJson, iso } = require('./util');
 const { preferenceLines } = require('./user-modules');
+const { preferredTarget } = require('./providers/task');
 const schemas = require('./schemas');
 const events = require('./events');
+const usageRecord = require('./usage-record');
 const usageSamples = require('./usage-samples');
 
 const TERMINAL = new Set(['succeeded', 'failed', 'cancelled', 'cached']);
@@ -99,7 +101,7 @@ function routePinRequest(value, principal, wf) {
     return { provider, model };
 }
 
-function createRuns({ db, registry, engine, cache, quotas, config, clock = { now: () => Date.now() }, log = console, userModules = null, credentials = null, tiers = null, projectSecrets = null, pool = null, runBudgets = null }) {
+function createRuns({ db, registry, engine, cache, quotas, config, clock = { now: () => Date.now() }, log = console, userModules = null, credentials = null, preferences: personPreferences = null, tiers = null, projectSecrets = null, pool = null, runBudgets = null }) {
     const inflight = new Map();     // run id -> { controller, promise, release, caller }
     const queue = [];               // run ids waiting for the worker
     let active = 0;
@@ -242,11 +244,18 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         // An app's own provider (ADR-056 project secret): only on ai.complete, only for an app; its key spends the
         // project's money at its provider, so no tier budget holds it (the app's quotas still count it).
         const projectProvider = body.project_provider == null ? null : projectProviderOf(body.project_provider);
+        // L37: the soft preference (a provider, and a model if the caller wants one). It is a wish, not a pin.
+        const prefer = preferredTarget(body.prefer);
         if (projectProvider) {
             if (!app) throw new AiError(403, 'capability.denied', 'only a developer app names its project\'s own provider');
             if (wf.key !== 'ai.complete') throw new AiError(422, 'input.invalid', 'a project provider is used for ai.complete only');
             if (!projectSecrets || !projectSecrets.available()) throw new AiError(503, 'project_secret.unavailable', 'project secrets are not configured on this service');
         }
+        // L36 Y1: a run on behalf of a person tries that person's OWN keys first (owner `self`). When they hold one,
+        // the run is uncached and no network budget or tier holds it: their own key is free to them, and a $0 balance
+        // must never block it. If it falls back to the network, the usage is still recorded after the fact.
+        const personSubject = body.on_behalf_of && body.on_behalf_of.type === 'user' && typeof body.on_behalf_of.id === 'string' ? body.on_behalf_of.id : null;
+        const selfKeys = Boolean(credentials && personSubject && credentialSubject === null && !projectProvider && !pinned && await credentials.hasSelf(personSubject));
         // The budget a Codes run token carries (Codes C3): a run that is over its budget is refused before
         // any provider call. The budget lives here, not in the token, so the holder of the token cannot raise it.
         if (runBudgets && principal.jti) {
@@ -274,23 +283,26 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             source_service: requester.type === 'service' ? requester.id : null,
             target: body.target ? JSON.stringify(body.target) : null, target_key: ctx.targetKey,
             input: null, input_hash: inputHash, idempotency_key: idem, trace_id: trace, request_id: requestId, retry_of: retryOf,
-            options: JSON.stringify({ cache: options.cache !== false && credentialSubject === null && !projectProvider && !pinned, debug: Boolean(options.debug), input_retained: kept.full,
+            options: JSON.stringify({ cache: options.cache !== false && credentialSubject === null && !projectProvider && !pinned && !selfKeys, debug: Boolean(options.debug), input_retained: kept.full,
                 ...(credentialSubject !== null ? { credential_subject: credentialSubject } : {}), ...(credentialProvider !== null ? { credential_provider: credentialProvider } : {}),
-                ...(projectProvider ? { project_provider: projectProvider } : {}), ...(pinned ? { pinned_offer: pinned } : {}) }), created_at: now,
+                ...(selfKeys ? { self_subject: personSubject } : {}),
+                ...(projectProvider ? { project_provider: projectProvider } : {}), ...(pinned ? { pinned_offer: pinned } : {}),
+                ...(prefer ? { prefer } : {}) }), created_at: now,
         };
         base.input = stableStringify(kept.value);
 
         // Cache (scoped; never crosses requester/actor/target/attribution)
         // A pinned run is never served from (or written to) the shared cache: the caller asked for THIS model,
-        // and another model's answer under the same prompt would silently break the pin.
-        const scope = options.cache === false || credentialSubject !== null || projectProvider || pinned ? null : cache.scopeFor(wf.cache_mode, ctx);
+        // and another model's answer under the same prompt would silently break the pin. A run that may use the
+        // person's own key is never cached either: their key must be used, and the answer is theirs, not the scope's.
+        const scope = options.cache === false || credentialSubject !== null || projectProvider || pinned || selfKeys ? null : cache.scopeFor(wf.cache_mode, ctx);
         let cacheKey = null;
         if (scope) {
             cacheKey = cache.keyFor({ scope, workflowKey: wf.key, workflowVersion: wf.version, templateVersion: base.template_version, routeKey: base.route_key, routeVersion: base.route_version, inputHash });
             const hit = await cache.get(cacheKey, scope);
             if (hit) {
                 await db.tx(async () => {
-                    const cacheExplain = { objective: 'cache', reasons: ["the answer was already in this scope's cache; no provider was called"], selected: null, candidates: [] };
+                    const cacheExplain = { objective: 'cache', reasons: ["the answer was already in this scope's cache; no provider was called"], paid_by: 'cache', selected: null, candidates: [], attempts: [] };
                     await db.prepare(`INSERT INTO runs (id, workflow_key, workflow_version, template_key, template_version, route_key, route_version, status, requester_type, requester_id, on_behalf_of, attribution,
                         source_service, target, target_key, input, input_hash, output, model_key, cache_key, cached_from, retry_of, idempotency_key, trace_id, request_id, options, explain, created_at, started_at, finished_at, citations_count)
                         VALUES (@id, @workflow_key, @workflow_version, @template_key, @template_version, @route_key, @route_version, 'cached', @requester_type, @requester_id, @on_behalf_of, @attribution,
@@ -305,6 +317,8 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                         readings: [{ attempt: 0, kind: 'in', model: hit.model_key || null, quantity: 0, cost: 0, freeAllowanceUsed: 0 }] });
                     await events.runChanged(await getRow(id));
                 });
+                // A cache hit is still a run: its record says so (no tokens, no money).
+                await publishUsage({ row: await getRow(id), outcome: 'cached' });
                 await registry.audit(principal.sub, 'run.create', 'run', id, { trace, metadata: { workflow: wf.key, version: wf.version, status: 'cached', cached_from: hit.run_id } });
                 return { run: await get(id), created: true, promise: null };
             }
@@ -315,10 +329,12 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         admit(caller);
         // A run with a person's own key spends their money, not the shared quotas (its own budget was checked above).
         // The tier budgets (server/govern.js, AI_GOVERN_TIERS) hold first, so a run they refuse is not counted by reserve().
-        const hold = credentialSubject !== null || projectProvider || !tiers ? null : await tiers.admit(ctx, id);
+        // L36 Y1: a run that may use the person's own key holds neither — their key is free to them, and a $0 balance
+        // anywhere must never block it. If it falls back to the network, the usage is recorded after the run.
+        const hold = credentialSubject !== null || projectProvider || selfKeys || !tiers ? null : await tiers.admit(ctx, id);
         let reserved;
         try {
-            reserved = credentialSubject !== null ? null : await quotas.reserve(ctx);
+            reserved = credentialSubject !== null || selfKeys ? null : await quotas.reserve(ctx);
         } catch (err) { if (hold) await tiers.release(hold); throw err; }
 
         try {
@@ -332,6 +348,14 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             });
         } catch (err) { if (hold) await tiers.release(hold); throw err; }
         await registry.audit(principal.sub, retryOf ? 'run.retry' : 'run.create', 'run', id, { trace, metadata: { workflow: wf.key, version: wf.version, target: ctx.targetKey, retry_of: retryOf, ...(pinned ? { pinned_offer: pinned } : {}) } });
+        // L55 C3: a service running on a person's own key (the person allowed it for that provider) is audited: who,
+        // which service, which provider, which run. The key itself is never in the row.
+        if (credentialSubject && requester.type === 'service' && credentials) {
+            const consent = await credentials.consentUse(requester.id, credentialSubject, credentialProvider).catch(() => null);
+            if (consent) {
+                await registry.audit(principal.sub, 'credential.self.use', 'credential', `${consent.service}:${consent.subject}:${consent.provider}`, { trace, metadata: { service: consent.service, subject: consent.subject, provider: consent.provider, run_id: id } });
+            }
+        }
 
         const controller = new AbortController();
         let release;
@@ -375,10 +399,83 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         return {
             providerKey: `project:${ctx.projectId}`, provider: 'openai', base_url: spec.base_url, apiKey: value, models: { chat: spec.model },
             capabilities: ['chat', 'json', 'vision', 'tools'],
-            explain: { objective: null, reasons: [`the project's own provider at ${new URL(spec.base_url).origin} (project secret ${spec.secret}, ${environment})`], selected: `project:${ctx.projectId}`, candidates: [] },
+            explain: { objective: null, reasons: [`the project's own provider at ${new URL(spec.base_url).origin} (project secret ${spec.secret}, ${environment})`], paid_by: 'project', selected: `project:${ctx.projectId}`, candidates: [], attempts: [] },
         };
     }
 
+    /**
+     * The record of a run (plan L40): the tokens (the cache read and the cache write counted apart), the money and
+     * who paid. It is published as one ai.call.recorded@1 event; OpenVibe.Report keeps the ledger. The record never
+     * carries the prompt or the answer.
+     */
+    async function publishUsage({ row, outcome, usage = {}, provider = null, model = null, attempts = 0, latencyMs = null, ttftMs = null }) {
+        try {
+            const opts = parseJson(row.options, {});
+            const payer = await payerOf({ row, providerKey: provider, opts });
+            const tokens = {
+                input: Math.max(0, (usage.input || 0) - (usage.cached || 0) - (usage.cache_write || 0)),
+                output: usage.output || 0, reasoning: usage.reasoning || 0,
+                cache_read: usage.cached || 0, cache_write: usage.cache_write || 0,
+            };
+            const cards = provider ? await pool.rateCardsFor(provider, model) : null;
+            const prices = usageRecord.pricesOf(cards);
+            const money = usageRecord.moneyOf({ prices, tokens, paidBy: payer.paid_by, feeRate: (config.usage && config.usage.feeRate) || 0 });
+            const rec = usageRecord.recordOf({
+                system: 'ai', run_id: row.id, subject: subjectOf(row), attribution: attributionOf(row), surface: row.workflow_key || '',
+                provider: payer.provider || provider || null, model: model || null, effort: opts.effort || null,
+                paid_by: payer.paid_by, paid_by_detail: payer.detail,
+                input: tokens.input, output: tokens.output, reasoning: tokens.reasoning, cache_read: tokens.cache_read,
+                cache_write: tokens.cache_write, cache_write_ttl: usage.cache_write_ttl || null,
+                images: usage.images || 0, audio_seconds: usage.audio_seconds || 0, video_seconds: usage.video_seconds || 0,
+                list_cost_usd: money.list_cost_usd, charged_usd: money.charged_usd, fee_usd: money.fee_usd, cache_saved_usd: money.cache_saved_usd,
+                price_source: prices.source, price_date: prices.date,
+                latency_ms: latencyMs, ttft_ms: ttftMs, attempts, outcome,
+                at: row.finished_at || new Date(clock.now()).toISOString(),
+            });
+            // The event (ai.call.recorded) is queued in its own transaction, like every other event here.
+            await db.tx(async () => { await events.callRecorded(rec); });
+        } catch (err) {
+            log.warn(`[runs] ${row.id}: the usage record was not written: ${err && err.message}`);
+        }
+    }
+
+    /** The person the run was for, when there is one (a run on behalf of a service has none). */
+    const subjectOf = (row) => {
+        const o = parseJson(row.on_behalf_of, null);
+        return o && o.type === 'user' && o.id ? o.id : null;
+    };
+
+    /** The site or app the run came from, as '<type>:<id>' (empty when nothing is known). */
+    const attributionOf = (row) => {
+        const a = parseJson(row.attribution, null);
+        if (!a) return '';
+        if (typeof a === 'string') return a;
+        const kind = a.service || a.type || '';
+        return a.id ? `${kind}:${a.id}` : kind;
+    };
+
+    /**
+     * Who paid for this run (L40): the person's own key, the OpenVibe key, their plan, their own machine, a free
+     * tier, the network's allowance or an organisation's key. A person's own key is never charged here.
+     */
+    async function payerOf({ row, providerKey, opts }) {
+        if (opts.credential_subject) {
+            const cred = await credentials.get(row.requester_id, opts.credential_subject, opts.credential_provider || null).catch(() => null);
+            if (cred && cred.provider === 'node') return { paid_by: 'own_machine', detail: cred.machine || 'node', provider: 'node' };
+            const name = (cred && cred.provider) || 'own';
+            const hint = cred && cred.key_hint ? String(cred.key_hint) : '';
+            return { paid_by: 'own_key', detail: hint ? `${name} ...${hint}` : name, provider: name };
+        }
+        if (opts.project_provider) return { paid_by: 'org_key', detail: `project:${opts.project_provider.project_id || ''}`, provider: providerKey };
+        const p = providerKey ? await registry.getProvider(providerKey) : null;
+        const profile = (p && p.billing_profile) || 'metered';
+        const name = providerKey || (p && p.key) || null;
+        if (profile === 'subscription') return { paid_by: 'plan', detail: (p && (p.pool_key || p.key)) || name, provider: name };
+        if (profile === 'free') return { paid_by: 'free_tier', detail: (p && (p.pool_key || p.key)) || name, provider: name };
+        if (profile === 'byok') return { paid_by: 'own_key', detail: name, provider: name };
+        if (p && p.metadata && p.metadata.allowance === 'network') return { paid_by: 'network_allowance', detail: name, provider: name };
+        return { paid_by: 'openvibe_key', detail: name, provider: name };
+    }
     async function execute(id, { controller, reserved, scope, ctx, input, hold = null }) {
         const row = await getRow(id);
         if (!row || row.status !== 'queued') { inflight.delete(id); return; }
@@ -409,6 +506,16 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             }
             const credential = opts.credential_subject ? await credentials.forRun(row.requester_id, opts.credential_subject, opts.credential_provider || null)
                 : opts.project_provider ? await projectCredential(opts.project_provider, ctx) : null;
+            // L36 Y1/Y8: the person's own keys, and what their preferences say about the network fallback. A provider
+            // refusing one (401/403) marks it failing and publishes ai.credential.failed, never the key.
+            const selfSubject = opts.self_subject || null;
+            const selfCredentials = selfSubject && credentials ? await credentials.selfForAllRuns(selfSubject) : null;
+            const selfPreferences = selfSubject && personPreferences ? await personPreferences.get(selfSubject) : null;
+            const onCredentialFailed = credentials ? async (failure) => {
+                if (!failure || !failure.owner || !failure.subject || !failure.provider) return;
+                const changed = await credentials.markFailed(failure.owner, failure.subject, failure.provider, failure.error);
+                if (changed) await events.credentialFailed({ subject: failure.subject, provider: failure.provider, error: failure.error, owner: failure.owner });
+            } : undefined;
             const r = await engine.execute(wf, row, input, { signal: controller.signal, logRequest, debugRaw: Boolean(config.debugRawLog && opts.debug), inputHash: row.input_hash, preferences,
                 // A developer app's run (ADR-014): the provider pool excludes a person's byok key, and the run is
                 // limited to free and local capacity when it is a sandbox run or when no tier budget governs its
@@ -417,6 +524,10 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                 // Who asked, for a step that must not call the caller back (research: Search's own web ladder).
                 requesterType: ctx.requesterType, requesterId: ctx.requesterId,
                 ...(ctx.routePin ? { routePin: ctx.routePin } : {}),
+                // L37: the soft preference the caller made (provider, and a model if it named one).
+                prefer: opts.prefer || null,
+                ...(onCredentialFailed ? { onCredentialFailed } : {}),
+                ...(selfSubject ? { selfSubject, selfCredentials: selfCredentials || [], selfPreferences } : {}),
                 ...(credential ? { credential, role: input && typeof input.role === 'string' ? input.role : null } : {}),
                 ...(typeof ctx.onDelta === 'function' ? { onDelta: ctx.onDelta } : {}) });
             if (controller.signal.aborted) throw new AiError(409, 'run.cancelled', 'cancelled');
@@ -432,7 +543,12 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                 return d;
             });
             if (!done.changes) return;       // cancelled while finishing
-            if (r.provider && reserved) await quotas.account(ctx, reserved, { provider: r.provider, model: r.model, tokensIn: r.usage.input, tokensOut: r.usage.output, tokensCached: r.usage.cached, cost: r.cost, attempts: logged, runId: id, traceId: row.trace_id, hold });
+            // A self-key run has no reservation and no tier hold; if it fell back to the network, its usage is still
+            // recorded (the fallback is named in explain). A run that used the person's own key spends nothing here.
+            const usedOwnKey = String(r.provider || '').startsWith('byo:self:');
+            if (r.provider && (reserved || (opts.self_subject && !usedOwnKey))) await quotas.account(ctx, reserved, { provider: r.provider, model: r.model, tokensIn: r.usage.input, tokensOut: r.usage.output, tokensCached: r.usage.cached, cost: r.cost, attempts: logged, runId: id, traceId: row.trace_id, hold });
+            // The record of the run (L40): the tokens with the cache apart, the money and who paid.
+            await publishUsage({ row: await getRow(id), outcome: 'succeeded', usage: r.usage, provider: r.provider, model: r.model, attempts, latencyMs: r.latencyMs, ttftMs: r.ttftMs });
             // What the run spent goes on the budget of its run token (Codes C3): the same tokens and cost the
             // quota accounting counts, so the next request of a run over its budget is refused.
             if (runBudgets && ctx.runJti) await runBudgets.add(ctx.runJti, { tokens: r.usage.input + r.usage.output, cost: r.cost });
@@ -454,7 +570,11 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                     .run(cancelled ? 'cancelled' : 'failed', code, extra ? `${detail} ${extra}` : detail, attempts, explain, iso(clock.now()), id);
                 if (f.changes) await events.runChanged(await getRow(id));
             });
-            const spent = await db.prepare("SELECT COALESCE(SUM(tokens_in),0)::bigint ti, COALESCE(SUM(tokens_out),0)::bigint tout, COALESCE(SUM(cost_usd),0) c FROM requests WHERE run_id = ? AND status = 'ok'").get(id);
+            const spent = await db.prepare("SELECT COALESCE(SUM(tokens_in),0)::bigint ti, COALESCE(SUM(tokens_out),0)::bigint tout, COALESCE(SUM(tokens_cached),0)::bigint tc, COALESCE(SUM(cost_usd),0) c FROM requests WHERE run_id = ? AND status = 'ok'").get(id);
+            // A run that broke still spent: its record says what it cost and who paid (L40).
+            await publishUsage({ row: await getRow(id), outcome: cancelled ? 'cancelled' : 'failed',
+                usage: { input: Number(spent.ti) || 0, output: Number(spent.tout) || 0, cached: Number(spent.tc) || 0 },
+                provider: logged.length ? logged[logged.length - 1].provider_key : null, model: null, attempts });
             // Account the spent tokens/cost as before, but always roll up the finished attempts (the failed
             // ones included) into provider_stats_daily/placement_state: a run that answered nothing still
             // tells the router a provider was unhealthy.
