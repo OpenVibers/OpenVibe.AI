@@ -70,6 +70,44 @@ function preferredModelFor(prefs, operation, req, ctx) {
     const choice = prefs && prefs.defaults ? prefs.defaults[kind] : null;
     return choice && choice !== 'auto' ? choice : null;
 }
+/**
+ * A Chat Completions conversation in the shape bot.command@1's ai command takes (contracts 0.277.0): roles system, user,
+ * assistant and tool; text only (a picture part is left out); an assistant's tool calls and a tool message's call id
+ * kept. At most 200 messages: the first two (the instructions and the task) and the newest, never starting the newest
+ * part on a tool result whose call was left out.
+ */
+const MACHINE_MAX_MESSAGES = 200;
+const TOOL_NAME_RE = /^[A-Za-z0-9_.-]{1,64}$/;
+function machineMessages(list) {
+    const text = (c) => (typeof c === 'string' ? c : Array.isArray(c) ? c.filter((p) => p && p.type === 'text').map((p) => String(p.text || '')).join('\n') : '').slice(0, 65536);
+    let out = (Array.isArray(list) ? list : []).filter((m) => m && typeof m === 'object').map((m) => {
+        const role = ['system', 'user', 'assistant', 'tool'].includes(m.role) ? m.role : m.role === 'developer' ? 'system' : 'user';
+        const one = { role, content: text(m.content) };
+        if (role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length) {
+            one.tool_calls = m.tool_calls.slice(0, 32).map((c, i) => {
+                const fn = (c && c.function) || {};
+                return { id: String((c && c.id) || `call_${i + 1}`).slice(0, 200), type: 'function', function: { name: String(fn.name || ''), arguments: typeof fn.arguments === 'string' ? fn.arguments.slice(0, 65536) : JSON.stringify(fn.arguments || {}) } };
+            });
+        }
+        if (role === 'tool') one.tool_call_id = String(m.tool_call_id || 'call_1').slice(0, 200);
+        return one;
+    });
+    if (out.length > MACHINE_MAX_MESSAGES) {
+        let tail = out.slice(-(MACHINE_MAX_MESSAGES - 2));
+        while (tail.length && tail[0].role === 'tool') tail = tail.slice(1);
+        out = [...out.slice(0, 2), ...tail];
+    }
+    return out;
+}
+/** The tools as the machine takes them: function tools with a plain name, at most 64; null when there are none. */
+function machineTools(tools) {
+    const out = (Array.isArray(tools) ? tools : [])
+        .filter((t) => t && t.type === 'function' && t.function && TOOL_NAME_RE.test(String(t.function.name || '')))
+        .slice(0, 64)
+        .map((t) => ({ type: 'function', function: { name: t.function.name, ...(typeof t.function.description === 'string' ? { description: t.function.description.slice(0, 4096) } : {}), ...(t.function.parameters && typeof t.function.parameters === 'object' ? { parameters: t.function.parameters } : {}) } }));
+    return out.length ? out : null;
+}
+
 /** Can one stored key serve this operation? (executeWithCredential's own rule, checked before it is called.) */
 function credentialCanServe(provider, operation, req) {
     if (!CREDENTIAL_PROVIDERS.includes(provider)) return false;
@@ -524,26 +562,36 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
     /**
      * A run on the person's own machine (credential provider node): one chat completion through OpenVibe.Bot to their
      * model server. Text only, no fallback, nothing spent; one request-log row under byo:<owner>:<subject>.
+     * The OpenAI-compatible endpoint (operation complete, plan L55 C3) passes its tools and the calls already made, so an
+     * agent's loop (Actor) runs on the person's own model; the machine's answer becomes the completion's one choice.
      */
     async function executeOnMachine(cred, operation, req, ctx = {}) {
-        if (!['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich'].includes(operation)) throw new AiError(422, 'credential.unsupported', `a person's own machine answers text only, not ${operation}`);
+        const completing = operation === 'complete';
+        if (!completing && !['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich'].includes(operation)) throw new AiError(422, 'credential.unsupported', `a person's own machine answers text only, not ${operation}`);
         if (req.image) throw new AiError(422, 'credential.unsupported', 'a person\'s own machine reads no pictures yet');
         const wanted = ctx.role || ((/^live\.(chat|vision|director|summary|legacy)$/.exec(ctx.routeKey || '') || [])[1]) || null;
         const model = (wanted && cred.models[wanted]) || cred.models.chat;
         if (!model) throw new AiError(422, 'credential.no_model', 'the person\'s own machine credential names no model (models.chat)');
         const sysText = [...(req.system || []).map((x) => x.text), req.json ? schemaInstruction(req.json) : ''].filter(Boolean).join('\n\n');
-        const messages = [
+        const o = completing ? (req.openai || {}) : null;
+        const messages = completing ? machineMessages(o.messages) : [
             ...(sysText ? [{ role: 'system', content: sysText }] : []),
             ...(req.messages || []).map((m) => ({ role: m.role === 'assistant' ? 'assistant' : m.role === 'system' ? 'system' : 'user', content: Array.isArray(m.content) ? m.content.filter((p) => p && p.type === 'text').map((p) => p.text).join('\n') : String(m.content || '') })),
         ];
+        const tools = completing ? machineTools(o.tools) : null;
         const base = { operation, provider_key: cred.providerKey, model_key: model, route_key: ctx.routeKey || null, route_version: ctx.routeVersion || null, fallback: 0, prompt_hash: ctx.promptHash || null };
         const t0 = Date.now();
         try {
-            const result = await machines.chat({ machine: cred.machine, subject: cred.subject, model, messages, maxTokens: req.maxTokens, temperature: req.temperature, signal: ctx.signal, timeoutMs: Math.max(5000, Math.min(req.timeoutMs || 120000, 300000)) });
+            const result = await machines.chat({ machine: cred.machine, subject: cred.subject, model, messages, maxTokens: req.maxTokens, temperature: req.temperature, signal: ctx.signal, timeoutMs: Math.max(5000, Math.min(req.timeoutMs || 120000, 300000)),
+                ...(tools ? { tools, toolChoice: o.tool_choice === 'none' ? 'none' : 'auto' } : {}) });
             const usage = result.usage;
             const latency = Date.now() - t0;
             if (ctx.logRequest) ctx.logRequest({ ...base, model_key: result.model, status: 'ok', output_hash: sha256(result.text || ''), tokens_in: usage.input, tokens_out: usage.output, tokens_cached: 0, tokens_estimated: 0, cost_usd: 0, latency_ms: latency });
-            return { result: { text: result.text, json: null, model: result.model, usage }, provider: cred.providerKey, providerKind: 'node', model: result.model, fallbackUsed: false, usage, cost: 0, latencyMs: latency, synthetic: false, tried: [], startedAt: t0,
+            const message = result.message || { role: 'assistant', content: result.text };
+            const out = completing
+                ? { completion: { choices: [{ index: 0, message, finish_reason: result.finish || (message.tool_calls ? 'tool_calls' : 'stop') }], system_fingerprint: null }, text: result.text, json: null, model: result.model, usage }
+                : { text: result.text, json: null, model: result.model, usage };
+            return { result: out, provider: cred.providerKey, providerKind: 'node', model: result.model, fallbackUsed: false, usage, cost: 0, latencyMs: latency, synthetic: false, tried: [], startedAt: t0,
                 explain: { objective: 'own-machine', reasons: [cred.machine === 'any' ? 'the fastest of the person\'s own machines that answered, by their choice' : 'the person\'s own machine, by their choice'],
                     paid_by: 'your machine',
                     selected: { provider: 'node', machine: result.machine || cred.machine, model: result.model },
@@ -955,4 +1003,4 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
     return { adapter, health, resetHealth, execute, executeWithCredential, offers, benchView, priceFor, costOf, rateCardsFor, providerStates, stats, statFor, candidates };
 }
 
-module.exports = { createProviderPool };
+module.exports = { createProviderPool, machineMessages, machineTools };
