@@ -654,6 +654,7 @@ mix vectors from different providers (re-embed when the provider changes).
 | The OpenAI Responses adapter (`kind: responses`) with a stubbed fetch: request shape, output and usage parsing, `text.format`, error mapping, the key never in an error | `test/provider-responses.test.js` |
 | Ported adapters against fake OpenAI/Anthropic servers, stub determinism, whisper filter, templates | `test/providers.test.js` |
 | Parakeet: engine by language, 30 s pieces past 45 s, fallback to whisper, `ASR_ENGINE=whisper` | `test/parakeet.test.js` |
+| Word timing (`live.media.transcribe` with `words: true`): whisper's `-ojf` tokens and Parakeet's token lines become each segment's words with their times; punctuation joins a word without moving its end; one unit per token in Japanese; fillers and control tokens are not words | `test/word-timing.test.js` |
 | `media.analyze` on a real 28 s fixture: signals, scenes and loud moments measured, highlights with evidence, the local model's overview from the facts only; the local model down → extractive and said; paid only with `allow_paid` and a `media.paid` budget, never past it; too little disk refused before downloading | `test/media-analysis.test.js` |
 | Import from a Live snapshot: dry run, holds, idempotent re-run | `test/import.test.js` |
 | Capability proposals are valid contracts documents matching what is enforced | `test/proposals.test.js` |
