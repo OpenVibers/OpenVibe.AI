@@ -45,6 +45,7 @@ function phrase(rnd, n) {
     return out.join(' ');
 }
 
+const PATTERN_SAMPLES = ['0:01', 'en', 'auto', '1024x1024'];
 /** A value shaped like `schema`, drawn from rnd. Strings are marked synthetic. */
 function synthesize(schema, rnd, depth = 0, name = 'value') {
     if (!schema || typeof schema !== 'object' || depth > 6) return null;
@@ -81,6 +82,10 @@ function synthesize(schema, rnd, depth = 0, name = 'value') {
         case 'boolean': return rnd() < 0.5;
         case 'null': return null;
         default: {
+            // A string with a pattern takes the first common shape that fits it (a clock time, a language code, a size).
+            if (typeof schema.pattern === 'string') {
+                try { const re = new RegExp(schema.pattern); const hit = PATTERN_SAMPLES.find((x) => re.test(x)); if (hit) return hit; } catch { /* not a pattern this engine reads */ }
+            }
             let s = `(synthetic) ${name.replace(/_/g, ' ')}: ${phrase(rnd, 4 + Math.floor(rnd() * 5))}`;
             if (Number.isInteger(schema.maxLength)) s = s.slice(0, Math.max(0, schema.maxLength));
             if (Number.isInteger(schema.minLength) && s.length < schema.minLength) s = s.padEnd(schema.minLength, '.');

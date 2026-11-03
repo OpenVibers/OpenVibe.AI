@@ -2,7 +2,8 @@
 // Live prompts moved to versioned templates (roadmap WS-O task 2); each renders as Live rendered it.
 //   live.moments.pick: the prepare hook formats the timeline, transcript and sounds as [m:ss] lines, names clip and
 //     chat signals, adds the flavor hint, and writes the "already used" line only when there is something to avoid;
-//     nothing to work from is no run; the postprocess refuses an answer without a time.
+//     nothing to work from is no run; the model answers with the moment's [m:ss] as written ("at"), since asked for
+//     seconds beside [m:ss] lines it wrote the minutes (11-03); the postprocess refuses an answer without a time.
 const assert = require('assert');
 const { suite } = require('./helpers');
 const { PREPARE, POSTPROCESS } = require('../server/workflows/hooks');
@@ -33,9 +34,11 @@ t.test('the prompt renders as Live rendered it', () => {
 t.test('only a clip is offered the way out (C09): a paste always names its frame', () => {
     const clip = render(tpl.user_prompt, PREPARE['live.moments.pick']({ title: 'x', flavor: 'clip', timeline: [{ t: 1, text: 'a' }] }).vars);
     const paste = render(tpl.user_prompt, PREPARE['live.moments.pick']({ title: 'x', flavor: 'paste', timeline: [{ t: 1, text: 'a' }] }).vars);
-    assert.match(clip, /If NOTHING here is clearly worth a clip[\s\S]*"t": null[\s\S]*Otherwise: Return STRICT JSON only/);
-    assert.ok(!/"t": null/.test(paste) && !/NOTHING here/.test(paste), 'no way out for a paste');
-    assert.match(paste, /Return STRICT JSON only, nothing else: \{"t": <seconds into the vod>/);
+    assert.match(clip, /If NOTHING here is clearly worth a clip[\s\S]*"at": null[\s\S]*Otherwise: Return STRICT JSON only/);
+    assert.ok(!/"at": null/.test(paste) && !/NOTHING here/.test(paste), 'no way out for a paste');
+    assert.match(paste, /Return STRICT JSON only, nothing else: \{"at": "<the m:ss timestamp of the moment, exactly as written in the lines above>"/);
+    assert.ok(!/seconds into the vod/i.test(tpl.user_prompt), 'never asked for seconds beside [m:ss] lines');
+    assert.deepStrictEqual(tpl.output_schema.required, ['at', 'title', 'desc'], 'the provider is held to the timestamp');
     assert.ok(!/\{\{|\$\{/.test(clip + paste), 'nothing left unrendered');
 });
 
@@ -48,6 +51,24 @@ t.test('the answer is read like Live read it', () => {
     assert.deepStrictEqual(post({ json: { abstain: true } }), { t: null, title: '', desc: '', abstain: true, why: '' });
     assert.strictEqual(post({ text: '{"t": "soon"}' }), null, 'a t that is neither a second nor null is still no answer');
     assert.strictEqual(post({ text: 'no json at all' }), null);
+});
+
+t.test('the moment comes back as the lines show it (11-03: "t": 2 for 2:14)', () => {
+    const post = POSTPROCESS['live.moments.pick'];
+    const input = { title: 'x', timeline: [{ t: 95, text: 'a' }, { t: 3600, text: 'b' }], transcript: [{ t: 3700, text: 'c' }] };
+    const at = (v) => { const r = post({ json: { at: v, title: 'T', desc: 'D' } }, input); return r && r.t; };
+    assert.strictEqual(at('1:35'), 95);
+    assert.strictEqual(at('[1:35]'), 95, 'copied with its brackets');
+    assert.strictEqual(at('60:05'), 3605, 'minutes past the hour, as the hook writes them');
+    assert.strictEqual(at('1:00:05'), 3605, 'or with hours');
+    assert.strictEqual(at('2:14.5'), 134);
+    assert.strictEqual(at('12'), null, 'a bare number could be minutes or seconds: no answer');
+    assert.strictEqual(at('1:75'), null);
+    assert.strictEqual(at('soon'), null);
+    assert.strictEqual(at('70:00'), null, 'past everything it was shown (plus two minutes): made up');
+    assert.strictEqual(at('63:40'), 3820, 'within two minutes of the last line');
+    assert.deepStrictEqual(post({ json: { at: null, title: '', desc: '', why: 'only  talk' } }, input), { t: null, title: '', desc: '', abstain: true, why: 'only talk' });
+    assert.deepStrictEqual(post({ text: '{"at": "1:35", "title": "\\"Up\\"", "desc": "He  jumps."}' }, input), { t: 95, title: 'Up', desc: 'He jumps.' });
 });
 
 t.test('slogans, the daily secret and the star render as Live rendered them', () => {

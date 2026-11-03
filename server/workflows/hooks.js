@@ -73,8 +73,14 @@ const MOMENT_FLAVOR = {
     paste: 'This moment becomes a SCREENSHOT paste: pick something visually striking in a single frame — a face or reaction, a visual gag, something odd on screen, a scene change. What was said matters less than what is SEEN.',
     clip: 'This moment becomes a 25-SECOND VIDEO CLIP: pick a beat that plays out over time — a line that lands, a reaction, a sound, chat exploding, something HAPPENING — not a static pretty frame.',
 };
-const ABSTAIN_CLIP = 'If NOTHING here is clearly worth a clip (only routine talk with no reaction, a static screen, nothing happening, or only moments already used), say so instead of forcing a pick: a missed clip costs less than a bad one. Then answer {"t": null, "title": "", "desc": "", "why": "<a few words>"}. Otherwise: ';
+const ABSTAIN_CLIP = 'If NOTHING here is clearly worth a clip (only routine talk with no reaction, a static screen, nothing happening, or only moments already used), say so instead of forcing a pick: a missed clip costs less than a bad one. Then answer {"at": null, "title": "", "desc": "", "why": "<a few words>"}. Otherwise: ';
 const oneLine = (t, max) => String(t || '').replace(/\s+/g, ' ').trim().slice(0, max);
+/** "12:34", "[1:02:03]" or "75:12" → seconds; anything else (a bare number, words) → NaN. */
+function clockSeconds(v) {
+    const m = /^\s*\[?\s*(?:(\d{1,2}):)?(\d{1,4}):(\d{2})(?:\.\d+)?\s*\]?\s*$/.exec(String(v == null ? '' : v));
+    if (!m || Number(m[3]) > 59 || (m[1] !== undefined && Number(m[2]) > 59)) return NaN;
+    return (Number(m[1] || 0) * 3600) + (Number(m[2]) * 60) + Number(m[3]);
+}
 // Text shown to the public as a description: one paragraph of prose. A model that answers with a list, headings or
 // bold labels ("- Streamer handle: x (@x).") has its markup and labels dropped, line by line, and headings left out,
 // before the lines are joined.
@@ -443,14 +449,22 @@ const POSTPROCESS = {
         if (!j || !j.username) return null;
         return { username: String(j.username).slice(0, 64), headline: String(j.headline || '').trim().slice(0, 60), reason: String(j.reason || '').trim().slice(0, 170) };
     },
-    'live.moments.pick'(r) {
+    'live.moments.pick'(r, input) {
         const j = r.json || parseJsonLoose(r.text);
-        // An explicit "nothing worth it" (t: null, or abstain: true) is an answer, not a failure (C09).
-        if (j && (j.abstain === true || (Object.prototype.hasOwnProperty.call(j, 't') && j.t === null))) {
+        const has = (k) => j && Object.prototype.hasOwnProperty.call(j, k);
+        // An explicit "nothing worth it" (at or t null, or abstain: true) is an answer, not a failure (C09).
+        if (j && (j.abstain === true || (has('at') && j.at === null) || (!has('at') && has('t') && j.t === null))) {
             return { t: null, title: '', desc: '', abstain: true, why: oneLine(j.why, 200) };
         }
-        const t = j && Number(j.t);
-        if (!j || !Number.isFinite(t) || t < 0) return null;
+        if (!j) return null;
+        // The moment comes back as the lines show it ("12:34", "1:02:03"); a bare number there could be minutes or
+        // seconds, so it is no answer. An older answer's t is seconds.
+        const t = has('at') ? clockSeconds(j.at) : Number(j.t);
+        if (!Number.isFinite(t) || t < 0) return null;
+        // Never after everything the model was shown: a time past the last line (plus two minutes) is made up.
+        const shown = ['timeline', 'transcript', 'sounds'].flatMap((k) => ((input && input[k]) || []).map((x) => Number(x && x.t)))
+            .concat(((input && input.clipped) || []).map(Number), ((input && input.spikes) || []).map(Number)).filter(Number.isFinite);
+        if (shown.length && t > Math.max(...shown) + 120) return null;
         return { t: Math.floor(t), title: oneLine(j.title, 80).replace(/^["']+|["']+$/g, ''), desc: oneLine(j.desc, 400) };
     },
     'ai.classify'(r, input) {
