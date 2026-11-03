@@ -74,6 +74,22 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
     // The product home's browser files (the OpenVibe Frame, openvibe-shared/serve) under content-addressed
     // /shared/* URLs from this repo's pinned openvibe-shared; each answer sets its own asset cache policy.
     app.use('/shared', ovServe.handler());
+    // Terms, Privacy and DMCA in this site's own words (openvibe-shared/legal, profile 'service'; 11-03: the footer's
+    // legal links answered 404 here). The facts must match the code: change both together.
+    const legal = require('openvibe-shared/legal');
+    app.get(legal.PATHS, legal.handler({
+        "host": "ai.openvibe.services",
+        "name": "AI.OpenVibe.Services",
+        "id": "ai",
+        "service": "ai",
+        "profile": "service",
+        "what": "One API for chat, generation, summaries, classification, extraction and embeddings across many models; every run says which model answered, why it was chosen and what it cost.",
+        "makes": [
+                "your runs: the model that answered, why it was chosen, its tokens and its cost",
+                "the API keys you make, and the provider keys you bring, which are stored encrypted"
+        ],
+        "ai": true
+    }));
     // Inline images arrive as data URLs; the per-run input cap is enforced again in runs.create.
     app.use(['/api', '/v1'], express.json({ limit: Math.ceil(config.runs.maxInputBytes * 1.5), type: ['application/json', 'application/*+json'] }));
 
