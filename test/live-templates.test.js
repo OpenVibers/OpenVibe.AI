@@ -30,6 +30,15 @@ t.test('the prompt renders as Live rendered it', () => {
     assert.deepStrictEqual(PREPARE['live.moments.pick']({ title: 'x' }), { output: null }, 'nothing to work from: no run');
 });
 
+t.test('only a clip is offered the way out (C09): a paste always names its frame', () => {
+    const clip = render(tpl.user_prompt, PREPARE['live.moments.pick']({ title: 'x', flavor: 'clip', timeline: [{ t: 1, text: 'a' }] }).vars);
+    const paste = render(tpl.user_prompt, PREPARE['live.moments.pick']({ title: 'x', flavor: 'paste', timeline: [{ t: 1, text: 'a' }] }).vars);
+    assert.match(clip, /If NOTHING here is clearly worth a clip[\s\S]*"t": null[\s\S]*Otherwise: Return STRICT JSON only/);
+    assert.ok(!/"t": null/.test(paste) && !/NOTHING here/.test(paste), 'no way out for a paste');
+    assert.match(paste, /Return STRICT JSON only, nothing else: \{"t": <seconds into the vod>/);
+    assert.ok(!/\{\{|\$\{/.test(clip + paste), 'nothing left unrendered');
+});
+
 t.test('the answer is read like Live read it', () => {
     const post = POSTPROCESS['live.moments.pick'];
     assert.deepStrictEqual(post({ text: 'Sure! {"t": 95.7, "title": "\\"It Compiles\\"", "desc": "He  jumps."}' }), { t: 95, title: 'It Compiles', desc: 'He jumps.' });
