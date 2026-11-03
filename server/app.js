@@ -170,16 +170,38 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
         try { homeStats = { at: clock.now(), rows: await statsRows() }; } catch (e) { log.warn(`[home] price and latency rows unavailable: ${e.message}`); }
         return homeStats.rows || [];
     }
+    // The public pages, one render each: the page and its Markdown twin (SEO-1) are the same render, and the same for
+    // everyone (nothing on them is per person).
+    const publicPages = {
+        '/': async () => home.renderHome({ siteUrl: config.baseUrl, stats: { days: STATS_DAYS, rows: await homeRows() } }),
+        '/stats': async () => {
+            const now = clock.now();
+            return home.renderStats({ siteUrl: config.baseUrl, days: STATS_DAYS, rows: await statsRows(),
+                from: new Date(now - STATS_DAYS * 86400000).toISOString().slice(0, 10), to: new Date(now).toISOString().slice(0, 10) });
+        },
+        '/updates': async () => home.renderUpdates({ siteUrl: config.baseUrl }),
+    };
+    const agentLayer = require('openvibe-shared/agent-layer');
+    // The Link: header that names a public page's twin, as its head does.
+    const twinLink = (p) => agentLayer.linkHeaderTags(`${config.baseUrl}${p}`, '/llms.txt').header;
+    {
+        // A twin request (`/stats.md`, `/index.md`, ?format=markdown, Accept: text/markdown) for a public page.
+        const twins = express.Router();
+        agentLayer.mount(twins, { descriptor: require('./agent-descriptor'), render: async (p) => (publicPages[p] ? { html: await publicPages[p](), title: null, updated: null } : null) });
+        app.use((req, res, next) => {
+            const p = String(req.path || '');
+            const page = p === '/index.md' ? '/' : p.replace(/\.md$/, '');
+            const asked = p.endsWith('.md') || req.query.format === 'markdown' || req.accepts(['html', 'text/markdown']) === 'text/markdown';
+            return asked && publicPages[page] && (req.method === 'GET' || req.method === 'HEAD') ? twins(req, res, next) : next();
+        });
+    }
     app.get('/stats', async (req, res, next) => {
         try {
-            const now = clock.now();
-            const rows = await statsRows();
+            const html = await publicPages['/stats']();
             res.setHeader('Cache-Control', cachePolicy.htmlHeaders());
             res.setHeader('Content-Security-Policy', home.HOME_CSP);
-            res.type('html').send(home.renderStats({ siteUrl: config.baseUrl,
-                days: STATS_DAYS, rows,
-                from: new Date(now - STATS_DAYS * 86400000).toISOString().slice(0, 10), to: new Date(now).toISOString().slice(0, 10),
-            }));
+            res.setHeader('Link', twinLink('/stats'));
+            res.type('html').send(html);
         } catch (e) { next(e); }
     });
 
@@ -215,17 +237,18 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
     // GET /updates: what shipped on this site (the shared update log).
     app.get('/updates', (req, res) => {
         res.type('html').set('Content-Security-Policy', home.HOME_CSP).set('Cache-Control', 'public, max-age=300')
-            .send(home.renderUpdates({ siteUrl: config.baseUrl }));
+            .set('Link', twinLink('/updates')).send(home.renderUpdates({ siteUrl: config.baseUrl }));
     });
 
     app.get('/', async (req, res) => {
         res.vary('Accept');
         if (req.accepts(['text/plain', 'text/html']) === 'text/html') {
-            const rows = await homeRows();
+            const html = await publicPages['/']();
             return res.type('html')
                 .set('Content-Security-Policy', home.HOME_CSP)
                 .set('Cache-Control', 'private, max-age=300')
-                .send(home.renderHome({ siteUrl: config.baseUrl, stats: { days: STATS_DAYS, rows } }));
+                .set('Link', twinLink('/'))
+                .send(html);
         }
         res.type('text/plain').send([
             'OpenVibe.AI: providers, models, routing, versioned prompt templates and workflows, runs, citations, scoped cache, quotas and audit.',
