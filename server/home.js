@@ -308,6 +308,7 @@ ${list.map((r) => `<tr><td data-label="Provider"><code>${esc(r.provider)}</code>
         siteName: SITE_NAME,
         description: `Price and latency of every AI model OpenVibe.AI called in the last ${days} days: p50 and p95 latency, success rate, price per million tokens and the free allowance.`,
         canonical: `${site}/stats`,
+        agentLayer: true, llms: '/llms.txt',   // the head names the Markdown twin (SEO-1)
         robots: 'index,follow',
         navbar: { service: 'ai', apiBase: NETWORK_URL, links: NAV_LINKS, history: { type: 'page', title: SITE_NAME } },
         footer: FOOTER, home: '/', navLinks: NAV_LINKS,
@@ -332,6 +333,7 @@ function renderUpdates({ siteUrl }) {
         siteName: SITE_NAME,
         description: `Every change deployed to ${SITE_NAME}, newest first.`,
         canonical: `${siteUrl}/updates`,
+        agentLayer: true, llms: '/llms.txt',
         robots: 'index, follow',
         navbar: { service: 'ai', apiBase: NETWORK_URL, links: NAV_LINKS, history: { type: 'page', title: SITE_NAME } },
         footer: FOOTER, home: '/', navLinks: NAV_LINKS,
@@ -356,6 +358,7 @@ function renderHome({ siteUrl, stats = null }) {
         description: DESCRIPTION,
         summary: SUMMARY,
         canonical: `${siteUrl}/`,
+        agentLayer: true, llms: '/llms.txt',
         robots: 'index, follow',
         jsonLd: [
             seo.jsonLd.website({ name: SITE_NAME, url: site, description: DESCRIPTION }),
