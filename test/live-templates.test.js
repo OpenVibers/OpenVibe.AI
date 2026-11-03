@@ -3,7 +3,8 @@
 //   live.moments.pick: the prepare hook formats the timeline, transcript and sounds as [m:ss] lines, names clip and
 //     chat signals, adds the flavor hint, and writes the "already used" line only when there is something to avoid;
 //     nothing to work from is no run; the model answers with the moment's [m:ss] as written ("at"), since asked for
-//     seconds beside [m:ss] lines it wrote the minutes (11-03); the postprocess refuses an answer without a time.
+//     seconds beside [m:ss] lines it wrote the minutes (11-03); the postprocess refuses an answer without a time;
+//     lines within two minutes of a used moment are not shown (11-03: told only to avoid 0:06, it picked 0:01).
 const assert = require('assert');
 const { suite } = require('./helpers');
 const { PREPARE, POSTPROCESS } = require('../server/workflows/hooks');
@@ -15,7 +16,7 @@ const tpl = (live.templates || []).find((x) => x.key === 'live.moments.pick');
 
 t.test('the prompt renders as Live rendered it', () => {
     assert.ok(tpl, 'the template exists');
-    const prep = PREPARE['live.moments.pick']({ title: 'Rust night', flavor: 'clip', timeline: [{ t: 95, text: 'streamer   jumps up' }], transcript: [{ t: 94, text: 'IT COMPILES' }], sounds: [{ t: 96, label: 'Cheering' }], clipped: [95, 3605], spikes: [96], avoid: [300, 60] });
+    const prep = PREPARE['live.moments.pick']({ title: 'Rust night', flavor: 'clip', timeline: [{ t: 95, text: 'streamer   jumps up' }], transcript: [{ t: 94, text: 'IT COMPILES' }], sounds: [{ t: 96, label: 'Cheering' }], clipped: [95, 3605], spikes: [96], avoid: [300, 600] });
     const out = render(tpl.user_prompt, prep.vars);
     assert.match(out, /titled "Rust night"/);
     assert.match(out, /TIMELINE:\n\[1:35\] streamer jumps up/);
@@ -23,12 +24,30 @@ t.test('the prompt renders as Live rendered it', () => {
     assert.match(out, /\[1:36\] Cheering/);
     assert.match(out, /CLIPPED these timestamps .*: 1:35, 60:05/);
     assert.match(out, /25-SECOND VIDEO CLIP/);
-    assert.match(out, /ALREADY USED .*: 1:00, 5:00\. Find a DIFFERENT moment\./);
+    assert.match(out, /ALREADY USED .*: 5:00, 10:00\. Find a DIFFERENT moment\./);
     const none = render(tpl.user_prompt, PREPARE['live.moments.pick']({ title: 'x', timeline: [{ t: 1, text: 'a' }] }).vars);
     assert.ok(!/ALREADY USED/.test(none), 'no avoid line without anything to avoid');
     assert.match(none, /SCREENSHOT paste/, 'paste is the default flavor');
     assert.match(none, /TRANSCRIPT:\n\(none\)/);
     assert.deepStrictEqual(PREPARE['live.moments.pick']({ title: 'x' }), { output: null }, 'nothing to work from: no run');
+});
+
+t.test('what is next to a used moment is not shown (11-03: it picked 0:01 beside a used 0:06)', () => {
+    const prep = PREPARE['live.moments.pick']({ title: 'x', flavor: 'paste',
+        timeline: [{ t: 1, text: 'stream starts' }, { t: 125, text: 'still setting up' }, { t: 126, text: 'a cat walks in' }, { t: 560, text: 'big crash' }],
+        transcript: [{ t: 4, text: 'hello' }, { t: 300, text: 'no way' }], sounds: [{ t: 7, label: 'Laughter' }, { t: 301, label: 'Gasp' }],
+        clipped: [10, 900], spikes: [20, 302], avoid: [6, 470] });
+    const out = render(tpl.user_prompt, prep.vars);
+    assert.ok(!/stream starts|still setting up|hello|Laughter/.test(out), 'nothing within two minutes of 0:06');
+    assert.ok(!/big crash/.test(out), 'nor of 7:50');
+    assert.match(out, /TIMELINE:\n\[2:06\] a cat walks in\n\nTRANSCRIPT/, 'exactly two minutes away is free');
+    assert.match(out, /TRANSCRIPT:\n\[5:00\] no way/);
+    assert.match(out, /\[5:01\] Gasp/);
+    assert.match(out, /CLIPPED these timestamps .*: 15:00\n/);
+    assert.match(out, /SPIKED around: 5:02\n/);
+    assert.match(out, /ALREADY USED .*: 0:06, 7:50\./, 'the used moments are still named');
+    const none = PREPARE['live.moments.pick']({ title: 'x', flavor: 'clip', timeline: [{ t: 30, text: 'a' }], transcript: [{ t: 500, text: 'b' }], avoid: [60, 520] });
+    assert.deepStrictEqual(none.output, { t: null, title: '', desc: '', abstain: true, why: 'every moment shown is within two minutes of one already used' }, 'nothing left to pick from: no run, an answer');
 });
 
 t.test('only a clip is offered the way out (C09): a paste always names its frame', () => {

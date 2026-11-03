@@ -73,6 +73,8 @@ const MOMENT_FLAVOR = {
     paste: 'This moment becomes a SCREENSHOT paste: pick something visually striking in a single frame — a face or reaction, a visual gag, something odd on screen, a scene change. What was said matters less than what is SEEN.',
     clip: 'This moment becomes a 25-SECOND VIDEO CLIP: pick a beat that plays out over time — a line that lands, a reaction, a sound, chat exploding, something HAPPENING — not a static pretty frame.',
 };
+// Live's moment registry keeps two moments of one VOD this far apart (server/ai/moment-registry.js GAP_SEC).
+const MOMENT_GAP_SEC = 120;
 const ABSTAIN_CLIP = 'If NOTHING here is clearly worth a clip (only routine talk with no reaction, a static screen, nothing happening, or only moments already used), say so instead of forcing a pick: a missed clip costs less than a bad one. Then answer {"at": null, "title": "", "desc": "", "why": "<a few words>"}. Otherwise: ';
 const oneLine = (t, max) => String(t || '').replace(/\s+/g, ' ').trim().slice(0, max);
 /** "12:34", "[1:02:03]" or "75:12" → seconds; anything else (a bare number, words) → NaN. */
@@ -199,14 +201,23 @@ const PREPARE = {
         const times = (list, n) => ((list || []).length ? list.slice(0, n).map((t) => mmss(Number(t) || 0)).join(', ') : 'none');
         const avoid = (input.avoid || []).map(Number).filter((t) => Number.isFinite(t)).sort((a, b) => a - b);
         if (!(input.timeline || []).length && !(input.transcript || []).length) return { output: null };
+        // What is within two minutes of a used moment is not shown at all. Told only to stay away, the model picked
+        // 0:01 beside a used 0:06, and 4 of the 11-03 10:44 run's 12 picks were thrown away for it.
+        const free = (t) => avoid.every((a) => Math.abs((Number(t) || 0) - a) >= MOMENT_GAP_SEC);
+        const open = (list) => (list || []).filter((x) => free(x && x.t));
+        const timeline = open(input.timeline);
+        const transcript = open(input.transcript);
+        if (!timeline.length && !transcript.length) {
+            return { output: { t: null, title: '', desc: '', abstain: true, why: 'every moment shown is within two minutes of one already used' } };
+        }
         return {
             vars: {
                 title: oneLine(input.title, 80),
-                timeline: lines(input.timeline, 180) || '(none)',
-                transcript: lines(input.transcript, 160) || '(none)',
-                sounds: lines(input.sounds, 80) || '(none)',
-                clipped: times(input.clipped, 12),
-                spikes: times(input.spikes, 6),
+                timeline: lines(timeline, 180) || '(none)',
+                transcript: lines(transcript, 160) || '(none)',
+                sounds: lines(open(input.sounds), 80) || '(none)',
+                clipped: times((input.clipped || []).filter(free), 12),
+                spikes: times((input.spikes || []).filter(free), 6),
                 flavor_hint: MOMENT_FLAVOR[input.flavor] || MOMENT_FLAVOR.paste,
                 // Only a clip may come back empty (C09): a paste needs one good frame, and offering it the same way out
                 // made the model decline all twelve VODs of the 11-03 run, leaving the home with no new pastes.
