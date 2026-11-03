@@ -73,6 +73,7 @@ const MOMENT_FLAVOR = {
     paste: 'This moment becomes a SCREENSHOT paste: pick something visually striking in a single frame — a face or reaction, a visual gag, something odd on screen, a scene change. What was said matters less than what is SEEN.',
     clip: 'This moment becomes a 25-SECOND VIDEO CLIP: pick a beat that plays out over time — a line that lands, a reaction, a sound, chat exploding, something HAPPENING — not a static pretty frame.',
 };
+const ABSTAIN_CLIP = 'If NOTHING here is clearly worth a clip (only routine talk with no reaction, a static screen, nothing happening, or only moments already used), say so instead of forcing a pick: a missed clip costs less than a bad one. Then answer {"t": null, "title": "", "desc": "", "why": "<a few words>"}. Otherwise: ';
 const oneLine = (t, max) => String(t || '').replace(/\s+/g, ' ').trim().slice(0, max);
 // Text shown to the public as a description: one paragraph of prose. A model that answers with a list, headings or
 // bold labels ("- Streamer handle: x (@x).") has its markup and labels dropped, line by line, and headings left out,
@@ -201,6 +202,9 @@ const PREPARE = {
                 clipped: times(input.clipped, 12),
                 spikes: times(input.spikes, 6),
                 flavor_hint: MOMENT_FLAVOR[input.flavor] || MOMENT_FLAVOR.paste,
+                // Only a clip may come back empty (C09): a paste needs one good frame, and offering it the same way out
+                // made the model decline all twelve VODs of the 11-03 run, leaving the home with no new pastes.
+                abstain_hint: input.flavor === 'clip' ? ABSTAIN_CLIP : '',
                 avoid: avoid.map(mmss).join(', '),
             },
         };
