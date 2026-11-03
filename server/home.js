@@ -409,18 +409,32 @@ function llmsFullTxt({ siteUrl }) {
     });
 }
 
+// llmstxt.org: the pages as links, each of this site's own at its Markdown twin (AGT-5, openvibe-shared 4.108.0's markdown
+// mode); the developer-app facts as plain lines; ## Optional last.
 function llmsTxt({ siteUrl }) {
+    const head = seo.llmsTxt({
+        name: SITE_NAME,
+        summary: DESCRIPTION,
+        markdown: true,
+        base: siteUrl,
+        sections: [
+            { title: 'Start here', links: [
+                { title: 'Home', url: `${siteUrl}/` },
+                { title: 'Prices and measured latency per provider and model', url: `${siteUrl}/stats` },
+                { title: 'Developer guide (tokens, limits, billing, sandbox)', url: GUIDE },
+                { title: 'API reference (OpenAPI, generated from the contracts)', url: API_DOCS_URL },
+                { title: 'Create a project and an app', url: PROJECTS_URL },
+            ] },
+        ],
+    });
+    const optional = seo.llmsTxt({ name: '', sections: [], optional: [
+        { title: 'What shipped on OpenVibe.AI', url: `${siteUrl}/updates` },
+        { title: 'Source (AGPL-3.0)', url: SOURCE },
+        { title: 'Sitemap', url: `${siteUrl}/sitemap.xml` },
+        { title: 'Full text for language models', url: `${siteUrl}/llms-full.txt` },
+    ], markdown: true, base: siteUrl }).split('\n## Optional\n')[1];
     return [
-        `# ${SITE_NAME}`,
-        '',
-        `> ${DESCRIPTION}`,
-        '',
-        `- Home: ${siteUrl}/`,
-        `- Prices and measured latency per provider and model: ${siteUrl}/stats`,
-        `- Developer guide (tokens, limits, billing, sandbox): ${GUIDE}`,
-        `- API reference (OpenAPI, generated from the contracts): ${API_DOCS_URL}`,
-        `- Create a project and an app: ${PROJECTS_URL}`,
-        `- Source (AGPL-3.0): ${SOURCE}`,
+        head.replace(/\n+$/, ''),
         '',
         '## Developer apps',
         '',
@@ -431,6 +445,7 @@ function llmsTxt({ siteUrl }) {
         '- Every run response carries explain: the objective, the model selected and every candidate with its estimated cost, latency and excluded reason.',
         '- Sandbox apps run on free and local capacity only; runs, usage and the free allowance are per project; a person\'s own provider key is never used for an app.',
         '',
+        `## Optional\n${optional}`,
     ].join('\n');
 }
 
