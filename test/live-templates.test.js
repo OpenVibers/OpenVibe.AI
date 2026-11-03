@@ -71,6 +71,28 @@ t.test('the moment comes back as the lines show it (11-03: "t": 2 for 2:14)', ()
     assert.deepStrictEqual(post({ text: '{"at": "1:35", "title": "\\"Up\\"", "desc": "He  jumps."}' }, input), { t: 95, title: 'Up', desc: 'He jumps.' });
 });
 
+t.test('the verifier (C09) reads the minute around the moment and only answers from its set', () => {
+    const vt = (live.templates || []).find((x) => x.key === 'live.moments.verify');
+    assert.ok(vt, 'the template exists');
+    const input = { title: 'Rust night', clip_title: 'It Compiles At Last', clip_desc: 'He jumps up cheering.', t: 95,
+        timeline: [{ t: 95, text: 'streamer   jumps up' }, { t: 400, text: 'far away' }], transcript: [{ t: 94, text: 'IT COMPILES' }], sounds: [{ t: 96, label: 'Cheering' }], chat: { peak: 22, avg: 3.2, people: 7 } };
+    const out = render(vt.user_prompt, PREPARE['live.moments.verify'](input).vars);
+    assert.match(out, /about the moment at \[1:35\]/);
+    assert.match(out, /PROPOSED TITLE: It Compiles At Last\nPROPOSED DESCRIPTION: He jumps up cheering\./);
+    assert.match(out, /SCENE NOTES:\n\[1:35\] streamer jumps up\n\nSPEECH/);
+    assert.ok(!/far away/.test(out), 'only the minute around the moment');
+    assert.match(out, /CHAT: 22 messages in the busiest 30 s \(the stream averages 3\) from 7 people/);
+    assert.ok(!/\{\{|\$\{/.test(out), 'nothing left unrendered');
+    assert.deepStrictEqual(PREPARE['live.moments.verify']({ clip_title: 'x', t: 10, timeline: [{ t: 500, text: 'later' }] }), { output: { verdict: 'unsure', unsupported: [], why: 'nothing recorded near the moment to check against' } }, 'nothing to check: unsure, no model');
+    const post = POSTPROCESS['live.moments.verify'];
+    assert.deepStrictEqual(post({ json: { verdict: 'supported', unsupported: [], why: 'he cheers' } }), { verdict: 'supported', unsupported: [], why: 'he cheers' });
+    assert.deepStrictEqual(post({ text: '{"verdict":"unsupported","unsupported":["a dragon  explodes"],"why":"no dragon"}' }), { verdict: 'unsupported', unsupported: ['a dragon explodes'], why: 'no dragon' });
+    assert.strictEqual(post({ json: { verdict: 'supported', unsupported: ['a cat'], why: '' } }).verdict, 'unsure', 'a yes with unbacked claims is not a yes');
+    assert.strictEqual(post({ json: { verdict: 'probably', unsupported: [] } }), null, 'a verdict outside the set is no answer');
+    assert.strictEqual(post({ text: 'Looks fine to me!' }), null);
+    assert.strictEqual(live.workflows.find((w) => w.key === 'live.moments.verify').cache_mode, 'none');
+});
+
 t.test('slogans, the daily secret and the star render as Live rendered them', () => {
     const tp = (k) => live.templates.find((x) => x.key === k);
     const sl = render(tp('live.hero.slogans').user_prompt, PREPARE['live.hero.slogans']({ users: [{ name: 'goosely', text: 'loves   croutons' }], usernames: ['goosely'], count: 20 }).vars);

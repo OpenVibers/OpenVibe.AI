@@ -215,6 +215,24 @@ const PREPARE = {
             },
         };
     },
+    // C09: the lines within a minute of the moment, as [m:ss]; nothing to check against is "unsure" with no model run.
+    'live.moments.verify'(input) {
+        const t = Number(input.t) || 0;
+        const near = (list, key) => (list || []).filter((x) => Math.abs((Number(x.t) || 0) - t) <= 60).map((x) => `[${mmss(Number(x.t) || 0)}] ${oneLine(x[key], 200)}`);
+        const timeline = near(input.timeline, 'text');
+        const transcript = near(input.transcript, 'text');
+        const sounds = near(input.sounds, 'label');
+        if (!timeline.length && !transcript.length && !sounds.length) return { output: { verdict: 'unsure', unsupported: [], why: 'nothing recorded near the moment to check against' } };
+        const c = input.chat || {};
+        const chat = Number(c.peak) > 0 ? `${Math.round(Number(c.peak))} messages in the busiest 30 s (the stream averages ${Math.round(Number(c.avg) || 0)})${Number(c.people) > 0 ? ` from ${Math.round(Number(c.people))} people` : ''}` : 'no chat reaction recorded';
+        return {
+            vars: {
+                title: oneLine(input.title, 120) || 'Untitled stream', at: mmss(t),
+                clip_title: oneLine(input.clip_title, 120), clip_desc: oneLine(input.clip_desc, 400) || '(none)',
+                timeline: timeline.join('\n') || '(none)', transcript: transcript.join('\n') || '(none)', sounds: sounds.join('\n') || '(none)', chat,
+            },
+        };
+    },
     'live.translate'(input) {
         const text = String(input.text || '').trim();
         const from = input.from || 'auto';
@@ -466,6 +484,14 @@ const POSTPROCESS = {
             .concat(((input && input.clipped) || []).map(Number), ((input && input.spikes) || []).map(Number)).filter(Number.isFinite);
         if (shown.length && t > Math.max(...shown) + 120) return null;
         return { t: Math.floor(t), title: oneLine(j.title, 80).replace(/^["']+|["']+$/g, ''), desc: oneLine(j.desc, 400) };
+    },
+    // C09: only a verdict from the set is an answer; "supported" with claims it calls unbacked is not a yes.
+    'live.moments.verify'(r) {
+        const j = r.json || parseJsonLoose(r.text);
+        if (!j || typeof j !== 'object' || !['supported', 'unsupported', 'unsure'].includes(j.verdict)) return null;
+        const unsupported = (Array.isArray(j.unsupported) ? j.unsupported : []).map((x) => oneLine(x, 200)).filter(Boolean).slice(0, 8);
+        const verdict = j.verdict === 'supported' && unsupported.length ? 'unsure' : j.verdict;
+        return { verdict, unsupported, why: oneLine(j.why, 200) };
     },
     'ai.classify'(r, input) {
         const j = r.json || parseJsonLoose(r.text);
