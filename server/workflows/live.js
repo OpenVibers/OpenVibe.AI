@@ -228,15 +228,17 @@ const templates = [
         description: 'From ai-moments-job.js _findBestMoment (moment_pick): the most interesting visible moment for a screenshot paste or a clip, away from moments already used.',
         input_schema: { type: 'object' },
         output_schema: {
-            type: 'object', additionalProperties: false, required: ['t', 'title', 'desc'], properties: {
-                t: { type: ['integer', 'null'], description: 'seconds into the VOD, or null when nothing is worth it' },
+            type: 'object', additionalProperties: false, required: ['at', 'title', 'desc'], properties: {
+                // The moment as the lines show it ("12:34"), not seconds: asked for seconds next to [m:ss] lines, the
+                // model wrote the minutes (t: 2 for 2:14) on nearly every VOD until 11-03. The hook turns it into t.
+                at: { type: ['string', 'null'], pattern: '^\\[?([0-9]{1,2}:)?[0-9]{1,4}:[0-9]{2}\\]?$', description: 'the [m:ss] timestamp of the moment, copied from the lines above (e.g. "12:34"), or null when nothing is worth it' },
                 title: { type: 'string', description: 'specific punchy 3-8 word title, not the stream name, funny, never generic' },
                 desc: { type: 'string', description: 'one vivid sentence describing the moment' },
-                why: { type: 'string', description: 'when t is null: why nothing is worth it, in a few words' },
+                why: { type: 'string', description: 'when at is null: why nothing is worth it, in a few words' },
             },
         },
         system_prompt: '',
-        user_prompt: 'Below is a single livestream VOD titled "{{title}}", described by its on-screen TIMELINE (visual scene notes) and its AUDIO TRANSCRIPT, each line timestamped [m:ss]. Titles and descriptions are about what happens.\n\nTIMELINE:\n{{timeline}}\n\nTRANSCRIPT:\n{{transcript}}\n\nSOUNDS HEARD (non-speech audio events):\n{{sounds}}\n\nViewers CLIPPED these timestamps (very strong "this was a highlight" signal): {{clipped}}\nChat activity SPIKED around: {{spikes}}\n\n{{flavor_hint}}\n{{#avoid}}ALREADY USED (a paste or clip exists there) — do NOT pick these or anything within 2 minutes of them: {{avoid}}. Find a DIFFERENT moment.{{/avoid}}\n\nFind the SINGLE most interesting/funny/dramatic/surprising/striking moment in this VOD with something clearly VISIBLE happening. Prefer moments backed by the clip/chat signals when they line up with something notable. NEVER pick a black/dark/loading/blank screen, an intro/BRB card, or a moment with no visible content or activity. {{abstain_hint}}Return STRICT JSON only, nothing else: {"t": <seconds into the vod>, "title": "<specific punchy 3-8 word title, not the stream name, funny, never generic>", "desc": "<one vivid sentence describing the moment>"}',
+        user_prompt: 'Below is a single livestream VOD titled "{{title}}", described by its on-screen TIMELINE (visual scene notes) and its AUDIO TRANSCRIPT, each line timestamped [m:ss]. Titles and descriptions are about what happens.\n\nTIMELINE:\n{{timeline}}\n\nTRANSCRIPT:\n{{transcript}}\n\nSOUNDS HEARD (non-speech audio events):\n{{sounds}}\n\nViewers CLIPPED these timestamps (very strong "this was a highlight" signal): {{clipped}}\nChat activity SPIKED around: {{spikes}}\n\n{{flavor_hint}}\n{{#avoid}}ALREADY USED (a paste or clip exists there) — do NOT pick these or anything within 2 minutes of them: {{avoid}}. Find a DIFFERENT moment.{{/avoid}}\n\nFind the SINGLE most interesting/funny/dramatic/surprising/striking moment in this VOD with something clearly VISIBLE happening. Prefer moments backed by the clip/chat signals when they line up with something notable. NEVER pick a black/dark/loading/blank screen, an intro/BRB card, or a moment with no visible content or activity. {{abstain_hint}}Return STRICT JSON only, nothing else: {"at": "<the m:ss timestamp of the moment, exactly as written in the lines above>", "title": "<specific punchy 3-8 word title, not the stream name, funny, never generic>", "desc": "<one vivid sentence describing the moment>"}',
         default_route: 'live.legacy', owner: 'live', metadata: { json_name: 'moment_pick' },
     },
     {
