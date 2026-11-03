@@ -83,6 +83,7 @@ t.test('the verifier (C09) reads the minute around the moment and only answers f
     assert.ok(!/far away/.test(out), 'only the minute around the moment');
     assert.match(out, /CHAT: 22 messages in the busiest 30 s \(the stream averages 3\) from 7 people/);
     assert.ok(!/\{\{|\$\{/.test(out), 'nothing left unrendered');
+    assert.match(out, /a claim missing from the lines is unsupported, not unsure\. Answer "unsure" only when there are too few lines to judge at all/, 'a missing event is unsupported (11-03: a dragon fight came back unsure)');
     assert.deepStrictEqual(PREPARE['live.moments.verify']({ clip_title: 'x', t: 10, timeline: [{ t: 500, text: 'later' }] }), { output: { verdict: 'unsure', unsupported: [], why: 'nothing recorded near the moment to check against' } }, 'nothing to check: unsure, no model');
     const post = POSTPROCESS['live.moments.verify'];
     assert.deepStrictEqual(post({ json: { verdict: 'supported', unsupported: [], why: 'he cheers' } }), { verdict: 'supported', unsupported: [], why: 'he cheers' });
