@@ -242,6 +242,21 @@ const templates = [
         default_route: 'live.legacy', owner: 'live', metadata: { json_name: 'moment_pick' },
     },
     {
+        key: 'live.moments.verify', name: 'Live: is a clip\'s title and description backed by what happened',
+        description: 'Item 151, C09: before an AI clip is made public, its title and description are checked against the lines around the moment (scene notes, speech, sounds, chat). Unbacked claims keep it from being public.',
+        input_schema: { type: 'object' },
+        output_schema: {
+            type: 'object', additionalProperties: false, required: ['verdict', 'unsupported', 'why'], properties: {
+                verdict: { type: 'string', enum: ['supported', 'unsupported', 'unsure'], description: 'supported: the lines back every claim; unsupported: a claim the lines contradict or never mention; unsure: too little to tell' },
+                unsupported: { type: 'array', items: { type: 'string' }, description: 'each claim of the title or description that the lines do not back (empty when supported)' },
+                why: { type: 'string', description: 'a few words' },
+            },
+        },
+        system_prompt: '',
+        user_prompt: 'A clip is about to be published from the livestream "{{title}}". It is about the moment at [{{at}}].\n\nPROPOSED TITLE: {{clip_title}}\nPROPOSED DESCRIPTION: {{clip_desc}}\n\nEverything known about the minute around it, each line timestamped [m:ss]:\nSCENE NOTES:\n{{timeline}}\n\nSPEECH:\n{{transcript}}\n\nSOUNDS:\n{{sounds}}\n\nCHAT: {{chat}}\n\nCheck the title and the description against these lines only. Answer "supported" when everything they say happens in the lines; "unsupported" when they claim something the lines contradict or never mention (an event, an object, a reaction, a person); "unsure" when the lines are too thin to tell. A funny or punchy wording is fine; an invented event is not. Never guess. Return STRICT JSON only: {"verdict": "supported" | "unsupported" | "unsure", "unsupported": ["<each claim the lines do not back>"], "why": "<a few words>"}',
+        default_route: 'live.legacy', owner: 'live', metadata: { json_name: 'moment_verify' },
+    },
+    {
         key: 'live.stream.recap', name: 'Live: after-show report',
         description: 'From recap/recap.js aiWriteup (stream_recap).',
         input_schema: { type: 'object' },
@@ -491,6 +506,20 @@ const structured = [
         cache_mode: 'none',
     },
     {
+        key: 'live.moments.verify', name: 'Check a clip\'s title and description against the moment', namespace: 'live',
+        description: 'Item 151, C09: a candidate clip (its second, title and description) and the lines around it in; supported, unsupported (with the claims) or unsure out. Live makes a clip public only on supported; a failed check is not a yes.',
+        input_schema: TEXT_OUT({
+            title: STR(200), clip_title: STR(200), clip_desc: STR(800), t: { type: 'number', minimum: 0 },
+            timeline: { type: 'array', maxItems: 60, items: { type: 'object', required: ['t', 'text'], additionalProperties: false, properties: { t: { type: 'number', minimum: 0 }, text: STR(2000) } } },
+            transcript: { type: 'array', maxItems: 120, items: { type: 'object', required: ['t', 'text'], additionalProperties: false, properties: { t: { type: 'number', minimum: 0 }, text: STR(2000) } } },
+            sounds: { type: 'array', maxItems: 60, items: { type: 'object', required: ['t', 'label'], additionalProperties: false, properties: { t: { type: 'number', minimum: 0 }, label: STR(120) } } },
+            chat: { type: 'object', additionalProperties: false, properties: { peak: { type: 'number', minimum: 0 }, avg: { type: 'number', minimum: 0 }, people: { type: 'number', minimum: 0 } } },
+        }, ['clip_title', 't']),
+        output_schema: TEXT_OUT({ verdict: { enum: ['supported', 'unsupported', 'unsure'] }, unsupported: { type: 'array', maxItems: 8, items: STR(200) }, why: STR(200) }, ['verdict', 'unsupported', 'why']),
+        steps: [{ kind: 'llm', template: 'live.moments.verify', operation: 'generate', output: 'json', prepare: 'live.moments.verify', postprocess: 'live.moments.verify', params: { max_tokens: 220 } }],
+        cache_mode: 'none',
+    },
+    {
         key: 'live.stream.recap', name: 'After-show report for a finished stream', namespace: 'live',
         input_schema: TEXT_OUT({ facts: { type: 'object' }, sources: SOURCES(0, 50) }, ['facts']),
         output_schema: TEXT_OUT({ headline: STR(90), summary: STR(500), moment: STR(200), tags: { type: 'array', items: STR(200), maxItems: 4 }, grade: { enum: ['S', 'A', 'B', 'C'] } }, ['headline', 'summary', 'moment', 'tags', 'grade']),
@@ -560,7 +589,7 @@ const passthrough = PASSTHROUGH.map(([key, name, description]) => ({
 const KIND_TO_WORKFLOW = {
     ai_viewers_director: 'live.viewers.plan', ai_viewers_reply: 'live.viewers.reply', ai_viewers: 'live.viewers.line', ai_viewers_fold: 'live.viewers.fold',
     chat_global: 'live.chat.insight', chat_user: 'live.chat.insight', chat_relay: 'live.chat.insight', chat_anon: 'live.chat.insight', combined_overview: 'live.chat.insight', session_titles: 'live.chat.insight',
-    moment_vod_rank: 'live.moments.rank', moment_pick: 'live.moments.pick', auto_clip_confirm: 'live.clips.confirm', hero_slogans: 'live.hero.slogans', easter_egg: 'live.easter_egg', home_star: 'live.home.star',
+    moment_vod_rank: 'live.moments.rank', moment_pick: 'live.moments.pick', moment_verify: 'live.moments.verify', auto_clip_confirm: 'live.clips.confirm', hero_slogans: 'live.hero.slogans', easter_egg: 'live.easter_egg', home_star: 'live.home.star',
     status_check: 'live.status_check',
 };
 

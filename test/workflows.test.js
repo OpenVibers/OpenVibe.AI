@@ -83,6 +83,7 @@ EXAMPLES['live.easter_egg'] = { vibe: 'croutons' };
 EXAMPLES['space.app.build'] = { prompt: 'A guestbook where people sign in and leave a one-line note', name: 'Guestbook', current: [{ path: 'index.html', content: '<!doctype html><title>Guestbook</title><script src="/_openvibe/sdk.js"></script>' }] };
 EXAMPLES['space.app.ask'] = { space: 'Pirate helper', instructions: 'Talk like a pirate.', transcript: 'visitor: hi\nai: Ahoy!', message: 'What is a good name for a parrot?' };
 EXAMPLES['live.home.star'] = { recent_stars: ['bob'], previous_star: 'bob', candidates: [{ username: 'ann', name: 'Ann', language: 'en', last_14d: { sessions: 5, hours: 12 } }] };
+EXAMPLES['live.moments.verify'] = { title: 'Rust night', clip_title: 'It Compiles At Last', clip_desc: 'The streamer jumps up cheering when the build passes.', t: 95, timeline: [{ t: 95, text: 'streamer jumps up cheering' }], transcript: [{ t: 94, text: 'IT COMPILES' }], sounds: [{ t: 96, label: 'Cheering' }], chat: { peak: 22, avg: 3, people: 7 } };
 EXAMPLES['live.moments.pick'] = { title: 'Rust night', flavor: 'clip', timeline: [{ t: 12, text: 'the build fails' }, { t: 95, text: 'streamer jumps up cheering' }], transcript: [{ t: 94, text: 'IT COMPILES' }], sounds: [{ t: 96, label: 'Cheering' }], clipped: [95], spikes: [96], avoid: [300] };
 
 const t = suite('workflows');
