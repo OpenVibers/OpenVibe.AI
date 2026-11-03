@@ -49,6 +49,7 @@ function isNoise(t, hasVad) {
     return false;
 }
 
+const r2 = (v) => Math.round(v * 100) / 100;
 function cleanSegments(segsRaw, hasVad) {
     const out = [];
     let last = '';
@@ -58,9 +59,44 @@ function cleanSegments(segsRaw, hasVad) {
         const norm = text.toLowerCase();
         if (norm === last) continue;
         last = norm;
-        out.push({ start: Math.round(seg.start * 100) / 100, end: Math.round(seg.end * 100) / 100, text });
+        const row = { start: r2(seg.start), end: r2(seg.end), text };
+        // Word timing, when it was asked for (item 151, C12): it goes with its segment, or not at all.
+        if (Array.isArray(seg.words)) row.words = seg.words.map((wd) => ({ start: r2(wd.start), end: r2(wd.end), text: wd.text }));
+        out.push(row);
     }
     return out;
+}
+
+// ── Word timing (item 151, C12) ──
+// Clips start and end on words, and a moment's words can be found again, only if the times of the words survive: the
+// segments alone say when a whole sentence was spoken. whisper.cpp's -ojf names every token with its offsets (ms):
+// a token that starts with a space starts a word (" comp" + "iles"), punctuation joins the word before it without
+// moving its end, and control tokens ([_BEG_], [_TT_315], <|…|>) are not speech. A language written without spaces
+// (Japanese, Chinese) has no word breaks to read, so each of its tokens is a unit of its own.
+const FILLER_WORD = /^(?:uh+|um+|uhm|erm|mm+)[,.!?]*$/i;
+const SPACELESS = /[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff\uac00-\ud7af]/;
+const PUNCT = /^[\p{P}\p{S}\s]+$/u;
+function wordsFromTokens(tokens, offsetSec = 0) {
+    const out = [];
+    let cur = null;
+    for (const tk of Array.isArray(tokens) ? tokens : []) {
+        const raw = String((tk && tk.text) || '');
+        if (!raw.trim() || /^\[_.*\]$/.test(raw.trim()) || /^<\|.*\|>$/.test(raw.trim())) continue;
+        const o = (tk && tk.offsets) || {};
+        const from = Number(o.from), to = Number(o.to);
+        if (!Number.isFinite(from) || !Number.isFinite(to) || to < from) continue;
+        if (PUNCT.test(raw)) { if (cur) cur.text += raw.trim(); continue; }
+        const starts = !cur || /^\s/.test(raw) || SPACELESS.test(raw) || SPACELESS.test(cur.text);
+        if (starts) {
+            if (cur) out.push(cur);
+            cur = { start: offsetSec + from / 1000, end: offsetSec + to / 1000, text: raw.trim() };
+        } else {
+            cur.text += raw;
+            cur.end = Math.max(cur.end, offsetSec + to / 1000);
+        }
+    }
+    if (cur) out.push(cur);
+    return out.filter((wd) => wd.text && !FILLER_WORD.test(wd.text));
 }
 
 // ── Parakeet output → timed sentences (Live's parseParakeet) ──
@@ -69,13 +105,21 @@ function cleanSegments(segsRaw, hasVad) {
 const PARAKEET_LANGS = new Set(['bg', 'hr', 'cs', 'da', 'nl', 'en', 'et', 'fi', 'fr', 'de', 'el', 'hu', 'it', 'lv', 'lt', 'mt', 'pl', 'pt', 'ro', 'sk', 'sl', 'es', 'sv', 'ru', 'uk']);
 const TOKEN_LINE = /t0=\s*(-?\d+)\s+t1=\s*(-?\d+)\s+word_start=(true|false)\s+"(.*)"\s*$/;
 const FILLER_RE = /(^|[\s,])(?:uh+|um+|uhm|erm|mm+)(?=[\s,.!?]|$)[,]?/gi;
-function parseParakeet(stderr, offsetSec = 0) {
+function parseParakeet(stderr, offsetSec = 0, { words = false } = {}) {
     const out = [];
     let cur = null;
+    let word = null;
+    const closeWord = () => {
+        if (!word || !cur) { word = null; return; }
+        const text = word.text.trim();
+        if (text && !FILLER_WORD.test(text)) cur.words.push({ start: offsetSec + word.t0 / 100, end: offsetSec + word.t1 / 100, text });
+        word = null;
+    };
     const close = () => {
         if (!cur) return;
+        closeWord();
         const text = cur.text.replace(FILLER_RE, '$1').replace(/\s+([,.!?])/g, '$1').replace(/\s+/g, ' ').replace(/^[,\s]+/, '').trim();
-        if (text) out.push({ start: offsetSec + cur.t0 / 100, end: offsetSec + cur.t1 / 100, text });
+        if (text) out.push({ start: offsetSec + cur.t0 / 100, end: offsetSec + cur.t1 / 100, text, ...(words ? { words: cur.words } : {}) });
         cur = null;
     };
     for (const line of String(stderr || '').split('\n')) {
@@ -87,9 +131,13 @@ function parseParakeet(stderr, offsetSec = 0) {
         if (/^<.*>$/.test(raw)) continue;                      // <unk>, <|…|> control tokens
         const piece = raw.replace(/\u2581/g, ' ');
         if (cur && wordStart && (t0 - cur.t1 > 150 || t0 - cur.t0 > 2000)) close();
-        if (!cur) cur = { t0, t1, text: '' };
+        if (!cur) cur = { t0, t1, text: '', words: [] };
         cur.text += wordStart && !piece.startsWith(' ') ? ` ${piece}` : piece;
         cur.t1 = Math.max(cur.t1, t1);
+        // A word is the tokens from one word_start to the next; punctuation joins it without moving its end.
+        if (wordStart || !word) { closeWord(); word = { t0, t1, text: piece.trim() }; }
+        else if (PUNCT.test(piece)) word.text += piece.trim();
+        else { word.text += piece; word.t1 = Math.max(word.t1, t1); }
         if (/[.!?]["')\]]?$/.test(piece.trim())) close();
     }
     close();
@@ -162,7 +210,7 @@ function createWhisperProvider(record, { config }) {
         });
     }
 
-    function decode(wavPath, { language = 'en', live = false, lowPower = false, offsetSec = 0, signal, timeoutMs }) {
+    function decode(wavPath, { language = 'en', live = false, lowPower = false, offsetSec = 0, words = false, signal, timeoutMs }) {
         return new Promise((resolve, reject) => {
             const lang = language && language !== 'en' && multi() ? String(language) : 'en';
             const model = lang !== 'en' ? multi() : (live && exists(MODEL_LIVE) ? MODEL_LIVE : MODEL);
@@ -170,7 +218,8 @@ function createWhisperProvider(record, { config }) {
             const threads = live || lowPower ? Math.max(1, Math.min(2, w.threads)) : w.threads;
             const outBase = `${wavPath}.out`;
             const jsonPath = `${outBase}.json`;
-            const args = ['-m', model, '-f', wavPath, '-oj', '-of', outBase, '-t', String(threads), '-l', lang];
+            // -ojf adds every token with its offsets (word timing, C12); only when asked, since it is a far larger file.
+            const args = ['-m', model, '-f', wavPath, words ? '-ojf' : '-oj', '-of', outBase, '-t', String(threads), '-l', lang];
             if (w.beam > 1) args.push('-bs', String(w.beam));
             const vm = vadModel();
             if (vm) args.push('--vad', '-vm', vm);
@@ -190,6 +239,7 @@ function createWhisperProvider(record, { config }) {
                     start: offsetSec + ((it.offsets && it.offsets.from) || 0) / 1000,
                     end: offsetSec + ((it.offsets && it.offsets.to) || 0) / 1000,
                     text: it.text || '',
+                    ...(words ? { words: wordsFromTokens(it.tokens, offsetSec) } : {}),
                 })), Boolean(vm));
                 // With -l auto, whisper.cpp names the language it detected in result.language.
                 const detected = parsed && parsed.result && /^[a-z]{2,3}$/.test(String(parsed.result.language || '')) ? parsed.result.language : null;
@@ -200,7 +250,7 @@ function createWhisperProvider(record, { config }) {
     }
 
     // One parakeet-cli run on a short WAV: the tokens on stderr become timed sentences.
-    function parakeetOnce(wavPath, { threads, offsetSec, signal, deadline }) {
+    function parakeetOnce(wavPath, { threads, offsetSec, words = false, signal, deadline }) {
         return new Promise((resolve, reject) => {
             let ch;
             try { ch = spawnTracked('nice', ['-n', '15', parakeetBin(), '-t', String(threads), '-ps', '-np', '-m', w.parakeetModel, '-f', wavPath], { stderr: true }); }
@@ -214,13 +264,13 @@ function createWhisperProvider(record, { config }) {
                 clearTimeout(timer);
                 if (signal && signal.aborted) return reject(new ProviderError('cancelled', { code: 'provider.cancelled' }));
                 if (code !== 0) return reject(new ProviderError(`parakeet exited ${code}`, { code: 'provider.error' }));
-                resolve(parseParakeet(Buffer.concat(chunks).toString('utf8'), offsetSec));
+                resolve(parseParakeet(Buffer.concat(chunks).toString('utf8'), offsetSec, { words }));
             });
             ch.on('error', (e) => { clearTimeout(timer); reject(new ProviderError(e.message, { code: 'provider.unavailable' })); });
         });
     }
     // Parakeet on a whole WAV: in 30 s pieces past 45 s (PCM cut exactly, so a piece's times shift only by its start).
-    async function decodeParakeet(wavPath, { language = 'en', live = false, lowPower = false, offsetSec = 0, signal, timeoutMs }) {
+    async function decodeParakeet(wavPath, { language = 'en', live = false, lowPower = false, offsetSec = 0, words = false, signal, timeoutMs }) {
         const threads = live || lowPower ? Math.max(1, Math.min(2, w.threads)) : w.threads;
         const deadline = Date.now() + timeoutMs;
         let pieces = [wavPath], dir = null;
@@ -237,7 +287,7 @@ function createWhisperProvider(record, { config }) {
             const raw = [];
             for (let i = 0; i < pieces.length; i++) {
                 if (Date.now() >= deadline) throw new ProviderError('parakeet timed out', { code: 'provider.error' });
-                raw.push(...await parakeetOnce(pieces[i], { threads, offsetSec: offsetSec + i * CHUNK_SEC, signal, deadline }));
+                raw.push(...await parakeetOnce(pieces[i], { threads, offsetSec: offsetSec + i * CHUNK_SEC, words, signal, deadline }));
             }
             const segments = cleanSegments(raw, true);
             return { text: segments.map(s => s.text).join(' ').replace(/\s+/g, ' ').trim(), segments, language: String(language || 'en'), model: path.basename(w.parakeetModel) };
@@ -254,7 +304,7 @@ function createWhisperProvider(record, { config }) {
         try {
             await acquire(lane);
             try {
-                const opts = { language: req.language, live: req.live, lowPower: req.lowPower === true, offsetSec: req.offsetSec || 0, signal: req.signal, timeoutMs };
+                const opts = { language: req.language, live: req.live, lowPower: req.lowPower === true, offsetSec: req.offsetSec || 0, words: req.words === true, signal: req.signal, timeoutMs };
                 let r = null;
                 if (engineFor(req.language) === 'parakeet') {
                     try { r = await decodeParakeet(wav, opts); }
@@ -280,4 +330,4 @@ function createWhisperProvider(record, { config }) {
     };
 }
 
-module.exports = { createWhisperProvider, cleanSegments, isNoise, parseParakeet };
+module.exports = { createWhisperProvider, cleanSegments, isNoise, parseParakeet, wordsFromTokens };

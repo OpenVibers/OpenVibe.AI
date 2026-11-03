@@ -135,7 +135,12 @@ function createStubProvider(record = { key: 'stub', metadata: {} }, { stats = nu
         if (op === 'transcribe') {
             const n = 2 + Math.floor(rnd() * 3);
             const at = Number(req.offsetSec) || 0;   // a window of a longer recording keeps the recording's times
-            const segments = Array.from({ length: n }, (_, i) => ({ start: at + i * 4, end: at + i * 4 + 3.5, text: `(synthetic) ${phrase(rnd, 5)}` }));
+            const segments = Array.from({ length: n }, (_, i) => {
+                const seg = { start: at + i * 4, end: at + i * 4 + 3.5, text: `(synthetic) ${phrase(rnd, 5)}` };
+                // words: true → each word with an even share of its segment's time (the shape whisper gives).
+                if (req.words === true) { const ws = seg.text.split(/\s+/); seg.words = ws.map((text, k) => ({ start: Math.round((seg.start + (3.5 * k) / ws.length) * 100) / 100, end: Math.round((seg.start + (3.5 * (k + 1)) / ws.length) * 100) / 100, text })); }
+                return seg;
+            });
             return { text: segments.map(s => s.text).join(' '), segments, model, synthetic: true, usage: { input: 0, output: 0, cached: 0, estimated: true } };
         }
         let json = null;
