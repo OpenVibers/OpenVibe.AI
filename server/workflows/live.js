@@ -229,13 +229,14 @@ const templates = [
         input_schema: { type: 'object' },
         output_schema: {
             type: 'object', additionalProperties: false, required: ['t', 'title', 'desc'], properties: {
-                t: { type: 'integer', description: 'seconds into the VOD' },
+                t: { type: ['integer', 'null'], description: 'seconds into the VOD, or null when nothing is worth it' },
                 title: { type: 'string', description: 'specific punchy 3-8 word title, not the stream name, funny, never generic' },
                 desc: { type: 'string', description: 'one vivid sentence describing the moment' },
+                why: { type: 'string', description: 'when t is null: why nothing is worth it, in a few words' },
             },
         },
         system_prompt: '',
-        user_prompt: 'Below is a single livestream VOD titled "{{title}}", described by its on-screen TIMELINE (visual scene notes) and its AUDIO TRANSCRIPT, each line timestamped [m:ss]. Titles and descriptions are about what happens.\n\nTIMELINE:\n{{timeline}}\n\nTRANSCRIPT:\n{{transcript}}\n\nSOUNDS HEARD (non-speech audio events):\n{{sounds}}\n\nViewers CLIPPED these timestamps (very strong "this was a highlight" signal): {{clipped}}\nChat activity SPIKED around: {{spikes}}\n\n{{flavor_hint}}\n{{#avoid}}ALREADY USED (a paste or clip exists there) — do NOT pick these or anything within 2 minutes of them: {{avoid}}. Find a DIFFERENT moment.{{/avoid}}\n\nFind the SINGLE most interesting/funny/dramatic/surprising/striking moment in this VOD with something clearly VISIBLE happening. Prefer moments backed by the clip/chat signals when they line up with something notable. NEVER pick a black/dark/loading/blank screen, an intro/BRB card, or a moment with no visible content or activity. Return STRICT JSON only, nothing else: {"t": <seconds into the vod>, "title": "<specific punchy 3-8 word title, not the stream name, funny, never generic>", "desc": "<one vivid sentence describing the moment>"}',
+        user_prompt: 'Below is a single livestream VOD titled "{{title}}", described by its on-screen TIMELINE (visual scene notes) and its AUDIO TRANSCRIPT, each line timestamped [m:ss]. Titles and descriptions are about what happens.\n\nTIMELINE:\n{{timeline}}\n\nTRANSCRIPT:\n{{transcript}}\n\nSOUNDS HEARD (non-speech audio events):\n{{sounds}}\n\nViewers CLIPPED these timestamps (very strong "this was a highlight" signal): {{clipped}}\nChat activity SPIKED around: {{spikes}}\n\n{{flavor_hint}}\n{{#avoid}}ALREADY USED (a paste or clip exists there) — do NOT pick these or anything within 2 minutes of them: {{avoid}}. Find a DIFFERENT moment.{{/avoid}}\n\nFind the SINGLE most interesting/funny/dramatic/surprising/striking moment in this VOD with something clearly VISIBLE happening. Prefer moments backed by the clip/chat signals when they line up with something notable. NEVER pick a black/dark/loading/blank screen, an intro/BRB card, or a moment with no visible content or activity. If NOTHING here is clearly worth it — only routine talk with no reaction, a static screen, nothing happening, or only moments already used — say so instead of forcing a pick: a missed moment costs less than a bad one. Then answer {"t": null, "title": "", "desc": "", "why": "<a few words>"}. Otherwise return STRICT JSON only, nothing else: {"t": <seconds into the vod>, "title": "<specific punchy 3-8 word title, not the stream name, funny, never generic>", "desc": "<one vivid sentence describing the moment>"}',
         default_route: 'live.legacy', owner: 'live', metadata: { json_name: 'moment_pick' },
     },
     {
@@ -481,7 +482,9 @@ const structured = [
             spikes: { type: 'array', maxItems: 100, items: { type: 'number', minimum: 0 } },
             avoid: { type: 'array', maxItems: 500, items: { type: 'number', minimum: 0 } },
         }, ['title']),
-        output_schema: TEXT_OUT({ t: { type: 'integer', minimum: 0 }, title: STR(90), desc: STR(420) }, ['t', 'title', 'desc']),
+        // t: null with abstain: true is an answer (item 151, C09): nothing in the VOD is worth a paste or clip. Live takes
+        // it as final and tries no weaker signal in its place.
+        output_schema: TEXT_OUT({ t: { type: ['integer', 'null'], minimum: 0 }, title: STR(90), desc: STR(420), abstain: { type: 'boolean' }, why: STR(200) }, ['t', 'title', 'desc']),
         steps: [{ kind: 'llm', template: 'live.moments.pick', operation: 'generate', output: 'json', prepare: 'live.moments.pick', postprocess: 'live.moments.pick', params: { max_tokens: 300 } }],
         cache_mode: 'none',
     },
