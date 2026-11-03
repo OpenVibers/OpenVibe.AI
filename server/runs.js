@@ -18,6 +18,7 @@
  */
 const { ids } = require('openvibe-contracts');
 const { AiError, sha256, stableStringify, parseJson, iso } = require('./util');
+const { CACHE_INPUT } = require('./workflows/hooks');
 const { preferenceLines } = require('./user-modules');
 const { preferredTarget } = require('./providers/task');
 const schemas = require('./schemas');
@@ -298,7 +299,9 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         const scope = options.cache === false || credentialSubject !== null || projectProvider || pinned || selfKeys ? null : cache.scopeFor(wf.cache_mode, ctx);
         let cacheKey = null;
         if (scope) {
-            cacheKey = cache.keyFor({ scope, workflowKey: wf.key, workflowVersion: wf.version, templateVersion: base.template_version, routeKey: base.route_key, routeVersion: base.route_version, inputHash });
+            // Some workflows key the cache on less than their whole input (hooks.js CACHE_INPUT: a signed URL's signature).
+            const keyInput = CACHE_INPUT[wf.key] ? sha256(stableStringify(CACHE_INPUT[wf.key](input))) : inputHash;
+            cacheKey = cache.keyFor({ scope, workflowKey: wf.key, workflowVersion: wf.version, templateVersion: base.template_version, routeKey: base.route_key, routeVersion: base.route_version, inputHash: keyInput });
             const hit = await cache.get(cacheKey, scope);
             if (hit) {
                 await db.tx(async () => {
