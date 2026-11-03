@@ -34,6 +34,10 @@ t.test('the answer is read like Live read it', () => {
     const post = POSTPROCESS['live.moments.pick'];
     assert.deepStrictEqual(post({ text: 'Sure! {"t": 95.7, "title": "\\"It Compiles\\"", "desc": "He  jumps."}' }), { t: 95, title: 'It Compiles', desc: 'He jumps.' });
     assert.strictEqual(post({ text: '{"title": "no time"}' }), null);
+    // Nothing worth it is an answer (C09), not a malformed one.
+    assert.deepStrictEqual(post({ text: '{"t": null, "title": "", "desc": "", "why": "only   routine talk"}' }), { t: null, title: '', desc: '', abstain: true, why: 'only routine talk' });
+    assert.deepStrictEqual(post({ json: { abstain: true } }), { t: null, title: '', desc: '', abstain: true, why: '' });
+    assert.strictEqual(post({ text: '{"t": "soon"}' }), null, 'a t that is neither a second nor null is still no answer');
     assert.strictEqual(post({ text: 'no json at all' }), null);
 });
 

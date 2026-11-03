@@ -441,6 +441,10 @@ const POSTPROCESS = {
     },
     'live.moments.pick'(r) {
         const j = r.json || parseJsonLoose(r.text);
+        // An explicit "nothing worth it" (t: null, or abstain: true) is an answer, not a failure (C09).
+        if (j && (j.abstain === true || (Object.prototype.hasOwnProperty.call(j, 't') && j.t === null))) {
+            return { t: null, title: '', desc: '', abstain: true, why: oneLine(j.why, 200) };
+        }
         const t = j && Number(j.t);
         if (!j || !Number.isFinite(t) || t < 0) return null;
         return { t: Math.floor(t), title: oneLine(j.title, 80).replace(/^["']+|["']+$/g, ''), desc: oneLine(j.desc, 400) };
