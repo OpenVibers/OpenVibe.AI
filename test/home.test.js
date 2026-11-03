@@ -144,6 +144,10 @@ t.test('robots.txt, sitemap.xml and llms.txt name the public origin', async () =
     assert.match(llms.headers.get('content-type'), /^text\/plain/);
     assert.ok(llms.text.startsWith('# OpenVibe.AI'));
     assert.ok(llms.text.includes(`${SITE}/stats`) && llms.text.includes(`POST ${SITE}/api/v1/chat`));
+    // AGT-5: the pages are links, each of this site's own at its Markdown twin; other sites keep theirs; Optional is last.
+    assert.ok(llms.text.includes(`[Home](${SITE}/index.md)`) && llms.text.includes(`(${SITE}/stats.md)`), llms.text.slice(0, 600));
+    assert.ok(llms.text.includes('(https://openvibe.services/docs/api)') && llms.text.includes(`(${SITE}/sitemap.xml)`));
+    assert.ok(llms.text.includes('\n## Optional\n') && llms.text.lastIndexOf('\n## ') === llms.text.indexOf('\n## Optional\n'), 'Optional is last');
     const full = await request(h.base, 'GET', '/llms-full.txt');
     assert.strictEqual(full.status, 200);
     assert.match(full.headers.get('content-type'), /^text\/plain/);
