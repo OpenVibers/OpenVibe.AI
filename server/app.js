@@ -23,6 +23,8 @@ const pkg = require('../package.json');
 
 function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, credentials = null, preferences = null, grants = null, vault = null, benchEvents = null, runBudgets = null, memory = null }) {
     const app = express();
+    // /.well-known/agent.json (openvibe-shared/agent-layer, SEO-2): what this site serves, for agents.
+    require('openvibe-shared/agent-layer').mount(app, { descriptor: require('./agent-descriptor') });
     app.disable('x-powered-by');
     app.set('trust proxy', 'loopback');
     const release = createRelease({ service: 'ai', root: path.join(__dirname, '..') });
