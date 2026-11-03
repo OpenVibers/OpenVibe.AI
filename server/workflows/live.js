@@ -504,7 +504,8 @@ const structured = [
         // words: true adds each segment's words with their times (item 151, C12), so a clip can start and end on a word.
         output_schema: TEXT_OUT({ text: { type: 'string' }, language: STR(8), segments: { type: 'array', items: { type: 'object', required: ['start', 'end', 'text'], properties: { start: { type: 'number' }, end: { type: 'number' }, text: { type: 'string' }, words: { type: 'array', items: { type: 'object', required: ['start', 'end', 'text'], properties: { start: { type: 'number' }, end: { type: 'number' }, text: { type: 'string' } } } } } } } }, ['text', 'segments']),
         steps: [{ kind: 'transcribe', route: 'live.stt' }],
-        cache_mode: 'private',
+        // A recording's words do not change: a range is kept two weeks (keyed without the URL's signature, hooks.js).
+        cache_mode: 'private', cache_ttl_sec: 14 * 86400,
     },
     {
         key: 'network.site_copy', name: 'Footer copy for the shared network chrome', namespace: 'network',

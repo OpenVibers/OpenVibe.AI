@@ -527,4 +527,24 @@ const POSTPROCESS = {
 // Space's builder keeps its hooks beside its templates (server/workflows/space.js).
 { const space = require('./space'); Object.assign(PREPARE, space.PREPARE); Object.assign(POSTPROCESS, space.POSTPROCESS); }
 
-module.exports = { PREPARE, POSTPROCESS, CATEGORIES, normalizeCategory, translatable, sourcesBlock, LANG_NAMES };
+/**
+ * What the run cache keys on, for a workflow whose input carries parts that do not change the answer (item 151, C12:
+ * the range cache). live.media.transcribe gets a signed media URL (exp, sig) that differs on every call and a
+ * low_power flag that only changes how fast whisper runs, so the same seconds of the same recording were transcribed
+ * again (30 of 317 runs in the week to 11-03). Its key is the recording, the range, the language and words: the cache
+ * stays scoped to the requester as before.
+ */
+const CACHE_INPUT = {
+    'live.media.transcribe'(input) {
+        let url = String(input.media_url || '');
+        try {
+            const u = new URL(url);
+            for (const k of ['exp', 'sig', 'expires', 'signature', 'token']) u.searchParams.delete(k);
+            url = u.toString();
+        } catch { /* not a URL: kept as given */ }
+        const { low_power: _lowPower, ...rest } = input;
+        return { ...rest, media_url: url };
+    },
+};
+
+module.exports = { PREPARE, POSTPROCESS, CACHE_INPUT, CATEGORIES, normalizeCategory, translatable, sourcesBlock, LANG_NAMES };
