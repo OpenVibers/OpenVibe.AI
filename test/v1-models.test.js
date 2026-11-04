@@ -3,7 +3,7 @@
 //   - GET /v1/models and /v1/models/{id} in both wire protocols: the registry's real models as ai.model@1 entries
 //     plus the dynamic policy aliases, marked dynamic;
 //   - an exact id runs only its artifact (never a substitute); an alias resolves through the same placement;
-//   - the `openvibe` disclosure on JSON responses, as the first SSE comment and on the final chunk;
+//   - the route disclosure inside x_openvibe (D3') on JSON responses, as the first SSE comment and on the final chunk;
 //   - paid managed routing refuses UNVERIFIED/RESTRICTED offers, while an own deployment and CUSTOMER_BYOK work;
 //   - with the flag off, the legacy single `openvibe` model and no disclosure, exactly as before.
 const assert = require('assert');
@@ -17,7 +17,7 @@ const PERSON = 'usr_01JAB2C3D4E5F6G7H8J9K0MNP7';
 const CREDENTIAL_KEY = 'cd'.repeat(32);
 const ACTION = token('codes', ALL, { extra: { on_behalf_of: PERSON } });
 const MANAGER = token('codes', [...ALL, 'ai.credential.manage'], { extra: { on_behalf_of: PERSON } });
-const APP_D8 = token('app', ['ai.inference.create'], { sub: `app:app_${PRJ.slice(4)}`, actorType: 'app', ns: [PRJ, `app.${PRJ}.*`], extra: { project_id: PRJ, env: 'production' } });
+const APP_D8 = token('app', ['ai.app.run'], { sub: `app:app_${PRJ.slice(4)}`, actorType: 'app', ns: [PRJ, `app.${PRJ}.*`], extra: { project_id: PRJ, env: 'production' } });
 const APP_LEGACY = token('app', ['ai.app.run'], { sub: `app:app_${PRJ.slice(4)}`, actorType: 'app', ns: [PRJ, `app.${PRJ}.*`], extra: { project_id: PRJ, env: 'production' } });
 
 const ALPHA_ID = 'acme/m1:q4_k_m@rev1';
@@ -173,9 +173,9 @@ t.test('an exact id runs only that artifact; an alias is dynamic and says which 
     const exactBody = exact.body;
     assert.strictEqual(alpha.calls.length, 1, 'alpha ran');
     assert.deepStrictEqual([beta.calls.length, gamma.calls.length], [0, 0], 'no other artifact was called');
-    assert.deepStrictEqual([exactBody.openvibe.resolved_model, exactBody.openvibe.deployment, exactBody.openvibe.provider_access, exactBody.openvibe.policy],
-        [ALPHA_ID, 'alpha', 'OWN_DEPLOYMENT', 'exact'], JSON.stringify(exactBody.openvibe));
-    assert.deepStrictEqual([exactBody.model, exactBody.openvibe.rate_version], ['alpha-1', 'rr-1']);
+    assert.deepStrictEqual([exactBody.x_openvibe.resolved_model, exactBody.x_openvibe.deployment, exactBody.x_openvibe.provider_access, exactBody.x_openvibe.policy],
+        [ALPHA_ID, 'alpha', 'OWN_DEPLOYMENT', 'exact'], JSON.stringify(exactBody.x_openvibe));
+    assert.deepStrictEqual([exactBody.model, exactBody.x_openvibe.rate_version], ['alpha-1', 'rr-1']);
 
     alpha.calls.length = 0; beta.calls.length = 0; gamma.calls.length = 0;
     const alias = await chat('openvibe/economy');
@@ -183,7 +183,7 @@ t.test('an exact id runs only that artifact; an alias is dynamic and says which 
     const aliasBody = alias.body;
     assert.strictEqual(alpha.calls.length, 1, 'economy picked the cheapest eligible offer, alpha');
     assert.deepStrictEqual([beta.calls.length, gamma.calls.length], [0, 0], 'beta costs more; gamma is UNVERIFIED');
-    assert.deepStrictEqual([aliasBody.openvibe.resolved_model, aliasBody.openvibe.deployment, aliasBody.openvibe.policy],
+    assert.deepStrictEqual([aliasBody.x_openvibe.resolved_model, aliasBody.x_openvibe.deployment, aliasBody.x_openvibe.policy],
         [ALPHA_ID, 'alpha', 'cheapest']);
 });
 
@@ -222,8 +222,8 @@ t.test('BYOK still works with the catalog on, disclosed as CUSTOMER_BYOK', async
     const res = await request(h.base, 'POST', '/v1/messages', { tok: ACTION, headers: { 'x-openvibe-credential': 'anthropic' }, body: { model: 'openvibe/auto', max_tokens: 64, messages: [{ role: 'user', content: 'hi' }] } });
     assert.strictEqual(res.status, 200, res.text);
     const body = res.body;
-    assert.strictEqual(body.openvibe.provider_access, 'CUSTOMER_BYOK');
-    assert.strictEqual(body.openvibe.policy, 'byok');
+    assert.strictEqual(body.x_openvibe.provider_access, 'CUSTOMER_BYOK');
+    assert.strictEqual(body.x_openvibe.policy, 'byok');
     assert.strictEqual(ownCalls, 1, 'the person\'s own key answered');
     assert.strictEqual(delta.calls.length, before, 'the managed Anthropic offer was not called');
     await request(h.base, 'DELETE', `/api/v1/credentials/${PERSON}/anthropic`, { tok: MANAGER });
@@ -233,25 +233,25 @@ t.test('the SSE disclosure: a leading comment and a field on the final chunk, bo
     const openai = await post('/v1/chat/completions', { model: ALPHA_ID, stream: true, messages: [{ role: 'user', content: 'stream' }] });
     assert.strictEqual(openai.status, 200);
     const blocks = (await openai.text()).split('\n\n').filter(Boolean);
-    assert.match(blocks[0], /^: openvibe /, 'the first SSE block is the disclosure comment');
-    const head = JSON.parse(blocks[0].slice(': openvibe '.length));
+    assert.match(blocks[0], /^: x_openvibe /, 'the first SSE block is the disclosure comment');
+    const head = JSON.parse(blocks[0].slice(': x_openvibe '.length));
     assert.deepStrictEqual([head.resolved_model, head.deployment, head.provider_access], [ALPHA_ID, 'alpha', 'OWN_DEPLOYMENT']);
     const chunks = blocks.filter((b) => b.startsWith('data: ') && !b.includes('[DONE]')).map((b) => JSON.parse(b.slice(6)));
-    assert.deepStrictEqual([chunks[chunks.length - 1].openvibe.resolved_model, chunks[chunks.length - 1].openvibe.policy], [ALPHA_ID, 'exact']);
+    assert.deepStrictEqual([chunks[chunks.length - 1].x_openvibe.resolved_model, chunks[chunks.length - 1].x_openvibe.policy], [ALPHA_ID, 'exact']);
 
     delta.calls.length = 0;
     const anthropic = await post('/v1/messages', { model: DELTA_ID, max_tokens: 32, stream: true, messages: [{ role: 'user', content: 'stream' }] }, service, { 'anthropic-version': '2023-06-01' });
     assert.strictEqual(anthropic.status, 200);
     const frames = (await anthropic.text()).split('\n\n').filter(Boolean);
-    assert.match(frames[0], /^: openvibe /, 'the first Anthropic SSE block is the disclosure comment');
-    const anthropicHead = JSON.parse(frames[0].slice(': openvibe '.length));
+    assert.match(frames[0], /^: x_openvibe /, 'the first Anthropic SSE block is the disclosure comment');
+    const anthropicHead = JSON.parse(frames[0].slice(': x_openvibe '.length));
     assert.deepStrictEqual([anthropicHead.resolved_model, anthropicHead.deployment, anthropicHead.policy], [DELTA_ID, 'delta', 'exact']);
     const stop = frames.map((b) => { const d = /^data: (.*)$/m.exec(b); return d ? JSON.parse(d[1]) : null; }).filter((d) => d && d.type === 'message_stop');
     assert.strictEqual(stop.length, 1);
-    assert.strictEqual(stop[0].openvibe.resolved_model, DELTA_ID, 'the final Anthropic chunk carries the disclosure');
+    assert.strictEqual(stop[0].x_openvibe.resolved_model, DELTA_ID, 'the final Anthropic chunk carries the disclosure');
 });
 
-t.test('D8: ai.inference.create is accepted on /v1/models and /v1/chat/completions while the flag is on', async () => {
+t.test("D8': developer apps use ai.app.run on /v1/models and /v1/chat/completions", async () => {
     const list = await request(h.base, 'GET', '/v1/models', { tok: APP_D8 });
     assert.strictEqual(list.status, 200, list.text);
     assert.ok(list.body.data.some((m) => m.id === ALPHA_ID));
@@ -274,8 +274,8 @@ t.test('flag off: the legacy single model and no disclosure, exactly as before',
         assert.deepStrictEqual(anthropic.body.data.map((m) => m.id), ['openvibe']);
         const res = await request(off.base, 'POST', '/v1/chat/completions', { tok: service, body: { model: 'not-a-catalog-id', messages: [{ role: 'user', content: 'hi' }] } });
         assert.strictEqual(res.status, 200);
-        assert.strictEqual(res.body.openvibe, undefined, 'no disclosure with the flag off');
-        assert.strictEqual((await request(off.base, 'GET', '/v1/models', { tok: APP_D8 })).status, 403, 'ai.inference.create is not accepted off-flag');
+        assert.strictEqual((res.body.x_openvibe || {}).resolved_model, undefined, 'no route disclosure with the flag off');
+        assert.strictEqual((await request(off.base, 'GET', '/v1/models', { tok: APP_D8 })).status, 200, 'an ai.app.run app lists the legacy model as before');
     } finally { await off.stop(); }
 });
 

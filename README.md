@@ -193,15 +193,19 @@ Behind `AI_MODEL_CATALOG` (off by default; with it off both `GET /v1/models` end
 - **Aliases:** the dynamic names resolve through the same provider placement. `economy` ranks price first, `fast`
   measured latency first, `balanced` weighs both, `private` never leaves local/own capacity, and `auto` keeps the
   existing task-aware router. User preferences (`only_my_keys`, `free_first`, own keys and machines) still apply.
-- **The `openvibe` object:** `{ resolved_model, revision, deployment, provider_access, rate_version, policy,
-  fallback_reason }`. It is a top-level field on a JSON response; on SSE it is the first line as an SSE comment
-  (`: openvibe {...}`) and is also on the final chunk (`message_stop` for Messages).
+- **The disclosure, inside `x_openvibe`:** `resolved_model`, `revision`, `deployment`, `provider_access`,
+  `rate_version`, `policy` and `fallback_reason` join the `x_openvibe` object responses already carry (run, provider,
+  cost). There is no second object.
+  - On a JSON response it is in the top-level `x_openvibe`.
+  - On SSE it is the first line, as an SSE comment (`: x_openvibe {...}`), and it is on the final chunk
+    (`message_stop` for Messages).
 - **Commercial access:** `provider_access` is a provider field (`POST/PATCH /api/v1/providers`, default `UNVERIFIED`).
   Paid managed routing uses only `OWN_DEPLOYMENT` and `AUTHORIZED_WHOLESALE`; `RESTRICTED`, `UNVERIFIED` and
   `CUSTOMER_BYOK` offers stay out of the shared pool. A person's own key or project provider is disclosed as
   `CUSTOMER_BYOK` and is unaffected.
-- **Tokens:** a developer app may call the inference routes with the public `ai.inference.create` capability (D8) as
-  well as `ai.app.run`; `ai.run.create` remains the first-party service capability.
+- **Tokens:** developer apps call with the public `ai.app.run` they already hold (ADR-014). The separate
+  `ai.inference.create` once planned for this was retired (Contracts 0.285.0). `ai.run.create` remains the
+  first-party service capability.
 
 ## OpenAI-compatible endpoint
 
