@@ -180,7 +180,15 @@ async function select({ registry, model, route }) {
         if (alias.policy === 'cheapest') { constraints.objective = 'cheapest'; delete constraints.authority; }
         else if (alias.policy === 'fastest') { constraints.objective = 'lowest-latency'; delete constraints.authority; }
         else if (alias.policy === 'balanced') { constraints.objective = 'balanced'; delete constraints.authority; }
-        else if (alias.policy === 'private') { constraints.objective = 'private'; constraints.provider_scope = 'local'; delete constraints.authority; }
+        else if (alias.policy === 'private') {
+            constraints.objective = 'private';
+            constraints.provider_scope = 'local';
+            // placement's `private` objective defaults to first-party trust, while the providers file classes every
+            // local offer `community` (server/providers/index.js). Name both local trust classes explicitly; the local
+            // scope above still keeps every external offer out, which is the alias's promise.
+            if (!Array.isArray(constraints.trust) || !constraints.trust.length) constraints.trust = ['first-party', 'community'];
+            delete constraints.authority;
+        }
         return { kind: 'alias', requested, alias, policy: alias.policy, route: { ...route, constraints } };
     }
     if (!EXACT_ID.test(requested)) {

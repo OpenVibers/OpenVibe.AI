@@ -32,7 +32,8 @@ const { CAPS } = require('../auth');
 const { appAttribution } = require('../apps');
 const { credentialFor } = require('./credential');
 const models = require('./models');
-const { EXACT_ID } = require('../providers/model-catalog');
+const modelCatalog = require('../providers/model-catalog');
+const { EXACT_ID } = modelCatalog;
 
 const FIELDS = ['system', 'tools', 'tool_choice', 'stop_sequences', 'temperature', 'top_p', 'top_k', 'metadata'];
 const MAX_TOKENS = 64000;
@@ -57,15 +58,15 @@ function anthropicError(res, status, message, type, code = null) {
  * The event stream of one streamed message: each upstream event goes out as `event: <name>` + its JSON as it arrives (or
  * waits until open(run) has sent the headers). fail() sends Anthropic's error event; done() ends the stream.
  *
- * AI Exchange D3: once the router has picked the offer (route(info)), the stream's first line is the `openvibe`
- * disclosure as an SSE comment, before any event; the final message_stop event carries the same object as `openvibe`.
+ * AI Exchange D3: once the router has picked the offer (route(info)), the stream's first line is the `x_openvibe`
+ * disclosure as an SSE comment, before any event; the final message_stop event carries the whole x_openvibe object.
  */
 function createEventStream(res) {
     let opened = false;
     let any = false;
-    let stopped = false;
     let routeInfo = null;
     let commented = false;
+    let finalEvent = null;
     const waiting = [];
     const alive = () => !res.writableEnded && !res.destroyed;
     const comment = () => {
@@ -76,9 +77,9 @@ function createEventStream(res) {
     const write = (event, data) => { if (alive()) { comment(); res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } };
     const emit = (event, data) => {
         if (!data) return;
-        if (event === 'message_stop') stopped = true;
-        // The final chunk carries the disclosure (D3); the client's message fields are otherwise untouched.
-        if (event === 'message_stop' && routeInfo) data = { ...data, x_openvibe: routeInfo };   // D3': the disclosure rides in x_openvibe
+        // message_stop is held until the run has settled: the final chunk carries the whole x_openvibe object (run_id,
+        // provider, cost_usd and the route disclosure), and the cost is only known once the provider's usage is recorded.
+        if (event === 'message_stop') { finalEvent = data; return; }
         write(event, data);
     };
     const out = {
@@ -102,7 +103,13 @@ function createEventStream(res) {
         },
         emit,
         sentAny: () => any,
-        get stopped() { return stopped; },
+        /** The held message_stop with the final x_openvibe object, then end the stream. */
+        finish(xOpenVibe) {
+            const data = finalEvent || { type: 'message_stop' };
+            finalEvent = null;
+            write('message_stop', xOpenVibe ? { ...data, x_openvibe: xOpenVibe } : data);
+            return out.done();
+        },
         fail(message, code) {
             const status = code === 'ai.run_budget_reached' ? 402 : /^(input|validation)\./.test(code || '') ? 400 : /quota|allowance|budget/.test(code || '') ? 429 : 529;
             emit('error', { type: 'error', error: { type: errorType(status), message: String(message || 'error').slice(0, 1000), code: code || null } });
@@ -176,6 +183,17 @@ function messagesRouter({ runs, auth, config, registry, log = console }) {
             const requested = b.model == null ? 'openvibe/auto' : String(b.model).trim();
             if (!requested || requested.length > 256) return anthropicError(res, 400, 'model: must name an exact id or a dynamic alias');
             input.model = requested;
+            // An exact id is a pin: an unknown or inactive artifact is refused here, before the run (and its stream)
+            // exists, so a streaming client gets the 404/400 it expects rather than a 200 SSE error. The engine selects
+            // the same artifact again when the run executes.
+            if (EXACT_ID.test(requested)) {
+                try {
+                    await modelCatalog.select({ registry, model: requested, route: null });
+                } catch (err) {
+                    if (err && err.status) return anthropicError(res, err.status, err.detail || err.message, null, err.code);
+                    throw err;
+                }
+            }
         }
         let body = { workflow: 'ai.messages', input };
         // L37: the soft preference (provider, and a model if the caller wants one). A wish, not a pin.
@@ -227,15 +245,19 @@ function messagesRouter({ runs, auth, config, registry, log = console }) {
         };
         const disclosure = await models.disclosureOf({ registry, config, run });
         if (live) live.route(disclosure);
+        // D8': the route disclosure joins the existing x_openvibe object (run, provider, fallback, cost), never a second object.
+        const x = { run_id: run.id, provider: run.provenance && run.provenance.provider, fallback_used: Boolean(run.provenance && run.provenance.fallback_used),
+            cost_usd: run.usage.cost_usd, synthetic: Boolean(run.synthetic) };
+        const xOpenVibe = disclosure ? { ...x, ...disclosure } : null;
         if (live) {
             // The events already went out as they arrived; an answer that came in one piece (an upstream that cannot
-            // stream, a replayed run) is sent as the events it is, and a stream that never closed is closed.
+            // stream, a replayed run) is sent as the events it is. finish() sends the held message_stop with the whole
+            // x_openvibe object, then ends the stream.
             if (!live.sentAny()) replay(live, message, run);
-            else if (!live.stopped) live.emit('message_stop', { type: 'message_stop' });
-            return live.done();
+            return live.finish(xOpenVibe);
         }
         res.setHeader('X-OpenVibe-Run-Id', run.id);
-        return res.status(200).json(disclosure ? { ...message, x_openvibe: disclosure } : message);
+        return res.status(200).json(xOpenVibe ? { ...message, x_openvibe: xOpenVibe } : message);
     });
 
     // The model list a client asks for. An Anthropic client identifies itself with `anthropic-version`; the OpenAI
