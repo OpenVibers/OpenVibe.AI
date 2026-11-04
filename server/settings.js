@@ -252,7 +252,7 @@ function createProviderKeys({ db, registry, env = process.env, log = console, on
 }
 
 /**
- * Create both namespaces (the DDL is migrations/0027_config.sql), apply ai.exchange to the live config object,
+ * Create both namespaces (the DDL is migrations/0028_config.sql), apply ai.exchange to the live config object,
  * load the provider-key cache and reseal plaintext/old-KEK rows once when OV_CONFIG_KEKS is set.
  */
 async function createSettings({ db, config, registry, clock = { now: () => Date.now() }, env = process.env, log = console, onExchange = null }) {

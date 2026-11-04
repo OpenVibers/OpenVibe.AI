@@ -402,7 +402,7 @@ the Action Center is separate: a first-party service token with `ai.actions.read
 ### Provider keys added from the console (`vault:`)
 
 A provider the owner adds from the console keeps its key in the `ai.provider_keys` namespace of the configuration
-store (D11, `server/settings.js`, `migrations/0027_config.sql`). For each provider `<p>.origin` is the origin of its
+store (D11, `server/settings.js`, `migrations/0028_config.sql`). For each provider `<p>.origin` is the origin of its
 base URL and `<p>.key` is a write-only secret sealed under `OV_CONFIG_KEKS` and x-bind'ed to `<p>.origin`; changing the
 base URL locks the key until it is entered again. The provider's `secret_ref` is `vault:<provider key>`, which
 `util.resolveSecret` reads from this process's cache (refreshed by the store's `onActivate`; providers resolve secrets
