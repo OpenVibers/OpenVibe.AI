@@ -131,7 +131,7 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
     if (credentials) app.use(require('./credentials').credentialsRouter({ credentials, auth, registry, sendError: (res, err, ctx) => sendError(res, err, ctx, log) }));
     // The budget of a Codes run token (Codes C3): Codes registers it when it mints the token.
     if (runBudgets) app.use(require('./api/run-budgets').runBudgetsRouter({ runBudgets, auth, log, sendError: (res, err, ctx) => sendError(res, err, ctx, log) }));
-    app.use(adminRouter({ db, registry, pool, quotas, cache, runs, auth, ops, log }));
+    app.use(adminRouter({ config, db, registry, pool, quotas, cache, runs, auth, ops, log }));
     // The operator console (/console, /auth/*): Network staff, server-rendered, no scripts (server/console).
     // Person sessions are separate, read-only and open one run receipt each (server/person-session.js).
     const personSessions = createPersonSessions({ db, config, clock });

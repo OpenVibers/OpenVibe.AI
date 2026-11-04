@@ -240,6 +240,9 @@ function load(env = process.env) {
             maxInputBytes: int(env.AI_MAX_INPUT_BYTES, 6 * 1024 * 1024),
             retentionDays: int(env.AI_RUN_RETENTION_DAYS, 30),
         },
+        // Aggregate demand for Host's inference planner (GET /api/v1/usage/series): off by default;
+        // the capability gate (ai.usage.read) is still required when it is on.
+        usageSeries: { enabled: bool(env.AI_USAGE_SERIES, false) },
         // Compiled JSON Schema validators (server/schemas.js): an LRU shared by every caller, some of
         // whose schemas are caller-supplied, so it is bounded by count and by total schema size.
         schemaCache: {

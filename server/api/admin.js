@@ -15,6 +15,7 @@
  *         (routes/templates/workflows: read with ai.workflow.manage, ai.run.create or ai.usage.read; write with ai.workflow.manage)
  *   GET   /api/v1/quotas            POST /api/v1/quotas (ai.provider.manage)
  *   GET   /api/v1/usage, /api/v1/requests, /api/v1/audit, /api/v1/cache (ai.usage.read)
+ *   GET   /api/v1/usage/series          aggregate demand, only with AI_USAGE_SERIES=on (ai.usage.read)
  *   DELETE /api/v1/cache[?workflow=]                        purge (ai.provider.manage)
  *
  * Provider status, circuit reset, cache purge and the status summary are server/ops.js, shared with
@@ -25,7 +26,7 @@ const { CAPS } = require('../auth');
 const { AiError, sendError } = require('../util');
 const { createOps } = require('../ops');
 
-function adminRouter({ db, registry, pool, quotas, cache, runs, auth, ops = createOps({ db, registry, pool, quotas, cache, runs }), log = console }) {
+function adminRouter({ config = {}, db, registry, pool, quotas, cache, runs, auth, ops = createOps({ db, registry, pool, quotas, cache, runs }), log = console }) {
     const r = express.Router();
     const provRead = auth.requireCap(CAPS.providerManage, CAPS.usageRead);
     const provWrite = auth.requireCap(CAPS.providerManage);
@@ -177,6 +178,11 @@ function adminRouter({ db, registry, pool, quotas, cache, runs, auth, ops = crea
 
     // Quotas, usage, logs, audit, cache
     r.get('/api/v1/quotas', usageRead, wrap(async () => ({ quotas: await quotas.list(), current: await quotas.counters() })));
+    // Aggregate demand for Host's inference planner (AI_USAGE_SERIES, off by default): per day and
+    // model only, no caller id, prompt, answer, project or cost.
+    if (config.usageSeries && config.usageSeries.enabled) {
+        r.get('/api/v1/usage/series', usageRead, wrap(async (req) => await quotas.usageSeries({ days: req.query.days })));
+    }
     r.post('/api/v1/quotas', provWrite, wrap(async (req, res) => { res.status(201); return { quota: await quotas.upsert(body(req), { ...actor(req), origin: 'admin' }) }; }));
     r.get('/api/v1/usage', usageRead, wrap(async (req) => ({ usage: await quotas.usage({ from: req.query.from, to: req.query.to, requester: req.query.requester }) })));
     r.get('/api/v1/requests', usageRead, wrap(async (req) => {

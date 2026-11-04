@@ -128,6 +128,7 @@ idempotent replay):
 | `POST /api/v1/{templates,workflows,routes}/:key/versions`, `…/versions/:v/status` | `ai.workflow.manage` |
 | `POST/PATCH /api/v1/providers…`, `…/disable\|enable\|reset`, `POST/PATCH /api/v1/models…`, `POST /api/v1/quotas`, `DELETE /api/v1/cache` | `ai.provider.manage` |
 | `GET /api/v1/status\|usage\|quotas\|requests\|audit\|cache\|providers\|models` | `ai.usage.read` |
+| `GET /api/v1/usage/series?days=N` (N 1–90) — aggregate demand per UTC day and model: requests, successes and the four token totals, never a caller id or text (`AI_USAGE_SERIES=on`) | `ai.usage.read` |
 | `GET /api/health`, `GET /api/ready`, `GET /release.json` | public |
 | `GET /metrics` | direct loopback callers only (a request carrying X-Forwarded-For gets 404) |
 | `GET /console…`, `/auth/login\|callback`, `POST /auth/logout` | Network staff, signed in (see [Operator console](#operator-console)) |
