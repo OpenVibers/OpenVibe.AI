@@ -72,7 +72,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     const preferences = require('./person-preferences').createPreferences({ db, clock });
     const projectSecrets = require('./project-secrets').createProjectSecrets({ config, env, fetchImpl });
     // AI Exchange F: Billing Credits for paid managed inference (AI_CREDITS, off). Null when off, so runs never touch it.
-    const credits = require('./credits').createCredits({ config, registry, env, fetchImpl, clock, log, networkUrl: config.networkInternalUrl });
+    const credits = require('./credits').createCredits({ config, db, registry, env, fetchImpl, clock, log, networkUrl: config.networkInternalUrl });
     if (credits && !(config.modelCatalog && config.modelCatalog.enabled)) {
         log.warn('[credits] AI_CREDITS is on but AI_MODEL_CATALOG is off: no offer declares managed access, so no request is charged');
     }
@@ -122,6 +122,9 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     let accountSubscription = null;
     if (listen) userModules.start();
     if (listen && config.memoryJobs && config.memoryJobs.enabled) memoryJobs.start();
+    // Durable Credit settles: the same jobs rule as Memory (never in test mode, never under a provider drill; the
+    // queue's runOnce checks the drill itself).
+    if (listen && credits && config.nodeEnv !== 'test') credits.startSettlements();
     if (listen) {
         server = await new Promise((resolve, reject) => {
             // Socket activation (2026-10-31): systemd's .socket unit holds the listener across restarts, so a deploy
@@ -152,6 +155,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         if (accountSubscription) accountSubscription.stop();
         userModules.stop();
         memoryJobs.stop();
+        if (credits) credits.stopSettlements();
         if (jwks) jwks.stop();
         if (server) {
             server.closeAllConnections?.();
@@ -166,7 +170,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         if (!givenDb) await db.close();
     }
 
-    return { config, db, registry, pool, quotas, tiers, cache, fetcher, engine, runs, keys, keyLoaded, auth, app, server, bench, benchEvents, memory, memoryJobs, close };
+    return { config, db, registry, pool, quotas, tiers, cache, fetcher, engine, runs, keys, keyLoaded, auth, app, server, bench, benchEvents, memory, memoryJobs, credits, close };
 }
 
 if (require.main === module) {

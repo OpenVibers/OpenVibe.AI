@@ -860,13 +860,16 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         if (exact) {
             const candidatesView = [];
             const usable = [];
+            let payerSkipped = false;
             for (const offer of exact.offers || []) {
                 const p = await registry.getProvider(offer.provider);
                 const entry = p ? await adapter(offer.provider) : null;
                 const row = offer.model ? await registry.getModel(offer.provider, offer.model) : null;
                 const missing = hardNeeds(capabilitiesOf(row, p), task);
                 const why = [];
+                const card = row ? modelCatalog.retailRate(row) : null;
                 if (!p) why.push('unknown_provider');
+                else if (ctx.creditsRequired && !isFreeProvider(p) && card && card.version) { why.push('payer_required'); payerSkipped = true; }
                 else {
                     if (!accessOffered(p)) why.push(`provider_access ${modelCatalog.accessOf(p)}`);
                     const skip = await skipReason(p, entry && entry.adapter, features);
@@ -878,7 +881,10 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                 if (!reason) usable.push({ provider: offer.provider, model: offer.model });
             }
             explain = { objective: 'exact', policy: 'exact', reasons: [`exact model ${exact.id}: only its own deployment may answer`], selected: null, candidates: candidatesView };
-            if (!usable.length) throw new AiError(400, 'ai.model_unavailable', `the artifact ${exact.id} cannot run this request`, { explain });
+            if (!usable.length) {
+                if (payerSkipped) throw new AiError(402, 'billing.payer_required', `the exact model ${exact.id} needs a project app token so Credits can bill a person; it was not run`, { explain });
+                throw new AiError(400, 'ai.model_unavailable', `the artifact ${exact.id} cannot run this request`, { explain });
+            }
             list = usable;
         } else {
             ({ order: list, explain } = await candidates(route, features, operation, ctx));
@@ -957,6 +963,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         // L36 Y7: the fallback chain stops after three providers.
         const maxAttempts = (config.routing && config.routing.maxAttempts) || DEFAULT_MAX_ATTEMPTS;
         let attemptsMade = 0;
+        candidate:
         for (let i = 0; i < list.length; i++) {
             const c = list[i];
             const entry = await adapter(c.provider);
@@ -977,6 +984,20 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                     tried.push({ provider: c.provider, skipped: 'over_price_ceiling' });
                     attempts.push({ key: 'openvibe', provider: c.provider, model, why: chosen || 'the router chose it', status: 'skipped', error: whyPrice });
                     if (ctx.logRequest) ctx.logRequest({ ...base, status: 'skipped', skip_reason: 'over_price_ceiling' });
+                    continue;
+                }
+            }
+            // AI Exchange F: a run with no payer (no person and no app project) must not be served a paid managed
+            // offer that carries a versioned retail card: nobody could be charged for it. Offers without a card keep
+            // today's behaviour, as do free and prepaid ones.
+            if (ctx.creditsRequired && p && !isFreeProvider(p)) {
+                const row = model ? await registry.getModel(p.key, model) : null;
+                const card = row ? modelCatalog.retailRate(row) : null;
+                if (card && card.version) {
+                    statFor(c.provider).skipped++;
+                    tried.push({ provider: c.provider, skipped: 'payer_required' });
+                    attempts.push({ key: 'openvibe', provider: c.provider, model, why: chosen || 'the router chose it', status: 'skipped', error: 'payer_required' });
+                    if (ctx.logRequest) ctx.logRequest({ ...base, status: 'skipped', skip_reason: 'payer_required' });
                     continue;
                 }
             }
@@ -1015,12 +1036,22 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                 // The hold needs the offer's retail card, whether it is prepaid, and the real output cap.
                 const attemptRow = p && model ? await registry.getModel(p.key, model) : null;
                 const attemptMeta = { provider: p ? p.key : null, model, maxTokens: req.maxTokens, paid: !isFreeProvider(p), retail: modelCatalog.retailRate(attemptRow) };
-                if (typeof ctx.onRoute === 'function') await ctx.onRoute(attemptFacts, attemptMeta);
+                const routed = typeof ctx.onRoute === 'function' ? await ctx.onRoute(attemptFacts, attemptMeta) : null;
+                if (routed && routed.skip) {
+                    statFor(c.provider).skipped++;
+                    tried.push({ provider: c.provider, skipped: routed.skip });
+                    attempts.push({ key: 'openvibe', provider: c.provider, model, why: chosen || 'the router chose it', status: 'skipped', error: routed.skip });
+                    if (ctx.logRequest) ctx.logRequest({ ...base, status: 'skipped', skip_reason: routed.skip });
+                    continue candidate;
+                }
+                // max_cost_usd, when it binds, comes back as the affordable output cap for this attempt.
+                const callMax = routed && Number.isSafeInteger(routed.maxTokens) && routed.maxTokens >= 1 && routed.maxTokens !== req.maxTokens ? routed.maxTokens : null;
+                const callReq = callMax == null ? req : { ...req, maxTokens: callMax };
                 try {
                     const fn = a[operation];
                     if (typeof fn !== 'function') throw new ProviderError(`${operation} not implemented`, { code: 'provider.unsupported' });
                     statFor(c.provider).calls += p.kind === 'stub' ? 0 : 1;   // stub counts its own calls
-                    const result = await fn({ ...req, ...(onDelta ? { onDelta } : {}), model, signal: ctx.signal, timeoutMs });
+                    const result = await fn({ ...callReq, ...(onDelta ? { onDelta } : {}), model, signal: ctx.signal, timeoutMs });
                     if (operation === 'embed' && (!Array.isArray(result.vectors) || result.vectors.length !== req.input.length
                         || result.vectors.some(v => !Array.isArray(v) || !v.length || v.some(n => typeof n !== 'number' || !Number.isFinite(n)))))
                         throw new ProviderError('embedding response has invalid vectors', { code: 'provider.output' });

@@ -5,20 +5,34 @@
  * A request on a PAID MANAGED route (the catalog's `provider_access` is OWN_DEPLOYMENT or AUTHORIZED_WHOLESALE)
  * reserves its worst case before any provider is called:
  *
- *     hold = min( ceil(input estimate × retail input) + ceil(max_tokens × retail output) + per-request,
- *                 max_cost_usd when the caller set it )
+ *     hold = ceil(input estimate × retail input) + ceil(max_tokens × retail output) + per-request
  *
- * The hold is created with the request id as its idempotency key and a fingerprint of the resolved model, the
- * token caps, the retail rate version, the subject and the project. Billing answers 402
- * `billing.insufficient_funds` for a short balance; that becomes AI's own 402 before the provider runs, and any
- * other Billing failure fails closed (503 `billing.unavailable`) rather than serving unpaid capacity.
+ * capped by the caller's optional `max_cost_usd` (parsed as an exact decimal, at most 9 fractional digits, finer
+ * digits rounded up to the next nano-USD; never a float). The hold is keyed by the request id and fingerprinted
+ * with the resolved model, the token caps, the retail rate version, the payer and the project. Billing's 402
+ * `billing.insufficient_funds` becomes AI's own 402 before the provider runs; any other Billing failure fails
+ * closed (503 `billing.unavailable`) rather than serving unpaid capacity.
+ *
+ * A hold's subject is always a person: Billing keys a Credits account by (person, project). An app token's
+ * project owner is resolved through Network (`GET /internal/projects/:id`, network.project.read) and cached for
+ * 60 s; a project that cannot be resolved fails closed with 503 before the provider. A first-party run with no
+ * person (no `on_behalf_of`) has no payer: the pool skips paid offers that carry a versioned retail card
+ * (`payer_required`) rather than serve them free.
+ *
+ * When `max_cost_usd` binds, the affordable output is computed in BigInt from nano-USD per million tokens
+ * (floor((cap - input charge - per-request) × 1e6 / output rate)); the provider receives that clamped
+ * `max_tokens`. Fewer than one affordable token is a 402 before the provider. A later managed fallback whose
+ * own worst case exceeds the hold extends the hold by the difference (capped by max_cost_usd, clamping its
+ * output the same way); if Billing refuses the extension the attempt is skipped as `hold_not_extended`.
  *
  * While a stream runs, `observe()` estimates the output from the deltas and extends the hold in steps when the
  * projected charge nears it (capped by max_cost_usd; a refused extension never loses the usage — Billing settles
  * the overage as a recorded shortfall). At the end, one settle carries the four token counts, the answering
- * model's retail card (version included), the supply cost and the attempts the router made. One run settles
- * once: the settle key is the request id too, so a retried request replays Billing's answer instead of charging
- * twice. An error before the first token releases the hold; an abort settles what was streamed.
+ * model's retail card (version included), the supply cost and the attempts the router made, in the contract's
+ * exact attempt shape. The settle key is the request id too, so a retried request replays Billing's answer
+ * instead of charging twice. A settle Billing cannot take is queued (`credit_settle_queue`) and retried with
+ * backoff; a 409 or 422 marks the row for review. An error before the first token releases the hold; an abort
+ * settles what was streamed.
  *
  * BYOK is never charged and never held: a run on a person's own key, their machine or a project's own provider
  * only produces CUSTOMER_BYOK attempts, so no hold is ever created for it (there is no hold to settle `byok` on;
@@ -33,19 +47,31 @@ const { createServiceTokenClient } = require('openvibe-sdk/auth');
 
 const MANAGED_ACCESS = new Set(['OWN_DEPLOYMENT', 'AUTHORIZED_WHOLESALE']);
 const PER_MILLION = 1000000n;
-const NANO_PER_USD = 1e9;
+const NANO_PER_USD = 1000000000n;
+const USR_RE = /^usr_[0-9A-HJKMNP-TV-Z]{26}$/;
+const PROJECT_RE = /^prj_[0-9A-HJKMNP-TV-Z]{26}$/;
 /** The four capabilities Credits names for AI (Contracts v0.284.0, one per operation). */
 const CAPABILITIES = ['billing.credit.hold.create', 'billing.credit.hold.extend', 'billing.credit.hold.settle', 'billing.credit.hold.release'];
 /** A prepaid answer has no retail charge; a settle still needs a card, and this says why the charge is zero. */
 const ZERO_RETAIL = Object.freeze({ version: 'prepaid', nano_usd_per_m: Object.freeze({ input: '0', cached_read: '0', cache_write: '0', output: '0' }), per_request_nano_usd: '0' });
 
-/** USD -> integer nano-USD, rounded up (a hold never under-reserves a fraction of a nano-USD). */
-function nanoFromUsd(usd, field = 'max_cost_usd') {
-    const n = Number(usd);
-    if (!Number.isFinite(n) || n < 0) throw new AiError(422, 'input.invalid', `${field} must be a non-negative number`);
-    const nano = Math.ceil(n * NANO_PER_USD);
-    if (!Number.isSafeInteger(nano)) throw new AiError(422, 'input.invalid', `${field} is too large`);
-    return BigInt(nano);
+/**
+ * `max_cost_usd` as an exact decimal amount: a JSON number is stringified first, exponent forms are refused
+ * (422), up to 9 fractional digits are exact and any finer non-zero digit rounds up to the next nano-USD.
+ * Returns BigInt nano-USD, or null when absent.
+ */
+function parseCostUsd(value, field = 'max_cost_usd') {
+    if (value == null) return null;
+    const raw = (typeof value === 'number' ? String(value) : String(value)).trim();
+    if (!/^[0-9]+(?:\.[0-9]+)?$/.test(raw)) throw new AiError(422, 'input.invalid', `${field} must be a plain decimal amount with no exponent (for example 0.000000001)`);
+    const [whole, frac = ''] = raw.split('.');
+    let nano;
+    try { nano = BigInt(whole) * NANO_PER_USD; } catch { throw new AiError(422, 'input.invalid', `${field} is too large`); }
+    nano += BigInt((frac + '000000000').slice(0, 9));
+    if (/[1-9]/.test(frac.slice(9))) nano += 1n;
+    // Billing's money fields are 1-19 digits; a bigger amount is refused here rather than by Billing later.
+    if (nano >= 10000000000000000000n) throw new AiError(422, 'input.invalid', `${field} is too large`);
+    return nano;
 }
 
 /** ceil(tokens × nano-per-million / 1e6), the D1 rule, per component. */
@@ -80,6 +106,29 @@ function retailChargeNano(retail, { input = 0, cached = 0, cacheWrite = 0, outpu
         + chargeNano(cacheWrite, perM.cache_write) + chargeNano(output, perM.output);
 }
 
+/**
+ * The hold a request can afford: its own card, the input estimate and the requested output cap, clamped by
+ * max_cost_usd. Returns { maxTokens, amount }; throws 402 when the cap cannot buy even one output token.
+ */
+function affordable(retail, { inputTokens, maxTokens, maxCostNano = null }) {
+    const perM = retail.nano_usd_per_m || {};
+    const base = BigInt(retail.per_request_nano_usd || '0') + chargeNano(inputTokens, perM.input);
+    const requested = Math.max(1, Math.trunc(Number(maxTokens) || 1024));
+    let tokens = requested;
+    if (maxCostNano != null) {
+        if (maxCostNano < base) throw new AiError(402, 'billing.insufficient_funds', 'max_cost_usd is below this request\'s minimum cost');
+        const rate = BigInt(String(perM.output == null ? '0' : perM.output));
+        if (rate > 0n) {
+            // floor((cap - base) × 1e6 / rate-per-million), in BigInt: the review's D1 arithmetic.
+            const can = ((maxCostNano - base) * PER_MILLION) / rate;
+            if (can < 1n) throw new AiError(402, 'billing.insufficient_funds', 'max_cost_usd leaves no room for any output token');
+            if (can < BigInt(tokens)) tokens = Number(can);
+        }
+    }
+    const amount = base + chargeNano(tokens, perM.output);
+    return { maxTokens: tokens, amount };
+}
+
 /** The text a streamed delta carries, for the output estimate (OpenAI and Anthropic event shapes). */
 function deltaText(d) {
     if (!d) return '';
@@ -92,19 +141,21 @@ function deltaText(d) {
     return '';
 }
 
-/** The payer's subject (Contracts identity.subject-ref@1): the person when a request names one, else the app/service. */
-function subjectOf({ onBehalfOf = null, appId = null, requesterType = null, requesterId = null } = {}) {
-    if (onBehalfOf) return { type: 'user', id: String(onBehalfOf) };
+/**
+ * Who pays: a person (the request's `on_behalf_of`, or an app's project owner resolved later). A first-party
+ * service with no person and no app project has no payer and gets no session (the pool refuses it paid offers).
+ */
+function payerOf({ onBehalfOf = null, appId = null } = {}) {
+    if (onBehalfOf && USR_RE.test(String(onBehalfOf))) return { type: 'user', id: String(onBehalfOf) };
     if (appId) return { type: 'app', id: String(appId) };
-    if (requesterType === 'service' && requesterId) return { type: 'service', id: String(requesterId) };
     return null;
 }
 
 /** The project a request is billed to: an app's own project, or a project attribution on a first-party run. */
 function projectOf({ projectId = null, attribution = null } = {}) {
-    if (projectId && /^prj_[0-9A-HJKMNP-TV-Z]{26}$/.test(String(projectId))) return String(projectId);
+    if (projectId && PROJECT_RE.test(String(projectId))) return String(projectId);
     const id = attribution && attribution.type === 'project' ? String(attribution.id || '') : '';
-    return /^prj_[0-9A-HJKMNP-TV-Z]{26}$/.test(id) ? id : null;
+    return PROJECT_RE.test(id) ? id : null;
 }
 
 /** A Billing error -> the API's own error: 402 keeps its code, everything else fails closed as unavailable. */
@@ -144,15 +195,17 @@ function createBillingClient({ billingUrl, audience, tokens, fetchImpl = globalT
 /**
  * One request's Credits session. Created by `begin()`; the run drives it:
  *
- *   onRoute(facts, meta)   before each provider attempt (the pool's hook); the first managed attempt holds
+ *   onRoute(facts, meta)   before each provider attempt; returns { maxTokens } to clamp the attempt,
+ *                          { skip: 'hold_not_extended' } to pass on that offer, or null (not a Credits offer)
  *   observe(delta)         each streamed delta; extends the hold when the output nears it
  *   settle({...})          once, after the answer (or after the partial usage of an abort/failure)
  *   release()              once, when no token was produced at all
  */
-function createSession({ manager, requestId, subject, projectId, credentialId = null, inputTokens, maxCostNano = null, startedAt }) {
+function createSession({ manager, requestId, payer, projectId, credentialId = null, inputTokens, maxCostNano = null, startedAt }) {
     const s = {
         requestId: String(requestId),
-        subject, projectId, credentialId,
+        payer, projectId, credentialId,
+        subject: payer && payer.type === 'user' ? payer : null,
         inputTokens: Math.max(0, Math.trunc(inputTokens)),
         maxCostNano,
         holdId: null,
@@ -168,43 +221,67 @@ function createSession({ manager, requestId, subject, projectId, credentialId = 
     const holdKey = `ai-hold:${s.requestId}`;
     const settleKey = `ai-settle:${s.requestId}`;
 
+    /** The Billing subject: a person, or the app's project owner resolved through Network (cached 60 s). */
+    async function subjectForHold() {
+        if (s.subject) return s.subject;
+        if (!s.payer || s.payer.type !== 'app') throw new AiError(503, 'billing.unavailable', 'this request has no payer for Credits');
+        const owner = await manager.ownerFor(s.projectId);
+        s.subject = { type: 'user', id: owner };
+        return s.subject;
+    }
+
     /**
-     * The pool calls this before every provider attempt. The first MANAGED attempt reserves the credit; a later
-     * managed fallback keeps the first hold (a pricier fallback settles its overage as Billing's shortfall) and
-     * remembers its card for the settle.
+     * The first managed paid attempt holds its worst case. A later managed fallback with a bigger worst case
+     * extends the hold by the difference (never above max_cost_usd); a refused extension skips that offer.
      */
     async function onRoute(facts, meta) {
-        if (s.settled || s.released) return;
-        if (!meta) return;                                                   // a person's own key or machine
+        if (s.settled || s.released) return null;
+        if (!meta) return null;                                                   // a person's own key or machine
         const card = retailOf(meta.retail);
         // A prepaid offer (free, subscription, BYOK, the stub) never spends Credits. After an earlier managed
         // attempt it may still answer (a free fallback): the settle then uses its card, or zero.
-        if (meta.paid === false) { if (s.holdId) s.retail = card || ZERO_RETAIL; return; }
-        if (!MANAGED_ACCESS.has(facts && facts.provider_access)) return;     // BYOK/unverified: no managed offer
-        if (s.holdId) { s.retail = card || s.retail; return; }
+        if (meta.paid === false) { if (s.holdId) s.retail = card || ZERO_RETAIL; return null; }
+        if (!MANAGED_ACCESS.has(facts && facts.provider_access)) return null;     // BYOK/unverified: no managed offer
         const retail = card;
         if (!retail) throw new AiError(503, 'billing.rate_unavailable', 'this route has no versioned retail rate card, so its credit cannot be held');
-        const outputTokens = Math.max(1, Math.trunc(Number(meta.maxTokens) || 1024));
-        let amount = retailChargeNano(retail, { input: s.inputTokens, output: outputTokens });
-        if (s.maxCostNano != null) {
-            // The input alone is already owed, so a cap below it cannot be honoured: refuse before the provider.
-            const floor = retailChargeNano(retail, { input: s.inputTokens });
-            if (s.maxCostNano < floor) throw new AiError(402, 'billing.insufficient_funds', 'max_cost_usd is below this request\'s minimum cost');
-            if (amount > s.maxCostNano) amount = s.maxCostNano;
+        const requested = Math.max(1, Math.trunc(Number(meta.maxTokens) || 1024));
+        let plan;
+        try {
+            plan = affordable(retail, { inputTokens: s.inputTokens, maxTokens: requested, maxCostNano: s.maxCostNano });
+        } catch (err) {
+            // The first offer cannot be bought at this cap: 402 before the provider. A fallback simply cannot be
+            // covered, so it is skipped and a cheaper offer (or a later failure) decides the run.
+            if (s.holdId) return { skip: 'hold_not_extended' };
+            throw err;
         }
         s.retail = retail;
-        s.heldNano = amount;
-        const fingerprint = sha256({
-            resolved_model: (facts && facts.resolved_model) || null, revision: (facts && facts.revision) || null,
-            input_tokens: s.inputTokens, output_tokens: outputTokens, max_cost_usd: s.maxCostNano == null ? null : String(s.maxCostNano),
-            rate_version: retail.version, subject: s.subject, project_id: s.projectId,
-        });
-        const created = await manager.hold({
-            idempotency_key: holdKey, subject: s.subject, project_id: s.projectId, ...(s.credentialId ? { credential_id: s.credentialId } : {}),
-            max_nano_usd: String(amount), rate_version: retail.version, request_fingerprint: fingerprint, service: 'ai',
-        }, s.requestId);
-        s.holdId = created.hold_id;
-        s.heldNano = BigInt(String(created.held_nano_usd == null ? amount : created.held_nano_usd));
+        if (!s.holdId) {
+            const subject = await subjectForHold();
+            s.heldNano = plan.amount;
+            const fingerprint = sha256({
+                resolved_model: (facts && facts.resolved_model) || null, revision: (facts && facts.revision) || null,
+                input_tokens: s.inputTokens, output_tokens: plan.maxTokens, max_cost_usd: s.maxCostNano == null ? null : String(s.maxCostNano),
+                rate_version: retail.version, subject, project_id: s.projectId,
+            });
+            const created = await manager.hold({
+                idempotency_key: holdKey, subject, project_id: s.projectId, ...(s.credentialId ? { credential_id: s.credentialId } : {}),
+                max_nano_usd: String(plan.amount), rate_version: retail.version, request_fingerprint: fingerprint, service: 'ai',
+            }, s.requestId);
+            s.holdId = created.hold_id;
+            s.heldNano = BigInt(String(created.held_nano_usd == null ? plan.amount : created.held_nano_usd));
+            return { maxTokens: plan.maxTokens };
+        }
+        if (plan.amount > s.heldNano) {
+            const add = plan.amount - s.heldNano;
+            try {
+                await manager.extend(s.holdId, { add_nano_usd: String(add) }, s.requestId);
+                s.heldNano = plan.amount;
+            } catch (err) {
+                if (err && (err.code === 'billing.insufficient_funds' || err.code === 'billing.conflict')) return { skip: 'hold_not_extended' };
+                throw err;
+            }
+        }
+        return { maxTokens: plan.maxTokens };
     }
 
     /** The projected output charge of what has streamed so far. */
@@ -254,12 +331,17 @@ function createSession({ manager, requestId, subject, projectId, credentialId = 
     async function settle({ usage = {}, supplyCostUsd = 0, attempts = [] } = {}) {
         if (!s.holdId || s.settled || s.released) return null;
         if (s.pending) await s.pending;
-        const supply = Math.ceil(Math.max(0, Number(supplyCostUsd) || 0) * NANO_PER_USD);
+        // The provider's own cost comes as a float from the rate cards; turn it into integer nano-USD through a
+        // decimal string (never a nano conversion by float multiplication).
+        let supply = 0n;
+        if (Number.isFinite(supplyCostUsd) && supplyCostUsd > 0) {
+            try { supply = parseCostUsd(Number(supplyCostUsd).toFixed(9)) || 0n; } catch { supply = 0n; }
+        }
         const body = {
             idempotency_key: settleKey,
             usage: usageOf(usage),
             retail: s.retail,
-            supply_cost_nano_usd: String(Number.isSafeInteger(supply) ? supply : 0),
+            supply_cost_nano_usd: String(supply),
             byok: false,
             attempts: Array.isArray(attempts) ? attempts : [],
         };
@@ -268,6 +350,11 @@ function createSession({ manager, requestId, subject, projectId, credentialId = 
             return await manager.settle(s.holdId, body, s.requestId);
         } catch (err) {
             s.settled = false;
+            // Durable: Billing may be down or slow now; the same body and key are retried by the outbox.
+            if (manager.enqueueSettle) {
+                try { await manager.enqueueSettle({ holdId: s.holdId, requestId: s.requestId, body, error: err }); }
+                catch (qerr) { manager.log.warn(`[credits] queue settle ${settleKey} failed: ${qerr && qerr.message}`); }
+            }
             throw err;
         }
     }
@@ -288,30 +375,80 @@ function createSession({ manager, requestId, subject, projectId, credentialId = 
         onRoute, observe, settle, release, projectedNano, usageOf, requestId: s.requestId,
         get holdId() { return s.holdId; }, get heldNano() { return s.heldNano; }, get retail() { return s.retail; },
         get streamedChars() { return s.streamedChars; }, get settled() { return s.settled; }, get released() { return s.released; },
-        get inputTokens() { return s.inputTokens; },
+        get inputTokens() { return s.inputTokens; }, get payer() { return s.payer; },
     };
 }
 
 /**
  * The manager the service builds at boot (null when AI_CREDITS is off, so `runs` never touches Billing).
- * `tokens` is injectable for tests; production mints a service token for openvibe.billing with the four caps.
+ * `tokens` / `networkTokens` are injectable for tests; production mints service tokens for openvibe.billing
+ * (the four hold capabilities) and openvibe.network (network.project.read).
  */
-function createCredits({ config, registry = null, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, tokens = null, networkUrl = '' }) {
+function createCredits({ config, db = null, registry = null, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, tokens = null, networkTokens = null, networkUrl = '' }) {
     const cfg = (config && config.credits) || {};
     if (!cfg.enabled) return null;
     const billingUrl = String(cfg.billingUrl || '').replace(/\/+$/, '');
     const clientSecret = env.OV_OAUTH_CLIENT_SECRET;
     const network = String(networkUrl || cfg.networkUrl || 'http://127.0.0.1:4000').replace(/\/+$/, '');
+    const clientId = (config.console && config.console.clientId) || env.OV_OAUTH_CLIENT_ID || 'ai';
     let tokenClient = tokens;
     if (!tokenClient && clientSecret) {
         tokenClient = createServiceTokenClient({
-            tokenUrl: `${network}/oauth/token`, clientId: (config.console && config.console.clientId) || env.OV_OAUTH_CLIENT_ID || 'ai',
-            clientSecret, scope: { [cfg.audience || 'openvibe.billing']: CAPABILITIES }, fetch: fetchImpl,
+            tokenUrl: `${network}/oauth/token`, clientId, clientSecret,
+            scope: { [cfg.audience || 'openvibe.billing']: CAPABILITIES }, fetch: fetchImpl,
+        });
+    }
+    let networkClient = networkTokens;
+    if (!networkClient && clientSecret) {
+        networkClient = createServiceTokenClient({
+            tokenUrl: `${network}/oauth/token`, clientId, clientSecret,
+            scope: { 'openvibe.network': 'network.project.read' }, fetch: fetchImpl,
         });
     }
     const available = Boolean(billingUrl && tokenClient);
     if (!available) log.warn('[credits] AI_CREDITS is on but Billing is not configured (OV_BILLING_INTERNAL_URL / OV_OAUTH_CLIENT_SECRET); paid managed requests will be refused');
     const billing = available ? createBillingClient({ billingUrl, audience: cfg.audience || 'openvibe.billing', tokens: tokenClient, fetchImpl, timeoutMs: cfg.timeoutMs || 5000 }) : null;
+
+    // The project owner is stable; cache it for a minute, and share one lookup between concurrent runs.
+    const owners = new Map();
+    const ownerInflight = new Map();
+    const ownerTtlMs = Math.max(1000, Number(cfg.ownerTtlMs) || 60000);
+    async function ownerFor(projectId) {
+        if (!PROJECT_RE.test(String(projectId))) throw new AiError(503, 'billing.unavailable', 'the project for this app is not a project id, so Credits cannot find its owner');
+        const hit = owners.get(projectId);
+        if (hit && hit.exp > clock.now()) return hit.owner;
+        if (ownerInflight.has(projectId)) return ownerInflight.get(projectId);
+        const lookup = (async () => {
+            if (!networkClient) throw new AiError(503, 'billing.unavailable', 'Credits cannot resolve a project owner: Network is not configured');
+            let token;
+            try { token = await networkClient.getToken({ audience: 'openvibe.network' }); }
+            catch (err) { throw new AiError(503, 'billing.unavailable', `Credits cannot resolve a project owner: Network token failed`); }
+            let res;
+            try {
+                res = await fetchImpl(`${network}/internal/projects/${encodeURIComponent(projectId)}`, {
+                    headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' }, signal: AbortSignal.timeout(Number(cfg.timeoutMs) || 5000),
+                });
+            } catch (err) {
+                throw new AiError(503, 'billing.unavailable', 'Credits cannot resolve a project owner: Network is unreachable');
+            }
+            if (!res.ok) throw new AiError(503, 'billing.unavailable', `Credits cannot resolve a project owner (Network ${res.status})`);
+            const body = await res.json().catch(() => null);
+            const owner = body && body.project && body.project.owner;
+            if (!owner || owner.type !== 'user' || !USR_RE.test(String(owner.id || ''))) throw new AiError(503, 'billing.unavailable', 'Credits cannot resolve a project owner: Network named none');
+            owners.set(projectId, { owner: String(owner.id), exp: clock.now() + ownerTtlMs });
+            return String(owner.id);
+        })().finally(() => ownerInflight.delete(projectId));
+        ownerInflight.set(projectId, lookup);
+        return lookup;
+    }
+
+    const settlements = db && billing
+        ? require('./credit-settlements').createCreditSettlements({
+            db, clock, log, registry,
+            send: (row) => billing.settle(row.hold_id, row.body, row.request_id),
+            retryMs: cfg.settleRetryMs, maxRetryMs: cfg.settleMaxRetryMs,
+        })
+        : null;
 
     const manager = {
         enabled: true,
@@ -333,19 +470,29 @@ function createCredits({ config, registry = null, env = process.env, clock = { n
             if (!billing) throw new AiError(503, 'billing.unavailable', 'Billing Credits is not configured on this service');
             return billing.release(holdId, requestId);
         },
+        ownerFor,
+        enqueueSettle: settlements ? (row) => settlements.enqueue(row) : null,
+        drainSettlements: settlements ? (opts) => settlements.runOnce(opts) : async () => ({ skipped: 'disabled' }),
+        pendingSettlements: settlements ? () => settlements.pending() : async () => [],
+        startSettlements: settlements ? () => settlements.start() : () => null,
+        stopSettlements: settlements ? () => settlements.stop() : () => {},
         /**
-         * Begin a request's Credits session, or null when nothing can be billed (no project, a cache hit, or a run
-         * whose payer is not known). `requestId` is the API's request id: the hold and settle keys.
+         * Begin a request's Credits session, or null when there is no payer or project (the pool then refuses
+         * paid offers that carry a versioned card), or for a BYOK run (no managed route to bill).
          */
         begin({ requestId, ctx = {}, input = {}, attribution = null, onBehalfOf = null, credentialId = null } = {}) {
             const projectId = projectOf({ projectId: ctx.projectId, attribution });
-            const subject = subjectOf({ onBehalfOf, appId: ctx.appId, requesterType: ctx.requesterType, requesterId: ctx.requesterId });
-            if (!subject || !projectId) return null;
+            const payer = payerOf({ onBehalfOf: onBehalfOf || ctx.onBehalfOf || null, appId: ctx.appId });
+            if (!payer || !projectId) return null;
             if (ctx.byok) return null;                           // a credential/project provider: no managed route in this run
-            const requestKey = String(requestId || `${ctx.runId || ''}:${clock.now()}`);
+            const requestKey = String(requestId || ctx.runId || '');
+            if (!requestKey) return null;                        // no stable key: never invent one from the clock
             const inputTokens = approxTokens(JSON.stringify(input || {})) + 16;
-            const maxCostNano = ctx.maxCostUsd != null ? nanoFromUsd(ctx.maxCostUsd) : null;
-            return createSession({ manager, requestId: requestKey, subject, projectId, credentialId, inputTokens, maxCostNano, startedAt: iso(clock.now()) });
+            let maxCostNano = null;
+            if (ctx.maxCostNano != null) {
+                try { maxCostNano = BigInt(String(ctx.maxCostNano)); } catch { throw new AiError(422, 'input.invalid', 'max_cost_usd is invalid'); }
+            } else if (ctx.maxCostUsd != null) maxCostNano = parseCostUsd(ctx.maxCostUsd);
+            return createSession({ manager, requestId: requestKey, payer, projectId, credentialId, inputTokens, maxCostNano, startedAt: iso(clock.now()) });
         },
     };
     return manager;
@@ -356,4 +503,7 @@ function accessOfProvider(provider) {
     try { return require('./providers/model-catalog').accessOf(provider); } catch { return null; }
 }
 
-module.exports = { createCredits, createBillingClient, createSession, retailOf, retailChargeNano, nanoFromUsd, deltaText, subjectOf, projectOf, accessOfProvider, CAPABILITIES, MANAGED_ACCESS };
+module.exports = {
+    createCredits, createBillingClient, createSession, retailOf, retailChargeNano, affordable, parseCostUsd,
+    deltaText, payerOf, projectOf, accessOfProvider, CAPABILITIES, MANAGED_ACCESS,
+};

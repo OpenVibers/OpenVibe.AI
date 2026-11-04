@@ -1,26 +1,28 @@
 'use strict';
-// AI Exchange F / P7: the Credits session (server/credits.js) against a fake Billing, without HTTP.
-// Covers the decisions the run-level tests lean on: the worst-case hold at the retail card, a 402 before any
-// provider (the session refuses in onRoute), one settle per request, the partial usage of an abort, release
-// before a first token, a managed fallback settling once with both attempts, BYOK never held, the streaming
-// extension, max_cost_usd, and AI_CREDITS off.
+// AI Exchange F / P7: the Credits session (server/credits.js) against a fake Billing and a fake Network, without
+// HTTP. Covers the review's money rules: the worst-case hold at the retail card, a decimal-only max_cost_usd that
+// clamps the output, a payer (the app's project owner), a pricier managed fallback extending the hold, one settle
+// per request, the partial usage of an abort, release before a first token, BYOK never held, the streaming
+// extension, contract-valid request bodies, and AI_CREDITS off.
 const assert = require('assert');
+const contracts = require('openvibe-contracts');
 const { suite } = require('./helpers');
-const { createCredits, retailOf } = require('../server/credits');
+const { createCredits, retailOf, parseCostUsd, affordable } = require('../server/credits');
 
 const t = suite('credits');
 
 const PRJ = 'prj_01JAB2C3D4E5F6G7H8J9K0MNPQ';
 const APP = 'app_01JAB2C3D4E5F6G7H8J9K0MNPQ';
+const OWNER = 'usr_01JAB2C3D4E5F6G7H8J9K0MNP7';
 const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 const R1 = { version: 'retail-1', input_nano_usd_per_m: '1000000000', output_nano_usd_per_m: '2000000000', cached_read_nano_usd_per_m: '0', cache_write_nano_usd_per_m: '0', per_request_nano_usd: '0' };
 const R2 = { version: 'retail-2', input_nano_usd_per_m: '500000000', output_nano_usd_per_m: '4000000000', cached_read_nano_usd_per_m: '0', cache_write_nano_usd_per_m: '0', per_request_nano_usd: '0' };
 const FACTS = { resolved_model: 'org/model@r1', revision: 'r1', deployment: 'up', provider_access: 'OWN_DEPLOYMENT', rate_version: 'retail-1', policy: null, fallback_reason: null };
 const BYOK_FACTS = { ...FACTS, provider_access: 'CUSTOMER_BYOK' };
 
-/** A tiny Billing that keeps holds/settlements the way PR #187 does (idempotent, 402 on a short balance). */
+/** A tiny Billing + Network: holds/settlements like PR #187, and GET /internal/projects/:id like Network #553. */
 function fakeBilling({ balance = '100000000000' } = {}) {
-    const state = { balance: BigInt(balance), held: 0n, holds: new Map(), settlements: new Map(), released: new Map(), calls: [], seq: 0 };
+    const state = { balance: BigInt(balance), held: 0n, holds: new Map(), settlements: new Map(), released: new Map(), calls: [], seq: 0, projectCalls: 0, projectStatus: 200, owner: OWNER };
     const available = () => state.balance - state.held;
     const chargeOf = (usage, retail) => {
         const perM = retail.nano_usd_per_m || {};
@@ -35,6 +37,11 @@ function fakeBilling({ balance = '100000000000' } = {}) {
         const path = new URL(url).pathname;
         const body = opts.body ? JSON.parse(opts.body) : {};
         state.calls.push({ path, body });
+        if (path.startsWith('/internal/projects/')) {
+            state.projectCalls++;
+            if (state.projectStatus !== 200) return json(state.projectStatus, { code: 'project.not_found', detail: 'no such project' });
+            return json(200, { project: { id: path.split('/').pop(), owner: { type: 'user', id: state.owner } } });
+        }
         if (path === '/internal/credits/holds') {
             const key = body.idempotency_key;
             const prev = state.holds.get(key);
@@ -54,6 +61,7 @@ function fakeBilling({ balance = '100000000000' } = {}) {
             const hold = [...state.holds.values()].find((h) => h.hold_id === decodeURIComponent(extend[1]));
             if (!hold) return json(404, { code: 'billing.hold_not_found' });
             const add = BigInt(String(body.add_nano_usd));
+            if (state.refuseExtend) return json(402, { code: 'billing.insufficient_funds', detail: 'cannot extend' });
             if (available() < add) return json(402, { code: 'billing.insufficient_funds', detail: 'cannot extend' });
             hold.held_nano_usd = String(BigInt(hold.held_nano_usd) + add);
             hold.status = 'extended';
@@ -69,13 +77,11 @@ function fakeBilling({ balance = '100000000000' } = {}) {
             if (!hold) return json(404, { code: 'billing.hold_not_found' });
             const charge = body.byok ? 0n : chargeOf(body.usage, body.retail);
             const held = BigInt(hold.held_nano_usd);
-            const collected = charge; // enough balance in these fixtures
-            const result = { charge_nano_usd: String(collected), released_nano_usd: String(collected >= held ? 0n : held - collected), journal_id: `txn_${state.settlements.size + 1}`, settlement: { usage: body.usage, retail: body.retail, attempts: body.attempts } };
+            const result = { charge_nano_usd: String(charge), released_nano_usd: String(charge >= held ? 0n : held - charge), journal_id: `txn_${state.settlements.size + 1}`, settlement: { usage: body.usage, retail: body.retail, attempts: body.attempts } };
             state.settlements.set(body.idempotency_key, { hold_id: id, result });
             hold.status = 'settled';
             state.held -= held;
-            state.balance -= collected;
-            state.settlements.get(body.idempotency_key).hold = hold;
+            state.balance -= charge;
             return json(201, result);
         }
         const release = /^\/internal\/credits\/holds\/([^/]+)\/release$/.exec(path);
@@ -94,10 +100,12 @@ function fakeBilling({ balance = '100000000000' } = {}) {
     return { state, fetchImpl, available, chargeOf };
 }
 
-function managerFor(billing, { balance } = {}) {
+function managerFor(billing, overrides = {}) {
     return createCredits({
         config: { credits: { enabled: true, billingUrl: 'http://billing.test', audience: 'openvibe.billing', timeoutMs: 1000 }, console: { clientId: 'ai' } },
-        tokens: { getToken: async () => 'test-token' }, fetchImpl: billing.fetchImpl, log: { warn() {}, log() {}, error() {} },
+        tokens: { getToken: async () => 'billing-token' }, networkTokens: { getToken: async () => 'network-token' },
+        networkUrl: 'http://network.test', fetchImpl: billing.fetchImpl, log: { warn() {}, log() {}, error() {} },
+        ...overrides,
     });
 }
 
@@ -105,20 +113,56 @@ function begin(manager, { requestId = 'req_credits_0001', input = {}, extra = {}
     return manager.begin({ requestId, ctx: { runId: 'run_1', requesterType: 'app', requesterId: APP, appId: APP, projectId: PRJ, ...extra }, input: { messages: [{ role: 'user', content: 'hello' }], ...input } });
 }
 
-t.test('the hold is the worst case at the retail card: the input estimate plus max_tokens of output', async () => {
+const callsTo = (billing, suffix) => billing.state.calls.filter((c) => c.path.endsWith(suffix));
+
+t.test('max_cost_usd is an exact decimal: 0.29, 0.000000001, and 0.0000000011 rounding up to 2 nano', () => {
+    assert.strictEqual(parseCostUsd(0.29), 290000000n);
+    assert.strictEqual(parseCostUsd('0.000000001'), 1n);
+    assert.strictEqual(parseCostUsd('0.0000000011'), 2n);
+    assert.strictEqual(parseCostUsd('1.0000000004'), 1000000001n);
+    assert.strictEqual(parseCostUsd('0'), 0n);
+    assert.throws(() => parseCostUsd('1e-9'), (err) => err.status === 422 && err.code === 'input.invalid');
+    assert.throws(() => parseCostUsd('0.1e2'), (err) => err.status === 422);
+    assert.throws(() => parseCostUsd('-1'), (err) => err.status === 422);
+    assert.throws(() => parseCostUsd('abc'), (err) => err.status === 422);
+});
+
+t.test('max_cost_usd caps the worst case by clamping the affordable output tokens in BigInt', () => {
+    const retail = retailOf({ ...R1, input_nano_usd_per_m: '0' });
+    assert.deepStrictEqual(affordable(retail, { inputTokens: 0, maxTokens: 100, maxCostNano: 10000n }), { maxTokens: 5, amount: 10000n });
+    assert.deepStrictEqual(affordable(retail, { inputTokens: 0, maxTokens: 100, maxCostNano: 9999n }).maxTokens, 4);
+    assert.throws(() => affordable(retail, { inputTokens: 0, maxTokens: 100, maxCostNano: 1999n }), (err) => err.status === 402 && err.code === 'billing.insufficient_funds');
+    assert.deepStrictEqual(affordable(retail, { inputTokens: 0, maxTokens: 3 }), { maxTokens: 3, amount: 6000n });
+});
+
+t.test('the hold is the worst case at the retail card, paid by the app\'s project owner (network.project.read)', async () => {
     const billing = fakeBilling();
     const manager = managerFor(billing);
     const session = begin(manager);
-    const before = billing.state.calls.length;
-    await session.onRoute(FACTS, { retail: R1, maxTokens: 1000 });
-    const call = billing.state.calls[before];
-    assert.strictEqual(call.path, '/internal/credits/holds');
+    const routed = await session.onRoute(FACTS, { retail: R1, maxTokens: 1000 });
+    const call = billing.state.calls.find((c) => c.path === '/internal/credits/holds');
     const expected = BigInt(session.inputTokens) * 1000n + 1000n * 2000n;   // $1/M input, $2/M output, in nano
     assert.strictEqual(call.body.max_nano_usd, String(expected));
     assert.strictEqual(call.body.rate_version, 'retail-1');
-    assert.deepStrictEqual(call.body.subject, { type: 'app', id: APP });
+    assert.deepStrictEqual(call.body.subject, { type: 'user', id: OWNER }, 'Billing bills a person, not an app');
     assert.strictEqual(call.body.project_id, PRJ);
     assert.match(call.body.request_fingerprint, /^[0-9a-f]{64}$/);
+    assert.deepStrictEqual(routed, { maxTokens: 1000 });
+    assert.strictEqual(billing.state.projectCalls, 1);
+    // A second request for the same project reuses the 60 s owner cache.
+    const second = begin(manager, { requestId: 'req_credits_0002' });
+    await second.onRoute(FACTS, { retail: R1, maxTokens: 10 });
+    assert.strictEqual(billing.state.projectCalls, 1, 'the owner is cached');
+});
+
+t.test('a project whose owner cannot be resolved fails closed (503) before any hold or provider', async () => {
+    const billing = fakeBilling();
+    const manager = managerFor(billing);
+    const session = begin(manager);
+    billing.state.projectStatus = 404;
+    await assert.rejects(session.onRoute(FACTS, { retail: R1, maxTokens: 100 }), (err) => err.status === 503 && err.code === 'billing.unavailable');
+    assert.strictEqual(session.holdId, null);
+    assert.strictEqual(callsTo(billing, '/holds').length, 0);
 });
 
 t.test('a 402 from Billing is AI\'s own 402, raised before the provider (onRoute never returns)', async () => {
@@ -135,7 +179,7 @@ t.test('one settle per request: the second call is a no-op, and a retried reques
     const manager = managerFor(billing);
     const session = begin(manager);
     await session.onRoute(FACTS, { retail: R1, maxTokens: 100 });
-    const first = await session.settle({ usage: { input: 100, output: 10 }, supplyCostUsd: 0.000001, attempts: [{ deployment_id: 'up:gpt-up', provider: 'up', model: 'gpt-up', started_at: new Date().toISOString(), ended_at: new Date().toISOString() }] });
+    const first = await session.settle({ usage: { input: 100, output: 10 }, supplyCostUsd: 0.000001, attempts: [{ deployment_id: 'up:gpt-up', provider_access: 'OWN_DEPLOYMENT', started_at: new Date().toISOString(), ended_at: new Date().toISOString(), error_code: null }] });
     const again = await session.settle({ usage: { input: 100, output: 10 } });
     assert.ok(first && first.charge_nano_usd);
     assert.strictEqual(again, null, 'the same session settles once');
@@ -173,34 +217,36 @@ t.test('an error before the first token releases the hold with nothing charged',
     assert.strictEqual(await session.settle({ usage: { input: 10, output: 0 } }), null);
 });
 
-t.test('a fallback settles once with both attempts and the answering model\'s card', async () => {
+t.test('a pricier managed fallback extends the hold by the difference, and a refused extension skips it', async () => {
     const billing = fakeBilling();
     const manager = managerFor(billing);
     const session = begin(manager);
-    await session.onRoute({ ...FACTS, resolved_model: 'org/one@r1' }, { retail: R1, maxTokens: 100 });
-    await session.onRoute({ ...FACTS, resolved_model: 'org/two@r1', deployment: 'up2', rate_version: 'retail-2' }, { retail: R2, maxTokens: 100 });
-    const attempts = [
-        { deployment_id: 'up:one', provider: 'up', model: 'one', started_at: new Date().toISOString(), ended_at: new Date().toISOString(), error_code: 'provider.error' },
-        { deployment_id: 'up2:two', provider: 'up2', model: 'two', started_at: new Date().toISOString(), ended_at: new Date().toISOString(), error_code: null },
-    ];
-    const out = await session.settle({ usage: { input: 100, output: 20 }, attempts });
+    await session.onRoute(FACTS, { retail: R1, maxTokens: 100 });
+    const before = BigInt(session.heldNano);
+    const routed = await session.onRoute({ ...FACTS, resolved_model: 'org/two@r1', deployment: 'up2', rate_version: 'retail-2' }, { retail: R2, maxTokens: 100 });
+    const extend = callsTo(billing, '/extend').pop();
+    const after = BigInt(session.heldNano);
+    assert.ok(after > before, 'the hold grew');
+    assert.strictEqual(extend.body.add_nano_usd, String(after - before));
+    assert.deepStrictEqual(routed, { maxTokens: 100 });
+    const out = await session.settle({ usage: { input: 100, output: 20 }, attempts: [
+        { deployment_id: 'up:one', provider_access: 'OWN_DEPLOYMENT', started_at: new Date().toISOString(), ended_at: new Date().toISOString(), error_code: 'provider.error' },
+        { deployment_id: 'up2:two', provider_access: 'OWN_DEPLOYMENT', started_at: new Date().toISOString(), ended_at: new Date().toISOString(), error_code: null },
+    ] });
     assert.strictEqual(billing.state.settlements.size, 1);
     const saved = [...billing.state.settlements.values()][0];
     assert.strictEqual(saved.result.settlement.retail.version, 'retail-2', 'the card of the model that answered');
     assert.strictEqual(saved.result.settlement.attempts.length, 2);
-    assert.strictEqual(billing.state.calls.filter((c) => c.path.endsWith('/settle')).length, 1);
     assert.ok(out.charge_nano_usd);
-});
 
-t.test('BYOK is never held and never charged', async () => {
-    const billing = fakeBilling();
-    const manager = managerFor(billing);
-    const session = begin(manager);
-    await session.onRoute(BYOK_FACTS, { retail: R1, maxTokens: 100 });     // a person's own key: no meta, or CUSTOMER_BYOK
-    await session.onRoute(BYOK_FACTS);
-    assert.strictEqual(session.holdId, null);
-    assert.strictEqual(billing.state.calls.length, 0, 'Billing was never called');
-    assert.strictEqual(await session.settle({ usage: { input: 100, output: 20 } }), null);
+    // The same fallback, but Billing refuses the extension: the offer is skipped, never run.
+    const refused = fakeBilling();
+    refused.state.refuseExtend = true;
+    const m2 = managerFor(refused);
+    const s2 = begin(m2);
+    await s2.onRoute(FACTS, { retail: R1, maxTokens: 100 });
+    const skip = await s2.onRoute({ ...FACTS, resolved_model: 'org/two@r1', deployment: 'up2' }, { retail: R2, maxTokens: 100 });
+    assert.deepStrictEqual(skip, { skip: 'hold_not_extended' });
 });
 
 t.test('a stream near the hold is extended in a step (and never past max_cost_usd)', async () => {
@@ -219,24 +265,56 @@ t.test('a stream near the hold is extended in a step (and never past max_cost_us
     assert.ok(extend, 'the hold was extended');
     assert.ok(BigInt(extend.body.add_nano_usd) > 0n);
 
-    // max_cost_usd caps the total: a second session holds at most the cap.
-    const capped = begin(manager, { requestId: 'req_credits_cap', extra: { maxCostUsd: 0.000002 } });   // 2,000 nano
-    await capped.onRoute(FACTS, { retail: cheap, maxTokens: 16000 });
+    // max_cost_usd caps the total: a second session holds at most the cap and clamps its max_tokens.
+    const capped = begin(manager, { requestId: 'req_credits_cap', extra: { maxCostNano: '2000' } });
+    const routed = await capped.onRoute(FACTS, { retail: cheap, maxTokens: 16000 });
+    assert.deepStrictEqual(routed, { maxTokens: 2 });
     assert.strictEqual(capped.heldNano, 2000n);
 });
 
-t.test('no project, no subject or the flag off means no session at all', async () => {
+t.test('the outgoing hold, extend and settle bodies validate against the contracts', async () => {
     const billing = fakeBilling();
     const manager = managerFor(billing);
-    assert.strictEqual(manager.begin({ requestId: 'req_1', ctx: { requesterType: 'service', requesterId: 'live' } }), null, 'a first-party run with no project is not held');
-    assert.strictEqual(manager.begin({ requestId: 'req_2', ctx: { requesterType: 'user', requesterId: 'usr_x', projectId: PRJ } }), null, 'an unknown payer is not held');
-    assert.strictEqual(createCredits({ config: { credits: { enabled: false } }, tokens: { getToken: async () => 't' }, fetchImpl: billing.fetchImpl }), null, 'AI_CREDITS off -> no manager, nothing changes');
+    const session = begin(manager);
+    await session.onRoute(FACTS, { retail: R1, maxTokens: 100 });
+    await session.onRoute({ ...FACTS, resolved_model: 'org/two@r1', deployment: 'up2', rate_version: 'retail-2' }, { retail: R2, maxTokens: 100 });
+    await session.settle({ usage: { input: 100, output: 20 }, attempts: [
+        { deployment_id: 'up:one', provider_access: 'OWN_DEPLOYMENT', started_at: new Date().toISOString(), ended_at: new Date().toISOString(), error_code: 'provider.error' },
+        { deployment_id: 'up2:two', provider_access: 'OWN_DEPLOYMENT', started_at: new Date().toISOString(), ended_at: new Date().toISOString(), error_code: null },
+    ] });
+    const hold = billing.state.calls.find((c) => c.path === '/internal/credits/holds').body;
+    const extend = callsTo(billing, '/extend').pop().body;
+    const settle = callsTo(billing, '/settle').pop().body;
+    for (const [schema, body] of [['billing.credit-hold-create-request@1', hold], ['billing.credit-hold-extend-request@1', extend], ['billing.credit-hold-settle-request@1', settle]]) {
+        const v = contracts.validate(schema, body);
+        assert.ok(v.valid, `${schema}: ${JSON.stringify(v.errors && v.errors.slice(0, 3))}`);
+    }
+    assert.deepStrictEqual(Object.keys(settle.attempts[0]).sort(), ['deployment_id', 'ended_at', 'error_code', 'provider_access', 'started_at'], 'the contract\'s exact attempt shape');
 });
 
-t.test('credits on with no Billing configured refuses a paid managed offer instead of serving it free', async () => {
-    const manager = createCredits({ config: { credits: { enabled: true, billingUrl: '' }, console: { clientId: 'ai' } }, env: { OV_OAUTH_CLIENT_SECRET: 'test-secret' }, tokens: { getToken: async () => 't' }, fetchImpl: fakeBilling().fetchImpl, log: { warn() {}, log() {}, error() {} } });
+t.test('BYOK is never held, never charged and Billing is never called', async () => {
+    const billing = fakeBilling();
+    const manager = managerFor(billing);
     const session = begin(manager);
-    await assert.rejects(session.onRoute(FACTS, { retail: R1, maxTokens: 100 }), (err) => err.status === 503 && err.code === 'billing.unavailable');
+    await session.onRoute(BYOK_FACTS, { retail: R1, maxTokens: 100 });     // a person's own key: no meta, or CUSTOMER_BYOK
+    await session.onRoute(BYOK_FACTS);
+    assert.strictEqual(session.holdId, null);
+    assert.strictEqual(billing.state.calls.length, 0, 'Billing was never called');
+    assert.strictEqual(await session.settle({ usage: { input: 100, output: 20 } }), null);
+});
+
+t.test('no payer or no project means no session, and credits on with no Billing refuses paid offers', async () => {
+    const billing = fakeBilling();
+    const manager = managerFor(billing);
+    assert.strictEqual(manager.begin({ requestId: 'req_1', ctx: { requesterType: 'service', requesterId: 'live' } }), null, 'a first-party service with no person has no payer');
+    assert.strictEqual(manager.begin({ requestId: 'req_2', ctx: { requesterType: 'service', requesterId: 'live' }, onBehalfOf: OWNER }), null, 'a person but no project has no account');
+    assert.strictEqual(createCredits({ config: { credits: { enabled: false } }, tokens: { getToken: async () => 't' }, fetchImpl: billing.fetchImpl }), null, 'AI_CREDITS off -> no manager, nothing changes');
+    // Credits on, Billing URL missing: a paid managed offer must refuse rather than run free.
+    const unconfigured = createCredits({ config: { credits: { enabled: true, billingUrl: '' }, console: { clientId: 'ai' } }, env: { OV_OAUTH_CLIENT_SECRET: 'test-secret' }, tokens: { getToken: async () => 't' }, networkTokens: { getToken: async () => 'n' }, fetchImpl: billing.fetchImpl, log: { warn() {}, log() {}, error() {} } });
+    const s = managerFor(billing).begin({ requestId: 'req_3', ctx: { requesterType: 'service', requesterId: 'live' }, onBehalfOf: OWNER, attribution: { type: 'project', id: PRJ } });
+    assert.ok(s, 'a person and a project get a session');
+    const blocked = unconfigured.begin({ requestId: 'req_4', ctx: { requesterType: 'service', requesterId: 'live' }, onBehalfOf: OWNER, attribution: { type: 'project', id: PRJ } });
+    await assert.rejects(blocked.onRoute(FACTS, { retail: R1, maxTokens: 100 }), (err) => err.status === 503 && err.code === 'billing.unavailable');
 });
 
 t.run();

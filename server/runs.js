@@ -18,6 +18,7 @@
  */
 const { ids } = require('openvibe-contracts');
 const { AiError, sha256, stableStringify, parseJson, iso } = require('./util');
+const { parseCostUsd } = require('./credits');
 const { CACHE_INPUT } = require('./workflows/hooks');
 const { preferenceLines } = require('./user-modules');
 const { preferredTarget } = require('./providers/task');
@@ -264,12 +265,10 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             if (refusal) throw refusal;
         }
         // AI Exchange F: the caller's optional liability cap on a Credits hold (`max_cost_usd`). It is a request
-        // field on the OpenAI and Messages routes and an input/option field on the direct ones.
-        const maxCostUsd = body.max_cost_usd != null ? body.max_cost_usd : options.max_cost_usd != null ? options.max_cost_usd : input.max_cost_usd;
-        if (maxCostUsd != null) {
-            const n = Number(maxCostUsd);
-            if (!Number.isFinite(n) || n < 0) throw new AiError(422, 'input.invalid', 'max_cost_usd must be a non-negative number');
-        }
+        // field on the OpenAI and Messages routes and an input/option field on the direct ones; parsed as an exact
+        // decimal into integer nano-USD, never through a float (0.000000001 is one nano, 0.0000000011 rounds up).
+        const rawMaxCost = body.max_cost_usd != null ? body.max_cost_usd : options.max_cost_usd != null ? options.max_cost_usd : input.max_cost_usd;
+        const maxCostNano = rawMaxCost == null ? null : parseCostUsd(rawMaxCost);
         const ctx = {
             requesterType: requester.type, requesterId: requester.id,
             ...(principal.jti ? { runJti: principal.jti } : {}),
@@ -279,7 +278,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             onBehalfOf: personSubject || principal.onBehalfOf || null,
             // A credential or a project's own provider never reaches managed supply: no Credits hold for that run.
             ...(credentialSubject !== null || projectProvider ? { byok: true } : {}),
-            ...(maxCostUsd != null ? { maxCostUsd } : {}),
+            ...(maxCostNano != null ? { maxCostNano: String(maxCostNano) } : {}),
             ...(pinned ? { routePin: pinned } : {}),
             // POST /v1/chat/completions with stream: true: the upstream's deltas, as they arrive (kept in memory only).
             ...(typeof onDelta === 'function' ? { onDelta } : {}),
@@ -494,7 +493,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         if (p && p.metadata && p.metadata.allowance === 'network') return { paid_by: 'network_allowance', detail: name, provider: name };
         return { paid_by: 'openvibe_key', detail: name, provider: name };
     }
-    /** The attempts a Credits settle reports: provider, model, access, start/end and the error of a failed one. */
+    /** The attempts a Credits settle reports, in billing.credit-hold-settle-request@1's exact attempt shape. */
     async function billingAttempts({ explain, logged, startedAt, endedAt }) {
         const source = explain && Array.isArray(explain.attempts) && explain.attempts.length ? explain.attempts : (logged || []);
         const out = [];
@@ -507,7 +506,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             try { const p = await registry.getProvider(provider); access = p && credits ? credits.accessOf(p) : null; } catch { access = null; }
             const ok = a.status === 'ok' || a.status === 'succeeded';
             out.push({
-                deployment_id: `${provider}:${model || ''}`, provider, model,
+                deployment_id: `${provider}:${model || ''}`,
                 ...(access ? { provider_access: access } : {}),
                 started_at: startedAt, ended_at: endedAt,
                 error_code: ok ? null : String(a.error || a.error_code || a.status || 'error').slice(0, 120),
@@ -523,7 +522,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             const attempts = await billingAttempts({ explain, logged, startedAt, endedAt });
             return await credit.settle({ usage, supplyCostUsd: costUsd, attempts });
         } catch (err) {
-            log.warn(`[credits] settle ${credit.holdId} failed (Billing will expire the hold if it is not settled): ${err && err.message}`);
+            log.warn(`[credits] settle ${credit.holdId} failed; queued for retry (a 409/422 needs review): ${err && err.message}`);
             return null;
         }
     }
@@ -557,7 +556,10 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             // default). A run with no project to bill (a first-party service, a cache hit, BYOK) begins no session
             // and never touches Billing.
             if (credits && credits.enabled) {
-                credit = credits.begin({ requestId: row.request_id || id, ctx, input, attribution: parseJson(row.attribution, null) });
+                credit = credits.begin({ requestId: row.request_id || id, ctx, input, attribution: parseJson(row.attribution, null), onBehalfOf: ctx.onBehalfOf || null });
+                // No payer (or no project) on a run that is not BYOK: the pool must not serve a paid managed offer
+                // with a versioned card, because nobody could be charged for it.
+                ctx.creditsRequired = !credit && !ctx.byok;
             }
             billingDelta = typeof ctx.onDelta === 'function'
                 ? (credit ? (d) => { credit.observe(d); ctx.onDelta(d); } : ctx.onDelta)
@@ -565,8 +567,9 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             // Credits holds first (a 402 must land before the provider), then the router's own disclosure hook.
             onRoute = (credit || typeof ctx.onRoute === 'function')
                 ? async (facts, meta) => {
-                    if (credit) await credit.onRoute(facts, meta);
+                    const routed = credit ? await credit.onRoute(facts, meta) : null;
                     if (typeof ctx.onRoute === 'function') await ctx.onRoute(facts, meta);
+                    return routed;
                 }
                 : null;
             // A run on a person's behalf follows their ai.preferences (Network user module): style, length and
@@ -594,6 +597,8 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                 appRun: Boolean(ctx.appRun), freeOnly: Boolean(ctx.appRun && (ctx.sandbox || !(tiers && tiers.enabled))),
                 // Who asked, for a step that must not call the caller back (research: Search's own web ladder).
                 requesterType: ctx.requesterType, requesterId: ctx.requesterId,
+                // AI Exchange F: no payer on this run (and not BYOK): the pool skips paid offers with a card.
+                creditsRequired: Boolean(ctx.creditsRequired),
                 ...(ctx.routePin ? { routePin: ctx.routePin } : {}),
                 // L37: the soft preference the caller made (provider, and a model if it named one).
                 prefer: opts.prefer || null,

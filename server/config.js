@@ -288,6 +288,11 @@ function load(env = process.env) {
             billingUrl: trimUrl(env.OV_BILLING_INTERNAL_URL),
             audience: 'openvibe.billing',
             timeoutMs: Math.max(200, Math.min(30000, int(env.AI_CREDITS_TIMEOUT_MS, 5000))),
+            // A project owner (network.project.read) is cached this long: Billing bills a person, not an app.
+            ownerTtlMs: Math.max(1000, Math.min(10 * 60 * 1000, int(env.AI_CREDITS_OWNER_TTL_MS, 60000))),
+            // A settle Billing could not take is retried by the background queue with exponential backoff.
+            settleRetryMs: Math.max(1000, Math.min(5 * 60 * 1000, int(env.AI_CREDITS_SETTLE_RETRY_MS, 5000))),
+            settleMaxRetryMs: Math.max(1000, Math.min(60 * 60 * 1000, int(env.AI_CREDITS_SETTLE_MAX_RETRY_MS, 5 * 60 * 1000))),
         },
 
         // ── Billing (plan T5 lane F): one platform.usage-sample@1 reading per accounted run, posted by

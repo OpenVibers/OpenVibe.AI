@@ -205,7 +205,7 @@ function messagesRouter({ runs, auth, config, registry, log = console }) {
         }
         if (run.status === 'failed' || run.status === 'cancelled') {
             const code = (run.error && run.error.code) || 'run.failed';
-            const status = code === 'ai.run_budget_reached' || code === 'billing.insufficient_funds' ? 402 : /^(input|validation)\./.test(code) ? 400 : /quota|allowance|budget/.test(code) ? 429
+            const status = code === 'ai.run_budget_reached' || code === 'billing.insufficient_funds' || code === 'billing.payer_required' ? 402 : /^(input|validation)\./.test(code) ? 400 : /quota|allowance|budget/.test(code) ? 429
                 : code === 'credential.unsupported' ? 422 : code === 'credential.not_found' ? 404
                 : code === 'ai.model_unavailable' ? 400 : code === 'ai.model_not_found' ? 404 : 529;
             return anthropicError(res, status, (run.error && run.error.detail) || code, null, code);
