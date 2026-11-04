@@ -11,7 +11,7 @@
  *                                              on_behalf_of (an agent acting for them)
  *   body                                       Anthropic's Messages API: messages, system, tools, tool_choice,
  *                                              stop_sequences, temperature, top_p, top_k, max_tokens, metadata, stream
- *   model                                      with AI_MODEL_CATALOG off, ignored as before. On, an exact id
+ *   model                                      with AI_MODEL_CATALOG off, ignored as before (an exact id is refused). On, an exact id
  *                                              `<org>/<model>[:<quant>]@<revision>` (runs only that artifact, never a
  *                                              substitute) or a dynamic alias (openvibe/auto|economy|balanced|fast|
  *                                              private; legacy openvibe = auto), with the `openvibe` disclosure: the
@@ -32,6 +32,7 @@ const { CAPS } = require('../auth');
 const { appAttribution } = require('../apps');
 const { credentialFor } = require('./credential');
 const models = require('./models');
+const { EXACT_ID } = require('../providers/model-catalog');
 
 const FIELDS = ['system', 'tools', 'tool_choice', 'stop_sequences', 'temperature', 'top_p', 'top_k', 'metadata'];
 const MAX_TOKENS = 64000;
@@ -164,8 +165,13 @@ function messagesRouter({ runs, auth, config, registry, log = console }) {
         // AI Exchange F: the caller's liability cap for the Credits hold (an OpenVibe extension).
         if (b.max_cost_usd != null) input.max_cost_usd = b.max_cost_usd;
         // AI Exchange D3 (AI_MODEL_CATALOG): an exact id or a dynamic alias. With the flag off the field is ignored
-        // exactly as before, and the router picks.
-        if (config.modelCatalog && config.modelCatalog.enabled) {
+        // exactly as before, and the router picks, except an exact id: a pin is never silently run on another model (a
+        // rollback of the flag included), so it is refused.
+        const catalogOn = Boolean(config.modelCatalog && config.modelCatalog.enabled);
+        if (!catalogOn && typeof b.model === 'string' && EXACT_ID.test(b.model.trim())) {
+            return anthropicError(res, 400, 'model: an exact model id needs the model catalog, which is off: name a dynamic model (openvibe) instead (ai.model_unavailable)');
+        }
+        if (catalogOn) {
             if (b.model !== undefined && b.model !== null && typeof b.model !== 'string') return anthropicError(res, 400, 'model: must be a string');
             const requested = b.model == null ? 'openvibe/auto' : String(b.model).trim();
             if (!requested || requested.length > 256) return anthropicError(res, 400, 'model: must name an exact id or a dynamic alias');
