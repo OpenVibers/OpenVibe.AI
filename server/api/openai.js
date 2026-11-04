@@ -68,7 +68,7 @@ function createLiveStream(res) {
     const alive = () => !res.writableEnded && !res.destroyed;
     const comment = () => {
         if (commented || !routeInfo || !alive()) return;
-        res.write(`: openvibe ${JSON.stringify(routeInfo)}\n\n`);
+        res.write(`: x_openvibe ${JSON.stringify(routeInfo)}\n\n`);
         commented = true;
     };
     const write = (o) => { if (alive()) { comment(); res.write(`data: ${JSON.stringify(o)}\n\n`); } };
@@ -113,8 +113,8 @@ function openaiError(res, status, message, code, type) {
 
 function openaiRouter({ runs, auth, config, registry, log = console }) {
     const r = express.Router();
-    // D8: a developer app may call inference with ai.inference.create (accepted while AI_MODEL_CATALOG is on).
-    const allow = auth.appOrCap([CAPS.appRun, CAPS.inferenceCreate], CAPS.runCreate, CAPS.inferenceCreate);
+    // Developer apps call with ai.app.run, the public capability they already hold (ADR-014; AI Exchange D8').
+    const allow = auth.appOrCap(CAPS.appRun, CAPS.runCreate);
 
     // A problem from the auth layer arrives as problem+json; a client built for OpenAI reads { error }: convert it as
     // it is written, whichever way the layer writes it.
@@ -222,10 +222,10 @@ function openaiRouter({ runs, auth, config, registry, log = console }) {
                 send({ ...base, choices: [{ index: c.index || 0, delta: {}, finish_reason: c.finish_reason || 'stop' }] });
             }
             if (b.stream_options && b.stream_options.include_usage) send({ ...base, choices: [], usage });
-            send({ ...base, choices: [], x_openvibe: x, ...(disclosure ? { openvibe: disclosure } : {}) });
+            send({ ...base, choices: [], x_openvibe: disclosure ? { ...x, ...disclosure } : x });
             return live.done();
         }
-        return res.status(200).json({ id, object: 'chat.completion', created, model, choices: run.output.choices, usage, system_fingerprint: run.output.system_fingerprint || null, x_openvibe: x, ...(disclosure ? { openvibe: disclosure } : {}) });
+        return res.status(200).json({ id, object: 'chat.completion', created, model, choices: run.output.choices, usage, system_fingerprint: run.output.system_fingerprint || null, x_openvibe: disclosure ? { ...x, ...disclosure } : x });
     });
 
     // The model list a client asks for first. With AI_MODEL_CATALOG on it is the registry's real models plus the

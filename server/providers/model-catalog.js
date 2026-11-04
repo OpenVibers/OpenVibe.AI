@@ -21,8 +21,8 @@
  * managed routing (the network's providers, never a person's own key) accepts only OWN_DEPLOYMENT and
  * AUTHORIZED_WHOLESALE; RESTRICTED, CUSTOMER_BYOK and UNVERIFIED offers are never resold as managed capacity.
  *
- * The pinned openvibe-contracts release predates the ai.model@1 catalog fields and ai.inference.create (D4/D8);
- * the shapes here follow CHECKPOINT D4 and are written to stay valid when the pin moves.
+ * The ai.model@1 catalog shape is CHECKPOINT D4 (Contracts 0.284.0); apps call with ai.app.run (D8'), and the
+ * route disclosure joins x_openvibe (D3').
  */
 const { AiError } = require('../util');
 

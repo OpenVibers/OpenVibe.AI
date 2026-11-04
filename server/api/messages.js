@@ -3,7 +3,7 @@
  * The Anthropic-compatible endpoint: POST /v1/messages on ai.openvibe.services, so a client built for Anthropic's
  * Messages API (Claude Code, an SDK) points ANTHROPIC_BASE_URL at https://ai.openvibe.services and works (Codes C3).
  *
- *   Authorization: Bearer <a Network token>   an app's token (ai.app.run, or ai.inference.create with AI_MODEL_CATALOG
+ *   Authorization: Bearer <a Network token>   an app's token (ai.app.run
  *                                              on; its project pays) or a first-party service's (ai.run.create)
  *   x-openvibe-credential: <provider>          the person's own key for that provider instead of the router: anthropic,
  *                                              deepseek or minimax (their Anthropic-compatible endpoints), or a custom
@@ -69,7 +69,7 @@ function createEventStream(res) {
     const alive = () => !res.writableEnded && !res.destroyed;
     const comment = () => {
         if (commented || !routeInfo || !alive()) return;
-        res.write(`: openvibe ${JSON.stringify(routeInfo)}\n\n`);
+        res.write(`: x_openvibe ${JSON.stringify(routeInfo)}\n\n`);
         commented = true;
     };
     const write = (event, data) => { if (alive()) { comment(); res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } };
@@ -77,7 +77,7 @@ function createEventStream(res) {
         if (!data) return;
         if (event === 'message_stop') stopped = true;
         // The final chunk carries the disclosure (D3); the client's message fields are otherwise untouched.
-        if (event === 'message_stop' && routeInfo) data = { ...data, openvibe: routeInfo };
+        if (event === 'message_stop' && routeInfo) data = { ...data, x_openvibe: routeInfo };   // D3': the disclosure rides in x_openvibe
         write(event, data);
     };
     const out = {
@@ -131,8 +131,8 @@ function replay(res, message, run) {
 
 function messagesRouter({ runs, auth, config, registry, log = console }) {
     const r = express.Router();
-    // D8: a developer app may call inference with ai.inference.create (accepted while AI_MODEL_CATALOG is on).
-    const allow = auth.appOrCap([CAPS.appRun, CAPS.inferenceCreate], CAPS.runCreate, CAPS.inferenceCreate);
+    // Developer apps call with ai.app.run, the public capability they already hold (ADR-014; AI Exchange D8').
+    const allow = auth.appOrCap(CAPS.appRun, CAPS.runCreate);
 
     // The auth layer writes problem+json; a client built for Anthropic reads { type: 'error', error: { … } }. Convert it
     // as it is written, whichever way the layer writes it.
@@ -229,7 +229,7 @@ function messagesRouter({ runs, auth, config, registry, log = console }) {
             return live.done();
         }
         res.setHeader('X-OpenVibe-Run-Id', run.id);
-        return res.status(200).json(disclosure ? { ...message, openvibe: disclosure } : message);
+        return res.status(200).json(disclosure ? { ...message, x_openvibe: disclosure } : message);
     });
 
     // The model list a client asks for. An Anthropic client identifies itself with `anthropic-version`; the OpenAI
