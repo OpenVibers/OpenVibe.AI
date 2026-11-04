@@ -8,7 +8,7 @@
  *   body                                       OpenAI Chat Completions: messages (with tool calls and tool results),
  *                                              tools, tool_choice, parallel_tool_calls, response_format, stop, seed,
  *                                              temperature, top_p, max_tokens / max_completion_tokens, stream
- *   model                                      with AI_MODEL_CATALOG off, ignored: AI's router picks the upstream
+ *   model                                      with AI_MODEL_CATALOG off, ignored (an exact id is refused): AI's router picks the upstream
  *                                              for route default.chat. On, an exact id
  *                                              `<org>/<model>[:<quant>]@<revision>` (runs only that artifact, never a
  *                                              substitute) or a dynamic alias (`openvibe/auto|economy|balanced|fast|
@@ -40,6 +40,7 @@ const { CAPS } = require('../auth');
 const { appAttribution } = require('../apps');
 const { credentialFor } = require('./credential');
 const models = require('./models');
+const { EXACT_ID } = require('../providers/model-catalog');
 
 const FIELDS = ['messages', 'tools', 'tool_choice', 'parallel_tool_calls', 'response_format', 'stop', 'seed', 'top_p', 'presence_penalty', 'frequency_penalty', 'temperature'];
 
@@ -148,8 +149,13 @@ function openaiRouter({ runs, auth, config, registry, log = console }) {
         const input = {};
         for (const k of FIELDS) if (b[k] !== undefined && b[k] !== null) input[k] = b[k];
         // AI Exchange D3 (AI_MODEL_CATALOG): the `model` the caller names is exact, or one of the dynamic aliases.
-        // With the flag off it is ignored exactly as before (the router picks).
-        if (config.modelCatalog && config.modelCatalog.enabled) {
+        // With the flag off it is ignored exactly as before (the router picks), except an exact id: that is a pin, and a
+        // pin is never silently run on another model (a rollback of the flag included), so it is refused.
+        const catalogOn = Boolean(config.modelCatalog && config.modelCatalog.enabled);
+        if (!catalogOn && typeof b.model === 'string' && EXACT_ID.test(b.model.trim())) {
+            return openaiError(res, 400, 'an exact model id needs the model catalog, which is off: name a dynamic model (openvibe) instead', 'ai.model_unavailable');
+        }
+        if (catalogOn) {
             if (b.model !== undefined && b.model !== null && typeof b.model !== 'string') return openaiError(res, 400, 'model must be a string', 'input.invalid');
             const requested = b.model == null ? 'openvibe/auto' : String(b.model).trim();
             if (!requested || requested.length > 256) return openaiError(res, 400, 'model must name an exact id or a dynamic alias', 'input.invalid');

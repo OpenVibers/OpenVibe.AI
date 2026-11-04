@@ -175,7 +175,9 @@ and its rollback lever (`AI_NS_REQUIRED`) were retired on 2026-09-28 (shims C-22
 ## Model catalog, exact ids and the disclosure
 
 Behind `AI_MODEL_CATALOG` (off by default; with it off both `GET /v1/models` endpoints answer the legacy virtual
-`openvibe` model and no disclosure is added). It applies to both `POST /v1/chat/completions` and `POST /v1/messages`.
+`openvibe` model and no disclosure is added; an exact id is still a pin, so it is refused with 400
+`ai.model_unavailable` rather than run on another model). It applies to both `POST /v1/chat/completions` and
+`POST /v1/messages`.
 
 - **`GET /v1/models` / `GET /v1/models/{id}`:** the registry's real models as `ai.model@1` catalog entries
   (`provider_key`, `model_key`, `id`, family, variant, quant, revision, sha256, license, context, capabilities,

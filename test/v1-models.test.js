@@ -276,6 +276,14 @@ t.test('flag off: the legacy single model and no disclosure, exactly as before',
         assert.strictEqual(res.status, 200);
         assert.strictEqual((res.body.x_openvibe || {}).resolved_model, undefined, 'no route disclosure with the flag off');
         assert.strictEqual((await request(off.base, 'GET', '/v1/models', { tok: APP_D8 })).status, 200, 'an ai.app.run app lists the legacy model as before');
+        // An exact id is a pin: with the catalog off (a rollback of the flag) it is refused, never run on another model.
+        const pin = 'qwen/qwen3-8b:q4_k_m@3f2a1c9';
+        const chat = await request(off.base, 'POST', '/v1/chat/completions', { tok: service, body: { model: pin, messages: [{ role: 'user', content: 'hi' }] } });
+        assert.strictEqual(chat.status, 400, 'an exact id with the catalog off is refused');
+        assert.strictEqual(chat.body.error.code, 'ai.model_unavailable');
+        const msg = await request(off.base, 'POST', '/v1/messages', { tok: service, body: { model: pin, max_tokens: 16, messages: [{ role: 'user', content: 'hi' }] } });
+        assert.strictEqual(msg.status, 400, 'and on Messages');
+        assert.match(msg.body.error.message, /ai\.model_unavailable/);
     } finally { await off.stop(); }
 });
 
