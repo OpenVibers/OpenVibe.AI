@@ -79,7 +79,7 @@ function createLiveStream(res) {
         sentAny: () => any,
         finished: (i) => finishedIdx.has(i),
         fail(message, code) {
-            const status = code === 'ai.run_budget_reached' ? 402 : /^(input|validation)\./.test(code || '') ? 400 : /quota|allowance|budget/.test(code || '') ? 429 : 503;
+            const status = code === 'ai.run_budget_reached' || code === 'billing.insufficient_funds' ? 402 : /^(input|validation)\./.test(code || '') ? 400 : /quota|allowance|budget/.test(code || '') ? 429 : 503;
             write({ error: { message: String(message || 'error').slice(0, 1000), type: status === 400 ? 'invalid_request_error' : status === 429 ? 'rate_limit_error' : status === 402 ? 'insufficient_quota' : 'api_error', code: code || null, param: null } });
             return out.done();
         },
@@ -126,6 +126,8 @@ function openaiRouter({ runs, auth, config, log = console }) {
         for (const k of FIELDS) if (b[k] !== undefined && b[k] !== null) input[k] = b[k];
         const maxTokens = b.max_completion_tokens != null ? b.max_completion_tokens : b.max_tokens;
         if (maxTokens != null) input.max_tokens = Math.max(1, Math.min(Number(maxTokens) || 1, 16000));
+        // AI Exchange F: the caller's liability cap for the Credits hold (an OpenVibe extension, like x_openvibe).
+        if (b.max_cost_usd != null) input.max_cost_usd = b.max_cost_usd;
         let body = { workflow: 'ai.complete', input };
         // L37: the soft preference (provider, and a model if the caller wants one). A wish, not a pin.
         if (b.prefer) body = { ...body, prefer: b.prefer };
@@ -157,7 +159,7 @@ function openaiRouter({ runs, auth, config, log = console }) {
         }
         if (run.status === 'failed' || run.status === 'cancelled') {
             const code = (run.error && run.error.code) || 'run.failed';
-            const status = code === 'ai.run_budget_reached' ? 402 : /^(input|validation)\./.test(code) ? 400 : /quota|allowance|budget/.test(code) ? 429
+            const status = code === 'ai.run_budget_reached' || code === 'billing.insufficient_funds' ? 402 : /^(input|validation)\./.test(code) ? 400 : /quota|allowance|budget/.test(code) ? 429
                 : code === 'project_secret.refused' ? 403 : code === 'credential.endpoint_refused' ? 422 : 503;
             return openaiError(res, status, (run.error && run.error.detail) || code, code);
         }

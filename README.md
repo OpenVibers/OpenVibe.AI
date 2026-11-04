@@ -440,7 +440,24 @@ run, and a pinned run is never served from the shared cache.
 reading its `idempotency_key`, `state` (`queued` until Billing accepts it, `sent`, or `failed` when Billing
 refused it), `attempts`, `queued_at`, `sent_at`, `rejected_at`, `next_attempt_at`, `last_error` (the
 outbox's last send error, also while a queued reading is retried) and `free_allowance_used` when some
-was free; a sent reading the relay has pruned reads `{ state: 'sent', pruned: true }`. Speech and embeddings use placement pools of registered `stt` and `embedding` models; until
+**Credits (AI Exchange F; `AI_CREDITS`, off).** A request on a paid managed route — the model catalog's
+`provider_access` is `OWN_DEPLOYMENT` or `AUTHORIZED_WHOLESALE` and the offer is metered — reserves its
+worst case in OpenVibe.Billing before any provider is called: the input estimate plus `max_tokens` of
+output at the model's retail card (`ai.model@1` `retail_rate`), capped by the request's optional
+`max_cost_usd`. The hold's idempotency key is the request id; its fingerprint covers the resolved model,
+the token caps, the rate version, the payer and the project. Billing's `402 billing.insufficient_funds`
+becomes AI's own 402 `billing.insufficient_funds`; any other Billing failure refuses the run with
+`503 billing.unavailable` rather than serving unpaid capacity. A stream extends the hold in steps when the
+output nears it. At the end one settle carries the four token counts, the answering model's retail card
+version, the supply cost and every attempt (provider, model, access, error); a retried request replays the
+same settlement instead of charging twice. A failure before the first token releases the hold, an abort
+settles the partial usage. BYOK — a person's key, their machine, a project's own provider — is never held
+and never charged; Billing is not called at all. A sandbox app token is never offered paid supply (D10),
+so it spends no Credits. Requires `AI_MODEL_CATALOG` for the access labels; with either flag off nothing
+changes. Code: `server/credits.js`; the fake-Billing tests are `test/credits.test.js` and
+`test/credits-run.test.js`.
+
+Speech and embeddings use placement pools of registered `stt` and `embedding` models; until
 a second upstream exists, an unavailable sole provider answers `503 provider.unavailable`. Media
 uses separate local and paid pools so paid work still requires its explicit budget. The synthetic
 stub can join general text routes as a last resort outside production only (`AI_STUB_FALLBACK`).

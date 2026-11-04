@@ -274,6 +274,17 @@ function load(env = process.env) {
             timeoutMs: int(env.AI_FETCH_TIMEOUT_MS, 120000),
         },
 
+        // ── Billing Credits (AI Exchange F, CHECKPOINT D2/D9/D10), off by default. A paid managed request holds its
+        // worst-case cost before any provider call, extends the hold while streaming, and settles once. Reads the
+        // same OV_BILLING_INTERNAL_URL and OV_OAUTH_CLIENT_SECRET as the usage samples; the capability is one per
+        // operation (contracts v0.284.0): billing.credit.hold.{create,extend,settle,release}.
+        credits: {
+            enabled: bool(env.AI_CREDITS, false),
+            billingUrl: trimUrl(env.OV_BILLING_INTERNAL_URL),
+            audience: 'openvibe.billing',
+            timeoutMs: Math.max(200, Math.min(30000, int(env.AI_CREDITS_TIMEOUT_MS, 5000))),
+        },
+
         // ── Billing (plan T5 lane F): one platform.usage-sample@1 reading per accounted run, posted by
         // server/usage-samples.js to billing.usage.record (POST /api/v1/usage, audience openvibe.billing).
         // Readings are queued unless USAGE_SAMPLES=off; they are sent while OV_BILLING_INTERNAL_URL is set.

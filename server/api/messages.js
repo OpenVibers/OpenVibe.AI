@@ -40,8 +40,8 @@ function errorType(status) {
     return 'api_error';
 }
 
-function anthropicError(res, status, message, type) {
-    res.status(status).json({ type: 'error', error: { type: type || errorType(status), message: String(message || 'error').slice(0, 1000), code: status === 402 ? 'ai.run_budget_reached' : null } });
+function anthropicError(res, status, message, type, code = null) {
+    res.status(status).json({ type: 'error', error: { type: type || errorType(status), message: String(message || 'error').slice(0, 1000), code: code || (status === 402 ? 'ai.run_budget_reached' : null) } });
 }
 
 /**
@@ -139,6 +139,8 @@ function messagesRouter({ runs, auth, config, log = console }) {
         if (!Number.isInteger(b.max_tokens) || b.max_tokens < 1) return anthropicError(res, 400, 'max_tokens: must be a positive integer');
         const input = { messages: b.messages, max_tokens: Math.min(b.max_tokens, MAX_TOKENS) };
         for (const k of FIELDS) if (b[k] !== undefined && b[k] !== null) input[k] = b[k];
+        // AI Exchange F: the caller's liability cap for the Credits hold (an OpenVibe extension).
+        if (b.max_cost_usd != null) input.max_cost_usd = b.max_cost_usd;
         let body = { workflow: 'ai.messages', input };
         // L37: the soft preference (provider, and a model if the caller wants one). A wish, not a pin.
         if (b.prefer) body = { ...body, prefer: b.prefer };
@@ -165,9 +167,9 @@ function messagesRouter({ runs, auth, config, log = console }) {
         }
         if (run.status === 'failed' || run.status === 'cancelled') {
             const code = (run.error && run.error.code) || 'run.failed';
-            const status = code === 'ai.run_budget_reached' ? 402 : /^(input|validation)\./.test(code) ? 400 : /quota|allowance|budget/.test(code) ? 429
+            const status = code === 'ai.run_budget_reached' || code === 'billing.insufficient_funds' ? 402 : /^(input|validation)\./.test(code) ? 400 : /quota|allowance|budget/.test(code) ? 429
                 : code === 'credential.unsupported' ? 422 : code === 'credential.not_found' ? 404 : 529;
-            return anthropicError(res, status, (run.error && run.error.detail) || code);
+            return anthropicError(res, status, (run.error && run.error.detail) || code, null, code);
         }
         if (!['succeeded', 'cached'].includes(run.status) || !run.output || !Array.isArray(run.output.content)) {
             return anthropicError(res, 529, `the message is still running; GET /api/v1/runs/${run.id}`, 'overloaded_error');
