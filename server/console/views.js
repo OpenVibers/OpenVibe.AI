@@ -81,6 +81,8 @@ function usd(v) {
     return `$${x < 0.01 ? x.toFixed(6) : x.toFixed(x < 100 ? 4 : 2)}`;
 }
 const when = (s) => (s ? html`<time datetime="${s}">${String(s).replace('T', ' ').slice(0, 19)} UTC</time>` : '—');
+/** A 0..1 EWMA as a percentage, or an em dash when it was never measured. */
+const pct = (v) => (v == null ? '—' : `${(100 * Number(v)).toFixed(1)} %`);
 function span(fromIso, toIso) {
     if (!fromIso || !toIso) return '';
     const ms = Date.parse(toIso) - Date.parse(fromIso);
@@ -129,10 +131,11 @@ function shareTags({ title, description, canonical }) {
     return html`<meta property="og:type" content="website"><meta property="og:site_name" content="OpenVibe.AI"><meta property="og:title" content="${title}">${description ? html`<meta property="og:description" content="${description}">` : ''}<meta property="og:url" content="${canonical}"><meta property="og:image" content="${image}"><meta name="twitter:card" content="summary_large_image">`;
 }
 function layout({ title, section, staff, csrf, notice, error, body, site = 'operator console', robots = 'noindex,nofollow', description = null, canonical = null }) {
+    const nav = staff && staff.exchange ? [...NAV, ['/console/exchange', 'Exchange', 'exchange']] : NAV;
     return `<!doctype html>${render(html`<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="${robots}">${description ? html`<meta name="description" content="${description}">` : ''}${canonical ? html`<link rel="canonical" href="${canonical}">${shareTags({ title: `${title} · AI ${site}`, description, canonical })}` : ''}<meta name="referrer" content="no-referrer"><title>${title} · AI ${site}</title><style>${new Raw(CSS)}</style></head>
 <body><a class="skip" href="#main">Skip to content</a><header><div class="bar"><span class="brand">OpenVibe.AI · ${site}</span>
-${staff ? html`<nav aria-label="Console"><ul>${NAV.map(([href, label, id]) => html`<li><a href="${href}"${id === section ? html` aria-current="page"` : ''}>${label}</a></li>`)}</ul></nav>
+${staff ? html`<nav aria-label="Console"><ul>${nav.map(([href, label, id]) => html`<li><a href="${href}"${id === section ? html` aria-current="page"` : ''}>${label}</a></li>`)}</ul></nav>
 <div class="who"><span>${staff.username ? `@${staff.username} ` : ''}<code>${staff.subject}</code> · ${staff.role}</span>
 <form class="inline" method="post" action="/auth/logout">${csrfField(csrf)}<button class="link" type="submit">Sign out</button></form></div>` : ''}
 </div></header><main id="main" tabindex="-1">
@@ -509,6 +512,52 @@ ${table('Last send errors', ['Reading', 'Run', 'State', 'Attempts', 'Queued', 'L
     });
 }
 
+function creditsSection({ csrf, credits, canResolve }) {
+    const c = credits.counts;
+    const usage = credits.review_usage;
+    const rows = credits.review.map((r) => html`<tr>
+<td><code>${r.hold_id}</code></td><td>${r.request_id ? html`<code>${r.request_id}</code>` : '—'}</td><td>${n(r.tries)}</td>
+<td>${r.last_error ? clip(r.last_error, 300) : '—'}</td><td class="nowrap">${when(r.created_at)}</td>
+${canResolve ? html`<td><form class="inline" method="post" action="/console/exchange/credits/${enc(r.id)}/resolve">${csrfField(csrf)}<button type="submit">Mark resolved<span class="sr-only"> ${r.hold_id}</span></button></form></td>` : ''}</tr>`);
+    return html`<h2>Credits settle queue</h2>
+<div class="grid">
+<div class="card"><div class="k">Queued</div><div class="v">${n(c.queued)}</div></div>
+<div class="card"><div class="k">Sent</div><div class="v">${n(c.sent)}</div></div>
+<div class="card"><div class="k">Review</div><div class="v">${n(c.review)}</div></div>
+<div class="card"><div class="k">Oldest queued</div><div class="v">${credits.oldest_queued_seconds == null ? '—' : secs(credits.oldest_queued_seconds)}</div>
+<div class="muted">${credits.oldest_queued_at ? when(credits.oldest_queued_at) : 'nothing queued'}</div></div>
+</div>
+<p class="muted">Rows shown: ${n(credits.review.length)}${credits.review_truncated ? ` of ${n(credits.review_total)}` : ''} · tokens in ${n(usage.input_tokens)} · cached read ${n(usage.cached_read_tokens)} · cache write ${n(usage.cache_write_tokens)} · out ${n(usage.output_tokens)}. These are the only settle-body usage counts this page reads.</p>
+${table('Settle rows in review', ['Hold id', 'Request id', 'Tries', 'Last error', 'Created', ...(canResolve ? ['Action'] : [])], rows, 'no settle row is waiting for review.')}
+${canResolve ? '' : html`<p class="muted">Marking a review row resolved needs <code>ai.workflow.manage</code> (<code>staff.ai.manage</code>). It never retries the settle.</p>`}`;
+}
+
+function routingSection({ routing }) {
+    const deployments = routing.deployments.map((r) => html`<tr>
+<td><code>${r.provider_key}${r.model_key ? `:${r.model_key}` : ''}</code></td><td>${n(r.sample_count)}</td>
+<td>${r.sample_count ? pct(r.success_rate) : '—'}</td><td>${r.sample_count ? pct(r.timeout_rate) : '—'}</td>
+<td>${r.ttft_ms == null ? '—' : html`${n(Math.round(r.ttft_ms))} ms<br><span class="muted">n=${n(r.ttft_samples)}</span>`}</td>
+<td>${r.decode_tps == null ? '—' : html`${Number(r.decode_tps).toFixed(1)}<br><span class="muted">n=${n(r.decode_samples)}</span>`}</td>
+<td>${r.cache_hit_ratio == null ? '—' : pct(r.cache_hit_ratio)}${r.cache_samples ? html`<br><span class="muted">n=${n(r.cache_samples)}</span>` : ''}</td></tr>`);
+    const incumbents = routing.incumbents.map((r) => html`<tr><td><code>${r.decision_key}</code></td>
+<td>${r.provider_key ? html`<code>${r.provider_key}${r.model_key ? `:${r.model_key}` : ''}</code>` : '—'}</td>
+<td>${r.challenger_provider ? html`<code>${r.challenger_provider}${r.challenger_model ? `:${r.challenger_model}` : ''}</code>` : '—'}</td>
+<td>${n(r.challenger_streak)}</td><td class="nowrap">${when(r.updated_at)}</td></tr>`);
+    return html`<h2>Routing evidence</h2>
+<p class="muted">Measured per deployment: success and timeout rates, the TTFT and decode EWMA, and the cache-hit ratio. A metric with no measurement is shown as —, never as zero.</p>
+${table('Deployments', ['Deployment', 'Samples', 'Success rate', 'Timeout rate', 'TTFT', 'Decode tokens/s', 'Cache-hit ratio'], deployments, 'no deployment has been measured.')}
+${table('Routing incumbents', ['Decision key', 'Incumbent', 'Challenger', 'Streak', 'Updated'], incumbents, 'no incumbent recorded.')}`;
+}
+
+function exchange({ staff, csrf, credits, routing, canResolve, notice, error }) {
+    return layout({
+        title: 'AI Exchange', section: 'exchange', staff, csrf, notice, error, body: html`<h1>AI Exchange</h1>
+<p class="muted">Operational state of the AI Exchange, read-only.${credits ? html` A settle row in review can be marked resolved below; that never retries it.` : ''}</p>
+${credits ? creditsSection({ csrf, credits, canResolve }) : ''}
+${routing ? routingSection({ routing }) : ''}`,
+    });
+}
+
 function cache({ staff, csrf, stats, canManage, notice, error }) {
     const entries = stats.reduce((a, s) => a + s.entries, 0);
     const hits = stats.reduce((a, s) => a + (s.hits || 0), 0);
@@ -616,4 +665,4 @@ function allowance(cards) {
 /** The price and latency cells, as plain HTML strings for the public /stats page (server/home.js renderStats). */
 const statsFormat = { ms, rate, price: (cards) => render(price(cards)), allowance: (cards) => render(allowance(cards)) };
 
-module.exports = { CSP, html, esc, safeUrl, statsFormat, pages: { signIn, message, overview, providers, providerNew, definitions, definition, runs, run, runReceipt, quotas, usage, cache, audit } };
+module.exports = { CSP, html, esc, safeUrl, statsFormat, pages: { signIn, message, overview, providers, providerNew, definitions, definition, runs, run, runReceipt, quotas, usage, cache, audit, exchange } };

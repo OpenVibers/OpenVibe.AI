@@ -144,6 +144,7 @@ function preview(value, { string = PREVIEW_STRING, bytes = PREVIEW_BYTES } = {})
 const AUDIT_KINDS = Object.freeze({
     changes: { label: 'Configuration changes', where: "target_type IN ('provider', 'model', 'route', 'template', 'workflow', 'quota', 'cache')" },
     runs: { label: 'Runs', where: "target_type = 'run'" },
+    exchange: { label: 'AI Exchange', where: "target_type IN ('credit_settle', 'routing_incumbent')" },
     console: { label: 'Console sign-ins and refusals', where: "action ILIKE 'console.%'" },
     all: { label: 'Everything', where: null },
 });
@@ -219,7 +220,71 @@ async function usageReport(quotas, f) {
     };
 }
 
+// ── AI Exchange (P7 console) ─────────────────────────────────
+const REVIEW_ROWS = 100;
+const SETTLE_STATUSES = ['queued', 'sent', 'review'];
+const TOKEN_COUNTS = ['input_tokens', 'cached_read_tokens', 'cache_write_tokens', 'output_tokens'];
+const tokenCount = (v) => { const x = Number(v); return Number.isFinite(x) && x > 0 ? Math.trunc(x) : 0; };
+const parseBody = (v) => {
+    if (v && typeof v === 'object') return v;
+    try { const x = JSON.parse(v); return x && typeof x === 'object' ? x : {}; } catch { return {}; }
+};
+
+/**
+ * The Credits settle queue at a glance. Only the queue's own columns and the settle body's four usage
+ * token counts leave this function; the body's rates, supply cost, attempts and byok flag never do.
+ * No subject is selected or joined.
+ */
+async function settleQueue(db, nowMs = Date.now(), limit = REVIEW_ROWS) {
+    const counts = Object.fromEntries(SETTLE_STATUSES.map((s) => [s, 0]));
+    for (const row of await db.prepare('SELECT status, COUNT(*) AS n FROM credit_settle_queue GROUP BY status').all()) {
+        if (counts[row.status] != null) counts[row.status] = Number(row.n) || 0;
+    }
+    const oldest = await db.prepare("SELECT MIN(created_at) AS at FROM credit_settle_queue WHERE status = 'queued'").get();
+    const oldestIso = oldest && oldest.at ? String(oldest.at) : null;
+    const oldestMs = oldestIso ? Date.parse(oldestIso) : NaN;
+    const reviewUsage = Object.fromEntries(TOKEN_COUNTS.map((k) => [k, 0]));
+    const raw = await db.prepare(`SELECT id, hold_id, request_id, tries, last_error, created_at, settle_body
+        FROM credit_settle_queue WHERE status = 'review' ORDER BY created_at, id LIMIT ?`).all(Math.max(1, Math.min(500, Number(limit) || REVIEW_ROWS)));
+    const review = raw.map((r) => {
+        const usage = parseBody(r.settle_body).usage || {};
+        for (const k of TOKEN_COUNTS) reviewUsage[k] += tokenCount(usage[k]);
+        return {
+            id: r.id, hold_id: r.hold_id, request_id: r.request_id || null, tries: Number(r.tries) || 0,
+            last_error: r.last_error || null, created_at: r.created_at || null,
+        };
+    });
+    return {
+        counts, oldest_queued_at: oldestIso,
+        oldest_queued_seconds: Number.isFinite(oldestMs) ? Math.max(0, Math.floor((Number(nowMs) - oldestMs) / 1000)) : null,
+        review, review_total: counts.review, review_truncated: counts.review > review.length, review_usage: reviewUsage,
+    };
+}
+
+/** Measured per-deployment rows (EWMA) and the routing incumbents: numbers and ids only. */
+async function routingEvidence(db, limit = 200) {
+    const max = Math.max(1, Math.min(500, Number(limit) || 200));
+    const deployments = (await db.prepare(`SELECT provider_key, model_key, sample_count, success_rate, timeout_rate,
+            ttft_ms, ttft_samples, decode_tps, decode_samples, cache_hit_ratio, cache_samples, updated_at
+        FROM provider_metrics ORDER BY sample_count DESC, provider_key, model_key LIMIT ?`).all(max)).map((r) => ({
+        provider_key: r.provider_key, model_key: r.model_key || '',
+        sample_count: Number(r.sample_count) || 0, success_rate: Number(r.success_rate) || 0, timeout_rate: Number(r.timeout_rate) || 0,
+        ttft_ms: r.ttft_ms == null ? null : Number(r.ttft_ms), ttft_samples: Number(r.ttft_samples) || 0,
+        decode_tps: r.decode_tps == null ? null : Number(r.decode_tps), decode_samples: Number(r.decode_samples) || 0,
+        cache_hit_ratio: Number(r.cache_samples) > 0 ? Number(r.cache_hit_ratio) || 0 : null,
+        cache_samples: Number(r.cache_samples) || 0, updated_at: r.updated_at || null,
+    }));
+    const incumbents = (await db.prepare(`SELECT decision_key, provider_key, model_key, challenger_provider, challenger_model,
+            challenger_streak, updated_at FROM routing_incumbents ORDER BY decision_key LIMIT ?`).all(max)).map((r) => ({
+        decision_key: r.decision_key, provider_key: r.provider_key || null, model_key: r.model_key || '',
+        challenger_provider: r.challenger_provider || null, challenger_model: r.challenger_model || '',
+        challenger_streak: Number(r.challenger_streak) || 0, updated_at: r.updated_at || null,
+    }));
+    return { deployments, incumbents };
+}
+
 module.exports = {
     RUN_STATUSES, AUDIT_KINDS, PAGE, parseRunFilters, listRuns, failures, statusCounts, runFacets, preview,
     parseAuditFilters, listAudit, usernames, parseUsageFilters, usageReport, parseTime, requesterOf,
+    settleQueue, routingEvidence,
 };
