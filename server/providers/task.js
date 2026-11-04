@@ -177,7 +177,7 @@ const tierRank = (tier) => (TIER_RANK[tier] === undefined ? TIER_RANK[DEFAULT_TI
  * A warm prompt cache is worth up to 10 % of the price, so a near tie goes to the provider that already
  * has this prompt cached (L36 Y7). The order is stable: two candidates that tie keep the pool's order.
  */
-function rank(candidates, { task, warm = null, preferred = null, authority = null, tierFirst = null, keepOrder = false } = {}) {
+function rank(candidates, { task, warm = null, preferred = null, authority = null, tierFirst = null, keepOrder = false, policy = null } = {}) {
     const isAuthority = (c) => Boolean(authority && (authority === c.provider || authority === c.provider + ':' + (c.model || '')));
     const lead = tierFirst == null ? task.weight === 'heavy' : Boolean(tierFirst);
     const prepared = candidates.map((c, index) => {
@@ -189,6 +189,14 @@ function rank(candidates, { task, warm = null, preferred = null, authority = nul
         if (keepOrder) return a.index - b.index;   // a pinned route keeps its own order
         if (a.authority !== b.authority) return a.authority ? -1 : 1;
         if (preferred && (a.model === preferred) !== (b.model === preferred)) return a.model === preferred ? -1 : 1;
+        // A dynamic policy alias (AI Exchange D3) names what it optimises; the pool's eligibility and the
+        // person's preferences still come first, and a tie keeps the existing tier/health/latency order.
+        if (policy === 'cheapest' && a.effective !== b.effective) return a.effective - b.effective;
+        if (policy === 'fastest') {
+            const la = a.latency == null ? Infinity : a.latency;
+            const lb = b.latency == null ? Infinity : b.latency;
+            if (la !== lb) return la - lb;
+        }
         if (lead && a.tierRank !== b.tierRank) return b.tierRank - a.tierRank;
         if (a.effective !== b.effective) return a.effective - b.effective;
         if (a.tierRank !== b.tierRank) return b.tierRank - a.tierRank;

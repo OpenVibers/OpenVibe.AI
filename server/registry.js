@@ -15,6 +15,8 @@ const { provenance } = require('./providers/rate-cards');
 
 const PROVIDER_KINDS = ['stub', 'openai', 'responses', 'anthropic', 'http', 'whisper'];
 const BILLING_PROFILES = ['metered', 'subscription', 'payg', 'free', 'byok'];
+// AI Exchange D3: who may resell this offer's capacity. Defaults to UNVERIFIED (migrations/0024).
+const PROVIDER_ACCESS = ['OWN_DEPLOYMENT', 'AUTHORIZED_WHOLESALE', 'CUSTOMER_BYOK', 'RESTRICTED', 'UNVERIFIED'];
 const FEATURES = ['chat', 'complete', 'messages', 'generate', 'summarize', 'classify', 'extract', 'enrich', 'embed', 'vision', 'json', 'tools', 'transcribe', 'image'];
 const LIFECYCLE = ['draft', 'active', 'deprecated', 'archived'];
 const KEY_RE = /^[a-z][a-z0-9_-]*(\.[a-z0-9_-]+)*$/;
@@ -49,6 +51,7 @@ function createRegistry(db, { clock = { now: () => Date.now() }, env = process.e
             // The billing profile and shared pool (migrations/0008): exposed on every provider response; pool_key
             // is a name, never a secret value.
             billing_profile: r.billing_profile || 'metered', pool_key: r.pool_key == null ? null : r.pool_key,
+            provider_access: r.provider_access || 'UNVERIFIED',
             metadata: parseJson(r.metadata, {}), origin: r.origin, created_at: r.created_at, updated_at: r.updated_at,
         };
     }
@@ -70,6 +73,7 @@ function createRegistry(db, { clock = { now: () => Date.now() }, env = process.e
         if (!secretRefValid(p.secret_ref)) throw new AiError(422, 'ai.invalid', "secret_ref must be 'env:NAME' or 'vault:<provider key>' (a reference, never a secret value)");
         if (p.base_url && !/^https?:\/\/[^\s]+$/i.test(p.base_url)) throw new AiError(422, 'ai.invalid', 'base_url must be an http(s) URL');
         if (!BILLING_PROFILES.includes(p.billing_profile)) throw new AiError(422, 'ai.invalid', `billing_profile must be one of ${BILLING_PROFILES.join(', ')}`);
+        if (!PROVIDER_ACCESS.includes(p.provider_access)) throw new AiError(422, 'ai.invalid', `provider_access must be one of ${PROVIDER_ACCESS.join(', ')}`);
         // metadata.billing_profile only seeds the column (upsertProvider), but it is refused here too so an
         // unknown value can never be stored as an inert, silently-ignored profile.
         if (p.metadata && p.metadata.billing_profile !== undefined && !BILLING_PROFILES.includes(p.metadata.billing_profile))
@@ -99,16 +103,18 @@ function createRegistry(db, { clock = { now: () => Date.now() }, env = process.e
             // a later metadata edit can never silently re-route the provider.
             billing_profile: input.billing_profile || (prev && prev.billing_profile) || (input.metadata && input.metadata.billing_profile) || 'metered',
             pool_key: input.pool_key !== undefined ? (input.pool_key || null) : (prev ? prev.pool_key : null),
+            // The offer's commercial access (D3): set on the record, never inferred from its billing profile.
+            provider_access: input.provider_access || (prev && prev.provider_access) || 'UNVERIFIED',
             metadata: input.metadata || (prev && prev.metadata) || {},
         };
         checkProvider(p);
         const t = now();
-        await db.prepare(`INSERT INTO providers (key, display_name, kind, status, base_url, auth_mode, secret_ref, default_model, capabilities, timeout_ms, priority, billing_profile, pool_key, metadata, origin, created_at, updated_at)
-            VALUES (@key, @display_name, @kind, @status, @base_url, @auth_mode, @secret_ref, @default_model, @capabilities, @timeout_ms, @priority, @billing_profile, @pool_key, @metadata, @origin, @t, @t)
+        await db.prepare(`INSERT INTO providers (key, display_name, kind, status, base_url, auth_mode, secret_ref, default_model, capabilities, timeout_ms, priority, billing_profile, pool_key, provider_access, metadata, origin, created_at, updated_at)
+            VALUES (@key, @display_name, @kind, @status, @base_url, @auth_mode, @secret_ref, @default_model, @capabilities, @timeout_ms, @priority, @billing_profile, @pool_key, @provider_access, @metadata, @origin, @t, @t)
             ON CONFLICT(key) DO UPDATE SET display_name = excluded.display_name, kind = excluded.kind, status = excluded.status, base_url = excluded.base_url,
               auth_mode = excluded.auth_mode, secret_ref = excluded.secret_ref, default_model = excluded.default_model, capabilities = excluded.capabilities,
               timeout_ms = excluded.timeout_ms, priority = excluded.priority, billing_profile = excluded.billing_profile, pool_key = excluded.pool_key,
-              metadata = excluded.metadata, origin = excluded.origin, updated_at = excluded.updated_at`)
+              provider_access = excluded.provider_access, metadata = excluded.metadata, origin = excluded.origin, updated_at = excluded.updated_at`)
             .run({ ...p, capabilities: JSON.stringify(p.capabilities), metadata: JSON.stringify(p.metadata), origin, t });
         await audit(actor, prev ? 'provider.update' : 'provider.create', 'provider', p.key, { trace, metadata: { kind: p.kind, status: p.status, base_url: p.base_url, secret_ref: p.secret_ref, origin } });
         return await getProvider(p.key);
@@ -419,4 +425,4 @@ function createRegistry(db, { clock = { now: () => Date.now() }, env = process.e
     };
 }
 
-module.exports = { createRegistry, PROVIDER_KINDS, FEATURES, LIFECYCLE };
+module.exports = { createRegistry, PROVIDER_KINDS, FEATURES, LIFECYCLE, PROVIDER_ACCESS };

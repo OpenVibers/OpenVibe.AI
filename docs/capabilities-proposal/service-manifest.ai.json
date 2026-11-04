@@ -23,6 +23,7 @@
     "ai.actions.read",
     "ai.app.run",
     "ai.credential.manage",
+    "ai.inference.create",
     "ai.provider.manage",
     "ai.quota.attribution.manage",
     "ai.run.create",

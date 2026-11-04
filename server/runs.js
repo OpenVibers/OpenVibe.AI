@@ -183,7 +183,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
      * principal: { sub, subject: {type, id} }
      * Returns { run, created, promise? }.
      */
-    async function create(body, principal, { trace = null, requestId = null, retryOf = null, onDelta = null } = {}) {
+    async function create(body, principal, { trace = null, requestId = null, retryOf = null, onDelta = null, onRoute = null } = {}) {
         if (!body || typeof body !== 'object') throw new AiError(400, 'input.invalid', 'JSON body required');
         const wfKey = String(body.workflow || '');
         const wf = body.version ? await registry.getWorkflow(wfKey, Number(body.version)) : await registry.activeWorkflow(wfKey);
@@ -271,6 +271,8 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             ...(pinned ? { routePin: pinned } : {}),
             // POST /v1/chat/completions with stream: true: the upstream's deltas, as they arrive (kept in memory only).
             ...(typeof onDelta === 'function' ? { onDelta } : {}),
+            // The offer the router picked, before the first token: the SSE disclosure's first comment (D3).
+            ...(typeof onRoute === 'function' ? { onRoute } : {}),
         };
         const now = iso(clock.now());
         const id = newRunId();
@@ -532,7 +534,8 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                 ...(onCredentialFailed ? { onCredentialFailed } : {}),
                 ...(selfSubject ? { selfSubject, selfCredentials: selfCredentials || [], selfPreferences } : {}),
                 ...(credential ? { credential, role: input && typeof input.role === 'string' ? input.role : null } : {}),
-                ...(typeof ctx.onDelta === 'function' ? { onDelta: ctx.onDelta } : {}) });
+                ...(typeof ctx.onDelta === 'function' ? { onDelta: ctx.onDelta } : {}),
+                ...(typeof ctx.onRoute === 'function' ? { onRoute: ctx.onRoute } : {}) });
             if (controller.signal.aborted) throw new AiError(409, 'run.cancelled', 'cancelled');
             // The status, its citations and the ai.run.succeeded event commit together.
             const done = await db.tx(async () => {
