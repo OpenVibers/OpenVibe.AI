@@ -106,7 +106,7 @@ const DEF_KINDS = {
 };
 const DAY_MS = 86400000;
 
-function consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, vault = null, personSessions = null }) {
+function consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, vault = null, settings = null, personSessions = null }) {
     const cc = config.console;
     const r = express.Router();
     const scoped = ['/console', '/auth'];
@@ -328,10 +328,10 @@ function consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, e
     const presets = require('./presets');
     const KEY_RE = /^[a-z0-9][a-z0-9._-]{1,40}$/;
     r.get('/console/providers/new', needs(CAPS.providerManage), wrap(async (req, res) => await send(res, 200, pages.providerNew({
-        ...common(req), presets: presets.PRESETS, preset: presets.byId(String(req.query.preset || '')) || null, vaultReady: !!vault && /^[0-9a-f]{64}$/i.test(String(config.credentialsKey || '')),
+        ...common(req), presets: presets.PRESETS, preset: presets.byId(String(req.query.preset || '')) || null, vaultReady: !!vault && !!settings,
     }))));
     r.post('/console/providers', needs(CAPS.providerManage), wrap(async (req, res) => {
-        if (!vault) throw new AiError(503, 'vault.unavailable', 'provider keys cannot be stored here');
+        if (!vault || !settings) throw new AiError(503, 'vault.unavailable', 'provider keys cannot be stored here');
         const b = req.body || {};
         const preset = presets.byId(String(b.preset || 'custom')) || presets.byId('custom');
         const key = String(b.key || preset.id).trim().toLowerCase();
@@ -339,20 +339,21 @@ function consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, e
         if (await registry.getProvider(key)) throw new AiError(409, 'ai.conflict', `a provider called ${key} already exists: replace its key on the providers page`);
         const baseUrl = String(b.base_url || preset.base_url || '').trim();
         if (!/^https:\/\/[^\s]+$/i.test(baseUrl)) throw new AiError(422, 'ai.invalid', 'the base URL is an https address');
-        await vault.put(key, b.api_key, who(req));
         const caps = [...presets.TEXT_CAPS, ...(b.vision ? ['vision'] : [])];
+        // The provider comes first: its base URL is the origin its key is sealed to (D11).
         await registry.upsertProvider({
             key, display_name: String(b.display_name || preset.name || key).slice(0, 80), kind: preset.kind, status: 'active', base_url: baseUrl.replace(/\/+$/, ''),
             auth_mode: preset.kind === 'anthropic' ? 'x-api-key' : 'bearer', secret_ref: `vault:${key}`, default_model: String(b.default_model || preset.model || '').trim() || null,
             capabilities: caps, timeout_ms: 60000, priority: 50, billing_profile: 'metered', metadata: { added_from: 'console', preset: preset.id },
         }, { ...who(req), origin: 'admin' });
+        await vault.put(key, b.api_key, who(req));
         // Its model list, read right away (best effort: a provider whose list cannot be read is still added).
         const added = await registry.getProvider(key);
         await catalog.sync({ registry, provider: added, apiKey: resolveSecret(added.secret_ref, env), fetchImpl, actor: who(req).actor }).catch(() => null);
         res.redirect(303, '/console/providers?done=provider_added');
     }));
     r.post('/console/providers/:key/key', needs(CAPS.providerManage), wrap(async (req, res) => {
-        if (!vault) throw new AiError(503, 'vault.unavailable', 'provider keys cannot be stored here');
+        if (!vault || !settings) throw new AiError(503, 'vault.unavailable', 'provider keys cannot be stored here');
         const p = await registry.getProvider(req.params.key);
         if (!p) throw new AiError(404, 'ai.not_found', 'no such provider');
         await vault.put(p.key, (req.body || {}).api_key, who(req));

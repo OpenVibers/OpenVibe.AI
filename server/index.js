@@ -28,6 +28,7 @@ const { createAuth, createNetworkKeys } = require('./auth');
 const { jwksClient } = require('openvibe-sdk/auth');
 const schemas = require('./schemas');
 const { createApp } = require('./app');
+const { AiError } = require('./util');
 const { gracefulStop, telemetry } = require('openvibe-sdk/service');
 const { createPgTelemetrySink, startTelemetryRetention } = require('openvibe-sdk/telemetry');
 
@@ -37,8 +38,23 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     // PostgreSQL (ADR-035): opened and migrated here unless the caller (a test) hands in a migrated handle.
     const db = givenDb || await openDb(config, { log });
     const registry = createRegistry(db, { clock, env });
-    // Provider keys an owner stored from the console (server/vault.js): into this process before any provider is built.
-    const vault = require('./vault').createVault({ db, config, clock, log });
+    // AI Exchange F: Billing Credits for paid managed inference (AI_CREDITS, off). The manager is created when the
+    // flag is on, including when an owner turns it on live (D11 onExchange below); runs use the facade.
+    let credits = null;
+    function ensureCredits() {
+        if (credits || !(config.credits && config.credits.enabled)) return credits;
+        credits = require('./credits').createCredits({ config, db, registry, env, fetchImpl, clock, log, networkUrl: config.networkInternalUrl });
+        if (credits && !(config.modelCatalog && config.modelCatalog.enabled)) {
+            log.warn('[credits] AI_CREDITS is on but AI_MODEL_CATALOG is off: no offer declares managed access, so no request is charged');
+        }
+        if (credits && listen && config.nodeEnv !== 'test') credits.startSettlements();
+        return credits;
+    }
+    // D11 owner settings: ai.exchange and ai.provider_keys on openvibe-shared/config. The provider-key store also
+    // refreshes the synchronous vault cache, and its one-time migration runs before any provider is built.
+    const settings = await require('./settings').createSettings({ db, config, registry, clock, env, log, onExchange: () => ensureCredits() });
+    const vault = require('./vault').createVault({ settings, clock, log });
+    await require('./vault').migrate({ db, config, settings, log }).catch((err) => log.warn(`[Vault] migration failed: ${err.message}`));
     await vault.load().catch((err) => log.warn(`[Vault] ${err.message}`));
     // BENCH-11: Bench's ratings as routing evidence, and the opted-in tie rule inside placement.
     const bench = createBenchEvidence({ db, registry, config, clock, fetchImpl, log });
@@ -71,13 +87,28 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     // A person's ai.preferences (L36 Y3): only_my_keys, free_first, a price ceiling and a default model per kind.
     const preferences = require('./person-preferences').createPreferences({ db, clock });
     const projectSecrets = require('./project-secrets').createProjectSecrets({ config, env, fetchImpl });
-    // AI Exchange F: Billing Credits for paid managed inference (AI_CREDITS, off). Null when off, so runs never touch it.
-    const credits = require('./credits').createCredits({ config, db, registry, env, fetchImpl, clock, log, networkUrl: config.networkInternalUrl });
-    if (credits && !(config.modelCatalog && config.modelCatalog.enabled)) {
-        log.warn('[credits] AI_CREDITS is on but AI_MODEL_CATALOG is off: no offer declares managed access, so no request is charged');
-    }
-    const runs = createRuns({ db, registry, engine, cache, quotas, config, clock, log, userModules, credentials, preferences, tiers, projectSecrets, pool, runBudgets, credits });
+    ensureCredits();
+    // A stable facade: the store may create the Credits manager after boot (AI_CREDITS turned on live), and the runs
+    // keep the same object. enabled is the live flag, so turning Credits off stops new holds at once.
+    const creditsRef = {
+        get enabled() { return Boolean(credits && config.credits && config.credits.enabled); },
+        get accessOf() { return credits ? credits.accessOf : require('./credits').accessOfProvider; },
+        get manager() { return credits; },
+        begin(o) {
+            if (!credits) throw new AiError(503, 'billing.unavailable', 'Billing Credits is not configured on this service');
+            return credits.begin(o);
+        },
+        pendingSettlements() { return credits ? credits.pendingSettlements() : Promise.resolve([]); },
+        drainSettlements(o) { return credits ? credits.drainSettlements(o) : Promise.resolve({ skipped: 'disabled' }); },
+        startSettlements() { return credits ? credits.startSettlements() : null; },
+        stopSettlements() { return credits ? credits.stopSettlements() : undefined; },
+    };
+    const runs = createRuns({ db, registry, engine, cache, quotas, config, clock, log, userModules, credentials, preferences, tiers, projectSecrets, pool, runBudgets, credits: creditsRef });
     await seed({ registry, quotas, config, env, db });
+    // The seed creates or moves providers from the environment: publish their origins (the schema and every key's
+    // bind follow), so a key is bound to the host it is for from the first boot.
+    await settings.providerKeys.syncOrigins({ actor: { type: 'service', id: 'ai' }, reason: 'providers seeded' })
+        .catch((err) => log.warn(`[config] provider origins: ${err.message}`));
     const interrupted = await runs.recoverInterrupted();
     if (interrupted) log.warn(`[ai] marked ${interrupted} interrupted run(s) failed (run.interrupted); callers can retry them`);
 
@@ -98,7 +129,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         clientSecret: env.OV_OAUTH_CLIENT_SECRET, fetch: fetchImpl,
     }) : null;
     const benchEvents = createBenchEvents({ bench, accountData, accountSend, config, log, fetchImpl, clientSecret: env.OV_OAUTH_CLIENT_SECRET });
-    const app = createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, grants, vault, benchEvents, runBudgets, memory });
+    const app = createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, grants, vault, settings, benchEvents, runBudgets, memory });
     let jwks = null;
     let keyLoaded = Promise.resolve(null);
     if (!keys.pinned && config.nodeEnv !== 'test') {
@@ -170,7 +201,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         if (!givenDb) await db.close();
     }
 
-    return { config, db, registry, pool, quotas, tiers, cache, fetcher, engine, runs, keys, keyLoaded, auth, app, server, bench, benchEvents, memory, memoryJobs, credits, close };
+    return { config, db, registry, pool, quotas, tiers, cache, fetcher, engine, runs, keys, keyLoaded, auth, app, server, bench, benchEvents, memory, memoryJobs, credits: creditsRef, settings, vault, close };
 }
 
 if (require.main === module) {

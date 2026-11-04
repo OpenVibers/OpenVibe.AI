@@ -41,6 +41,8 @@ const TABLES = [
     { table: 'memory_profiles', subject: 'owner', value: (usr) => `user:${usr}`, file: null, erase: 'delete' },
     { table: 'memory_reads', subject: 'owner', value: (usr) => `user:${usr}`, file: null, erase: 'delete' },
     { table: 'free_allowance_usage', subject: 'subject', file: 'free-allowance.json', erase: { keep: ledger } },
+    // D11 owner settings: the revisions are the service's configuration audit trail, kept like the catalogues.
+    { table: 'config_snapshots', subject: 'created_by', file: null, erase: { keep: 'the configuration history is the service\'s; created_by is the operator audit trail' } },
     { table: 'routes', subject: 'created_by', file: null, erase: { keep: 'the route catalogue is the service\'s; created_by is the staff audit trail' } },
     { table: 'templates', subject: 'created_by', file: null, erase: { keep: 'the template catalogue is the service\'s; created_by is the staff audit trail' } },
     { table: 'workflows', subject: 'created_by', file: null, erase: { keep: 'the workflow catalogue is the service\'s; created_by is the staff audit trail' } },

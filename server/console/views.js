@@ -222,7 +222,7 @@ function providers({ staff, csrf, rows, models, canManage, stubFallback, notice,
     return layout({
         title: 'Providers', section: 'providers', staff, csrf, notice, error, body: html`<h1>Providers and models</h1>
 ${canManage ? html`<p><a class="button" href="/console/providers/new">Add a provider</a> <span class="muted">DeepSeek, OpenRouter, Groq, Gemini, Mistral, Together, Fireworks, Cerebras, xAI, OpenAI, Anthropic or any OpenAI-compatible API. Then choose it on a route's page.</span></p>` : ''}
-<p class="muted">Credentials are secret <em>references</em> (<code>env:NAME</code>, or <code>vault:NAME</code> for a key added here, kept encrypted) resolved inside the service; this page shows the name and whether it resolves, never a value. Routes try their primary and then each fallback in order; the table below is in provider priority order. The deterministic stub joins every route as a last resort: <strong>${stubFallback ? 'on' : 'off'}</strong> (<code>AI_STUB_FALLBACK</code>).</p>
+<p class="muted">Credentials are secret <em>references</em> (<code>env:NAME</code>, or <code>vault:NAME</code> for a key added here, sealed in the AI configuration store and bound to the provider's origin) resolved inside the service; this page shows the name and whether it resolves, never a value. Routes try their primary and then each fallback in order; the table below is in provider priority order. The deterministic stub joins every route as a last resort: <strong>${stubFallback ? 'on' : 'off'}</strong> (<code>AI_STUB_FALLBACK</code>).</p>
 ${table('Providers', ['Provider', 'Kind', 'Status', 'Credentials', 'Circuit', 'Base URL', 'Default model', 'Can do', 'Priority / timeout', ...(canManage ? ['Actions'] : [])], rows.map((p) => html`<tr>
 <td><code>${p.key}</code><br><span class="muted">${p.display_name}</span></td><td>${p.kind}</td><td>${badge(p.status)}</td>
 <td>${badge(p.credentials)}${p.secret_ref ? html`<br><code>${p.secret_ref}</code>` : ''}${keyCell(p)}<br><span class="muted">${p.auth_mode}</span></td>
@@ -247,8 +247,8 @@ function providerNew({ staff, csrf, presets, preset, vaultReady, notice, error }
     const p = preset || presets.find((x) => x.id === 'deepseek');
     return layout({
         title: 'Add a provider', section: 'providers', staff, csrf, notice, error, body: html`<h1>Add a provider</h1>
-<p class="muted">Pick a provider, paste an API key from its site and name its default model. The key is stored encrypted inside OpenVibe.AI and never shown again (only its last four characters). Nothing uses the provider until you choose it on a route's page.</p>
-${vaultReady ? '' : html`<p class="bad">Keys cannot be stored on this server: <code>AI_CREDENTIALS_KEY</code> is not set.</p>`}
+<p class="muted">Pick a provider, paste an API key from its site and name its default model. The key is sealed in AI's configuration store, bound to the provider's origin, and never shown again (only its last four characters). Nothing uses the provider until you choose it on a route's page.</p>
+${vaultReady ? '' : html`<p class="bad">Keys cannot be stored on this server: the configuration store is unavailable.</p>`}
 <nav aria-label="Providers"><ul class="tabs">${presets.map((x) => html`<li><a href="/console/providers/new?preset=${enc(x.id)}"${x.id === p.id ? html` aria-current="page"` : ''}>${x.name}</a></li>`)}</ul></nav>
 <form method="post" action="/console/providers" class="stack">${csrfField(csrf)}<input type="hidden" name="preset" value="${p.id}">
 <label>Name in OpenVibe <input type="text" name="key" required pattern="[a-z0-9][a-z0-9._-]{1,40}" value="${p.id === 'custom' ? '' : p.id}" spellcheck="false"></label>

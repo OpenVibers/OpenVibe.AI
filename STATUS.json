@@ -7,9 +7,9 @@
   "runtime": "node 22, express, postgresql",
   "port": 4700,
   "domain": "ai.openvibe.services (the old ai.openvibe.network address was retired on 2026-10-10); the service runs on openvibe-ovh (/opt/openvibe.ai, unit openvibe-ai) on 127.0.0.1:4700 behind nginx; OpenVibe.Live and OpenVibe.Network call it on loopback",
-  "contracts": "openvibe-contracts v0.262.0 (the ai.me.* schemas arrive in v0.257.0; the person routes also work without them until this pin moves)",
-  "sdk": "openvibe-sdk v0.82.0",
-  "shared": "openvibe-shared v4.109.2",
+  "contracts": "openvibe-contracts v0.288.0 (ai.config.manage and the common.config-* contracts carry D11)",
+  "sdk": "openvibe-sdk v0.83.0",
+  "shared": "openvibe-shared v4.110.0",
   "capabilities": [
     "ai.run.create",
     "ai.run.read",
@@ -22,7 +22,8 @@
     "ai.memory.read",
     "ai.memory.write",
     "ai.me.read",
-    "ai.me.manage"
+    "ai.me.manage",
+    "ai.config.manage"
   ],
   "capabilitiesRegistered": true,
   "providers": [

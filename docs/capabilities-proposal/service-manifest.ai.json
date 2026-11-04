@@ -22,6 +22,7 @@
   "capabilities": [
     "ai.actions.read",
     "ai.app.run",
+    "ai.config.manage",
     "ai.credential.manage",
     "ai.provider.manage",
     "ai.quota.attribution.manage",
