@@ -97,6 +97,9 @@ function createAuth({ config, log = console }) {
     // does not know is still refused exactly as before.
     const catalogOn = Boolean(config.modelCatalog && config.modelCatalog.enabled);
     function allowsLocal(claims, id) {
+        // D8 stays behind AI_MODEL_CATALOG: a release that knows the capability (v0.284.0) must not silently accept
+        // it while the catalog is off, which is how the flag-off behaviour was promised.
+        if (id === 'ai.inference.create' && !catalogOn) return { allowed: false, code: 'capability.denied', reason: `${id} is behind AI_MODEL_CATALOG` };
         // Once a contract release knows the id, the normal grant rule applies; until then the local check above is
         // the same grant/wildcard test without the unknown-capability refusal.
         if (id === 'ai.inference.create' && catalogOn && !capabilities.get(id)) {
