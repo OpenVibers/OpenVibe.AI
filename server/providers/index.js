@@ -35,6 +35,9 @@ const rates = require('./rate-cards');
 const { detectTask, capabilitiesOf, hardNeeds, rank, reasonFor, workKind, leadingText, preferredTarget, preferMatches } = require('./task');
 const modelCatalog = require('./model-catalog');
 const { createWarmCache } = require('./warm-cache');
+const { createProviderMetrics } = require('./metrics');
+const { createVariantEvidence } = require('./bench-variant');
+const { createRoutingEvidence } = require('./evidence');
 
 /** 4xx that the request itself caused (bad image, schema, max_tokens...), as opposed to auth, rate or availability. */
 function callerFault(err) {
@@ -131,13 +134,43 @@ function selfModelFor(cred, operation, req, ctx, prefs) {
     return { model, kind, why };
 }
 
-function createProviderPool({ db, registry, config, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, credentialFetch = null, machineModels = null, bench = null }) {
+function createProviderPool({ db, registry, config, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, credentialFetch = null, machineModels = null, bench = null, variantEvidence = null }) {
     // A person's own machine as their model (credential provider node, server/machines.js).
     const machines = machineModels || require('../machines').createMachineModels({ config, env, fetchImpl });
     const cache = new Map();          // key -> { stamp, adapter }
     const stats = {};                 // key -> { calls, failures, ... } (in memory; tests + /api/ready)
     // L36 Y7: the provider that last answered this prompt, for five minutes (server/providers/warm-cache.js).
     const warm = createWarmCache({ now: () => clock.now() });
+    // AI Exchange P7: measured per-deployment evidence for alias routing. Off unless AI_ROUTING_EVIDENCE is on;
+    // when off, no metrics are written and no order changes.
+    const routingEvidence = config.routingEvidence && config.routingEvidence.enabled
+        ? createRoutingEvidence({
+            db, config, clock, log,
+            metrics: createProviderMetrics({ db, clock, alpha: config.routingEvidence.alpha }),
+            bench: variantEvidence || createVariantEvidence({ config, fetchImpl, clock, log }),
+            resolveOffer: async (c) => {
+                const entry = await adapter(c.provider);
+                const p = entry && entry.record;
+                if (!p) return null;
+                const model = c.model || p.default_model || null;
+                const row = model ? await registry.getModel(p.key, model) : null;
+                const artifact = row ? modelCatalog.artifactOf(row, p) : null;
+                return {
+                    id: offerId(p.key, model), provider: p.key, model,
+                    exactId: artifact ? artifact.id : null,
+                    access: modelCatalog.accessOf(p),
+                    free: isFreeProvider(p),
+                    retail: row ? modelCatalog.retailRate(row) : null,
+                    cards: isFreeProvider(p) ? null : await rateCardsFor(p.key, model),
+                };
+            },
+        })
+        : null;
+    /** Evidence writes must never fail a run: a metrics problem is logged and routing continues. */
+    async function recordEvidence(attempt) {
+        if (!routingEvidence) return;
+        try { await routingEvidence.record(attempt); } catch (err) { log.warn(`[routing-evidence] ${String(err && err.message || err).slice(0, 200)}`); }
+    }
 
     function statFor(key) { return stats[key] || (stats[key] = { calls: 0, ok: 0, failures: 0, skipped: 0 }); }
 
@@ -903,7 +936,8 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         }
         // L36 Y7: pick for the task. The hard needs first (a model that cannot do the job is never tried), then
         // fit and cost: a light job takes the cheapest capable model, a heavy one the catalogue's strength tier.
-        const warmProvider = warm.get(warmSubject(ctx, route), leadingText(req));
+        const warmDeployment = warm.getDeployment(warmSubject(ctx, route), leadingText(req));
+        const warmProvider = warmDeployment ? warmDeployment.provider : null;
         // L36 Y3: with free_first on, the free tiers lead (the price decides); with it off, the strength tier
         // leads and the free tiers are the failover, not the first choice.
         const freeFirst = ctx.selfSubject ? prefs.free_first !== false : true;
@@ -944,6 +978,20 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             }
             explain.prefer = preferState;
         }
+        // AI Exchange P7: an alias route (economy/fast/balanced/auto) is ranked by measured evidence when
+        // AI_ROUTING_EVIDENCE is on. planAi (openvibe-sdk/placement) is the planner: this only prepares its
+        // inputs, keeps the incumbent for N decisions and explains the answer. Private never leaves local
+        // capacity, and an exact id never reaches here.
+        if (routingEvidence && ctx.aliasPolicy && ctx.aliasPolicy !== 'private' && !exact) {
+            const picked = await routingEvidence.choose({ routeKey: route.key, policy: ctx.aliasPolicy, list, req, ctx, warmDeployment, preferred: prefer });
+            if (picked && picked.view) {
+                list = picked.order;
+                explain.evidence = picked.view;
+                explain.policy = ctx.aliasPolicy;
+                explain.reasons = [picked.view.reason, ...(explain.reasons || [])];
+            }
+        }
+        const evidenceReason = explain.evidence ? explain.evidence.reason : null;
         const attempts = [...selfAttempts];
         explain.paid_by = 'openvibe';
         explain.attempts = attempts;
@@ -1031,7 +1079,8 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                 const attemptFacts = await modelCatalog.facts({
                     registry, providerRecord: p, model,
                     policy: policy || (exact ? 'exact' : null),
-                    fallbackReason: fallback ? 'the first eligible offer did not answer; a later offer on this same route answered' : null,
+                    policyReason: evidenceReason,
+                    fallbackReason: fallback ? `the first eligible offer did not answer; a later offer on this same route answered${evidenceReason ? ` (${evidenceReason})` : ''}` : null,
                 });
                 // The hold needs the offer's retail card, whether it is prepaid, and the real output cap.
                 const attemptRow = p && model ? await registry.getModel(p.key, model) : null;
@@ -1057,6 +1106,8 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                         throw new ProviderError('embedding response has invalid vectors', { code: 'provider.output' });
                     const latency = Date.now() - t0;
                     const usage = result.usage || { input: 0, output: 0, cached: 0 };
+                    await recordEvidence({ provider: c.provider, model, ok: true, timeout: false, ttftMs, latencyMs: latency,
+                        outputTokens: usage.output || 0, inputTokens: usage.input || 0, cachedTokens: usage.cached || 0 });
                     // An image is metered per image (usage.output = images), and no rate card prices one yet (an owner/T5
                     // item): its cost is 0 rather than the image count read as output tokens on the token cards.
                     const cost = operation === 'image' ? 0 : await costOf(c.provider, result.model || model, usage);
@@ -1079,7 +1130,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                         preferState.why = 'the ' + c.provider + ' offer answered, as you asked';
                     }
                     attempts.push({ key: 'openvibe', provider: c.provider, model: result.model || model, why: chosen || (fallback ? 'the next network provider after an earlier attempt failed' : 'the first network offer for this route'), status: 'ok', error: null });
-                    warm.remember(warmSubject(ctx, route), leadingText(req), c.provider);
+                    warm.remember(warmSubject(ctx, route), leadingText(req), c.provider, model);
                     explain.attempts = attempts;
                     explain.openvibe = attemptFacts;
                     return { result, provider: c.provider, providerKind: p.kind, model: result.model || model, fallbackUsed: fallback || selfAttempts.some(a => a.status !== 'skipped'), usage, cost, latencyMs: latency, ttftMs, synthetic: Boolean(result.synthetic || a.synthetic), tried, startedAt: started, explain };
@@ -1089,6 +1140,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                         if (ctx.logRequest) ctx.logRequest({ ...base, status: 'cancelled', latency_ms: Date.now() - t0, error: 'cancelled' });
                         throw new AiError(409, 'run.cancelled', 'run was cancelled');
                     }
+                    await recordEvidence({ provider: c.provider, model, ok: false, timeout: Boolean(err && err.code === 'provider.timeout'), latencyMs: Date.now() - t0 });
                     statFor(c.provider).failures++;
                     if (ctx.logRequest) ctx.logRequest({ ...base, status: err && err.code === 'provider.timeout' ? 'timeout' : 'error', latency_ms: Date.now() - t0, error: String(err && err.message || err).slice(0, 500) });
                     if (streamed) throw new AiError(502, 'provider.stream_broken', `the answer broke off after it began streaming: ${String(err && err.message || err).slice(0, 200)}`, { tried: [...tried, { provider: c.provider, error: String(err && err.message || err).slice(0, 200) }], explain });
@@ -1119,7 +1171,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         throw new AiError(503, 'provider.unavailable', 'no provider on this route could answer', { tried, explain });
     }
 
-    return { adapter, health, resetHealth, execute, executeWithCredential, offers, benchView, priceFor, costOf, rateCardsFor, providerStates, stats, statFor, candidates, machines };
+    return { adapter, health, resetHealth, execute, executeWithCredential, offers, benchView, priceFor, costOf, rateCardsFor, providerStates, stats, statFor, candidates, machines, routingEvidence };
 }
 
 module.exports = { createProviderPool, machineMessages, machineTools };

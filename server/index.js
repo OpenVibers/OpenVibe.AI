@@ -31,7 +31,7 @@ const { createApp } = require('./app');
 const { gracefulStop, telemetry } = require('openvibe-sdk/service');
 const { createPgTelemetrySink, startTelemetryRetention } = require('openvibe-sdk/telemetry');
 
-async function start({ config, db: givenDb = null, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, listen = true, credentialFetch = null, valkey = null, research = null, machineModels = null } = {}) {
+async function start({ config, db: givenDb = null, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, listen = true, credentialFetch = null, valkey = null, research = null, machineModels = null, variantEvidence = null } = {}) {
     config = config || load(env);
     schemas.configure(config.schemaCache);
     // PostgreSQL (ADR-035): opened and migrated here unless the caller (a test) hands in a migrated handle.
@@ -42,7 +42,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     await vault.load().catch((err) => log.warn(`[Vault] ${err.message}`));
     // BENCH-11: Bench's ratings as routing evidence, and the opted-in tie rule inside placement.
     const bench = createBenchEvidence({ db, registry, config, clock, fetchImpl, log });
-    const pool = createProviderPool({ db, registry, config, clock, fetchImpl, env, log, credentialFetch, machineModels, bench });
+    const pool = createProviderPool({ db, registry, config, clock, fetchImpl, env, log, credentialFetch, machineModels, bench, variantEvidence });
     // T6 step 8: the SaaS tier budgets on openvibe-sdk/govern in Valkey (server/govern.js); off unless AI_GOVERN_TIERS=1.
     const tiers = createTiers({ config, valkey, clock, log });
     // §2.1.8: the provider free allowance per subject, priced off the pool's own rate cards (server/free-allowance.js);

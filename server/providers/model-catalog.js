@@ -13,9 +13,9 @@
  *   select({ registry, model, route })
  *                             a request's `model`: an alias turns into the same route with the alias policy's
  *                             placement constraints; an exact id returns only its own deployments (never a substitute)
- *   facts({ registry, providerRecord, model, policy, fallbackReason })
+ *   facts({ registry, providerRecord, model, policy, policyReason, fallbackReason })
  *                             one `openvibe` disclosure: resolved_model, revision, deployment, provider_access,
- *                             rate_version, policy, fallback_reason
+ *                             rate_version, policy, policy_reason, fallback_reason
  *
  * Commercial access is the provider offer's `provider_access` (migrations/0024), defaulting to UNVERIFIED. Paid
  * managed routing (the network's providers, never a person's own key) accepts only OWN_DEPLOYMENT and
@@ -197,7 +197,7 @@ async function select({ registry, model, route }) {
 }
 
 /** One `openvibe` disclosure object (D3). Unknown facts stay null, never invented. */
-async function facts({ registry, providerRecord, model, policy = null, fallbackReason = null }) {
+async function facts({ registry, providerRecord, model, policy = null, policyReason = null, fallbackReason = null }) {
     const provider = providerRecord || null;
     const row = provider && model ? await registry.getModel(provider.key, model) : null;
     const artifact = row ? artifactOf(row, provider) : null;
@@ -209,6 +209,7 @@ async function facts({ registry, providerRecord, model, policy = null, fallbackR
         provider_access: accessOf(provider),
         rate_version: meta.rate_version ? String(meta.rate_version) : null,
         policy: policy || null,
+        ...(policyReason ? { policy_reason: String(policyReason).slice(0, 160) } : {}),
         fallback_reason: fallbackReason || null,
     };
 }

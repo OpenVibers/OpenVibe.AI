@@ -142,6 +142,22 @@ function load(env = process.env) {
         routing: {
             maxAttempts: Math.max(1, int(env.AI_ROUTING_MAX_ATTEMPTS, 3)),
         },
+        // AI Exchange P7 (PLAN §D/§E): alias routes ranked by measured evidence. Off by default; with the flag
+        // off nothing is written and no order changes. The EWMA alpha, the minimum sample count below which
+        // evidence is sparse (and reported, never trusted), the probability floor, the decisions a challenger
+        // must win, and the exploration share (0 = never leave the incumbent).
+        routingEvidence: {
+            enabled: bool(env.AI_ROUTING_EVIDENCE, false),
+            alpha: Math.max(0.01, Math.min(1, float(env.AI_ROUTING_EVIDENCE_ALPHA, 0.2))),
+            minSamples: Math.max(1, int(env.AI_ROUTING_EVIDENCE_MIN_SAMPLES, 20)),
+            successFloor: Math.max(0.01, Math.min(1, float(env.AI_ROUTING_EVIDENCE_SUCCESS_FLOOR, 0.1))),
+            prior: Math.max(0.01, Math.min(1, float(env.AI_ROUTING_EVIDENCE_PRIOR, 0.9))),
+            hysteresisDecisions: Math.max(1, int(env.AI_ROUTING_EVIDENCE_DECISIONS, 3)),
+            explorationShare: Math.max(0, Math.min(1, float(env.AI_ROUTING_EVIDENCE_EXPLORE, 0))),
+            affinityGain: Math.max(0, Math.min(1, float(env.AI_ROUTING_EVIDENCE_AFFINITY, 0.05))),
+            minGain: Math.max(0, Math.min(1, float(env.AI_ROUTING_EVIDENCE_MIN_GAIN, 0.15))),
+            expectedOutputTokens: Math.max(1, int(env.AI_ROUTING_EVIDENCE_OUTPUT_TOKENS, 512)),
+        },
         // AI Exchange P4 (CHECKPOINT D3): the truthful model catalog, exact ids and dynamic aliases. Off by
         // default: today's /v1 behaviour, the single `openvibe` model and no disclosure object, is unchanged.
         modelCatalog: {
