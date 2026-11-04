@@ -1,0 +1,319 @@
+{
+  "meta": {
+    "checked_date": "2026-11-03",
+    "source": "plan-state-2026-10-22/ai-exchange/PLAN.md section C",
+    "rule": "access_mode defaults to UNVERIFIED unless terms clearly allow resale AND an executed agreement exists. Retail subscriptions and coding-agent plans do not count as transferable wholesale compute."
+  },
+  "providers": [
+    {
+      "provider": "OpenAI",
+      "api_format": "OpenAI",
+      "existing_adapter": "openai",
+      "byok": true,
+      "access_mode_default": "RESTRICTED",
+      "resale_terms_quote": "Customer may not resell or lease access to its Account or any End User Account.",
+      "terms_url": "https://openai.com/policies/business-terms/",
+      "terms_effective": "2026-01-01",
+      "checked": "2026-11-03"
+    },
+    {
+      "provider": "Anthropic",
+      "api_format": "Anthropic Messages",
+      "existing_adapter": "anthropic",
+      "byok": true,
+      "access_mode_default": "RESTRICTED",
+      "resale_terms_quote": "resell the Services except as expressly approved by Anthropic",
+      "terms_url": "https://www.anthropic.com/legal/commercial-terms",
+      "terms_effective": "2025-06-17",
+      "checked": "2026-11-03"
+    },
+    {
+      "provider": "Google Gemini / Vertex",
+      "api_format": "Gemini / OpenAI-compatible",
+      "existing_adapter": "gemini / openai",
+      "byok": true,
+      "access_mode_default": "RESTRICTED",
+      "resale_terms_quote": "sell, resell, sublicense, transfer, or distribute any or all of the Services",
+      "terms_url": "https://cloud.google.com/terms",
+      "terms_effective": null,
+      "checked": "2026-11-03"
+    },
+    {
+      "provider": "Mistral",
+      "api_format": "OpenAI-compatible",
+      "existing_adapter": "openai (BYOK credential)",
+      "byok": true,
+      "access_mode_default": "RESTRICTED",
+      "resale_terms_quote": "nor grant any third party access to the Mistral AI Products without our prior written authorization",
+      "terms_url": "https://legal.mistral.ai/terms/commercial-terms-of-service",
+      "terms_effective": "2026-09-25",
+      "checked": "2026-11-03"
+    },
+    {
+      "provider": "xAI / Grok",
+      "api_format": "OpenAI-compatible",
+      "existing_adapter": "openai (BYOK credential)",
+      "byok": true,
+      "access_mode_default": "RESTRICTED",
+      "resale_terms_quote": "Enterprise terms permit Bundled Services to Customer's End Users only; no standalone resale right found.",
+      "terms_url": "https://x.ai/legal/terms-of-service-enterprise",
+      "terms_effective": "2026-10-27",
+      "checked": "2026-11-03"
+    },
+    {
+      "provider": "Together AI",
+      "api_format": "OpenAI-compatible",
+      "existing_adapter": "openai (BYOK credential)",
+      "byok": true,
+      "access_mode_default": "RESTRICTED",
+      "resale_terms_quote": "transfer, distribute, resell, lease, license, or assign the Services or otherwise offer the Services on a standalone basis",
+      "terms_url": "https://www.together.ai/terms-of-service",
+      "terms_effective": "2026-05-19",
+      "checked": "2026-11-03"
+    },
+    {
+      "provider": "DeepInfra",
+      "api_format": "OpenAI-compatible",
+      "existing_adapter": "openai / http",
+      "byok": true,
+      "byok_note": "custom credential",
+      "access_mode_default": "RESTRICTED",
+      "resale_terms_quote": "resell, sublicense, rent, distribute, or otherwise make the Services available to any third party except as expressly permitted under this Agreement or the applicable Service Order",
+      "terms_url": "https://deepinfra.com/terms",
+      "terms_effective": "2026-10-15",
+      "checked": "2026-11-03"
+    },
+    {
+      "provider": "RunPod (serverless)",
+      "api_format": "OpenAI-compatible",
+      "existing_adapter": "openai / http",
+      "byok": false,
+      "access_mode_default": "RESTRICTED",
+      "resale_terms_quote": "Resell any credits purchased through the Service without the prior written consent of Runpod; Marketplace / compute terms restrict commercial exploitation.",
+      "terms_url": "https://www.runpod.io/terms-of-service",
+      "terms_effective": "2026-03-24",
+      "checked": "2026-11-03"
+    },
+    {
+      "provider": "Replicate",
+      "api_format": "Replicate API",
+      "existing_adapter": "http",
+      "byok": false,
+      "access_mode_default": "RESTRICTED",
+      "resale_terms_quote": "rent, lease, lend, sell, sublicense, assign, distribute, publish, transfer, or otherwise make available any Services to any person, including ... software as a service",
+      "terms_url": "https://replicate.com/terms",
+      "terms_effective": "2026-04-01",
+      "checked": "2026-11-03"
+    },
+    {
+      "provider": "Cloudflare Workers AI",
+      "api_format": "Workers AI REST",
+      "existing_adapter": "http",
+      "byok": false,
+      "access_mode_default": "RESTRICTED",
+      "resale_terms_quote": "rent, lease, loan, export, or sell access to the Services to any third party",
+      "terms_url": "https://www.cloudflare.com/terms/",
+      "terms_effective": "2025-09-12",
+      "checked": "2026-11-03"
+    },
+    {
+      "provider": "AWS Bedrock",
+      "api_format": "Bedrock Converse / Invoke",
+      "existing_adapter": "http",
+      "byok": false,
+      "access_mode_default": "RESTRICTED",
+      "resale_terms_quote": "Standard AWS Customer Agreement / Service Terms do not permit resale of managed AI inference; AWS marketplace/partner programs require separate authorization.",
+      "terms_url": "https://aws.amazon.com/service-terms/",
+      "terms_effective": "2026-11-03",
+      "checked": "2026-11-03"
+    },
+    {
+      "provider": "Azure OpenAI / Foundry",
+      "api_format": "Azure OpenAI / REST",
+      "existing_adapter": "http",
+      "byok": false,
+      "access_mode_default": "RESTRICTED",
+      "resale_terms_quote": "Microsoft Customer Agreement / Online Subscription Agreement restrict resale; embedding in third-party SaaS requires negotiated terms.",
+      "terms_url": "https://azure.microsoft.com/en-us/support/legal/",
+      "terms_effective": null,
+      "checked": "2026-11-03"
+    },
+    {
+      "provider": "Featherless",
+      "api_format": "OpenAI-compatible",
+      "existing_adapter": "openai / http",
+      "byok": false,
+      "access_mode_default": "AUTHORIZED_WHOLESALE",
+      "access_mode_note": "Scale plans only; requires executed Scale agreement.",
+      "resale_terms_quote": "Scale plans are not subject to said limits and may be used in arbitrary applications, including inference resale.",
+      "terms_url": "https://featherless.ai/terms",
+      "terms_effective": "2024-06-10",
+      "checked": "2026-11-03"
+    },
+    {
+      "provider": "Chutes",
+      "api_format": "Custom / OpenAI-compatible",
+      "existing_adapter": "http",
+      "byok": false,
+      "access_mode_default": "UNVERIFIED",
+      "resale_terms_quote": "Terms fetched; no explicit resale/wholesale clause found. Subscriptions are for casual/direct use; PAYGO required for production.",
+      "terms_url": "https://chutes.ai/terms",
+      "terms_effective": "2026-03-16",
+      "checked": "2026-11-03"
+    },
+    {
+      "provider": "Baseten",
+      "api_format": "OpenAI-compatible",
+      "existing_adapter": "http",
+      "byok": false,
+      "access_mode_default": "UNVERIFIED",
+      "resale_terms_quote": "Terms page did not return readable content in this check.",
+      "terms_url": "https://www.baseten.co/terms-of-service",
+      "terms_effective": null,
+      "checked": "2026-11-03"
+    },
+    {
+      "provider": "Venice",
+      "api_format": "OpenAI-compatible",
+      "existing_adapter": "http",
+      "byok": false,
+      "access_mode_default": "UNVERIFIED",
+      "resale_terms_quote": "Terms URL returned 404.",
+      "terms_url": "https://venice.ai/terms-of-service",
+      "terms_effective": null,
+      "checked": "2026-11-03"
+    },
+    {
+      "provider": "Nebius",
+      "api_format": "OpenAI-compatible",
+      "existing_adapter": "http",
+      "byok": false,
+      "access_mode_default": "UNVERIFIED",
+      "resale_terms_quote": "Terms URL returned 404.",
+      "terms_url": "https://nebius.com/legal/terms-of-service",
+      "terms_effective": null,
+      "checked": "2026-11-03"
+    },
+    {
+      "provider": "Novita",
+      "api_format": "OpenAI-compatible",
+      "existing_adapter": "http",
+      "byok": false,
+      "access_mode_default": "UNVERIFIED",
+      "resale_terms_quote": "Terms URL returned 404.",
+      "terms_url": "https://novita.ai/terms-of-service",
+      "terms_effective": null,
+      "checked": "2026-11-03"
+    },
+    {
+      "provider": "Groq",
+      "api_format": "OpenAI-compatible",
+      "existing_adapter": "openai (BYOK credential)",
+      "byok": true,
+      "access_mode_default": "UNVERIFIED",
+      "resale_terms_quote": "/legal/terms-of-service returned 404; consumer terms exist but no clear wholesale/resale clause found.",
+      "terms_url": "https://groq.com/legal/terms-of-service",
+      "terms_effective": null,
+      "checked": "2026-11-03"
+    },
+    {
+      "provider": "Cerebras",
+      "api_format": "OpenAI-compatible",
+      "existing_adapter": "openai (BYOK credential)",
+      "byok": true,
+      "access_mode_default": "UNVERIFIED",
+      "resale_terms_quote": "Terms URL returned 404.",
+      "terms_url": "https://www.cerebras.ai/terms-of-use",
+      "terms_effective": null,
+      "checked": "2026-11-03"
+    },
+    {
+      "provider": "Fireworks",
+      "api_format": "OpenAI-compatible",
+      "existing_adapter": "openai (BYOK credential)",
+      "byok": true,
+      "access_mode_default": "UNVERIFIED",
+      "resale_terms_quote": "/terms returned 404; PDF at /legal/terms could not be fetched.",
+      "terms_url": "https://fireworks.ai/terms",
+      "terms_effective": null,
+      "checked": "2026-11-03"
+    },
+    {
+      "provider": "SiliconFlow",
+      "api_format": "OpenAI-compatible",
+      "existing_adapter": "http",
+      "byok": false,
+      "access_mode_default": "UNVERIFIED",
+      "resale_terms_quote": "Terms URL returned 404.",
+      "terms_url": "https://siliconflow.com/terms-of-service",
+      "terms_effective": null,
+      "checked": "2026-11-03"
+    },
+    {
+      "provider": "Refuseless",
+      "api_format": "Unknown",
+      "existing_adapter": null,
+      "byok": false,
+      "access_mode_default": "UNVERIFIED",
+      "resale_terms_quote": "No terms URL located.",
+      "terms_url": null,
+      "terms_effective": null,
+      "checked": "2026-11-03"
+    },
+    {
+      "provider": "Opper / Heabsy",
+      "api_format": "Unknown",
+      "existing_adapter": null,
+      "byok": false,
+      "access_mode_default": "UNVERIFIED",
+      "resale_terms_quote": "No terms URL located.",
+      "terms_url": null,
+      "terms_effective": null,
+      "checked": "2026-11-03"
+    },
+    {
+      "provider": "Modal",
+      "api_format": "Modal API",
+      "existing_adapter": "http",
+      "byok": false,
+      "access_mode_default": "UNVERIFIED",
+      "resale_terms_quote": "Terms URL returned 404.",
+      "terms_url": "https://modal.com/terms",
+      "terms_effective": null,
+      "checked": "2026-11-03"
+    },
+    {
+      "provider": "Beam",
+      "api_format": "REST / custom",
+      "existing_adapter": "http",
+      "byok": false,
+      "access_mode_default": "UNVERIFIED",
+      "resale_terms_quote": "Not fetched.",
+      "terms_url": null,
+      "terms_effective": null,
+      "checked": "2026-11-03"
+    },
+    {
+      "provider": "Prime Intellect",
+      "api_format": "REST / custom",
+      "existing_adapter": "http",
+      "byok": false,
+      "access_mode_default": "UNVERIFIED",
+      "resale_terms_quote": "Terms URL returned 404.",
+      "terms_url": "https://www.primeintellect.ai/terms",
+      "terms_effective": null,
+      "checked": "2026-11-03"
+    },
+    {
+      "provider": "Self-hosted vLLM / SGLang / llama.cpp / Ollama",
+      "api_format": "OpenAI-compatible",
+      "existing_adapter": "openai / http",
+      "byok": null,
+      "access_mode_default": "OWN_DEPLOYMENT",
+      "resale_terms_quote": "Open-source runtimes deployed on OpenVibe-owned or customer-authorized infrastructure; no upstream resale constraint.",
+      "terms_url": "Various OS licenses",
+      "terms_effective": null,
+      "checked": "2026-11-03"
+    }
+  ]
+}
