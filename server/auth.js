@@ -34,6 +34,8 @@ const CAPS = Object.freeze({
     credentialManage: 'ai.credential.manage',
     quotaAttributionManage: 'ai.quota.attribution.manage',
     appRun: 'ai.app.run',
+    // AI Exchange D8: the public capability a developer app calls the inference routes with (Contracts 0.284.0).
+    inferenceCreate: 'ai.inference.create',
     actionsRead: 'ai.actions.read',
 });
 
@@ -90,6 +92,20 @@ function principalSubject(sub) {
 }
 
 function createAuth({ config, log = console }) {
+    // D8's capability is newer than the pinned openvibe-contracts release. While the catalog flag is on, accept it
+    // from the token's own cap claim (the grant is Network's decision); with the flag off, an id the pinned release
+    // does not know is still refused exactly as before.
+    const catalogOn = Boolean(config.modelCatalog && config.modelCatalog.enabled);
+    function allowsLocal(claims, id) {
+        // Once a contract release knows the id, the normal grant rule applies; until then the local check above is
+        // the same grant/wildcard test without the unknown-capability refusal.
+        if (id === 'ai.inference.create' && catalogOn && !capabilities.get(id)) {
+            if (!hasCap(claims, id)) return { allowed: false, code: 'capability.denied', reason: `${id} not granted` };
+            return { allowed: true, code: 'ok', reason: `${id} granted` };
+        }
+        return allows(claims, id);
+    }
+
     /** The kid a token's header names (null when absent or undecodable). */
     function headerKid(token) {
         try { return JSON.parse(Buffer.from(String(token).split('.')[0], 'base64url').toString('utf8')).kid || null; } catch { return null; }
@@ -135,7 +151,7 @@ function createAuth({ config, log = console }) {
                 if (isAppClaims(r.claims)) return http.sendProblem(res, 403, 'capability.denied', { detail: 'app tokens are not accepted on this route', ctx });
                 let decision = null;
                 for (const id of anyOf) {
-                    decision = allows(r.claims, id);
+                    decision = allowsLocal(r.claims, id);
                     if (decision.allowed) break;
                 }
                 if (!decision.allowed) return http.sendProblem(res, 403, decision.code, { detail: anyOf.length > 1 ? `one of ${anyOf.join(', ')} is required` : decision.reason, ctx });
@@ -158,6 +174,7 @@ function createAuth({ config, log = console }) {
      * app's namespaces.
      */
     function appOrCap(appCap, ...anyOf) {
+        const appCaps = Array.isArray(appCap) ? appCap : [appCap];
         const serviceGuard = requireCap(...anyOf);
         return async function appOrCapGuard(req, res, next) {
             const ctx = req.ov;
@@ -168,8 +185,12 @@ function createAuth({ config, log = console }) {
                 if (!r.ok || !isAppClaims(r.claims)) return await serviceGuard(req, res, next);
                 const app = apps.appPrincipal(r.claims);
                 if (app.error) return http.sendProblem(res, 401, 'token.invalid_claims', { detail: app.error, ctx });
-                const decision = allows(r.claims, appCap);
-                if (!decision.allowed) return http.sendProblem(res, 403, decision.code, { detail: decision.reason, ctx });
+                let decision = null;
+                for (const id of appCaps) {
+                    decision = allowsLocal(r.claims, id);
+                    if (decision.allowed) break;
+                }
+                if (!decision.allowed) return http.sendProblem(res, 403, decision.code, { detail: appCaps.length > 1 ? `one of ${appCaps.join(', ')} is required` : decision.reason, ctx });
                 req.principal = {
                     kind: 'app', sub: r.claims.sub, subject: { type: 'project', id: app.projectId },
                     appId: app.appId, projectId: app.projectId, projectKey: app.projectKey, env: app.env, onBehalfOf: app.onBehalfOf,

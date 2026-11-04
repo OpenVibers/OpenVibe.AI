@@ -12,6 +12,7 @@ const service = token('live', ALL);
 const ULID = '01JAB2C3D4E5F6G7H8J9K0MNPQ';
 const PRJ = `prj_${ULID}`;
 const appToken = (env) => token('app', ['ai.app.run'], { sub: `app:app_${ULID}`, actorType: 'app', ns: [PRJ, `app.${PRJ}.*`], extra: { project_id: PRJ, env } });
+const producer = appToken('production');
 const sandbox = appToken('sandbox');
 
 const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
@@ -157,14 +158,15 @@ async function seed(h, up, { fallbacks = [] } = {}) {
 async function bootWith(billing, env = {}) {
     return boot({ env: {
         AI_CREDITS: '1', AI_MODEL_CATALOG: '1', AI_STUB_FALLBACK: 'false', AI_PROVIDER_RETRIES: '0',
+        AI_GOVERN_TIERS: '1', AI_GOVERN_POLICY_JSON: JSON.stringify({ 'ai-token': { free: {} }, 'ai-usd': { free: {} } }),
         OV_BILLING_INTERNAL_URL: billing.url, OV_NETWORK_INTERNAL_URL: billing.url, OV_OAUTH_CLIENT_SECRET: 'test-secret', OV_OAUTH_CLIENT_ID: 'ai',
         USAGE_SAMPLES: 'off',
         ...env,
     } });
 }
 
-const chat = (h, { tok = service, body = {}, headers = {} } = {}) => request(h.base, 'POST', '/v1/chat/completions', {
-    tok, headers, body: { messages: [{ role: 'user', content: 'hello' }], on_behalf_of: { type: 'user', id: `usr_${ULID}` }, attribution: { service: 'network', type: 'project', id: PRJ }, ...body } });
+const chat = (h, { tok = producer, body = {}, headers = {} } = {}) => request(h.base, 'POST', '/v1/chat/completions', {
+    tok, headers, body: { messages: [{ role: 'user', content: 'hello' }], ...body } });
 
 t.test('insufficient credit: a 402 billing.insufficient_funds, and the provider is never called', async () => {
     const billing = await fakeBilling();
@@ -208,14 +210,15 @@ t.test('an abort mid-stream settles the partial usage, never a release', async (
     const h = await bootWith(billing);
     try {
         await seed(h, up);
-        const res = await fetch(`${h.base}/v1/chat/completions`, { method: 'POST', headers: { Authorization: `Bearer ${service}`, 'Content-Type': 'application/json' }, body: JSON.stringify({
-            stream: true, messages: [{ role: 'user', content: 'stream please' }], on_behalf_of: { type: 'user', id: `usr_${ULID}` }, attribution: { service: 'network', type: 'project', id: PRJ } }) });
+        const res = await fetch(`${h.base}/v1/chat/completions`, { method: 'POST', headers: { Authorization: `Bearer ${producer}`, 'Content-Type': 'application/json' }, body: JSON.stringify({
+            stream: true, messages: [{ role: 'user', content: 'stream please' }] }) });
         assert.strictEqual(res.status, 200);
         const runId = res.headers.get('x-openvibe-run-id');
         assert.match(String(runId), /^run_/);
         const reader = res.body.getReader();
         const { value } = await reader.read();
         assert.ok(value && value.length > 0, 'a first chunk arrived');
+        // The cancel route takes first-party service tokens (ai.workflow.manage), not app tokens.
         const cancelled = await request(h.base, 'POST', `/api/v1/runs/${runId}/cancel`, { tok: service });
         assert.ok(cancelled.status < 300, cancelled.text);
         await reader.cancel().catch(() => {});
@@ -284,7 +287,7 @@ t.test('a sandbox app token never reaches paid supply, and is never charged', as
     const h = await bootWith(billing);
     try {
         await seed(h, up, { fallbacks: [{ provider: 'stub', model: 'stub-1' }] });
-        // A production app, with no tier budget, is free-only too: this service run proves the paid offer is usable.
+        // A production app under an unrestricted free tier budget may reach the paid offer.
         const paid = await chat(h, {});
         assert.strictEqual(paid.status, 200, paid.text);
         assert.strictEqual(up.calls, 1);

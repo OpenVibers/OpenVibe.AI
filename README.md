@@ -172,6 +172,37 @@ no `ns` runs nothing. Every caller's Network grant names its namespaces (Live: `
 `network.site_copy`, `media.analyze`). The fallback for service tokens without `ns` (`AI_NS_FALLBACK`)
 and its rollback lever (`AI_NS_REQUIRED`) were retired on 2026-09-28 (shims C-22 and C-23).
 
+## Model catalog, exact ids and the disclosure
+
+Behind `AI_MODEL_CATALOG` (off by default; with it off both `GET /v1/models` endpoints answer the legacy virtual
+`openvibe` model and no disclosure is added). It applies to both `POST /v1/chat/completions` and `POST /v1/messages`.
+
+- **`GET /v1/models` / `GET /v1/models/{id}`:** the registry's real models as `ai.model@1` catalog entries
+  (`provider_key`, `model_key`, `id`, family, variant, quant, revision, sha256, license, context, capabilities,
+  modalities, retail rate in integer nano-USD, availability) plus the dynamic policy aliases `openvibe/auto`,
+  `openvibe/economy`, `openvibe/balanced`, `openvibe/fast`, `openvibe/private` and legacy `openvibe` (= auto). An
+  alias carries `dynamic: true` and its `policy`. Every entry also carries the response shape of the protocol it was
+  asked in: OpenAI's `object`/`created`/`owned_by`, or Anthropic's `type`/`display_name`/`created_at`. An Anthropic
+  client identifies itself with its `anthropic-version` header (or `?format=anthropic`).
+- **Exact ids:** `model` may be `<org>/<model>[:<quant>]@<revision>` (for example
+  `qwen/qwen3-9b-abliterated:q4_k_m@3f2a1c9`). It runs only that artifact. An artifact that does not exist is 404
+  `ai.model_not_found`; one that exists but cannot run the request (no active deployment, unmet capability, down
+  provider, or an offer that may not be resold) is 400 `ai.model_unavailable`. It is never substituted with another
+  model, in fallback or otherwise. A row without artifact metadata has no exact id; it is still listed and reachable
+  by its legacy `provider/model` id.
+- **Aliases:** the dynamic names resolve through the same provider placement. `economy` ranks price first, `fast`
+  measured latency first, `balanced` weighs both, `private` never leaves local/own capacity, and `auto` keeps the
+  existing task-aware router. User preferences (`only_my_keys`, `free_first`, own keys and machines) still apply.
+- **The `openvibe` object:** `{ resolved_model, revision, deployment, provider_access, rate_version, policy,
+  fallback_reason }`. It is a top-level field on a JSON response; on SSE it is the first line as an SSE comment
+  (`: openvibe {...}`) and is also on the final chunk (`message_stop` for Messages).
+- **Commercial access:** `provider_access` is a provider field (`POST/PATCH /api/v1/providers`, default `UNVERIFIED`).
+  Paid managed routing uses only `OWN_DEPLOYMENT` and `AUTHORIZED_WHOLESALE`; `RESTRICTED`, `UNVERIFIED` and
+  `CUSTOMER_BYOK` offers stay out of the shared pool. A person's own key or project provider is disclosed as
+  `CUSTOMER_BYOK` and is unaffected.
+- **Tokens:** a developer app may call the inference routes with the public `ai.inference.create` capability (D8) as
+  well as `ai.app.run`; `ai.run.create` remains the first-party service capability.
+
 ## OpenAI-compatible endpoint
 
 `POST /v1/chat/completions` and `GET /v1/models` (`server/api/openai.js`), so a client built for OpenAI's API (the SDKs,

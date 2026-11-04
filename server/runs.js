@@ -183,7 +183,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
      * principal: { sub, subject: {type, id} }
      * Returns { run, created, promise? }.
      */
-    async function create(body, principal, { trace = null, requestId = null, retryOf = null, onDelta = null } = {}) {
+    async function create(body, principal, { trace = null, requestId = null, retryOf = null, onDelta = null, onRoute = null } = {}) {
         if (!body || typeof body !== 'object') throw new AiError(400, 'input.invalid', 'JSON body required');
         const wfKey = String(body.workflow || '');
         const wf = body.version ? await registry.getWorkflow(wfKey, Number(body.version)) : await registry.activeWorkflow(wfKey);
@@ -283,6 +283,8 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             ...(pinned ? { routePin: pinned } : {}),
             // POST /v1/chat/completions with stream: true: the upstream's deltas, as they arrive (kept in memory only).
             ...(typeof onDelta === 'function' ? { onDelta } : {}),
+            // The offer the router picked, before the first token: the SSE disclosure's first comment (D3).
+            ...(typeof onRoute === 'function' ? { onRoute } : {}),
         };
         const now = iso(clock.now());
         const id = newRunId();
@@ -560,7 +562,13 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             billingDelta = typeof ctx.onDelta === 'function'
                 ? (credit ? (d) => { credit.observe(d); ctx.onDelta(d); } : ctx.onDelta)
                 : null;
-            onRoute = credit ? (facts, meta) => credit.onRoute(facts, meta) : null;
+            // Credits holds first (a 402 must land before the provider), then the router's own disclosure hook.
+            onRoute = (credit || typeof ctx.onRoute === 'function')
+                ? async (facts, meta) => {
+                    if (credit) await credit.onRoute(facts, meta);
+                    if (typeof ctx.onRoute === 'function') await ctx.onRoute(facts, meta);
+                }
+                : null;
             // A run on a person's behalf follows their ai.preferences (Network user module): style, length and
             // perspective shape the prompt; history: false keeps neither their input nor a cache entry.
             const preferences = userModules && row.on_behalf_of ? await userModules.preferencesFor(row.on_behalf_of) : {};

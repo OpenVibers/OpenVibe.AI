@@ -12,6 +12,7 @@
   "shared": "openvibe-shared v4.109.2",
   "capabilities": [
     "ai.run.create",
+    "ai.inference.create",
     "ai.run.read",
     "ai.workflow.manage",
     "ai.provider.manage",

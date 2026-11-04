@@ -33,6 +33,7 @@ const { createHttpSeamProvider } = require('./http');
 const { createWhisperProvider } = require('./whisper');
 const rates = require('./rate-cards');
 const { detectTask, capabilitiesOf, hardNeeds, rank, reasonFor, workKind, leadingText, preferredTarget, preferMatches } = require('./task');
+const modelCatalog = require('./model-catalog');
 const { createWarmCache } = require('./warm-cache');
 
 /** 4xx that the request itself caused (bad image, schema, max_tokens...), as opposed to auth, rate or availability. */
@@ -263,6 +264,15 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         if (ctx.freeOnly && !isFreeProvider(p)) return false;
         return true;
     }
+    /**
+     * AI Exchange D3: may the network route paid, managed work to this offer? With the catalog flag on, only an
+     * owned deployment or an authorized wholesale agreement may be resold; UNVERIFIED (the default), RESTRICTED and
+     * CUSTOMER_BYOK offers stay out of the pool. A person's own key and their own machine never pass through here.
+     */
+    function accessOffered(p) {
+        if (!(config.modelCatalog && config.modelCatalog.enabled)) return true;
+        return Boolean(p) && modelCatalog.managedAccessAllowed(p);
+    }
     /** Operations served only by registered models of one type (never a provider's default chat model). */
     const MODEL_TYPE = { embed: 'embedding', transcribe: 'stt', image: 'image' };
     const offerId = (provider, model) => (model ? `${provider}:${model}` : provider);
@@ -294,6 +304,10 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         const rateCards = [];
         const cardsByProvider = {};
         const seen = new Set();
+        const accessExcluded = [];
+        // A dynamic policy alias (D3) looks at every active chat/vision model the provider registered, not only its
+        // default; the placement and the task router then choose among them. Auto keeps today's one-offer-per-provider.
+        const expandModels = Boolean(ctx.aliasPolicy && ctx.aliasPolicy !== 'auto') && !(route.constraints && route.constraints.model);
         const addOffer = async (p, model, caps) => {
             const id = offerId(p.key, model);
             if (seen.has(id)) return;
@@ -327,12 +341,21 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             if (!appOffered(ctx, p)) continue;
             if (scope === 'local' && !isLocalProvider(p)) continue;
             if (scope === 'paid' && isFreeProvider(p)) continue;
+            if (!accessOffered(p)) {
+                accessExcluded.push({ provider: p.key, model: (route.constraints && route.constraints.model) || p.default_model || null, eligible: false,
+                    excluded_reason: `provider_access ${modelCatalog.accessOf(p)}`, cost: null, latency: null });
+                continue;
+            }
             if (MODEL_TYPE[operation]) {
                 // A chat model advertised by an OpenAI-shaped provider is not an embedding, STT or image model.
                 const type = MODEL_TYPE[operation];
                 for (const m of await registry.listModels({ provider: p.key })) {
                     if (m.type === type && m.status === 'active') await addOffer(p, m.model_key, caps);
                 }
+            } else if (expandModels) {
+                const models = (await registry.listModels({ provider: p.key })).filter((m) => m.status === 'active' && (m.type === 'chat' || m.type === 'vision'));
+                if (models.length) for (const m of models) await addOffer(p, m.model_key, caps);
+                else await addOffer(p, p.default_model || null, caps);
             } else {
                 await addOffer(p, (route.constraints && route.constraints.model) || p.default_model || null, caps);
             }
@@ -346,6 +369,11 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             if (!appOffered(ctx, p)) continue;
             if (scope === 'local' && !isLocalProvider(p)) continue;
             if (scope === 'paid' && isFreeProvider(p)) continue;
+            if (!accessOffered(p)) {
+                accessExcluded.push({ provider: p.key, model: pin.model || p.default_model || null, eligible: false,
+                    excluded_reason: `provider_access ${modelCatalog.accessOf(p)}`, cost: null, latency: null });
+                continue;
+            }
             const declared = await offeredCapabilities(p);
             const caps = route.capability && !declared.includes(route.capability) ? [...declared, route.capability] : declared;
             await addOffer(p, pin.model || p.default_model || null, caps);
@@ -383,6 +411,8 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                     excluded_reason: x.excluded_because || null, cost: x.estimated_cost_usd == null ? null : x.estimated_cost_usd, latency: x.estimated_latency_ms == null ? null : x.estimated_latency_ms };
             }),
         };
+        // An offer the commercial gate kept out is named with its reason, never silently missing from the explain.
+        for (const x of accessExcluded) if (!explain.candidates.some((c) => c.provider === x.provider && c.model === x.model)) explain.candidates.push(x);
         const order = [];
         if (result.selected) order.push(result.selected);
         const rest = result.candidates.filter(x => x.id !== result.selected).sort((a, b) => {
@@ -408,11 +438,14 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             const p = entry && entry.record;
             const why = await skipReason(p, entry && entry.adapter, features);
             const offered = appOffered(ctx, p);
+            const access = accessOffered(p);
+            const excluded = !offered ? (p && billingProfile(p) === 'byok' ? 'byok' : 'free_only')
+                : !access ? `provider_access ${modelCatalog.accessOf(p)}` : why;
             explain.candidates.push({
-                provider: c.provider, model: c.model || (p && p.default_model) || null, eligible: offered && !why,
-                excluded_reason: offered ? why : (p && billingProfile(p) === 'byok' ? 'byok' : 'free_only'), cost: null, latency: null,
+                provider: c.provider, model: c.model || (p && p.default_model) || null, eligible: offered && access && !why,
+                excluded_reason: excluded, cost: null, latency: null,
             });
-            if (offered) order.push({ provider: c.provider, model: c.model || null });
+            if (offered && access) order.push({ provider: c.provider, model: c.model || null });
         }
         return { order, explain };
     }
@@ -504,7 +537,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
      * then fit and cost: a light job takes the cheapest capable model, a heavy one the catalogue's strength
      * tier first. The explain says what the task was and why every candidate is there.
      */
-    async function rankCandidates({ list, explain, task, route = null, warmProvider = null, preferred = null, ceiling = null, tierFirst = null, keepOrder = false }) {
+    async function rankCandidates({ list, explain, task, route = null, warmProvider = null, preferred = null, ceiling = null, tierFirst = null, keepOrder = false, policy = null }) {
         const byKey = new Map((explain.candidates || []).map((c) => [c.provider + ':' + (c.model || ''), c]));
         const authority = route && route.constraints ? (route.constraints.authority || null) : null;
         const entries = [];
@@ -533,7 +566,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         }
         const ranked = keepOrder
             ? { order: entries.map((e) => e.candidate), ranked: entries.slice(0, 5) }
-            : rank(entries, { task, warm: warmProvider, preferred, authority, tierFirst });
+            : rank(entries, { task, warm: warmProvider, preferred, authority, tierFirst, policy });
         const order = keepOrder ? ranked.order : [...ranked.order.map((e) => ({ provider: e.provider, model: e.model })), ...rest];
         if (stub) order.push(stub);
         const view = ranked.ranked.map((e) => ({ provider: e.provider, model: e.model, why: reasonFor(e, task), cost: Number.isFinite(e.price) ? e.price : null, tier: e.tier }));
@@ -580,6 +613,9 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         ];
         const tools = completing ? machineTools(o.tools) : null;
         const base = { operation, provider_key: cred.providerKey, model_key: model, route_key: ctx.routeKey || null, route_version: ctx.routeVersion || null, fallback: 0, prompt_hash: ctx.promptHash || null };
+        // A person's own machine is their own capacity: CUSTOMER_BYOK, never a managed resale.
+        const ownFacts = { resolved_model: `${cred.provider}/${model}`, revision: null, deployment: cred.providerKey, provider_access: 'CUSTOMER_BYOK', rate_version: null, policy: 'byok', fallback_reason: null };
+        if (typeof ctx.onRoute === 'function') await ctx.onRoute(ownFacts);
         const t0 = Date.now();
         try {
             const result = await machines.chat({ machine: cred.machine, subject: cred.subject, model, messages, maxTokens: req.maxTokens, temperature: req.temperature, signal: ctx.signal, timeoutMs: Math.max(5000, Math.min(req.timeoutMs || 120000, 300000)),
@@ -596,7 +632,8 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                     paid_by: 'your machine',
                     selected: { provider: 'node', machine: result.machine || cred.machine, model: result.model },
                     candidates: (result.tried || []).map((x) => ({ provider: 'node', machine: x.machine, skipped: x.error })),
-                    attempts: [{ key: 'your machine', provider: 'node', model: result.model, why: 'your own machine', status: 'ok', error: null }] } };
+                    attempts: [{ key: 'your machine', provider: 'node', model: result.model, why: 'your own machine', status: 'ok', error: null }],
+                    openvibe: ownFacts } };
         } catch (err) {
             if (ctx.logRequest) ctx.logRequest({ ...base, status: 'error', latency_ms: Date.now() - t0, error: String(err && err.message || err).slice(0, 500) });
             if (ctx.signal && ctx.signal.aborted) throw new AiError(409, 'run.cancelled', 'run was cancelled');
@@ -642,12 +679,15 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             attempts: [{ key: paidBy, provider: cred.provider, model, why: 'your own key', status: 'ok', error: null }],
         };
         const timeoutMs = Math.max(1000, Math.min(req.timeoutMs || 60000, 120000));
+        // The person's own key (BYOK) is never a managed resale offer: the disclosure says CUSTOMER_BYOK.
+        const ownFacts = { resolved_model: `${cred.provider}/${model}`, revision: null, deployment: cred.providerKey, provider_access: 'CUSTOMER_BYOK', rate_version: null, policy: 'byok', fallback_reason: null };
         const call = messaging ? a.messages : completing ? a.complete : a.chat;
         let streamed = false;
         const onDelta = (completing || messaging) && typeof req.onDelta === 'function' ? (d) => { streamed = true; req.onDelta(d); } : null;
         let lastErr = null;
         for (let attempt = 0; attempt <= config.providerRetries; attempt++) {
             if (ctx.signal && ctx.signal.aborted) throw new AiError(409, 'run.cancelled', 'run was cancelled');
+            if (typeof ctx.onRoute === 'function') await ctx.onRoute(ownFacts);
             const t0 = Date.now();
             try {
                 const result = await call({ ...req, ...(onDelta ? { onDelta } : {}), model, signal: ctx.signal, timeoutMs });
@@ -659,7 +699,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                         tokens_cached: usage.cached || 0, tokens_estimated: usage.estimated ? 1 : 0, cost_usd: cost, latency_ms: latency });
                 }
                 return { result, provider: cred.providerKey, providerKind: cred.provider, model: result.model || model, fallbackUsed: false, usage, cost, latencyMs: latency, synthetic: false, tried: [],
-                    startedAt: t0, explain: { ...explain, selected: `${cred.provider}/${result.model || model}` } };
+                    startedAt: t0, explain: { ...explain, selected: `${cred.provider}/${result.model || model}`, openvibe: ownFacts } };
             } catch (err) {
                 lastErr = err;
                 if (ctx.signal && ctx.signal.aborted) throw new AiError(409, 'run.cancelled', 'run was cancelled');
@@ -811,7 +851,39 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             }
         }
 
-        let { order: list, explain } = await candidates(route, features, operation, ctx);
+        // CHECKPOINT D3: an exact id runs only its own artifact. The candidates are the catalog's deployments of
+        // that id, filtered first by commercial access and what the request needs; no other model is ever added.
+        const exact = ctx.exact || null;
+        const policy = ctx.policy || (exact ? 'exact' : null);
+        let list;
+        let explain;
+        if (exact) {
+            const candidatesView = [];
+            const usable = [];
+            for (const offer of exact.offers || []) {
+                const p = await registry.getProvider(offer.provider);
+                const entry = p ? await adapter(offer.provider) : null;
+                const row = offer.model ? await registry.getModel(offer.provider, offer.model) : null;
+                const missing = hardNeeds(capabilitiesOf(row, p), task);
+                const why = [];
+                if (!p) why.push('unknown_provider');
+                else {
+                    if (!accessOffered(p)) why.push(`provider_access ${modelCatalog.accessOf(p)}`);
+                    const skip = await skipReason(p, entry && entry.adapter, features);
+                    if (skip) why.push(skip);
+                }
+                if (missing.length) why.push(...missing);
+                const reason = why.length ? [...new Set(why)].join(',') : null;
+                candidatesView.push({ provider: offer.provider, model: offer.model, eligible: !reason, excluded_reason: reason, cost: null, latency: null });
+                if (!reason) usable.push({ provider: offer.provider, model: offer.model });
+            }
+            explain = { objective: 'exact', policy: 'exact', reasons: [`exact model ${exact.id}: only its own deployment may answer`], selected: null, candidates: candidatesView };
+            if (!usable.length) throw new AiError(400, 'ai.model_unavailable', `the artifact ${exact.id} cannot run this request`, { explain });
+            list = usable;
+        } else {
+            ({ order: list, explain } = await candidates(route, features, operation, ctx));
+            if (policy) explain.policy = policy;
+        }
         // L36 Y3: free_first puts the free tiers ahead of metered ones for this person's fallback. Own-key attempts above
         // are already free to them, so this only reorders the network.
         if (prefs.free_first && ctx.selfSubject) {
@@ -829,14 +901,18 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         // L36 Y3: with free_first on, the free tiers lead (the price decides); with it off, the strength tier
         // leads and the free tiers are the failover, not the first choice.
         const freeFirst = ctx.selfSubject ? prefs.free_first !== false : true;
-        const ranked = await rankCandidates({
-            list, explain, task, route, warmProvider,
-            preferred: preferredModelFor(prefs, operation, req, ctx),
-            ceiling: prefs.price_ceiling_usd_per_mtok,
-            tierFirst: task.weight === 'heavy' || !freeFirst,
-            // A pinned route keeps its own order: the pin is the admin's decision, not the router's.
-            keepOrder: !(route.capability && operation),
-        });
+        const ranked = exact
+            // The exact id's own deployment order is already the only order there is: never re-rank in another model.
+            ? { order: list, ranked: [], reasons: new Map(), keepOrder: true }
+            : await rankCandidates({
+                list, explain, task, route, warmProvider,
+                preferred: preferredModelFor(prefs, operation, req, ctx),
+                ceiling: prefs.price_ceiling_usd_per_mtok,
+                tierFirst: task.weight === 'heavy' || !freeFirst,
+                policy,
+                // A pinned route keeps its own order: the pin is the admin's decision, not the router's.
+                keepOrder: !(route.capability && operation),
+            });
         list = ranked.order;
         explain.task = task;
         explain.ranked = ranked.ranked;
@@ -850,7 +926,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                 if (check.missing.length) preferState.why = check.missing.includes('no_vision') ? 'the model you named cannot see' : 'the model you named cannot do this job';
             }
             if (ranked.keepOrder) {
-                preferState.why = 'this route is pinned; the pin decides';
+                preferState.why = exact ? 'the exact model is the pin; nothing else may answer' : 'this route is pinned; the pin decides';
             } else {
                 const at = list.findIndex((c) => preferMatches(c.provider, c.model, prefer));
                 if (at > 0) {
@@ -869,7 +945,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         // A first-party service's generate run may name one offer from GET /api/v1/routes. The run then
         // tries that offer alone: no fallback to another model, so the caller gets the model it asked for
         // or an explicit failure. server/runs.js validates the pin against this same offer list first.
-        if (ctx.routePin && operation === 'generate') {
+        if (ctx.routePin && operation === 'generate' && !exact) {
             const pin = ctx.routePin;
             const chosen = list.find((c) => c.provider === pin.provider && (pin.model == null || c.model === pin.model));
             if (!chosen) {
@@ -929,6 +1005,17 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                 const started = clock.now();
                 const t0 = Date.now();
                 attemptStart = t0;
+                // The disclosure is known before the call starts, so a streamed answer can carry it as its first
+                // SSE comment without waiting for the run to finish (server/api/{openai,messages}.js).
+                const attemptFacts = await modelCatalog.facts({
+                    registry, providerRecord: p, model,
+                    policy: policy || (exact ? 'exact' : null),
+                    fallbackReason: fallback ? 'the first eligible offer did not answer; a later offer on this same route answered' : null,
+                });
+                // The hold needs the offer's retail card, whether it is prepaid, and the real output cap.
+                const attemptRow = p && model ? await registry.getModel(p.key, model) : null;
+                const attemptMeta = { provider: p ? p.key : null, model, maxTokens: req.maxTokens, paid: !isFreeProvider(p), retail: modelCatalog.retailRate(attemptRow) };
+                if (typeof ctx.onRoute === 'function') await ctx.onRoute(attemptFacts, attemptMeta);
                 try {
                     const fn = a[operation];
                     if (typeof fn !== 'function') throw new ProviderError(`${operation} not implemented`, { code: 'provider.unsupported' });
@@ -963,6 +1050,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                     attempts.push({ key: 'openvibe', provider: c.provider, model: result.model || model, why: chosen || (fallback ? 'the next network provider after an earlier attempt failed' : 'the first network offer for this route'), status: 'ok', error: null });
                     warm.remember(warmSubject(ctx, route), leadingText(req), c.provider);
                     explain.attempts = attempts;
+                    explain.openvibe = attemptFacts;
                     return { result, provider: c.provider, providerKind: p.kind, model: result.model || model, fallbackUsed: fallback || selfAttempts.some(a => a.status !== 'skipped'), usage, cost, latencyMs: latency, ttftMs, synthetic: Boolean(result.synthetic || a.synthetic), tried, startedAt: started, explain };
                 } catch (err) {
                     lastErr = err;

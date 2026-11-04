@@ -142,6 +142,11 @@ function load(env = process.env) {
         routing: {
             maxAttempts: Math.max(1, int(env.AI_ROUTING_MAX_ATTEMPTS, 3)),
         },
+        // AI Exchange P4 (CHECKPOINT D3): the truthful model catalog, exact ids and dynamic aliases. Off by
+        // default: today's /v1 behaviour, the single `openvibe` model and no disclosure object, is unchanged.
+        modelCatalog: {
+            enabled: bool(env.AI_MODEL_CATALOG, false),
+        },
         // Configurable local HTTP seam: POST {operation, request} JSON to this URL.
         httpSeamUrl: trimUrl(env.AI_HTTP_SEAM_URL),
         // A local model server speaking the OpenAI API (llama.cpp's llama-server, Ollama's /v1): the provider `local`,

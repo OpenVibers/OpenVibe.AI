@@ -92,6 +92,8 @@ const workflows = [
         // the prompt (passthrough). The output is the completion's choices.
         key: 'ai.complete', name: 'Chat completion (OpenAI-compatible)', namespace: 'ai',
         input_schema: OBJ({
+            // CHECKPOINT D3: an exact id or a dynamic alias, when AI_MODEL_CATALOG is on (server/api/openai.js).
+            model: STR(256),
             messages: { type: 'array', minItems: 1, maxItems: 500, items: { type: 'object', required: ['role'], properties: {
                 role: { enum: ['system', 'developer', 'user', 'assistant', 'tool'] },
                 content: { anyOf: [{ type: 'string', maxLength: 400000 }, { type: 'array', maxItems: 100 }, { type: 'null' }] },
@@ -118,6 +120,8 @@ const workflows = [
         // cost and explain but not the prompt (passthrough). The output is the message it answered with.
         key: 'ai.messages', name: 'Messages API (Anthropic-compatible)', namespace: 'ai',
         input_schema: OBJ({
+            // CHECKPOINT D3: an exact id or a dynamic alias, when AI_MODEL_CATALOG is on (server/api/messages.js).
+            model: STR(256),
             messages: { type: 'array', minItems: 1, maxItems: 500, items: { type: 'object', required: ['role'], properties: {
                 role: { enum: ['user', 'assistant'] },
                 content: { anyOf: [STR(400000), { type: 'array', maxItems: 500 }, { type: 'null' }] },
