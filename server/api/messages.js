@@ -162,7 +162,7 @@ function messagesRouter({ runs, auth, config, registry, log = console }) {
         if (!Number.isInteger(b.max_tokens) || b.max_tokens < 1) return anthropicError(res, 400, 'max_tokens: must be a positive integer');
         const input = { messages: b.messages, max_tokens: Math.min(b.max_tokens, MAX_TOKENS) };
         for (const k of FIELDS) if (b[k] !== undefined && b[k] !== null) input[k] = b[k];
-        // AI Exchange F: the caller's liability cap for the Credits hold (an OpenVibe extension).
+        // AI Exchange F: the caller's liability cap for the Balance hold (an OpenVibe extension).
         if (b.max_cost_usd != null) input.max_cost_usd = b.max_cost_usd;
         // AI Exchange D3 (AI_MODEL_CATALOG): an exact id or a dynamic alias. With the flag off the field is ignored
         // exactly as before, and the router picks, except an exact id: a pin is never silently run on another model (a

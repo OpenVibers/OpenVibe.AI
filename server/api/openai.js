@@ -163,7 +163,7 @@ function openaiRouter({ runs, auth, config, registry, log = console }) {
         }
         const maxTokens = b.max_completion_tokens != null ? b.max_completion_tokens : b.max_tokens;
         if (maxTokens != null) input.max_tokens = Math.max(1, Math.min(Number(maxTokens) || 1, 16000));
-        // AI Exchange F: the caller's liability cap for the Credits hold (an OpenVibe extension, like x_openvibe).
+        // AI Exchange F: the caller's liability cap for the Balance hold (an OpenVibe extension, like x_openvibe).
         if (b.max_cost_usd != null) input.max_cost_usd = b.max_cost_usd;
         let body = { workflow: 'ai.complete', input };
         // L37: the soft preference (provider, and a model if the caller wants one). A wish, not a pin.

@@ -1,6 +1,6 @@
 'use strict';
 /**
- * OpenVibe AI ↔ Billing Credits (AI Exchange F, P7; CHECKPOINT D2, D9, D10), behind `AI_CREDITS` (off).
+ * OpenVibe AI ↔ Billing Balance (AI Exchange F, P7; CHECKPOINT D2, D9, D10, D12), behind `AI_CREDITS` (off).
  *
  * A request on a PAID MANAGED route (the catalog's `provider_access` is OWN_DEPLOYMENT or AUTHORIZED_WHOLESALE)
  * reserves its worst case before any provider is called:
@@ -13,11 +13,11 @@
  * `billing.insufficient_funds` becomes AI's own 402 before the provider runs; any other Billing failure fails
  * closed (503 `billing.unavailable`) rather than serving unpaid capacity.
  *
- * A hold's subject is always a person: Billing keys a Credits account by (person, project). An app token's
- * project owner is resolved through Network (`GET /internal/projects/:id`, network.project.read) and cached for
- * 60 s; a project that cannot be resolved fails closed with 503 before the provider. A first-party run with no
- * person (no `on_behalf_of`) has no payer: the pool skips paid offers that carry a versioned retail card
- * (`payer_required`) rather than serve them free.
+ * Who pays (D12). An app's run holds against its PROJECT's Balance: the hold carries the app subject
+ * ({ type: 'app', id }) and its project_id, and Billing needs no owner lookup. A person's own run holds against
+ * their PERSONAL Balance: the user subject ({ type: 'user', id }) and no project_id. A first-party run with no
+ * payer (no person and no app) has no account: the pool skips paid offers that carry a versioned retail card
+ * (`payer_required`) rather than serve them free. A sandbox app is free-only (D10), so it never holds.
  *
  * When `max_cost_usd` binds, the affordable output is computed in BigInt from nano-USD per million tokens
  * (floor((cap - input charge - per-request) × 1e6 / output rate)); the provider receives that clamped
@@ -50,7 +50,7 @@ const PER_MILLION = 1000000n;
 const NANO_PER_USD = 1000000000n;
 const USR_RE = /^usr_[0-9A-HJKMNP-TV-Z]{26}$/;
 const PROJECT_RE = /^prj_[0-9A-HJKMNP-TV-Z]{26}$/;
-/** The four capabilities Credits names for AI (Contracts v0.284.0, one per operation). */
+/** The four capabilities Billing names for AI (Contracts v0.289.0, one per operation). */
 const CAPABILITIES = ['billing.credit.hold.create', 'billing.credit.hold.extend', 'billing.credit.hold.settle', 'billing.credit.hold.release'];
 /** A prepaid answer has no retail charge; a settle still needs a card, and this says why the charge is zero. */
 const ZERO_RETAIL = Object.freeze({ version: 'prepaid', nano_usd_per_m: Object.freeze({ input: '0', cached_read: '0', cache_write: '0', output: '0' }), per_request_nano_usd: '0' });
@@ -142,16 +142,18 @@ function deltaText(d) {
 }
 
 /**
- * Who pays: a person (the request's `on_behalf_of`, or an app's project owner resolved later). A first-party
- * service with no person and no app project has no payer and gets no session (the pool refuses it paid offers).
+ * Who pays (D12): an app (subject { type: 'app', id }) holds against its project's Balance; otherwise a person
+ * (the request's `on_behalf_of`, subject { type: 'user', id }) holds against their personal Balance. An app is
+ * always the app, whatever claim a service set on its token. A first-party service with neither has no payer and
+ * gets no session (the pool refuses it paid offers).
  */
 function payerOf({ onBehalfOf = null, appId = null } = {}) {
-    if (onBehalfOf && USR_RE.test(String(onBehalfOf))) return { type: 'user', id: String(onBehalfOf) };
     if (appId) return { type: 'app', id: String(appId) };
+    if (onBehalfOf && USR_RE.test(String(onBehalfOf))) return { type: 'user', id: String(onBehalfOf) };
     return null;
 }
 
-/** The project a request is billed to: an app's own project, or a project attribution on a first-party run. */
+/** The project whose Balance an app's hold spends: its own project, never a person's attribution. */
 function projectOf({ projectId = null, attribution = null } = {}) {
     if (projectId && PROJECT_RE.test(String(projectId))) return String(projectId);
     const id = attribution && attribution.type === 'project' ? String(attribution.id || '') : '';
@@ -161,7 +163,8 @@ function projectOf({ projectId = null, attribution = null } = {}) {
 /** A Billing error -> the API's own error: 402 keeps its code, everything else fails closed as unavailable. */
 function billingError(status, body, what) {
     const detail = (body && (body.detail || body.title || body.message)) || `Billing ${what} failed`;
-    if (status === 402) return new AiError(402, 'billing.insufficient_funds', String(detail).slice(0, 500));
+    // The public word is Balance, never Credits: 402 keeps its code and says what is short.
+    if (status === 402) return new AiError(402, 'billing.insufficient_funds', 'Not enough Balance');
     if (status === 409) return new AiError(409, 'billing.conflict', String(detail).slice(0, 500));
     if (status === 422) return new AiError(422, 'billing.invalid_request', String(detail).slice(0, 500));
     return new AiError(503, 'billing.unavailable', `Billing ${what} is unavailable (${status})`);
@@ -193,10 +196,10 @@ function createBillingClient({ billingUrl, audience, tokens, fetchImpl = globalT
 }
 
 /**
- * One request's Credits session. Created by `begin()`; the run drives it:
+ * One request's Balance session. Created by `begin()`; the run drives it:
  *
  *   onRoute(facts, meta)   before each provider attempt; returns { maxTokens } to clamp the attempt,
- *                          { skip: 'hold_not_extended' } to pass on that offer, or null (not a Credits offer)
+ *                          { skip: 'hold_not_extended' } to pass on that offer, or null (not a Balance offer)
  *   observe(delta)         each streamed delta; extends the hold when the output nears it
  *   settle({...})          once, after the answer (or after the partial usage of an abort/failure)
  *   release()              once, when no token was produced at all
@@ -205,7 +208,7 @@ function createSession({ manager, requestId, payer, projectId, credentialId = nu
     const s = {
         requestId: String(requestId),
         payer, projectId, credentialId,
-        subject: payer && payer.type === 'user' ? payer : null,
+        subject: payer,
         inputTokens: Math.max(0, Math.trunc(inputTokens)),
         maxCostNano,
         holdId: null,
@@ -221,15 +224,6 @@ function createSession({ manager, requestId, payer, projectId, credentialId = nu
     const holdKey = `ai-hold:${s.requestId}`;
     const settleKey = `ai-settle:${s.requestId}`;
 
-    /** The Billing subject: a person, or the app's project owner resolved through Network (cached 60 s). */
-    async function subjectForHold() {
-        if (s.subject) return s.subject;
-        if (!s.payer || s.payer.type !== 'app') throw new AiError(503, 'billing.unavailable', 'this request has no payer for Credits');
-        const owner = await manager.ownerFor(s.projectId);
-        s.subject = { type: 'user', id: owner };
-        return s.subject;
-    }
-
     /**
      * The first managed paid attempt holds its worst case. A later managed fallback with a bigger worst case
      * extends the hold by the difference (never above max_cost_usd); a refused extension skips that offer.
@@ -238,7 +232,7 @@ function createSession({ manager, requestId, payer, projectId, credentialId = nu
         if (s.settled || s.released) return null;
         if (!meta) return null;                                                   // a person's own key or machine
         const card = retailOf(meta.retail);
-        // A prepaid offer (free, subscription, BYOK, the stub) never spends Credits. After an earlier managed
+        // A prepaid offer (free, subscription, BYOK, the stub) never spends Balance. After an earlier managed
         // attempt it may still answer (a free fallback): the settle then uses its card, or zero.
         if (meta.paid === false) { if (s.holdId) s.retail = card || ZERO_RETAIL; return null; }
         if (!MANAGED_ACCESS.has(facts && facts.provider_access)) return null;     // BYOK/unverified: no managed offer
@@ -256,15 +250,15 @@ function createSession({ manager, requestId, payer, projectId, credentialId = nu
         }
         s.retail = retail;
         if (!s.holdId) {
-            const subject = await subjectForHold();
             s.heldNano = plan.amount;
             const fingerprint = sha256({
                 resolved_model: (facts && facts.resolved_model) || null, revision: (facts && facts.revision) || null,
                 input_tokens: s.inputTokens, output_tokens: plan.maxTokens, max_cost_usd: s.maxCostNano == null ? null : String(s.maxCostNano),
-                rate_version: retail.version, subject, project_id: s.projectId,
+                rate_version: retail.version, subject: s.subject, project_id: s.projectId,
             });
+            // D12: an app names its project's Balance; a person's hold is personal and carries no project_id.
             const created = await manager.hold({
-                idempotency_key: holdKey, subject, project_id: s.projectId, ...(s.credentialId ? { credential_id: s.credentialId } : {}),
+                idempotency_key: holdKey, subject: s.subject, ...(s.projectId ? { project_id: s.projectId } : {}), ...(s.credentialId ? { credential_id: s.credentialId } : {}),
                 max_nano_usd: String(plan.amount), rate_version: retail.version, request_fingerprint: fingerprint, service: 'ai',
             }, s.requestId);
             s.holdId = created.hold_id;
@@ -381,10 +375,10 @@ function createSession({ manager, requestId, payer, projectId, credentialId = nu
 
 /**
  * The manager the service builds at boot (null when AI_CREDITS is off, so `runs` never touches Billing).
- * `tokens` / `networkTokens` are injectable for tests; production mints service tokens for openvibe.billing
- * (the four hold capabilities) and openvibe.network (network.project.read).
+ * `tokens` is injectable for tests; production mints a service token for openvibe.billing (the four hold
+ * capabilities). Network is reached only for the OAuth token, never to resolve a project's owner (D12).
  */
-function createCredits({ config, db = null, registry = null, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, tokens = null, networkTokens = null, networkUrl = '' }) {
+function createCredits({ config, db = null, registry = null, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, tokens = null, networkUrl = '' }) {
     const cfg = (config && config.credits) || {};
     if (!cfg.enabled) return null;
     const billingUrl = String(cfg.billingUrl || '').replace(/\/+$/, '');
@@ -398,49 +392,9 @@ function createCredits({ config, db = null, registry = null, env = process.env, 
             scope: { [cfg.audience || 'openvibe.billing']: CAPABILITIES }, fetch: fetchImpl,
         });
     }
-    let networkClient = networkTokens;
-    if (!networkClient && clientSecret) {
-        networkClient = createServiceTokenClient({
-            tokenUrl: `${network}/oauth/token`, clientId, clientSecret,
-            scope: { 'openvibe.network': 'network.project.read' }, fetch: fetchImpl,
-        });
-    }
     const available = Boolean(billingUrl && tokenClient);
     if (!available) log.warn('[credits] AI_CREDITS is on but Billing is not configured (OV_BILLING_INTERNAL_URL / OV_OAUTH_CLIENT_SECRET); paid managed requests will be refused');
     const billing = available ? createBillingClient({ billingUrl, audience: cfg.audience || 'openvibe.billing', tokens: tokenClient, fetchImpl, timeoutMs: cfg.timeoutMs || 5000 }) : null;
-
-    // The project owner is stable; cache it for a minute, and share one lookup between concurrent runs.
-    const owners = new Map();
-    const ownerInflight = new Map();
-    const ownerTtlMs = Math.max(1000, Number(cfg.ownerTtlMs) || 60000);
-    async function ownerFor(projectId) {
-        if (!PROJECT_RE.test(String(projectId))) throw new AiError(503, 'billing.unavailable', 'the project for this app is not a project id, so Credits cannot find its owner');
-        const hit = owners.get(projectId);
-        if (hit && hit.exp > clock.now()) return hit.owner;
-        if (ownerInflight.has(projectId)) return ownerInflight.get(projectId);
-        const lookup = (async () => {
-            if (!networkClient) throw new AiError(503, 'billing.unavailable', 'Credits cannot resolve a project owner: Network is not configured');
-            let token;
-            try { token = await networkClient.getToken({ audience: 'openvibe.network' }); }
-            catch (err) { throw new AiError(503, 'billing.unavailable', `Credits cannot resolve a project owner: Network token failed`); }
-            let res;
-            try {
-                res = await fetchImpl(`${network}/internal/projects/${encodeURIComponent(projectId)}`, {
-                    headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' }, signal: AbortSignal.timeout(Number(cfg.timeoutMs) || 5000),
-                });
-            } catch (err) {
-                throw new AiError(503, 'billing.unavailable', 'Credits cannot resolve a project owner: Network is unreachable');
-            }
-            if (!res.ok) throw new AiError(503, 'billing.unavailable', `Credits cannot resolve a project owner (Network ${res.status})`);
-            const body = await res.json().catch(() => null);
-            const owner = body && body.project && body.project.owner;
-            if (!owner || owner.type !== 'user' || !USR_RE.test(String(owner.id || ''))) throw new AiError(503, 'billing.unavailable', 'Credits cannot resolve a project owner: Network named none');
-            owners.set(projectId, { owner: String(owner.id), exp: clock.now() + ownerTtlMs });
-            return String(owner.id);
-        })().finally(() => ownerInflight.delete(projectId));
-        ownerInflight.set(projectId, lookup);
-        return lookup;
-    }
 
     const settlements = db && billing
         ? require('./credit-settlements').createCreditSettlements({
@@ -455,35 +409,37 @@ function createCredits({ config, db = null, registry = null, env = process.env, 
         log,
         accessOf: accessOfProvider,
         async hold(body, requestId) {
-            if (!billing) throw new AiError(503, 'billing.unavailable', 'Billing Credits is not configured on this service');
+            if (!billing) throw new AiError(503, 'billing.unavailable', 'Billing is not configured on this service, so Balance cannot be held');
             return billing.hold(body, requestId);
         },
         async extend(holdId, body, requestId) {
-            if (!billing) throw new AiError(503, 'billing.unavailable', 'Billing Credits is not configured on this service');
+            if (!billing) throw new AiError(503, 'billing.unavailable', 'Billing is not configured on this service, so Balance cannot be held');
             return billing.extend(holdId, body, requestId);
         },
         async settle(holdId, body, requestId) {
-            if (!billing) throw new AiError(503, 'billing.unavailable', 'Billing Credits is not configured on this service');
+            if (!billing) throw new AiError(503, 'billing.unavailable', 'Billing is not configured on this service, so Balance cannot be held');
             return billing.settle(holdId, body, requestId);
         },
         async release(holdId, requestId) {
-            if (!billing) throw new AiError(503, 'billing.unavailable', 'Billing Credits is not configured on this service');
+            if (!billing) throw new AiError(503, 'billing.unavailable', 'Billing is not configured on this service, so Balance cannot be held');
             return billing.release(holdId, requestId);
         },
-        ownerFor,
         enqueueSettle: settlements ? (row) => settlements.enqueue(row) : null,
         drainSettlements: settlements ? (opts) => settlements.runOnce(opts) : async () => ({ skipped: 'disabled' }),
         pendingSettlements: settlements ? () => settlements.pending() : async () => [],
         startSettlements: settlements ? () => settlements.start() : () => null,
         stopSettlements: settlements ? () => settlements.stop() : () => {},
         /**
-         * Begin a request's Credits session, or null when there is no payer or project (the pool then refuses
-         * paid offers that carry a versioned card), or for a BYOK run (no managed route to bill).
+         * Begin a request's Balance session, or null when there is no payer (the pool then refuses paid offers
+         * that carry a versioned card), when an app names no project, or for a BYOK run (no managed route).
          */
         begin({ requestId, ctx = {}, input = {}, attribution = null, onBehalfOf = null, credentialId = null } = {}) {
-            const projectId = projectOf({ projectId: ctx.projectId, attribution });
             const payer = payerOf({ onBehalfOf: onBehalfOf || ctx.onBehalfOf || null, appId: ctx.appId });
-            if (!payer || !projectId) return null;
+            if (!payer) return null;
+            // D12: an app spends its project's Balance; a person's own run is personal, so an attribution is
+            // never turned into a project_id on a user's hold.
+            const projectId = payer.type === 'app' ? projectOf({ projectId: ctx.projectId, attribution }) : null;
+            if (payer.type === 'app' && !projectId) return null;
             if (ctx.byok) return null;                           // a credential/project provider: no managed route in this run
             const requestKey = String(requestId || ctx.runId || '');
             if (!requestKey) return null;                        // no stable key: never invent one from the clock
