@@ -915,7 +915,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             }
             explain = { objective: 'exact', policy: 'exact', reasons: [`exact model ${exact.id}: only its own deployment may answer`], selected: null, candidates: candidatesView };
             if (!usable.length) {
-                if (payerSkipped) throw new AiError(402, 'billing.payer_required', `the exact model ${exact.id} needs a project app token so Credits can bill a person; it was not run`, { explain });
+                if (payerSkipped) throw new AiError(402, 'billing.payer_required', `the exact model ${exact.id} needs a Balance payer (a person, or an app with its project); it was not run`, { explain });
                 throw new AiError(400, 'ai.model_unavailable', `the artifact ${exact.id} cannot run this request`, { explain });
             }
             list = usable;

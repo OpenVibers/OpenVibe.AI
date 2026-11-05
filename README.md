@@ -477,15 +477,15 @@ run, and a pinned run is never served from the shared cache.
 reading its `idempotency_key`, `state` (`queued` until Billing accepts it, `sent`, or `failed` when Billing
 refused it), `attempts`, `queued_at`, `sent_at`, `rejected_at`, `next_attempt_at`, `last_error` (the
 outbox's last send error, also while a queued reading is retried) and `free_allowance_used` when some
-**Credits (AI Exchange F; `AI_CREDITS`, off).** A request on a paid managed route — the model catalog's
+**Balance (AI Exchange F; `AI_CREDITS`, off).** A request on a paid managed route — the model catalog's
 `provider_access` is `OWN_DEPLOYMENT` or `AUTHORIZED_WHOLESALE` and the offer is metered — reserves its
 worst case in OpenVibe.Billing before any provider is called: the input estimate plus `max_tokens` of output
-at the model's retail card (`ai.model@1` `retail_rate`). Billing bills a person, so an app token's project
-owner is resolved through Network (`GET /internal/projects/:id`, capability `network.project.read`) and cached
-for 60 s; a project whose owner cannot be resolved fails closed with `503 billing.unavailable`. A run with no
-payer and no project (a first-party service without `on_behalf_of`) is never served a paid offer that carries
-a versioned card (`payer_required`); offers without a card behave as before. An exact id whose only offer is
-skipped that way is `402 billing.payer_required`.
+at the model's retail card (`ai.model@1` `retail_rate`). Who pays is the payer's own Balance (D12): an app's
+run holds against its project's Balance, with the hold's subject `{type: "app", id}` and its `project_id`, so
+no Network owner lookup is made; a person's own run holds against their personal Balance, subject
+`{type: "user", id}` and no `project_id`. A first-party service with no payer (no person and no app) is never
+served a paid offer that carries a versioned card (`payer_required`); offers without a card behave as before.
+An exact id whose only offer is skipped that way is `402 billing.payer_required`.
 
 `max_cost_usd` is parsed as an exact decimal (up to 9 fractional digits, finer digits round up; exponent forms
 are 422) into integer nano-USD. When it binds, the affordable output is computed in BigInt from nano-USD per
@@ -495,18 +495,18 @@ Billing refuses the extension the offer is skipped as `hold_not_extended`. A str
 when the output nears it.
 
 The hold's idempotency key is the request id; its fingerprint covers the resolved model, the token caps, the
-rate version, the payer and the project. Billing's `402 billing.insufficient_funds` becomes AI's own 402; any
-other Billing failure refuses the run with `503 billing.unavailable` rather than serving unpaid capacity. At
-the end one settle carries the four token counts, the answering model's retail card version, the supply cost
-and every attempt in `billing.credit-hold-settle-request@1`'s exact shape (`deployment_id`, `provider_access`,
-start/end, `error_code`); a retried request replays the same settlement instead of charging twice. A settle
-Billing cannot take is kept in `credit_settle_queue` (migration 0025) and retried with backoff and the same key;
-a 409 or 422 marks it `review`, never a retry. A failure before the first token releases the hold, an abort
-settles the partial usage. BYOK — a person's key, their machine, a project's own provider — is never held and
+rate version, the payer and (for an app) the project. Billing's `402 billing.insufficient_funds` becomes AI's
+own 402 `Not enough Balance`; any other Billing failure refuses the run with `503 billing.unavailable` rather
+than serving unpaid capacity. At the end one settle carries the four token counts, the answering model's retail
+card version, the supply cost and every attempt in `billing.credit-hold-settle-request@1`'s exact shape
+(`deployment_id`, `provider_access`, start/end, `error_code`); a retried request replays the same settlement
+instead of charging twice. A settle Billing cannot take is kept in `credit_settle_queue` (migration 0025) and
+retried with backoff and the same key; a 409 or 422 marks it `review`, never a retry. A failure before the
+first token releases the hold, an abort settles the partial usage. BYOK — a person's key, their machine, a project's own provider — is never held and
 never charged; Billing is not called at all. A sandbox app token is never offered paid supply (D10), so it
-spends no Credits and never resolves a payer. Requires `AI_MODEL_CATALOG` for the access labels; with either
-flag off nothing changes. Code: `server/credits.js`, `server/credit-settlements.js`; the fake-Billing/Network
-tests are `test/credits.test.js` and `test/credits-run.test.js`.
+spends no Balance and never opens a hold. Requires `AI_MODEL_CATALOG` for the access labels; with either
+flag off nothing changes. Code: `server/credits.js`, `server/credit-settlements.js`; the fake-Billing tests are
+`test/credits.test.js` and `test/credits-run.test.js`.
 
 Speech and embeddings use placement pools of registered `stt` and `embedding` models; until
 a second upstream exists, an unavailable sole provider answers `503 provider.unavailable`. Media

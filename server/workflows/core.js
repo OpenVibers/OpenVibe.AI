@@ -9,7 +9,7 @@ const { PASSTHROUGH_OUTPUT } = require('./live');
 const STR = (n) => ({ type: 'string', maxLength: n });
 const OBJ = (props, required = []) => ({ type: 'object', additionalProperties: false, required, properties: props });
 const COMMON = { max_tokens: { type: 'integer', minimum: 1, maximum: 16000 }, temperature: { type: ['number', 'null'], minimum: 0, maximum: 2 },
-    // AI Exchange F: a liability cap on the Credits hold for this request (optional; nothing when unset).
+    // AI Exchange F: a liability cap on the Balance hold for this request (optional; nothing when unset).
     max_cost_usd: { type: ['number', 'string', 'null'] } };
 
 const templates = [

@@ -1,7 +1,8 @@
 'use strict';
-// AI Exchange F / P7: the Credits session (server/credits.js) against a fake Billing and a fake Network, without
-// HTTP. Covers the review's money rules: the worst-case hold at the retail card, a decimal-only max_cost_usd that
-// clamps the output, a payer (the app's project owner), a pricier managed fallback extending the hold, one settle
+// AI Exchange F / P7 + D12: the Balance session (server/credits.js) against a fake Billing, without HTTP. Covers
+// the review's money rules and D12's payer: the worst-case hold at the retail card, a decimal-only max_cost_usd
+// that clamps the output, an app holding its project's Balance (subject app + project_id, no Network lookup), a
+// person holding their personal Balance (no project_id), a pricier managed fallback extending the hold, one settle
 // per request, the partial usage of an abort, release before a first token, BYOK never held, the streaming
 // extension, contract-valid request bodies, and AI_CREDITS off.
 const assert = require('assert');
@@ -20,9 +21,9 @@ const R2 = { version: 'retail-2', input_nano_usd_per_m: '500000000', output_nano
 const FACTS = { resolved_model: 'org/model@r1', revision: 'r1', deployment: 'up', provider_access: 'OWN_DEPLOYMENT', rate_version: 'retail-1', policy: null, fallback_reason: null };
 const BYOK_FACTS = { ...FACTS, provider_access: 'CUSTOMER_BYOK' };
 
-/** A tiny Billing + Network: holds/settlements like PR #187, and GET /internal/projects/:id like Network #553. */
+/** A tiny Billing: holds/settlements like PR #187. Network is not part of D12's hold path. */
 function fakeBilling({ balance = '100000000000' } = {}) {
-    const state = { balance: BigInt(balance), held: 0n, holds: new Map(), settlements: new Map(), released: new Map(), calls: [], seq: 0, projectCalls: 0, projectStatus: 200, owner: OWNER };
+    const state = { balance: BigInt(balance), held: 0n, holds: new Map(), settlements: new Map(), released: new Map(), calls: [], seq: 0 };
     const available = () => state.balance - state.held;
     const chargeOf = (usage, retail) => {
         const perM = retail.nano_usd_per_m || {};
@@ -37,11 +38,6 @@ function fakeBilling({ balance = '100000000000' } = {}) {
         const path = new URL(url).pathname;
         const body = opts.body ? JSON.parse(opts.body) : {};
         state.calls.push({ path, body });
-        if (path.startsWith('/internal/projects/')) {
-            state.projectCalls++;
-            if (state.projectStatus !== 200) return json(state.projectStatus, { code: 'project.not_found', detail: 'no such project' });
-            return json(200, { project: { id: path.split('/').pop(), owner: { type: 'user', id: state.owner } } });
-        }
         if (path === '/internal/credits/holds') {
             const key = body.idempotency_key;
             const prev = state.holds.get(key);
@@ -103,14 +99,19 @@ function fakeBilling({ balance = '100000000000' } = {}) {
 function managerFor(billing, overrides = {}) {
     return createCredits({
         config: { credits: { enabled: true, billingUrl: 'http://billing.test', audience: 'openvibe.billing', timeoutMs: 1000 }, console: { clientId: 'ai' } },
-        tokens: { getToken: async () => 'billing-token' }, networkTokens: { getToken: async () => 'network-token' },
-        networkUrl: 'http://network.test', fetchImpl: billing.fetchImpl, log: { warn() {}, log() {}, error() {} },
+        tokens: { getToken: async () => 'billing-token' },
+        fetchImpl: billing.fetchImpl, log: { warn() {}, log() {}, error() {} },
         ...overrides,
     });
 }
 
 function begin(manager, { requestId = 'req_credits_0001', input = {}, extra = {} } = {}) {
     return manager.begin({ requestId, ctx: { runId: 'run_1', requesterType: 'app', requesterId: APP, appId: APP, projectId: PRJ, ...extra }, input: { messages: [{ role: 'user', content: 'hello' }], ...input } });
+}
+
+/** A person's own run: a user subject, and (deliberately) a project attribution the hold must not use. */
+function beginPerson(manager, { requestId = 'req_credits_person_0001', input = {}, attribution = { type: 'project', id: PRJ } } = {}) {
+    return manager.begin({ requestId, ctx: { runId: 'run_person', requesterType: 'service', requesterId: 'live' }, attribution, onBehalfOf: OWNER, input: { messages: [{ role: 'user', content: 'hello' }], ...input } });
 }
 
 const callsTo = (billing, suffix) => billing.state.calls.filter((c) => c.path.endsWith(suffix));
@@ -135,7 +136,7 @@ t.test('max_cost_usd caps the worst case by clamping the affordable output token
     assert.deepStrictEqual(affordable(retail, { inputTokens: 0, maxTokens: 3 }), { maxTokens: 3, amount: 6000n });
 });
 
-t.test('the hold is the worst case at the retail card, paid by the app\'s project owner (network.project.read)', async () => {
+t.test('an app\'s hold names the app and its project: no Network lookup, and nothing is cached', async () => {
     const billing = fakeBilling();
     const manager = managerFor(billing);
     const session = begin(manager);
@@ -144,32 +145,42 @@ t.test('the hold is the worst case at the retail card, paid by the app\'s projec
     const expected = BigInt(session.inputTokens) * 1000n + 1000n * 2000n;   // $1/M input, $2/M output, in nano
     assert.strictEqual(call.body.max_nano_usd, String(expected));
     assert.strictEqual(call.body.rate_version, 'retail-1');
-    assert.deepStrictEqual(call.body.subject, { type: 'user', id: OWNER }, 'Billing bills a person, not an app');
-    assert.strictEqual(call.body.project_id, PRJ);
+    assert.deepStrictEqual(call.body.subject, { type: 'app', id: APP }, 'an app is the payer, not its owner');
+    assert.strictEqual(call.body.project_id, PRJ, 'the hold spends the project\'s Balance');
     assert.match(call.body.request_fingerprint, /^[0-9a-f]{64}$/);
     assert.deepStrictEqual(routed, { maxTokens: 1000 });
-    assert.strictEqual(billing.state.projectCalls, 1);
-    // A second request for the same project reuses the 60 s owner cache.
+    // A second app request holds too; there is no owner to resolve or cache.
     const second = begin(manager, { requestId: 'req_credits_0002' });
     await second.onRoute(FACTS, { retail: R1, maxTokens: 10 });
-    assert.strictEqual(billing.state.projectCalls, 1, 'the owner is cached');
+    assert.strictEqual(callsTo(billing, '/holds').length, 2);
+    assert.strictEqual(billing.state.calls.filter((c) => c.path.includes('/internal/projects/')).length, 0, 'Network was never called');
 });
 
-t.test('a project whose owner cannot be resolved fails closed (503) before any hold or provider', async () => {
+t.test('a person\'s own run holds their personal Balance: subject user, no project_id', async () => {
     const billing = fakeBilling();
     const manager = managerFor(billing);
-    const session = begin(manager);
-    billing.state.projectStatus = 404;
-    await assert.rejects(session.onRoute(FACTS, { retail: R1, maxTokens: 100 }), (err) => err.status === 503 && err.code === 'billing.unavailable');
-    assert.strictEqual(session.holdId, null);
-    assert.strictEqual(callsTo(billing, '/holds').length, 0);
+    const session = beginPerson(manager);
+    await session.onRoute(FACTS, { retail: R1, maxTokens: 100 });
+    const call = callsTo(billing, '/holds').pop();
+    assert.deepStrictEqual(call.body.subject, { type: 'user', id: OWNER });
+    assert.ok(!Object.prototype.hasOwnProperty.call(call.body, 'project_id'), 'a personal hold carries no project_id');
+    assert.strictEqual(callsTo(billing, '/holds').length, 1);
+    assert.strictEqual(billing.state.calls.filter((c) => c.path.includes('/internal/projects/')).length, 0, 'Network was never called');
+});
+
+t.test('an app without a project gets no session, so no unpaid paid offer can run', () => {
+    const billing = fakeBilling();
+    const manager = managerFor(billing);
+    const raw = manager.begin({ requestId: 'req_credits_noproject', ctx: { requesterType: 'app', requesterId: APP, appId: APP }, input: { messages: [] } });
+    assert.strictEqual(raw, null);
+    assert.strictEqual(billing.state.calls.length, 0);
 });
 
 t.test('a 402 from Billing is AI\'s own 402, raised before the provider (onRoute never returns)', async () => {
     const billing = fakeBilling({ balance: '0' });
     const manager = managerFor(billing);
     const session = begin(manager);
-    await assert.rejects(session.onRoute(FACTS, { retail: R1, maxTokens: 100 }), (err) => err.status === 402 && err.code === 'billing.insufficient_funds');
+    await assert.rejects(session.onRoute(FACTS, { retail: R1, maxTokens: 100 }), (err) => err.status === 402 && err.code === 'billing.insufficient_funds' && err.detail === 'Not enough Balance');
     assert.strictEqual(session.holdId, null, 'no hold exists to settle or release');
     assert.strictEqual(billing.state.settlements.size, 0);
 });
@@ -272,7 +283,7 @@ t.test('a stream near the hold is extended in a step (and never past max_cost_us
     assert.strictEqual(capped.heldNano, 2000n);
 });
 
-t.test('the outgoing hold, extend and settle bodies validate against the contracts', async () => {
+t.test('the outgoing app and personal hold, extend and settle bodies validate against v0.289.0', async () => {
     const billing = fakeBilling();
     const manager = managerFor(billing);
     const session = begin(manager);
@@ -282,10 +293,20 @@ t.test('the outgoing hold, extend and settle bodies validate against the contrac
         { deployment_id: 'up:one', provider_access: 'OWN_DEPLOYMENT', started_at: new Date().toISOString(), ended_at: new Date().toISOString(), error_code: 'provider.error' },
         { deployment_id: 'up2:two', provider_access: 'OWN_DEPLOYMENT', started_at: new Date().toISOString(), ended_at: new Date().toISOString(), error_code: null },
     ] });
-    const hold = billing.state.calls.find((c) => c.path === '/internal/credits/holds').body;
+    const person = beginPerson(manager);
+    await person.onRoute(FACTS, { retail: R1, maxTokens: 100 });
+    await person.settle({ usage: { input: 100, output: 20 }, attempts: [] });
+    const holds = callsTo(billing, '/holds').map((c) => c.body);
     const extend = callsTo(billing, '/extend').pop().body;
-    const settle = callsTo(billing, '/settle').pop().body;
-    for (const [schema, body] of [['billing.credit-hold-create-request@1', hold], ['billing.credit-hold-extend-request@1', extend], ['billing.credit-hold-settle-request@1', settle]]) {
+    const settle = callsTo(billing, '/settle')[0].body;
+    assert.strictEqual(holds.length, 2);
+    assert.strictEqual(holds[0].project_id, PRJ, 'the app hold names its project');
+    assert.ok(!('project_id' in holds[1]), 'the personal hold does not');
+    for (const hold of holds) {
+        const v = contracts.validate('billing.credit-hold-create-request@1', hold);
+        assert.ok(v.valid, `billing.credit-hold-create-request@1: ${JSON.stringify(v.errors && v.errors.slice(0, 3))}`);
+    }
+    for (const [schema, body] of [['billing.credit-hold-extend-request@1', extend], ['billing.credit-hold-settle-request@1', settle]]) {
         const v = contracts.validate(schema, body);
         assert.ok(v.valid, `${schema}: ${JSON.stringify(v.errors && v.errors.slice(0, 3))}`);
     }
@@ -303,17 +324,21 @@ t.test('BYOK is never held, never charged and Billing is never called', async ()
     assert.strictEqual(await session.settle({ usage: { input: 100, output: 20 } }), null);
 });
 
-t.test('no payer or no project means no session, and credits on with no Billing refuses paid offers', async () => {
+t.test('no payer means no session; a person without a project does get one; no Billing refuses paid offers', async () => {
     const billing = fakeBilling();
     const manager = managerFor(billing);
     assert.strictEqual(manager.begin({ requestId: 'req_1', ctx: { requesterType: 'service', requesterId: 'live' } }), null, 'a first-party service with no person has no payer');
-    assert.strictEqual(manager.begin({ requestId: 'req_2', ctx: { requesterType: 'service', requesterId: 'live' }, onBehalfOf: OWNER }), null, 'a person but no project has no account');
+    const person = manager.begin({ requestId: 'req_2', ctx: { requesterType: 'service', requesterId: 'live' }, onBehalfOf: OWNER });
+    assert.ok(person, 'a person gets a personal session with no project');
+    const created = await person.onRoute(FACTS, { retail: R1, maxTokens: 100 });
+    assert.deepStrictEqual(created, { maxTokens: 100 });
+    const hold = callsTo(billing, '/holds')[0].body;
+    assert.deepStrictEqual(hold.subject, { type: 'user', id: OWNER });
+    assert.ok(!('project_id' in hold));
     assert.strictEqual(createCredits({ config: { credits: { enabled: false } }, tokens: { getToken: async () => 't' }, fetchImpl: billing.fetchImpl }), null, 'AI_CREDITS off -> no manager, nothing changes');
-    // Credits on, Billing URL missing: a paid managed offer must refuse rather than run free.
-    const unconfigured = createCredits({ config: { credits: { enabled: true, billingUrl: '' }, console: { clientId: 'ai' } }, env: { OV_OAUTH_CLIENT_SECRET: 'test-secret' }, tokens: { getToken: async () => 't' }, networkTokens: { getToken: async () => 'n' }, fetchImpl: billing.fetchImpl, log: { warn() {}, log() {}, error() {} } });
-    const s = managerFor(billing).begin({ requestId: 'req_3', ctx: { requesterType: 'service', requesterId: 'live' }, onBehalfOf: OWNER, attribution: { type: 'project', id: PRJ } });
-    assert.ok(s, 'a person and a project get a session');
-    const blocked = unconfigured.begin({ requestId: 'req_4', ctx: { requesterType: 'service', requesterId: 'live' }, onBehalfOf: OWNER, attribution: { type: 'project', id: PRJ } });
+    // Billing on, Billing URL missing: a paid managed offer must refuse rather than run free.
+    const unconfigured = createCredits({ config: { credits: { enabled: true, billingUrl: '' }, console: { clientId: 'ai' } }, env: { OV_OAUTH_CLIENT_SECRET: 'test-secret' }, tokens: { getToken: async () => 't' }, fetchImpl: billing.fetchImpl, log: { warn() {}, log() {}, error() {} } });
+    const blocked = unconfigured.begin({ requestId: 'req_4', ctx: { requesterType: 'service', requesterId: 'live' }, onBehalfOf: OWNER });
     await assert.rejects(blocked.onRoute(FACTS, { retail: R1, maxTokens: 100 }), (err) => err.status === 503 && err.code === 'billing.unavailable');
 });
 

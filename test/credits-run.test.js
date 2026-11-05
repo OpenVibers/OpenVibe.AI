@@ -1,9 +1,10 @@
 'use strict';
-// AI Exchange F / P7 end to end, against a fake Billing and a fake Network. A paid managed request holds Credits
-// before the provider runs, paid by the app's project owner; max_cost_usd clamps the output; a pricier managed
-// fallback extends the hold (or is skipped if Billing refuses); a settle Billing cannot take is queued and retried
-// exactly once; a run with no payer never reaches a paid offer with a versioned card; an exact id then fails 402;
-// a provider without a card behaves as before; a sandbox app token never reaches paid supply; with the flag off
+// AI Exchange F / P7 + D12 end to end, against a fake Billing. A paid managed request holds Balance before the
+// provider runs: an app against its project's Balance (subject app + project_id, no Network lookup) and a person
+// against their personal Balance (no project_id). max_cost_usd clamps the output; a pricier managed fallback
+// extends the hold (or is skipped if Billing refuses); a settle Billing cannot take is queued and retried exactly
+// once; a run with no payer never reaches a paid offer with a versioned card; an exact id then fails 402; a
+// provider without a card behaves as before; a sandbox app token never reaches paid supply; with the flag off
 // nothing changes.
 const assert = require('assert');
 const http = require('http');
@@ -13,17 +14,18 @@ const t = suite('credits-run');
 const service = token('live', ALL);
 const ULID = '01JAB2C3D4E5F6G7H8J9K0MNPQ';
 const PRJ = `prj_${ULID}`;
-const OWNER = 'usr_01JAB2C3D4E5F6G7H8J9K0MNP7';
+const APP = `app_${ULID}`;
+const PERSON = 'usr_01JAB2C3D4E5F6G7H8J9K0MNP7';
 const appToken = (env) => token('app', ['ai.app.run'], { sub: `app:app_${ULID}`, actorType: 'app', ns: [PRJ, `app.${PRJ}.*`], extra: { project_id: PRJ, env } });
 const producer = appToken('production');
 const sandbox = appToken('sandbox');
 
 const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 
-/** A local fake Billing + Network: the four Credits routes, OAuth, the usage relay, and the project owner read. */
+/** A local fake Billing: the four hold routes, OAuth and the usage relay. D12 makes no Network call. */
 async function fakeBilling() {
-    const state = { balance: 10_000_000_000n, held: 0n, short: false, failSettle: 0, refuseExtend: false, projectStatus: 200, projectCalls: 0, owner: OWNER,
-        holds: new Map(), settlements: new Map(), releases: [], calls: [], seq: 0 };
+    const state = { balance: 10_000_000_000n, held: 0n, short: false, failSettle: 0, refuseExtend: false,
+        holds: new Map(), settlements: new Map(), releases: [], calls: [], oauthScopes: [], oauthAudiences: [], seq: 0 };
     const available = () => state.balance - state.held;
     const part = (tokens, rate) => {
         const n = BigInt(tokens || 0) * BigInt(rate || 0);
@@ -42,13 +44,13 @@ async function fakeBilling() {
             const body = (() => { try { return raw ? JSON.parse(raw) : {}; } catch { return {}; } })();
             state.calls.push({ path, body });
             const send = (status, out) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(out)); };
-            if (path === '/oauth/token') return send(200, { access_token: 'test-token', token_type: 'Bearer', expires_in: 300, scope: 'billing.credit.hold.create billing.credit.hold.extend billing.credit.hold.settle billing.credit.hold.release network.project.read' });
-            if (path === '/api/v1/usage') return send(201, { ok: true });
-            if (path.startsWith('/internal/projects/')) {
-                state.projectCalls++;
-                if (state.projectStatus !== 200) return send(state.projectStatus, { code: 'project.not_found', detail: 'no such project' });
-                return send(200, { project: { id: path.split('/').pop(), owner: { type: 'user', id: state.owner } } });
+            if (path === '/oauth/token') {
+                const params = new URLSearchParams(raw);
+                state.oauthAudiences.push(String(params.get('audience') || ''));
+                state.oauthScopes.push(String(params.get('scope') || ''));
+                return send(200, { access_token: 'test-token', token_type: 'Bearer', expires_in: 300, scope: String(params.get('scope') || '') });
             }
+            if (path === '/api/v1/usage') return send(201, { ok: true });
             if (path === '/internal/credits/holds') {
                 const key = body.idempotency_key;
                 const prev = state.holds.get(key);
@@ -180,7 +182,7 @@ const chat = (h, { tok = producer, body = {}, headers = {} } = {}) => request(h.
 /** The run id from an OpenAI answer's x_openvibe. */
 const runIdOf = (r) => r.body.x_openvibe && r.body.x_openvibe.run_id;
 
-t.test('a paid app request is billed to the project owner; the owner is cached for a minute', async () => {
+t.test('a paid app request holds its project\'s Balance: the hold names the app and its project, no Network call', async () => {
     const billing = await fakeBilling();
     const up = await upstream('ok');
     const h = await bootWith(billing);
@@ -190,26 +192,32 @@ t.test('a paid app request is billed to the project owner; the owner is cached f
         assert.strictEqual(first.status, 200, first.text);
         const holds = billing.calls.filter((c) => c.path === '/internal/credits/holds');
         assert.strictEqual(holds.length, 1);
-        assert.deepStrictEqual(holds[0].body.subject, { type: 'user', id: OWNER }, 'Billing bills a person, not the app');
-        assert.strictEqual(holds[0].body.project_id, PRJ);
+        assert.deepStrictEqual(holds[0].body.subject, { type: 'app', id: APP }, 'an app pays, not its owner');
+        assert.strictEqual(holds[0].body.project_id, PRJ, 'the project Balance is the account');
         const second = await chat(h, {});
         assert.strictEqual(second.status, 200, second.text);
-        assert.strictEqual(billing.projectCalls, 1, 'the owner lookup is cached across requests');
+        assert.strictEqual(billing.calls.filter((c) => c.path.includes('/internal/projects/')).length, 0, 'Network was never called');
+        assert.ok(!billing.oauthAudiences.includes('openvibe.network'), 'no Network service token was minted');
+        assert.ok(billing.oauthScopes.every((scope) => !/network\.project\.read/.test(scope)), 'network.project.read was never requested');
         assert.strictEqual(billing.settlements.size, 2);
     } finally { await h.stop(); await up.close(); await billing.close(); }
 });
 
-t.test('a project whose owner cannot be resolved fails closed (503) before the provider', async () => {
+t.test('a person\'s own run holds their personal Balance: no project_id and no Network call', async () => {
     const billing = await fakeBilling();
     const up = await upstream('ok');
     const h = await bootWith(billing);
     try {
         await seed(h, up);
-        billing.projectStatus = 404;
-        const r = await chat(h, {});
-        assert.strictEqual(r.status, 503, r.text);
-        assert.strictEqual(up.calls, 0, 'no provider ran');
-        assert.strictEqual(billing.settlements.size, 0);
+        const r = await request(h.base, 'POST', '/api/v1/runs?wait=5000', { tok: service, body: {
+            workflow: 'ai.complete', input: { messages: [{ role: 'user', content: 'hello as me' }] },
+            on_behalf_of: { type: 'user', id: PERSON } } });
+        assert.ok(r.status < 300, r.text);
+        const holds = billing.calls.filter((c) => c.path === '/internal/credits/holds');
+        assert.strictEqual(holds.length, 1);
+        assert.deepStrictEqual(holds[0].body.subject, { type: 'user', id: PERSON });
+        assert.ok(!('project_id' in holds[0].body), 'a personal hold has no project_id');
+        assert.strictEqual(billing.calls.filter((c) => c.path.includes('/internal/projects/')).length, 0, 'Network was never called');
     } finally { await h.stop(); await up.close(); await billing.close(); }
 });
 
@@ -223,6 +231,7 @@ t.test('insufficient credit: a 402 billing.insufficient_funds, and the provider 
         const r = await chat(h, {});
         assert.strictEqual(r.status, 402, r.text);
         assert.strictEqual(r.body.error.code, 'billing.insufficient_funds');
+        assert.strictEqual(r.body.error.message, 'Not enough Balance');
         assert.strictEqual(up.calls, 0, 'no provider call was made');
         assert.strictEqual(billing.settlements.size, 0);
     } finally { await h.stop(); await up.close(); await billing.close(); }
@@ -407,7 +416,7 @@ t.test('no payer: paid offers with a versioned card are skipped (payer_required)
         assert.strictEqual(r.body.x_openvibe.provider, 'stub', 'the free local offer answered');
         const run = await request(h.base, 'GET', `/api/v1/runs/${runIdOf(r)}`, { tok: service });
         assert.ok(run.body.run.explain.attempts.some((a) => a.status === 'skipped' && a.error === 'payer_required'), JSON.stringify(run.body.run.explain.attempts));
-        assert.strictEqual(billing.settlements.size, 0, 'no Credits were spent');
+        assert.strictEqual(billing.settlements.size, 0, 'no Balance was spent');
     } finally { await h.stop(); await up.close(); await billing.close(); }
 });
 
@@ -438,7 +447,7 @@ t.test('a paid offer without a versioned card behaves as before for a no-payer r
         await seed(h, up, { rateVersion: null });
         const r = await chat(h, { tok: service });
         assert.strictEqual(r.status, 200, r.text);
-        assert.strictEqual(up.calls, 1, 'no card: the offer is not a Credits offer and still runs');
+        assert.strictEqual(up.calls, 1, 'no card: the offer is not a Balance offer and still runs');
     } finally { await h.stop(); await up.close(); await billing.close(); }
 });
 
@@ -451,13 +460,12 @@ t.test('a sandbox app token never reaches paid supply, and is never charged (D10
         const paid = await chat(h, {});
         assert.strictEqual(paid.status, 200, paid.text);
         assert.strictEqual(up.calls, 1);
-        const beforeProjects = billing.projectCalls;
         const r = await chat(h, { tok: sandbox });
         assert.strictEqual(r.status, 200, r.text);
         assert.strictEqual(r.body.x_openvibe.provider, 'stub', 'the free local offer answered');
         assert.strictEqual(up.calls, 1, 'paid supply was never called for a sandbox token');
-        assert.strictEqual(billing.projectCalls, beforeProjects, 'a sandbox run never resolves a payer');
-        assert.strictEqual(billing.calls.filter((c) => c.path === '/internal/credits/holds').length, 1, 'only the production run held Credits');
+        assert.strictEqual(billing.calls.filter((c) => c.path.includes('/internal/projects/')).length, 0, 'a sandbox run resolves no payer');
+        assert.strictEqual(billing.calls.filter((c) => c.path === '/internal/credits/holds').length, 1, 'only the production run held Balance');
     } finally { await h.stop(); await up.close(); await billing.close(); }
 });
 

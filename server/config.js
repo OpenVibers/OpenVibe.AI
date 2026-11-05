@@ -295,17 +295,16 @@ function load(env = process.env) {
             timeoutMs: int(env.AI_FETCH_TIMEOUT_MS, 120000),
         },
 
-        // ── Billing Credits (AI Exchange F, CHECKPOINT D2/D9/D10), off by default. A paid managed request holds its
-        // worst-case cost before any provider call, extends the hold while streaming, and settles once. Reads the
+        // ── Billing Balance (AI Exchange F, CHECKPOINT D2/D9/D10/D12), off by default. A paid managed request holds
+        // its worst-case cost before any provider call, extends the hold while streaming, and settles once. Reads the
         // same OV_BILLING_INTERNAL_URL and OV_OAUTH_CLIENT_SECRET as the usage samples; the capability is one per
-        // operation (contracts v0.284.0): billing.credit.hold.{create,extend,settle,release}.
+        // operation (contracts v0.289.0): billing.credit.hold.{create,extend,settle,release}. An app holds against
+        // its project's Balance and a person against their own; no Network owner lookup is made.
         credits: {
             enabled: bool(env.AI_CREDITS, false),
             billingUrl: trimUrl(env.OV_BILLING_INTERNAL_URL),
             audience: 'openvibe.billing',
             timeoutMs: Math.max(200, Math.min(30000, int(env.AI_CREDITS_TIMEOUT_MS, 5000))),
-            // A project owner (network.project.read) is cached this long: Billing bills a person, not an app.
-            ownerTtlMs: Math.max(1000, Math.min(10 * 60 * 1000, int(env.AI_CREDITS_OWNER_TTL_MS, 60000))),
             // A settle Billing could not take is retried by the background queue with exponential backoff.
             settleRetryMs: Math.max(1000, Math.min(5 * 60 * 1000, int(env.AI_CREDITS_SETTLE_RETRY_MS, 5000))),
             settleMaxRetryMs: Math.max(1000, Math.min(60 * 60 * 1000, int(env.AI_CREDITS_SETTLE_MAX_RETRY_MS, 5 * 60 * 1000))),

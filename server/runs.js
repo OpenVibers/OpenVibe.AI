@@ -264,7 +264,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             const refusal = await runBudgets.refuse(principal.jti);
             if (refusal) throw refusal;
         }
-        // AI Exchange F: the caller's optional liability cap on a Credits hold (`max_cost_usd`). It is a request
+        // AI Exchange F: the caller's optional liability cap on a Balance hold (`max_cost_usd`). It is a request
         // field on the OpenAI and Messages routes and an input/option field on the direct ones; parsed as an exact
         // decimal into integer nano-USD, never through a float (0.000000001 is one nano, 0.0000000011 rounds up).
         const rawMaxCost = body.max_cost_usd != null ? body.max_cost_usd : options.max_cost_usd != null ? options.max_cost_usd : input.max_cost_usd;
@@ -274,9 +274,9 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             ...(principal.jti ? { runJti: principal.jti } : {}),
             actorKey: subjectKey(body.on_behalf_of), targetKey: entityKey(body.target), attributionKey: entityKey(body.attribution), workflowKey: wf.key,
             ...(app ? { appRun: true, projectId: app.projectId, sandbox: app.sandbox, appId: principal.appId } : {}),
-            // Who pays a Credits hold: the person a token acts for, else the app (its project), else the service.
+            // Who pays a Balance hold (D12): the app and its project, else the person a token acts for, else the service.
             onBehalfOf: personSubject || principal.onBehalfOf || null,
-            // A credential or a project's own provider never reaches managed supply: no Credits hold for that run.
+            // A credential or a project's own provider never reaches managed supply: no Balance hold for that run.
             ...(credentialSubject !== null || projectProvider ? { byok: true } : {}),
             ...(maxCostNano != null ? { maxCostNano: String(maxCostNano) } : {}),
             ...(pinned ? { routePin: pinned } : {}),
@@ -493,7 +493,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         if (p && p.metadata && p.metadata.allowance === 'network') return { paid_by: 'network_allowance', detail: name, provider: name };
         return { paid_by: 'openvibe_key', detail: name, provider: name };
     }
-    /** The attempts a Credits settle reports, in billing.credit-hold-settle-request@1's exact attempt shape. */
+    /** The attempts a Balance settle reports, in billing.credit-hold-settle-request@1's exact attempt shape. */
     async function billingAttempts({ explain, logged, startedAt, endedAt }) {
         const source = explain && Array.isArray(explain.attempts) && explain.attempts.length ? explain.attempts : (logged || []);
         const out = [];
@@ -515,7 +515,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         return out;
     }
 
-    /** Settle the request's Credits hold once; a failure is logged, never allowed to fail an answer already made. */
+    /** Settle the request's Balance hold once; a failure is logged, never allowed to fail an answer already made. */
     async function settleCredits(credit, { usage, costUsd, explain, logged = [], startedAt, endedAt }) {
         if (!credit || !credit.holdId) return null;
         try {
@@ -552,7 +552,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         let billingDelta = null;
         let onRoute = null;
         try {
-            // AI Exchange F: hold prepaid Credits before the first managed provider call (AI_CREDITS, off by
+            // AI Exchange F: hold prepaid Balance before the first managed provider call (AI_CREDITS, off by
             // default). A run with no project to bill (a first-party service, a cache hit, BYOK) begins no session
             // and never touches Billing.
             if (credits && credits.enabled) {
@@ -564,7 +564,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             billingDelta = typeof ctx.onDelta === 'function'
                 ? (credit ? (d) => { credit.observe(d); ctx.onDelta(d); } : ctx.onDelta)
                 : null;
-            // Credits holds first (a 402 must land before the provider), then the router's own disclosure hook.
+            // Balance holds first (a 402 must land before the provider), then the router's own disclosure hook.
             onRoute = (credit || typeof ctx.onRoute === 'function')
                 ? async (facts, meta) => {
                     const routed = credit ? await credit.onRoute(facts, meta) : null;
@@ -651,7 +651,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                 if (f.changes) await events.runChanged(await getRow(id));
             });
             const spent = await db.prepare("SELECT COALESCE(SUM(tokens_in),0)::bigint ti, COALESCE(SUM(tokens_out),0)::bigint tout, COALESCE(SUM(tokens_cached),0)::bigint tc, COALESCE(SUM(cost_usd),0) c FROM requests WHERE run_id = ? AND status = 'ok'").get(id);
-            // Credits: nothing reached a provider (or it failed before the first token) releases the hold; an abort
+            // Balance: nothing reached a provider (or it failed before the first token) releases the hold; an abort
             // or a failure after tokens streamed settles the partial usage it did produce.
             if (credit && credit.holdId) {
                 try {

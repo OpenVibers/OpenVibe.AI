@@ -71,7 +71,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     // A person's ai.preferences (L36 Y3): only_my_keys, free_first, a price ceiling and a default model per kind.
     const preferences = require('./person-preferences').createPreferences({ db, clock });
     const projectSecrets = require('./project-secrets').createProjectSecrets({ config, env, fetchImpl });
-    // AI Exchange F: Billing Credits for paid managed inference (AI_CREDITS, off). Null when off, so runs never touch it.
+    // AI Exchange F: Billing Balance for paid managed inference (AI_CREDITS, off). Null when off, so runs never touch it.
     const credits = require('./credits').createCredits({ config, db, registry, env, fetchImpl, clock, log, networkUrl: config.networkInternalUrl });
     if (credits && !(config.modelCatalog && config.modelCatalog.enabled)) {
         log.warn('[credits] AI_CREDITS is on but AI_MODEL_CATALOG is off: no offer declares managed access, so no request is charged');
