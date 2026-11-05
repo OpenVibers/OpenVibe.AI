@@ -40,7 +40,8 @@ const { CAPS } = require('../auth');
 const { appAttribution } = require('../apps');
 const { credentialFor } = require('./credential');
 const models = require('./models');
-const { EXACT_ID } = require('../providers/model-catalog');
+const modelCatalog = require('../providers/model-catalog');
+const { EXACT_ID } = modelCatalog;
 
 const FIELDS = ['messages', 'tools', 'tool_choice', 'parallel_tool_calls', 'response_format', 'stop', 'seed', 'top_p', 'presence_penalty', 'frequency_penalty', 'temperature'];
 
@@ -160,6 +161,17 @@ function openaiRouter({ runs, auth, config, registry, log = console }) {
             const requested = b.model == null ? 'openvibe/auto' : String(b.model).trim();
             if (!requested || requested.length > 256) return openaiError(res, 400, 'model must name an exact id or a dynamic alias', 'input.invalid');
             input.model = requested;
+            // An exact id is a pin: an unknown or inactive artifact is refused here, before the run (and its stream)
+            // exists, so a streaming client gets the 404/400 it expects rather than a 200 SSE error. The engine selects
+            // the same artifact again when the run executes.
+            if (EXACT_ID.test(requested)) {
+                try {
+                    await modelCatalog.select({ registry, model: requested, route: null });
+                } catch (err) {
+                    if (err && err.status) return openaiError(res, err.status, err.detail || err.message, err.code);
+                    throw err;
+                }
+            }
         }
         const maxTokens = b.max_completion_tokens != null ? b.max_completion_tokens : b.max_tokens;
         if (maxTokens != null) input.max_tokens = Math.max(1, Math.min(Number(maxTokens) || 1, 16000));
