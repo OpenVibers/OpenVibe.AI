@@ -31,7 +31,7 @@ const { createApp } = require('./app');
 const { gracefulStop, telemetry } = require('openvibe-sdk/service');
 const { createPgTelemetrySink, startTelemetryRetention } = require('openvibe-sdk/telemetry');
 
-async function start({ config, db: givenDb = null, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, listen = true, credentialFetch = null, valkey = null, research = null, machineModels = null } = {}) {
+async function start({ config, db: givenDb = null, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, listen = true, credentialFetch = null, valkey = null, research = null, machineModels = null, variantEvidence = null } = {}) {
     config = config || load(env);
     schemas.configure(config.schemaCache);
     // PostgreSQL (ADR-035): opened and migrated here unless the caller (a test) hands in a migrated handle.
@@ -42,7 +42,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     await vault.load().catch((err) => log.warn(`[Vault] ${err.message}`));
     // BENCH-11: Bench's ratings as routing evidence, and the opted-in tie rule inside placement.
     const bench = createBenchEvidence({ db, registry, config, clock, fetchImpl, log });
-    const pool = createProviderPool({ db, registry, config, clock, fetchImpl, env, log, credentialFetch, machineModels, bench });
+    const pool = createProviderPool({ db, registry, config, clock, fetchImpl, env, log, credentialFetch, machineModels, bench, variantEvidence });
     // T6 step 8: the SaaS tier budgets on openvibe-sdk/govern in Valkey (server/govern.js); off unless AI_GOVERN_TIERS=1.
     const tiers = createTiers({ config, valkey, clock, log });
     // §2.1.8: the provider free allowance per subject, priced off the pool's own rate cards (server/free-allowance.js);
@@ -71,7 +71,12 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     // A person's ai.preferences (L36 Y3): only_my_keys, free_first, a price ceiling and a default model per kind.
     const preferences = require('./person-preferences').createPreferences({ db, clock });
     const projectSecrets = require('./project-secrets').createProjectSecrets({ config, env, fetchImpl });
-    const runs = createRuns({ db, registry, engine, cache, quotas, config, clock, log, userModules, credentials, preferences, tiers, projectSecrets, pool, runBudgets });
+    // AI Exchange F: Billing Credits for paid managed inference (AI_CREDITS, off). Null when off, so runs never touch it.
+    const credits = require('./credits').createCredits({ config, db, registry, env, fetchImpl, clock, log, networkUrl: config.networkInternalUrl });
+    if (credits && !(config.modelCatalog && config.modelCatalog.enabled)) {
+        log.warn('[credits] AI_CREDITS is on but AI_MODEL_CATALOG is off: no offer declares managed access, so no request is charged');
+    }
+    const runs = createRuns({ db, registry, engine, cache, quotas, config, clock, log, userModules, credentials, preferences, tiers, projectSecrets, pool, runBudgets, credits });
     await seed({ registry, quotas, config, env, db });
     const interrupted = await runs.recoverInterrupted();
     if (interrupted) log.warn(`[ai] marked ${interrupted} interrupted run(s) failed (run.interrupted); callers can retry them`);
@@ -117,6 +122,9 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     let accountSubscription = null;
     if (listen) userModules.start();
     if (listen && config.memoryJobs && config.memoryJobs.enabled) memoryJobs.start();
+    // Durable Credit settles: the same jobs rule as Memory (never in test mode, never under a provider drill; the
+    // queue's runOnce checks the drill itself).
+    if (listen && credits && config.nodeEnv !== 'test') credits.startSettlements();
     if (listen) {
         server = await new Promise((resolve, reject) => {
             // Socket activation (2026-10-31): systemd's .socket unit holds the listener across restarts, so a deploy
@@ -147,6 +155,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         if (accountSubscription) accountSubscription.stop();
         userModules.stop();
         memoryJobs.stop();
+        if (credits) credits.stopSettlements();
         if (jwks) jwks.stop();
         if (server) {
             server.closeAllConnections?.();
@@ -161,7 +170,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         if (!givenDb) await db.close();
     }
 
-    return { config, db, registry, pool, quotas, tiers, cache, fetcher, engine, runs, keys, keyLoaded, auth, app, server, bench, benchEvents, memory, memoryJobs, close };
+    return { config, db, registry, pool, quotas, tiers, cache, fetcher, engine, runs, keys, keyLoaded, auth, app, server, bench, benchEvents, memory, memoryJobs, credits, close };
 }
 
 if (require.main === module) {

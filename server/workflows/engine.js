@@ -33,6 +33,7 @@ const { render } = require('../templates');
 const { preferenceLines } = require('../user-modules');
 const schemas = require('../schemas');
 const { PREPARE, POSTPROCESS } = require('./hooks');
+const modelCatalog = require('../providers/model-catalog');
 
 const ROLE_TIMEOUT = { chat: 20000, vision: 30000, director: 25000, summary: 30000, legacy: 30000 };
 const INLINE_AUDIO_MAX = 1024 * 1024;
@@ -215,9 +216,27 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
         return { output: { text: exec.result.text || '', json }, exec, route };
     }
 
+    /**
+     * The model the caller named (AI Exchange D3/D4, AI_MODEL_CATALOG): an exact id runs only its own artifact, a
+     * dynamic alias turns into the same route with that policy's placement constraints. With the flag off this is
+     * never called, so today's route selection is unchanged.
+     */
+    async function selectedRoute(base, input) {
+        if (!(config.modelCatalog && config.modelCatalog.enabled) || typeof input.model !== 'string' || !input.model.trim()) return { route: base, selection: null };
+        const selection = await modelCatalog.select({ registry, model: input.model.trim(), route: base });
+        return { route: selection.route, selection };
+    }
+
+    function selectionCtx(selection) {
+        if (!selection) return {};
+        return selection.kind === 'exact'
+            ? { policy: 'exact', exact: { id: selection.id, offers: selection.offers.map((o) => ({ provider: o.provider, model: o.model })) } }
+            : { policy: selection.policy, aliasPolicy: selection.policy };
+    }
+
     /** complete: the OpenAI Chat Completions request as the caller wrote it (ai.complete), to an upstream that speaks it. */
     async function completeStep(step, input, wf, run, ctx) {
-        const route = await routeFor(step.route || 'default.chat');
+        const { route, selection } = await selectedRoute(await routeFor(step.route || 'default.chat'), input);
         const openai = {};
         for (const k of ['messages', 'tools', 'tool_choice', 'parallel_tool_calls', 'response_format', 'stop', 'seed', 'top_p', 'presence_penalty', 'frequency_penalty']) {
             if (input[k] !== undefined) openai[k] = input[k];
@@ -230,7 +249,7 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
             prefer: ctx.prefer || null,
             ...(typeof ctx.onDelta === 'function' ? { onDelta: ctx.onDelta } : {}),
         };
-        const exec = await pool.execute(route, 'complete', req, { ...ctx, routeKey: route.key, routeVersion: route.version, promptHash: sha256({ m: openai.messages, t: openai.tools || null }) });
+        const exec = await pool.execute(route, 'complete', req, { ...ctx, ...selectionCtx(selection), routeKey: route.key, routeVersion: route.version, promptHash: sha256({ m: openai.messages, t: openai.tools || null }) });
         const c = exec.result.completion;
         if (!c || !Array.isArray(c.choices) || !c.choices.length) throw new AiError(502, 'output.empty', 'the provider answered, but with no choices');
         return { output: { choices: c.choices, system_fingerprint: c.system_fingerprint || null, model: exec.model }, exec, route };
@@ -241,7 +260,7 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
      * upstream that speaks that format. The run's output is the message (consumed by server/api/messages.js).
      */
     async function messagesStep(step, input, wf, run, ctx) {
-        const route = await routeFor(step.route || 'default.messages');
+        const { route, selection } = await selectedRoute(await routeFor(step.route || 'default.messages'), input);
         const req = {
             messages: input.messages,
             maxTokens: Math.max(1, Math.round(input.max_tokens || route.max_output_tokens || 1024)),
@@ -252,7 +271,7 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
         for (const k of ['system', 'tools', 'tool_choice', 'stop_sequences', 'temperature', 'top_p', 'top_k', 'metadata']) {
             if (input[k] !== undefined) req[k] = input[k];
         }
-        const exec = await pool.execute(route, 'messages', req, { ...ctx, routeKey: route.key, routeVersion: route.version, promptHash: sha256({ m: input.messages, t: input.tools || null }) });
+        const exec = await pool.execute(route, 'messages', req, { ...ctx, ...selectionCtx(selection), routeKey: route.key, routeVersion: route.version, promptHash: sha256({ m: input.messages, t: input.tools || null }) });
         const m = exec.result.message;
         if (!m || !Array.isArray(m.content)) throw new AiError(502, 'output.empty', 'the provider answered, but not with a message');
         return { output: { ...m, model: m.model || exec.model }, exec, route };

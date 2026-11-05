@@ -8,7 +8,9 @@ const { PASSTHROUGH_OUTPUT } = require('./live');
 
 const STR = (n) => ({ type: 'string', maxLength: n });
 const OBJ = (props, required = []) => ({ type: 'object', additionalProperties: false, required, properties: props });
-const COMMON = { max_tokens: { type: 'integer', minimum: 1, maximum: 16000 }, temperature: { type: ['number', 'null'], minimum: 0, maximum: 2 } };
+const COMMON = { max_tokens: { type: 'integer', minimum: 1, maximum: 16000 }, temperature: { type: ['number', 'null'], minimum: 0, maximum: 2 },
+    // AI Exchange F: a liability cap on the Credits hold for this request (optional; nothing when unset).
+    max_cost_usd: { type: ['number', 'string', 'null'] } };
 
 const templates = [
     {
@@ -90,6 +92,8 @@ const workflows = [
         // the prompt (passthrough). The output is the completion's choices.
         key: 'ai.complete', name: 'Chat completion (OpenAI-compatible)', namespace: 'ai',
         input_schema: OBJ({
+            // CHECKPOINT D3: an exact id or a dynamic alias, when AI_MODEL_CATALOG is on (server/api/openai.js).
+            model: STR(256),
             messages: { type: 'array', minItems: 1, maxItems: 500, items: { type: 'object', required: ['role'], properties: {
                 role: { enum: ['system', 'developer', 'user', 'assistant', 'tool'] },
                 content: { anyOf: [{ type: 'string', maxLength: 400000 }, { type: 'array', maxItems: 100 }, { type: 'null' }] },
@@ -116,6 +120,8 @@ const workflows = [
         // cost and explain but not the prompt (passthrough). The output is the message it answered with.
         key: 'ai.messages', name: 'Messages API (Anthropic-compatible)', namespace: 'ai',
         input_schema: OBJ({
+            // CHECKPOINT D3: an exact id or a dynamic alias, when AI_MODEL_CATALOG is on (server/api/messages.js).
+            model: STR(256),
             messages: { type: 'array', minItems: 1, maxItems: 500, items: { type: 'object', required: ['role'], properties: {
                 role: { enum: ['user', 'assistant'] },
                 content: { anyOf: [STR(400000), { type: 'array', maxItems: 500 }, { type: 'null' }] },
@@ -124,6 +130,7 @@ const workflows = [
             tools: { type: 'array', maxItems: 128, items: { type: 'object' } },
             tool_choice: { type: 'object' },
             max_tokens: { type: 'integer', minimum: 1, maximum: 64000 },
+            max_cost_usd: { type: ['number', 'string', 'null'] },
             stop_sequences: { type: 'array', maxItems: 8, items: STR(200) },
             temperature: { type: ['number', 'null'], minimum: 0, maximum: 1 },
             top_p: { type: ['number', 'null'], minimum: 0, maximum: 1 },

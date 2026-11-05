@@ -172,6 +172,43 @@ no `ns` runs nothing. Every caller's Network grant names its namespaces (Live: `
 `network.site_copy`, `media.analyze`). The fallback for service tokens without `ns` (`AI_NS_FALLBACK`)
 and its rollback lever (`AI_NS_REQUIRED`) were retired on 2026-09-28 (shims C-22 and C-23).
 
+## Model catalog, exact ids and the disclosure
+
+Behind `AI_MODEL_CATALOG` (off by default; with it off both `GET /v1/models` endpoints answer the legacy virtual
+`openvibe` model and no disclosure is added; an exact id is still a pin, so it is refused with 400
+`ai.model_unavailable` rather than run on another model). It applies to both `POST /v1/chat/completions` and
+`POST /v1/messages`.
+
+- **`GET /v1/models` / `GET /v1/models/{id}`:** the registry's real models as `ai.model@1` catalog entries
+  (`provider_key`, `model_key`, `id`, family, variant, quant, revision, sha256, license, context, capabilities,
+  modalities, retail rate in integer nano-USD, availability) plus the dynamic policy aliases `openvibe/auto`,
+  `openvibe/economy`, `openvibe/balanced`, `openvibe/fast`, `openvibe/private` and legacy `openvibe` (= auto). An
+  alias carries `dynamic: true` and its `policy`. Every entry also carries the response shape of the protocol it was
+  asked in: OpenAI's `object`/`created`/`owned_by`, or Anthropic's `type`/`display_name`/`created_at`. An Anthropic
+  client identifies itself with its `anthropic-version` header (or `?format=anthropic`).
+- **Exact ids:** `model` may be `<org>/<model>[:<quant>]@<revision>` (for example
+  `qwen/qwen3-9b-abliterated:q4_k_m@3f2a1c9`). It runs only that artifact. An artifact that does not exist is 404
+  `ai.model_not_found`; one that exists but cannot run the request (no active deployment, unmet capability, down
+  provider, or an offer that may not be resold) is 400 `ai.model_unavailable`. It is never substituted with another
+  model, in fallback or otherwise. A row without artifact metadata has no exact id; it is still listed and reachable
+  by its legacy `provider/model` id.
+- **Aliases:** the dynamic names resolve through the same provider placement. `economy` ranks price first, `fast`
+  measured latency first, `balanced` weighs both, `private` never leaves local/own capacity, and `auto` keeps the
+  existing task-aware router. User preferences (`only_my_keys`, `free_first`, own keys and machines) still apply.
+- **The disclosure, inside `x_openvibe`:** `resolved_model`, `revision`, `deployment`, `provider_access`,
+  `rate_version`, `policy` and `fallback_reason` join the `x_openvibe` object responses already carry (run, provider,
+  cost). There is no second object.
+  - On a JSON response it is in the top-level `x_openvibe`.
+  - On SSE it is the first line, as an SSE comment (`: x_openvibe {...}`), and it is on the final chunk
+    (`message_stop` for Messages).
+- **Commercial access:** `provider_access` is a provider field (`POST/PATCH /api/v1/providers`, default `UNVERIFIED`).
+  Paid managed routing uses only `OWN_DEPLOYMENT` and `AUTHORIZED_WHOLESALE`; `RESTRICTED`, `UNVERIFIED` and
+  `CUSTOMER_BYOK` offers stay out of the shared pool. A person's own key or project provider is disclosed as
+  `CUSTOMER_BYOK` and is unaffected.
+- **Tokens:** developer apps call with the public `ai.app.run` they already hold (ADR-014). The separate
+  `ai.inference.create` once planned for this was retired (Contracts 0.285.0). `ai.run.create` remains the
+  first-party service capability.
+
 ## OpenAI-compatible endpoint
 
 `POST /v1/chat/completions` and `GET /v1/models` (`server/api/openai.js`), so a client built for OpenAI's API (the SDKs,
@@ -440,7 +477,38 @@ run, and a pinned run is never served from the shared cache.
 reading its `idempotency_key`, `state` (`queued` until Billing accepts it, `sent`, or `failed` when Billing
 refused it), `attempts`, `queued_at`, `sent_at`, `rejected_at`, `next_attempt_at`, `last_error` (the
 outbox's last send error, also while a queued reading is retried) and `free_allowance_used` when some
-was free; a sent reading the relay has pruned reads `{ state: 'sent', pruned: true }`. Speech and embeddings use placement pools of registered `stt` and `embedding` models; until
+**Credits (AI Exchange F; `AI_CREDITS`, off).** A request on a paid managed route — the model catalog's
+`provider_access` is `OWN_DEPLOYMENT` or `AUTHORIZED_WHOLESALE` and the offer is metered — reserves its
+worst case in OpenVibe.Billing before any provider is called: the input estimate plus `max_tokens` of output
+at the model's retail card (`ai.model@1` `retail_rate`). Billing bills a person, so an app token's project
+owner is resolved through Network (`GET /internal/projects/:id`, capability `network.project.read`) and cached
+for 60 s; a project whose owner cannot be resolved fails closed with `503 billing.unavailable`. A run with no
+payer and no project (a first-party service without `on_behalf_of`) is never served a paid offer that carries
+a versioned card (`payer_required`); offers without a card behave as before. An exact id whose only offer is
+skipped that way is `402 billing.payer_required`.
+
+`max_cost_usd` is parsed as an exact decimal (up to 9 fractional digits, finer digits round up; exponent forms
+are 422) into integer nano-USD. When it binds, the affordable output is computed in BigInt from nano-USD per
+million tokens and the provider receives that clamped `max_tokens`; fewer than one affordable token is 402
+before the provider. A pricier managed fallback extends the hold by the difference (clamped the same way); if
+Billing refuses the extension the offer is skipped as `hold_not_extended`. A stream extends the hold in steps
+when the output nears it.
+
+The hold's idempotency key is the request id; its fingerprint covers the resolved model, the token caps, the
+rate version, the payer and the project. Billing's `402 billing.insufficient_funds` becomes AI's own 402; any
+other Billing failure refuses the run with `503 billing.unavailable` rather than serving unpaid capacity. At
+the end one settle carries the four token counts, the answering model's retail card version, the supply cost
+and every attempt in `billing.credit-hold-settle-request@1`'s exact shape (`deployment_id`, `provider_access`,
+start/end, `error_code`); a retried request replays the same settlement instead of charging twice. A settle
+Billing cannot take is kept in `credit_settle_queue` (migration 0025) and retried with backoff and the same key;
+a 409 or 422 marks it `review`, never a retry. A failure before the first token releases the hold, an abort
+settles the partial usage. BYOK — a person's key, their machine, a project's own provider — is never held and
+never charged; Billing is not called at all. A sandbox app token is never offered paid supply (D10), so it
+spends no Credits and never resolves a payer. Requires `AI_MODEL_CATALOG` for the access labels; with either
+flag off nothing changes. Code: `server/credits.js`, `server/credit-settlements.js`; the fake-Billing/Network
+tests are `test/credits.test.js` and `test/credits-run.test.js`.
+
+Speech and embeddings use placement pools of registered `stt` and `embedding` models; until
 a second upstream exists, an unavailable sole provider answers `503 provider.unavailable`. Media
 uses separate local and paid pools so paid work still requires its explicit budget. The synthetic
 stub can join general text routes as a last resort outside production only (`AI_STUB_FALLBACK`).

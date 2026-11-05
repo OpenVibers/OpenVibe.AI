@@ -18,6 +18,7 @@
  */
 const { ids } = require('openvibe-contracts');
 const { AiError, sha256, stableStringify, parseJson, iso } = require('./util');
+const { parseCostUsd } = require('./credits');
 const { CACHE_INPUT } = require('./workflows/hooks');
 const { preferenceLines } = require('./user-modules');
 const { preferredTarget } = require('./providers/task');
@@ -102,7 +103,7 @@ function routePinRequest(value, principal, wf) {
     return { provider, model };
 }
 
-function createRuns({ db, registry, engine, cache, quotas, config, clock = { now: () => Date.now() }, log = console, userModules = null, credentials = null, preferences: personPreferences = null, tiers = null, projectSecrets = null, pool = null, runBudgets = null }) {
+function createRuns({ db, registry, engine, cache, quotas, config, clock = { now: () => Date.now() }, log = console, userModules = null, credentials = null, preferences: personPreferences = null, tiers = null, projectSecrets = null, pool = null, runBudgets = null, credits = null }) {
     const inflight = new Map();     // run id -> { controller, promise, release, caller }
     const queue = [];               // run ids waiting for the worker
     let active = 0;
@@ -183,7 +184,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
      * principal: { sub, subject: {type, id} }
      * Returns { run, created, promise? }.
      */
-    async function create(body, principal, { trace = null, requestId = null, retryOf = null, onDelta = null } = {}) {
+    async function create(body, principal, { trace = null, requestId = null, retryOf = null, onDelta = null, onRoute = null } = {}) {
         if (!body || typeof body !== 'object') throw new AiError(400, 'input.invalid', 'JSON body required');
         const wfKey = String(body.workflow || '');
         const wf = body.version ? await registry.getWorkflow(wfKey, Number(body.version)) : await registry.activeWorkflow(wfKey);
@@ -263,17 +264,30 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             const refusal = await runBudgets.refuse(principal.jti);
             if (refusal) throw refusal;
         }
+        // AI Exchange F: the caller's optional liability cap on a Credits hold (`max_cost_usd`). It is a request
+        // field on the OpenAI and Messages routes and an input/option field on the direct ones; parsed as an exact
+        // decimal into integer nano-USD, never through a float (0.000000001 is one nano, 0.0000000011 rounds up).
+        const rawMaxCost = body.max_cost_usd != null ? body.max_cost_usd : options.max_cost_usd != null ? options.max_cost_usd : input.max_cost_usd;
+        const maxCostNano = rawMaxCost == null ? null : parseCostUsd(rawMaxCost);
         const ctx = {
             requesterType: requester.type, requesterId: requester.id,
             ...(principal.jti ? { runJti: principal.jti } : {}),
             actorKey: subjectKey(body.on_behalf_of), targetKey: entityKey(body.target), attributionKey: entityKey(body.attribution), workflowKey: wf.key,
-            ...(app ? { appRun: true, projectId: app.projectId, sandbox: app.sandbox } : {}),
+            ...(app ? { appRun: true, projectId: app.projectId, sandbox: app.sandbox, appId: principal.appId } : {}),
+            // Who pays a Credits hold: the person a token acts for, else the app (its project), else the service.
+            onBehalfOf: personSubject || principal.onBehalfOf || null,
+            // A credential or a project's own provider never reaches managed supply: no Credits hold for that run.
+            ...(credentialSubject !== null || projectProvider ? { byok: true } : {}),
+            ...(maxCostNano != null ? { maxCostNano: String(maxCostNano) } : {}),
             ...(pinned ? { routePin: pinned } : {}),
             // POST /v1/chat/completions with stream: true: the upstream's deltas, as they arrive (kept in memory only).
             ...(typeof onDelta === 'function' ? { onDelta } : {}),
+            // The offer the router picked, before the first token: the SSE disclosure's first comment (D3).
+            ...(typeof onRoute === 'function' ? { onRoute } : {}),
         };
         const now = iso(clock.now());
         const id = newRunId();
+        ctx.runId = id;
         const kept = retainedInput(input, wf, Boolean(config.debugRawLog && options.debug));
         const base = {
             id, workflow_key: wf.key, workflow_version: wf.version, template_key: tpl ? tpl.key : null, template_version: tpl ? tpl.version : null,
@@ -479,6 +493,40 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         if (p && p.metadata && p.metadata.allowance === 'network') return { paid_by: 'network_allowance', detail: name, provider: name };
         return { paid_by: 'openvibe_key', detail: name, provider: name };
     }
+    /** The attempts a Credits settle reports, in billing.credit-hold-settle-request@1's exact attempt shape. */
+    async function billingAttempts({ explain, logged, startedAt, endedAt }) {
+        const source = explain && Array.isArray(explain.attempts) && explain.attempts.length ? explain.attempts : (logged || []);
+        const out = [];
+        for (const a of source) {
+            if (!a) continue;
+            const provider = a.provider || a.provider_key || null;
+            if (!provider || a.status === 'skipped') continue;
+            const model = a.model || a.model_key || null;
+            let access = null;
+            try { const p = await registry.getProvider(provider); access = p && credits ? credits.accessOf(p) : null; } catch { access = null; }
+            const ok = a.status === 'ok' || a.status === 'succeeded';
+            out.push({
+                deployment_id: `${provider}:${model || ''}`,
+                ...(access ? { provider_access: access } : {}),
+                started_at: startedAt, ended_at: endedAt,
+                error_code: ok ? null : String(a.error || a.error_code || a.status || 'error').slice(0, 120),
+            });
+        }
+        return out;
+    }
+
+    /** Settle the request's Credits hold once; a failure is logged, never allowed to fail an answer already made. */
+    async function settleCredits(credit, { usage, costUsd, explain, logged = [], startedAt, endedAt }) {
+        if (!credit || !credit.holdId) return null;
+        try {
+            const attempts = await billingAttempts({ explain, logged, startedAt, endedAt });
+            return await credit.settle({ usage, supplyCostUsd: costUsd, attempts });
+        } catch (err) {
+            log.warn(`[credits] settle ${credit.holdId} failed; queued for retry (a 409/422 needs review): ${err && err.message}`);
+            return null;
+        }
+    }
+
     async function execute(id, { controller, reserved, scope, ctx, input, hold = null }) {
         const row = await getRow(id);
         if (!row || row.status !== 'queued') { inflight.delete(id); return; }
@@ -500,7 +548,30 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                 created_at: iso(clock.now()),
             });
         };
+        let credit = null;
+        let billingDelta = null;
+        let onRoute = null;
         try {
+            // AI Exchange F: hold prepaid Credits before the first managed provider call (AI_CREDITS, off by
+            // default). A run with no project to bill (a first-party service, a cache hit, BYOK) begins no session
+            // and never touches Billing.
+            if (credits && credits.enabled) {
+                credit = credits.begin({ requestId: row.request_id || id, ctx, input, attribution: parseJson(row.attribution, null), onBehalfOf: ctx.onBehalfOf || null });
+                // No payer (or no project) on a run that is not BYOK: the pool must not serve a paid managed offer
+                // with a versioned card, because nobody could be charged for it.
+                ctx.creditsRequired = !credit && !ctx.byok;
+            }
+            billingDelta = typeof ctx.onDelta === 'function'
+                ? (credit ? (d) => { credit.observe(d); ctx.onDelta(d); } : ctx.onDelta)
+                : null;
+            // Credits holds first (a 402 must land before the provider), then the router's own disclosure hook.
+            onRoute = (credit || typeof ctx.onRoute === 'function')
+                ? async (facts, meta) => {
+                    const routed = credit ? await credit.onRoute(facts, meta) : null;
+                    if (typeof ctx.onRoute === 'function') await ctx.onRoute(facts, meta);
+                    return routed;
+                }
+                : null;
             // A run on a person's behalf follows their ai.preferences (Network user module): style, length and
             // perspective shape the prompt; history: false keeps neither their input nor a cache entry.
             const preferences = userModules && row.on_behalf_of ? await userModules.preferencesFor(row.on_behalf_of) : {};
@@ -526,13 +597,16 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                 appRun: Boolean(ctx.appRun), freeOnly: Boolean(ctx.appRun && (ctx.sandbox || !(tiers && tiers.enabled))),
                 // Who asked, for a step that must not call the caller back (research: Search's own web ladder).
                 requesterType: ctx.requesterType, requesterId: ctx.requesterId,
+                // AI Exchange F: no payer on this run (and not BYOK): the pool skips paid offers with a card.
+                creditsRequired: Boolean(ctx.creditsRequired),
                 ...(ctx.routePin ? { routePin: ctx.routePin } : {}),
                 // L37: the soft preference the caller made (provider, and a model if it named one).
                 prefer: opts.prefer || null,
                 ...(onCredentialFailed ? { onCredentialFailed } : {}),
                 ...(selfSubject ? { selfSubject, selfCredentials: selfCredentials || [], selfPreferences } : {}),
                 ...(credential ? { credential, role: input && typeof input.role === 'string' ? input.role : null } : {}),
-                ...(typeof ctx.onDelta === 'function' ? { onDelta: ctx.onDelta } : {}) });
+                ...(billingDelta ? { onDelta: billingDelta } : {}),
+                ...(onRoute ? { onRoute } : {}) });
             if (controller.signal.aborted) throw new AiError(409, 'run.cancelled', 'cancelled');
             // The status, its citations and the ai.run.succeeded event commit together.
             const done = await db.tx(async () => {
@@ -546,6 +620,9 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                 return d;
             });
             if (!done.changes) return;       // cancelled while finishing
+            // One settle for the request, with the four token counts, the answering card, the supply cost and
+            // every attempt. A failure never turns the answer into an error: Billing expires an unsettled hold.
+            if (credit) await settleCredits(credit, { usage: r.usage, costUsd: r.cost, explain: r.explain, logged, startedAt: row.started_at || iso(clock.now()), endedAt: iso(clock.now()) });
             // A self-key run has no reservation and no tier hold; if it fell back to the network, its usage is still
             // recorded (the fallback is named in explain). A run that used the person's own key spends nothing here.
             const usedOwnKey = String(r.provider || '').startsWith('byo:self:');
@@ -574,6 +651,26 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                 if (f.changes) await events.runChanged(await getRow(id));
             });
             const spent = await db.prepare("SELECT COALESCE(SUM(tokens_in),0)::bigint ti, COALESCE(SUM(tokens_out),0)::bigint tout, COALESCE(SUM(tokens_cached),0)::bigint tc, COALESCE(SUM(cost_usd),0) c FROM requests WHERE run_id = ? AND status = 'ok'").get(id);
+            // Credits: nothing reached a provider (or it failed before the first token) releases the hold; an abort
+            // or a failure after tokens streamed settles the partial usage it did produce.
+            if (credit && credit.holdId) {
+                try {
+                    const streamedOut = Math.ceil(credit.streamedChars / 4);
+                    const produced = Number(spent.ti) > 0 || Number(spent.tout) > 0 || streamedOut > 0 || logged.some((e) => e.status === 'ok');
+                    if (produced) {
+                        await settleCredits(credit, {
+                            usage: { input: Math.max(Number(spent.ti) || 0, credit.inputTokens), output: Math.max(Number(spent.tout) || 0, streamedOut), cached: Number(spent.tc) || 0, cache_write: 0 },
+                            costUsd: Number(spent.c) || 0,
+                            explain: err instanceof AiError && err.extra && err.extra.explain ? err.extra.explain : null, logged,
+                            startedAt: row.started_at || iso(clock.now()), endedAt: iso(clock.now()),
+                        });
+                    } else {
+                        await credit.release();
+                    }
+                } catch (cers) {
+                    log.warn(`[credits] ${id} ${cers && cers.code || 'release/settle'}: ${cers && cers.message}`);
+                }
+            }
             // A run that broke still spent: its record says what it cost and who paid (L40).
             await publishUsage({ row: await getRow(id), outcome: cancelled ? 'cancelled' : 'failed',
                 usage: { input: Number(spent.ti) || 0, output: Number(spent.tout) || 0, cached: Number(spent.tc) || 0 },
