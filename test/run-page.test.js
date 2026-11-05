@@ -43,7 +43,9 @@ const json = (status, body) => new Response(JSON.stringify(body), { status, head
 async function fakeFetch(url, opts = {}) {
     const u = String(url);
     if (u === `${NETWORK}/oauth/token`) {
-        const body = Object.fromEntries(new URLSearchParams(String(opts.body)));
+        // openvibe-sdk/sso posts the grant as JSON; the real Network takes that (and this stub keeps the form shape too).
+        const text = String(opts.body || '');
+        const body = text.trim().startsWith('{') ? JSON.parse(text) : Object.fromEntries(new URLSearchParams(text));
         if (body.client_id !== 'ai' || body.client_secret !== CLIENT_SECRET) return json(401, { error: 'invalid_client' });
         const c = codes.get(body.code);
         if (!c) return json(400, { error: 'invalid_grant' });

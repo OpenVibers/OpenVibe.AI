@@ -1,44 +1,28 @@
 'use strict';
 /**
- * OpenVibe.Network single sign-on for the operator console: OAuth 2 authorization code with PKCE
- * (S256), as OAuth client `ai` (the client AI already uses for its service tokens).
+ * OpenVibe.Network single sign-on for the operator console: the OAuth half comes from
+ * openvibe-sdk/sso (createSsoClient), as OAuth client `ai` (the client AI already uses for its
+ * service tokens). The console keeps its own short staff session, CSRF token and staff checks in
+ * session.js / index.js; this module owns only the handshake:
  *
- *   authorizeUrl()  <OV_NETWORK_URL>/oauth/authorize?response_type=code&client_id=ai
- *                   &redirect_uri=<BASE_URL>/auth/callback&scope=profile&state=…&code_challenge=…
- *                   &code_challenge_method=S256
- *   exchange()      POST <OV_NETWORK_INTERNAL_URL>/oauth/token (client secret + code_verifier), server
- *                   to server; the access token is then verified with openvibe-sdk/auth verifyUserToken
- *                   against the Network's JWKS (or the pinned OV_NETWORK_PUBLIC_KEY), as a person
+ *   start()      <OV_NETWORK_URL>/oauth/authorize?response_type=code&client_id=ai
+ *                &redirect_uri=<BASE_URL>/auth/callback&scope=profile&state=…&code_challenge=…
+ *                &code_challenge_method=S256
+ *   exchange()   the SDK's token grant (client secret + code_verifier), server to server; the access
+ *                token is then verified with openvibe-sdk/auth verifyUserToken against the Network's
+ *                JWKS (or the pinned OV_NETWORK_PUBLIC_KEY), as a person
+ *   checkClient() the SDK's health check: does the Network accept this client? (/auth/health)
  *
  * The Network's user access token carries `role`, `is_owner` and `subject_id` (and, once the Network
  * issues them, `staff_caps` / `staff_map`), minted at the code exchange, so what the console reads
  * is current as of sign-in; the session is short. AI keeps none of the Network's tokens: the refresh
  * token it is handed is revoked straight away (best effort).
  */
-const crypto = require('crypto');
 const { ids, staff } = require('openvibe-contracts');
 const { verifyUserToken } = require('openvibe-sdk/auth');
+const { createSsoClient } = require('openvibe-sdk/sso');
 
 const PRINCIPAL_SUB = /^(svc|app|mod):/;
-
-function pkcePair() {
-    const verifier = crypto.randomBytes(32).toString('base64url');           // 43 chars
-    const challenge = crypto.createHash('sha256').update(verifier).digest('base64url');
-    return { verifier, challenge };
-}
-
-function authorizeUrl(config, { state, challenge }) {
-    const q = new URLSearchParams({
-        response_type: 'code',
-        client_id: config.console.clientId,
-        redirect_uri: config.console.redirectUri,
-        scope: 'profile',
-        state,
-        code_challenge: challenge,
-        code_challenge_method: 'S256',
-    });
-    return `${config.networkUrl}/oauth/authorize?${q.toString()}`;
-}
 
 /**
  * The person a verified token names: { subject, username, staff } or { error }. Service, app and
@@ -63,42 +47,62 @@ function personFromClaims(claims) {
     };
 }
 
-async function exchange({ config, clientSecret, code, verifier, now = Date.now(), fetchImpl = globalThis.fetch, log = null }) {
+function createConsoleSso({ config, clientSecret, fetchImpl = globalThis.fetch, log = console }) {
     const cc = config.console;
-    const body = new URLSearchParams({
-        grant_type: 'authorization_code',
-        code: String(code),
-        redirect_uri: cc.redirectUri,
-        client_id: cc.clientId,
-        client_secret: clientSecret,
-        code_verifier: verifier,
+    const client = createSsoClient({
+        site: 'ai',
+        siteName: 'OpenVibe.AI',
+        baseUrl: config.baseUrl,
+        clientId: cc.clientId,
+        clientSecret,
+        networkUrl: config.networkUrl,
+        networkInternalUrl: config.networkInternalUrl,
+        issuer: config.issuer,
+        redirectUri: cc.redirectUri,
+        scope: 'profile',
+        audience: cc.ssoAudience,
+        fetch: fetchImpl,
+        log,
     });
-    const res = await fetchImpl(`${config.networkInternalUrl}/oauth/token`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
-        body,
-        signal: AbortSignal.timeout(10_000),
-    });
-    const data = await res.json().catch(() => null);
-    if (!res.ok || !data || !data.access_token) {
-        const err = new Error((data && (data.error_description || data.error)) || `token endpoint ${res.status}`);
-        err.status = res.status;
-        throw err;
+
+    /** The authorize URL and the state/verifier the flow cookie must keep. → { url, state, verifier } */
+    function start() {
+        return client.authorizeUrl();
     }
-    // AI never uses the Network session again: drop the refresh token now.
-    if (data.refresh_token) {
-        Promise.resolve(fetchImpl(`${config.networkInternalUrl}/oauth/revoke`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ client_id: cc.clientId, client_secret: clientSecret, token: data.refresh_token }),
-            signal: AbortSignal.timeout(3000),
-        })).catch(() => {});
+
+    /** Redeem the code with the SDK, verify the person's token, revoke the refresh token AI will not use. */
+    async function exchange({ code, verifier, now = Date.now() }) {
+        const data = await client.tokenGrant({
+            grant_type: 'authorization_code',
+            redirect_uri: cc.redirectUri,
+            code: String(code),
+            code_verifier: verifier,
+        });
+        if (!data || !data.access_token) {
+            throw Object.assign(new Error('the Network sent no access token'), { status: 502 });
+        }
+        // AI never uses the Network session again: drop the refresh token now.
+        if (data.refresh_token) {
+            Promise.resolve(fetchImpl(`${config.networkInternalUrl}/oauth/revoke`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ client_id: cc.clientId, client_secret: clientSecret, token: data.refresh_token }),
+                signal: AbortSignal.timeout(3000),
+            })).catch(() => {});
+        }
+        const claims = await verifyUserToken(data.access_token, {
+            ...(config.networkPublicKey ? { publicKey: config.networkPublicKey } : { jwks: config.networkJwksUrl }),
+            issuer: config.issuer, audience: cc.ssoAudience, now, log,
+        });
+        return personFromClaims(claims);
     }
-    const claims = await verifyUserToken(data.access_token, {
-        ...(config.networkPublicKey ? { publicKey: config.networkPublicKey } : { jwks: config.networkJwksUrl }),
-        issuer: config.issuer, audience: cc.ssoAudience, now, log,
-    });
-    return personFromClaims(claims);
+
+    /** 'ok' | 'invalid' | 'unknown': does the Network accept this site's OAuth client? */
+    function checkClient() {
+        return client.checkClient();
+    }
+
+    return { start, exchange, checkClient };
 }
 
-module.exports = { pkcePair, authorizeUrl, verifyUserToken, personFromClaims, exchange };
+module.exports = { createConsoleSso, personFromClaims, verifyUserToken };

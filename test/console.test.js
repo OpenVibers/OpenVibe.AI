@@ -15,6 +15,7 @@ const path = require('path');
 const { serviceAuth, ids } = require('openvibe-contracts');
 const { boot, request, token, suite, seamServer, privateKey, ISSUER, ALL } = require('./helpers');
 const { sanitizeNext, consoleCapabilities } = require('../server/console');
+const { personFromClaims } = require('../server/console/sso');
 const { preview } = require('../server/console/queries');
 
 const t = suite('console');
@@ -53,7 +54,9 @@ const json = (status, body) => new Response(JSON.stringify(body), { status, head
 async function fakeFetch(url, opts = {}) {
     const u = String(url);
     if (u === `${NETWORK}/oauth/token`) {
-        const body = Object.fromEntries(new URLSearchParams(String(opts.body)));
+        // openvibe-sdk/sso posts the grant as JSON; the real Network takes that (and this stub keeps the form shape too).
+        const text = String(opts.body || '');
+        const body = text.trim().startsWith('{') ? JSON.parse(text) : Object.fromEntries(new URLSearchParams(text));
         grants.push(body);
         if (body.client_id !== 'ai' || body.client_secret !== CLIENT_SECRET) return json(401, { error: 'invalid_client' });
         const c = codes.get(body.code);
@@ -188,6 +191,24 @@ t.test('anonymous: console pages answer the sign-in page (401), never data; writ
     assert.strictEqual((await post('/console/providers/okseam/status', null, { status: 'disabled' })).status, 401);
     assert.strictEqual((await h.quotas.list()).length, before);
     assert.strictEqual((await h.registry.getProvider('okseam')).status, 'active');
+});
+
+t.test('the sign-in module takes a Network person only: no service/app principal, no FedCM assertion', () => {
+    assert.strictEqual(personFromClaims({ sub: 'svc:live', subject_id: people.admin }).error, 'not a person\'s token');
+    assert.strictEqual(personFromClaims({ sub: 42, actor_type: 'app', subject_id: people.admin }).error, 'not a person\'s token');
+    assert.strictEqual(personFromClaims({ sub: 42, typ: 'fedcm', subject_id: people.admin }).error, 'a FedCM assertion is not a sign-in');
+    assert.strictEqual(personFromClaims({ sub: 42, username: people.admin }).error, 'the token carries no network subject');
+    const person = personFromClaims({ sub: 42, subject_id: people.admin, username: 'ada', role: 'admin', is_owner: true, staff_caps: ['staff.site.view'], staff_map: '1.1.0' });
+    assert.strictEqual(person.subject, people.admin);
+    assert.strictEqual(person.username, 'ada');
+    assert.deepStrictEqual(person.staff, { role: 'admin', is_owner: true, staff_caps: ['staff.site.view'], staff_map: '1.1.0' });
+});
+
+t.test('GET /auth/health answers whether the Network accepts the ai client', async () => {
+    const r = await get('/auth/health');
+    assert.strictEqual(r.status, 200);
+    assert.deepStrictEqual(JSON.parse(r.text), { ok: true, client: 'ok' });
+    assert.strictEqual(r.headers.get('cache-control'), 'no-store');
 });
 
 t.test('sign-in redirects to the Network with PKCE S256 as client ai, with a signed host-only flow cookie', async () => {
