@@ -301,7 +301,7 @@ function load(env = process.env) {
         // ── Billing Balance (AI Exchange F, CHECKPOINT D2/D9/D10/D12), off by default. A paid managed request holds
         // its worst-case cost before any provider call, extends the hold while streaming, and settles once. Reads the
         // same OV_BILLING_INTERNAL_URL and OV_OAUTH_CLIENT_SECRET as the usage samples; the capability is one per
-        // operation (contracts v0.289.0): billing.credit.hold.{create,extend,settle,release}. An app holds against
+        // operation (contracts v0.289.1): billing.credit.hold.{create,extend,settle,release}. An app holds against
         // its project's Balance and a person against their own; no Network owner lookup is made.
         credits: {
             enabled: bool(env.AI_CREDITS, false),

@@ -283,7 +283,7 @@ t.test('a stream near the hold is extended in a step (and never past max_cost_us
     assert.strictEqual(capped.heldNano, 2000n);
 });
 
-t.test('the outgoing app and personal hold, extend and settle bodies validate against v0.289.0', async () => {
+t.test('the outgoing app and personal hold, extend and settle bodies validate against v0.289.1', async () => {
     const billing = fakeBilling();
     const manager = managerFor(billing);
     const session = begin(manager);

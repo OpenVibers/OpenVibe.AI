@@ -50,7 +50,7 @@ const PER_MILLION = 1000000n;
 const NANO_PER_USD = 1000000000n;
 const USR_RE = /^usr_[0-9A-HJKMNP-TV-Z]{26}$/;
 const PROJECT_RE = /^prj_[0-9A-HJKMNP-TV-Z]{26}$/;
-/** The four capabilities Billing names for AI (Contracts v0.289.0, one per operation). */
+/** The four capabilities Billing names for AI (Contracts v0.289.1, one per operation). */
 const CAPABILITIES = ['billing.credit.hold.create', 'billing.credit.hold.extend', 'billing.credit.hold.settle', 'billing.credit.hold.release'];
 /** A prepaid answer has no retail charge; a settle still needs a card, and this says why the charge is zero. */
 const ZERO_RETAIL = Object.freeze({ version: 'prepaid', nano_usd_per_m: Object.freeze({ input: '0', cached_read: '0', cache_write: '0', output: '0' }), per_request_nano_usd: '0' });
