@@ -45,7 +45,7 @@ const { AiError, resolveSecret, iso } = require('../util');
 const usageSamples = require('../usage-samples');
 const { CAPS } = require('../auth');
 const { staff: staffMap } = require('openvibe-contracts');
-const { createSessions, sameString, random } = require('./session');
+const { createSessions, sameString } = require('./session');
 const sso = require('./sso');
 const q = require('./queries');
 const catalog = require('../providers/catalog');
@@ -131,6 +131,8 @@ function consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, e
     if (!clientSecret()) unavailable = unavailable || 'OV_OAUTH_CLIENT_SECRET is not set';
     if (unavailable && config.nodeEnv !== 'test') log.warn(`[console] operator console disabled: ${unavailable}`);
     const sessions = createSessions({ db, config, clock, secret: secret || 'unavailable' });
+    // openvibe-sdk/sso owns the OAuth handshake and /auth/health; the staff session below stays this site's.
+    const consoleSso = sso.createConsoleSso({ config, clientSecret: clientSecret(), fetchImpl, log });
 
     /** Every secret value this process can resolve, so that no page can ever carry one (belt and braces). */
     async function secretValues() {
@@ -220,20 +222,25 @@ function consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, e
 
     // ── Sign-in ──────────────────────────────────────────────
     r.get('/auth/login', (req, res) => {
-        const state = random(32);
-        const { verifier, challenge } = sso.pkcePair();
-        sessions.setFlow(res, { s: state, v: verifier, n: sanitizeNext(req.query.next) });
-        res.redirect(302, sso.authorizeUrl(config, { state, challenge }));
+        const started = consoleSso.start();
+        sessions.setFlow(res, { s: started.state, v: started.verifier, n: sanitizeNext(req.query.next) });
+        res.redirect(302, started.url);
     });
 
     // A person's sign-in for one run receipt. It uses the same OAuth client and redirect URI, but the
     // flow cookie says which callback branch to take, so a non-staff person never receives a staff session.
     r.get('/auth/person/login', (req, res) => {
-        const state = random(32);
-        const { verifier, challenge } = sso.pkcePair();
-        sessions.setFlow(res, { s: state, v: verifier, n: sanitizeRunNext(req.query.next), kind: 'person' });
-        res.redirect(302, sso.authorizeUrl(config, { state, challenge }));
+        const started = consoleSso.start();
+        sessions.setFlow(res, { s: started.state, v: started.verifier, n: sanitizeRunNext(req.query.next), kind: 'person' });
+        res.redirect(302, started.url);
     });
+
+    // GET /auth/health: does the Network accept this site's OAuth client? 503 only when it refuses it.
+    r.get('/auth/health', wrap(async (req, res) => {
+        const client = await consoleSso.checkClient();
+        res.setHeader('Cache-Control', 'no-store');
+        return res.status(client === 'invalid' ? 503 : 200).json({ ok: client !== 'invalid', client });
+    }));
 
     r.get('/auth/callback', wrap(async (req, res) => {
         const flow = sessions.takeFlow(req, res);
@@ -248,7 +255,7 @@ function consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, e
         }
         let person;
         try {
-            person = await sso.exchange({ config, clientSecret: clientSecret(), code: req.query.code, verifier: flow.v, now: clock.now(), fetchImpl, log });
+            person = await consoleSso.exchange({ code: req.query.code, verifier: flow.v, now: clock.now() });
         } catch (e) {
             log.warn(`[console] sign-in failed: ${e.message}`);
             const text = 'OpenVibe.Network did not confirm the sign-in. Please try again.';
