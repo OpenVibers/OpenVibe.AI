@@ -357,8 +357,9 @@ needs scripts and inline styles), like Billing's staff console. Code: `server/co
 | `/console/runs` | runs newest first, filtered by status (tabs), workflow, requester (`live` = `service:live`), error code and a UTC time range; failed runs grouped by error code |
 | `/console/runs/:id` | versions used, provider/model, fallback, attempts, tokens, cost, the Billing reading with its delivery state, free share and last send error, error code and detail, requester/attribution/target, grounding, citations, the request log (hashes only), and the stored input/output **bounded**: strings cut at 240 characters, lists at 20 items, 6 KB in all, credential-named keys blanked; raw debug fields never |
 | `/console/quotas`, `/console/usage` | active quotas with their current windows and counters, every quota; usage by day, requester, workflow and provider/model over a day range (`quotas.usage`); the **free allowance this period** per subject × provider × metric (free used, allowance, remaining, period end; `quotas.freeAllowance.current()`); the `platform.usage-sample@1` readings by delivery state (queued, retrying, sent, failed) and the last send errors with their run. Staff only: the public `/stats` page never shows a subject |
+| `/console/exchange` | AI Exchange operational state, only with `AI_CREDITS` and/or `AI_ROUTING_EVIDENCE` on: the Credits settle queue's counts by status (queued, sent, review), the oldest queued row's age, the review rows (hold id, request id, tries, last error, created) with one **mark resolved** action that never retries, and the four settle-body usage counts only; per deployment samples, success and timeout rates, TTFT and decode EWMA and cache-hit ratio; the incumbents per decision key with the challenger and its streak |
 | `/console/cache` | live entries and hits by workflow |
-| `/console/audit` | the `audit_log`, filtered by kind (configuration changes by default, runs, console, everything), action, actor, target |
+| `/console/audit` | the `audit_log`, filtered by kind (configuration changes by default, runs, AI Exchange, console, everything), action, actor, target |
 
 **Who may use what.** Sign-in is OpenVibe.Network SSO (authorization code + PKCE S256 as OAuth client
 `ai`; the refresh token is revoked at once). The staff claims of the Network token (contracts staff
@@ -368,7 +369,7 @@ the same one the admin API does:
 | Network staff capability | Held by | Console capability | Allows |
 |---|---|---|---|
 | `staff.site.view` | admin, owner | `ai.usage.read` | open the console, read every page |
-| `staff.ai.manage` | admin, owner | `ai.workflow.manage` | set a route/template/workflow version's status; cancel a queued or running run |
+| `staff.ai.manage` | admin, owner | `ai.workflow.manage` | set a route/template/workflow version's status; cancel a queued or running run; mark a Credits settle review row resolved (never retried) |
 | `staff.secrets.manage` | owner | `ai.provider.manage` | add a provider with its key, replace a key, register a model, choose a route's provider and model, enable/disable a provider, reset its circuit, add/change a quota, purge the cache (one workflow, or all with a confirmation) |
 
 A `global_mod` (only `staff.console.access`), a user or a token without a `usr_` subject is refused
