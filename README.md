@@ -128,6 +128,7 @@ idempotent replay):
 | `POST /api/v1/{templates,workflows,routes}/:key/versions`, `…/versions/:v/status` | `ai.workflow.manage` |
 | `POST/PATCH /api/v1/providers…`, `…/disable\|enable\|reset`, `POST/PATCH /api/v1/models…`, `POST /api/v1/quotas`, `DELETE /api/v1/cache` | `ai.provider.manage` |
 | `GET /api/v1/status\|usage\|quotas\|requests\|audit\|cache\|providers\|models` | `ai.usage.read` |
+| `GET /api/v1/usage/series?days=N` (N 1–90) — aggregate demand per UTC day and model: requests, successes and the four token totals, never a caller id or text (`AI_USAGE_SERIES=on`) | `ai.usage.read` |
 | `GET /api/health`, `GET /api/ready`, `GET /release.json` | public |
 | `GET /metrics` | direct loopback callers only (a request carrying X-Forwarded-For gets 404) |
 | `GET /console…`, `/auth/login\|callback`, `POST /auth/logout` | Network staff, signed in (see [Operator console](#operator-console)) |
@@ -171,6 +172,43 @@ workflow namespaces it may run (`live.*`, `wiki.*`, …), and namespaces fail cl
 no `ns` runs nothing. Every caller's Network grant names its namespaces (Live: `live.*`,
 `network.site_copy`, `media.analyze`). The fallback for service tokens without `ns` (`AI_NS_FALLBACK`)
 and its rollback lever (`AI_NS_REQUIRED`) were retired on 2026-09-28 (shims C-22 and C-23).
+
+## Model catalog, exact ids and the disclosure
+
+Behind `AI_MODEL_CATALOG` (off by default; with it off both `GET /v1/models` endpoints answer the legacy virtual
+`openvibe` model and no disclosure is added; an exact id is still a pin, so it is refused with 400
+`ai.model_unavailable` rather than run on another model). It applies to both `POST /v1/chat/completions` and
+`POST /v1/messages`.
+
+- **`GET /v1/models` / `GET /v1/models/{id}`:** the registry's real models as `ai.model@1` catalog entries
+  (`provider_key`, `model_key`, `id`, family, variant, quant, revision, sha256, license, context, capabilities,
+  modalities, retail rate in integer nano-USD, availability) plus the dynamic policy aliases `openvibe/auto`,
+  `openvibe/economy`, `openvibe/balanced`, `openvibe/fast`, `openvibe/private` and legacy `openvibe` (= auto). An
+  alias carries `dynamic: true` and its `policy`. Every entry also carries the response shape of the protocol it was
+  asked in: OpenAI's `object`/`created`/`owned_by`, or Anthropic's `type`/`display_name`/`created_at`. An Anthropic
+  client identifies itself with its `anthropic-version` header (or `?format=anthropic`).
+- **Exact ids:** `model` may be `<org>/<model>[:<quant>]@<revision>` (for example
+  `qwen/qwen3-9b-abliterated:q4_k_m@3f2a1c9`). It runs only that artifact. An artifact that does not exist is 404
+  `ai.model_not_found`; one that exists but cannot run the request (no active deployment, unmet capability, down
+  provider, or an offer that may not be resold) is 400 `ai.model_unavailable`. It is never substituted with another
+  model, in fallback or otherwise. A row without artifact metadata has no exact id; it is still listed and reachable
+  by its legacy `provider/model` id.
+- **Aliases:** the dynamic names resolve through the same provider placement. `economy` ranks price first, `fast`
+  measured latency first, `balanced` weighs both, `private` never leaves local/own capacity, and `auto` keeps the
+  existing task-aware router. User preferences (`only_my_keys`, `free_first`, own keys and machines) still apply.
+- **The disclosure, inside `x_openvibe`:** `resolved_model`, `revision`, `deployment`, `provider_access`,
+  `rate_version`, `policy` and `fallback_reason` join the `x_openvibe` object responses already carry (run, provider,
+  cost). There is no second object.
+  - On a JSON response it is in the top-level `x_openvibe`.
+  - On SSE it is the first line, as an SSE comment (`: x_openvibe {...}`), and it is on the final chunk
+    (`message_stop` for Messages).
+- **Commercial access:** `provider_access` is a provider field (`POST/PATCH /api/v1/providers`, default `UNVERIFIED`).
+  Paid managed routing uses only `OWN_DEPLOYMENT` and `AUTHORIZED_WHOLESALE`; `RESTRICTED`, `UNVERIFIED` and
+  `CUSTOMER_BYOK` offers stay out of the shared pool. A person's own key or project provider is disclosed as
+  `CUSTOMER_BYOK` and is unaffected.
+- **Tokens:** developer apps call with the public `ai.app.run` they already hold (ADR-014). The separate
+  `ai.inference.create` once planned for this was retired (Contracts 0.285.0). `ai.run.create` remains the
+  first-party service capability.
 
 ## OpenAI-compatible endpoint
 
@@ -314,14 +352,15 @@ needs scripts and inline styles), like Billing's staff console. Code: `server/co
 |---|---|
 | `/console` | providers needing attention, runs and failures of the last 24 h by error code, today's spend, the queue, the busiest quota windows |
 | `/console/providers` | every provider (kind, status, **secret reference name and whether it resolves, never a value**, circuit, base URL without query/user info, default model, priority/timeout) and the models; for the owner, per provider: replace its key, register a model (with prices typed from the provider's own price page, which the form requires) |
-| `/console/providers/new` | the owner adds a provider in a few clicks: DeepSeek, OpenRouter, Groq, Gemini, Mistral, Together, Fireworks, Cerebras, xAI, OpenAI, Anthropic or any OpenAI-compatible API (`server/console/presets.js`), with its API key, which is kept encrypted (`vault:<provider>`, below) |
+| `/console/providers/new` | the owner adds a provider in a few clicks: DeepSeek, OpenRouter, Groq, Gemini, Mistral, Together, Fireworks, Cerebras, xAI, OpenAI, Anthropic or any OpenAI-compatible API (`server/console/presets.js`), with its API key, which is kept sealed in the config store, bound to the provider's origin (`vault:<provider>`, below) |
 | `/console/routes/:key` (owner form) | **use another provider**: a new route version whose primary is the provider and model chosen, with the previous primary kept as the first fallback; **back to the default** writes the newest seeded version again |
 | `/console/routes`, `/templates`, `/workflows` (`/:key[?version=]`) | every key's newest version and the version in use; per key every version with its status and content (primary and fallbacks in order, prompts, steps, schemas) |
 | `/console/runs` | runs newest first, filtered by status (tabs), workflow, requester (`live` = `service:live`), error code and a UTC time range; failed runs grouped by error code |
 | `/console/runs/:id` | versions used, provider/model, fallback, attempts, tokens, cost, the Billing reading with its delivery state, free share and last send error, error code and detail, requester/attribution/target, grounding, citations, the request log (hashes only), and the stored input/output **bounded**: strings cut at 240 characters, lists at 20 items, 6 KB in all, credential-named keys blanked; raw debug fields never |
 | `/console/quotas`, `/console/usage` | active quotas with their current windows and counters, every quota; usage by day, requester, workflow and provider/model over a day range (`quotas.usage`); the **free allowance this period** per subject × provider × metric (free used, allowance, remaining, period end; `quotas.freeAllowance.current()`); the `platform.usage-sample@1` readings by delivery state (queued, retrying, sent, failed) and the last send errors with their run. Staff only: the public `/stats` page never shows a subject |
+| `/console/exchange` | AI Exchange operational state, only with `AI_CREDITS` and/or `AI_ROUTING_EVIDENCE` on: the Credits settle queue's counts by status (queued, sent, review), the oldest queued row's age, the review rows (hold id, request id, tries, last error, created) with one **mark resolved** action that never retries, and the four settle-body usage counts only; per deployment samples, success and timeout rates, TTFT and decode EWMA and cache-hit ratio; the incumbents per decision key with the challenger and its streak |
 | `/console/cache` | live entries and hits by workflow |
-| `/console/audit` | the `audit_log`, filtered by kind (configuration changes by default, runs, console, everything), action, actor, target |
+| `/console/audit` | the `audit_log`, filtered by kind (configuration changes by default, runs, AI Exchange, console, everything), action, actor, target |
 
 **Who may use what.** Sign-in is OpenVibe.Network SSO (authorization code + PKCE S256 as OAuth client
 `ai`; the refresh token is revoked at once). The staff claims of the Network token (contracts staff
@@ -331,7 +370,7 @@ the same one the admin API does:
 | Network staff capability | Held by | Console capability | Allows |
 |---|---|---|---|
 | `staff.site.view` | admin, owner | `ai.usage.read` | open the console, read every page |
-| `staff.ai.manage` | admin, owner | `ai.workflow.manage` | set a route/template/workflow version's status; cancel a queued or running run |
+| `staff.ai.manage` | admin, owner | `ai.workflow.manage` | set a route/template/workflow version's status; cancel a queued or running run; mark a Credits settle review row resolved (never retried) |
 | `staff.secrets.manage` | owner | `ai.provider.manage` | add a provider with its key, replace a key, register a model, choose a route's provider and model, enable/disable a provider, reset its circuit, add/change a quota, purge the cache (one workflow, or all with a confirmation) |
 
 A `global_mod` (only `staff.console.access`), a user or a token without a `usr_` subject is refused
@@ -364,12 +403,16 @@ the Action Center is separate: a first-party service token with `ai.actions.read
 
 ### Provider keys added from the console (`vault:`)
 
-A provider the owner adds from the console keeps its key in `provider_secrets` (migration `0010_provider_secrets.sql`,
-`server/vault.js`): AES-256-GCM with `AI_CREDENTIALS_KEY`, bound to the provider's key so a row copied to another
-provider does not decrypt, with only a four-character hint ever shown. The provider's `secret_ref` is
-`vault:<provider key>`, which `util.resolveSecret` reads from this process's decrypted copy (loaded at boot and after
-every change; providers resolve secrets synchronously). Audit rows say a key was replaced, never what it is. Without
-`AI_CREDENTIALS_KEY` the form says keys cannot be stored and nothing is added.
+A provider the owner adds from the console keeps its key in the `ai.provider_keys` namespace of the configuration
+store (D11, `server/settings.js`, `migrations/0028_config.sql`). For each provider `<p>.origin` is the origin of its
+base URL and `<p>.key` is a write-only secret sealed under `OV_CONFIG_KEKS` and x-bind'ed to `<p>.origin`; changing the
+base URL locks the key until it is entered again. The provider's `secret_ref` is `vault:<provider key>`, which
+`util.resolveSecret` reads from this process's cache (refreshed by the store's `onActivate`; providers resolve secrets
+synchronously). Only a four-character hint is ever shown, and audit rows say a key was replaced, never what it is.
+Without a KEK the store still works and reports `"sealed": false`. At boot, when `AI_CREDENTIALS_KEY` and
+`OV_CONFIG_KEKS` are both set, the old `provider_secrets` rows (migration `0010_provider_secrets.sql`) are opened,
+written as sealed `<p>.key` values bound to their current origin, read back and only then deleted; counts are logged,
+never a value.
 
 ## The eleven record groups
 
@@ -440,7 +483,38 @@ run, and a pinned run is never served from the shared cache.
 reading its `idempotency_key`, `state` (`queued` until Billing accepts it, `sent`, or `failed` when Billing
 refused it), `attempts`, `queued_at`, `sent_at`, `rejected_at`, `next_attempt_at`, `last_error` (the
 outbox's last send error, also while a queued reading is retried) and `free_allowance_used` when some
-was free; a sent reading the relay has pruned reads `{ state: 'sent', pruned: true }`. Speech and embeddings use placement pools of registered `stt` and `embedding` models; until
+**Balance (AI Exchange F; `AI_CREDITS`, off).** A request on a paid managed route — the model catalog's
+`provider_access` is `OWN_DEPLOYMENT` or `AUTHORIZED_WHOLESALE` and the offer is metered — reserves its
+worst case in OpenVibe.Billing before any provider is called: the input estimate plus `max_tokens` of output
+at the model's retail card (`ai.model@1` `retail_rate`). Who pays is the payer's own Balance (D12): an app's
+run holds against its project's Balance, with the hold's subject `{type: "app", id}` and its `project_id`, so
+no Network owner lookup is made; a person's own run holds against their personal Balance, subject
+`{type: "user", id}` and no `project_id`. A first-party service with no payer (no person and no app) is never
+served a paid offer that carries a versioned card (`payer_required`); offers without a card behave as before.
+An exact id whose only offer is skipped that way is `402 billing.payer_required`.
+
+`max_cost_usd` is parsed as an exact decimal (up to 9 fractional digits, finer digits round up; exponent forms
+are 422) into integer nano-USD. When it binds, the affordable output is computed in BigInt from nano-USD per
+million tokens and the provider receives that clamped `max_tokens`; fewer than one affordable token is 402
+before the provider. A pricier managed fallback extends the hold by the difference (clamped the same way); if
+Billing refuses the extension the offer is skipped as `hold_not_extended`. A stream extends the hold in steps
+when the output nears it.
+
+The hold's idempotency key is the request id; its fingerprint covers the resolved model, the token caps, the
+rate version, the payer and (for an app) the project. Billing's `402 billing.insufficient_funds` becomes AI's
+own 402 `Not enough Balance`; any other Billing failure refuses the run with `503 billing.unavailable` rather
+than serving unpaid capacity. At the end one settle carries the four token counts, the answering model's retail
+card version, the supply cost and every attempt in `billing.credit-hold-settle-request@1`'s exact shape
+(`deployment_id`, `provider_access`, start/end, `error_code`); a retried request replays the same settlement
+instead of charging twice. A settle Billing cannot take is kept in `credit_settle_queue` (migration 0025) and
+retried with backoff and the same key; a 409 or 422 marks it `review`, never a retry. A failure before the
+first token releases the hold, an abort settles the partial usage. BYOK — a person's key, their machine, a project's own provider — is never held and
+never charged; Billing is not called at all. A sandbox app token is never offered paid supply (D10), so it
+spends no Balance and never opens a hold. Requires `AI_MODEL_CATALOG` for the access labels; with either
+flag off nothing changes. Code: `server/credits.js`, `server/credit-settlements.js`; the fake-Billing tests are
+`test/credits.test.js` and `test/credits-run.test.js`.
+
+Speech and embeddings use placement pools of registered `stt` and `embedding` models; until
 a second upstream exists, an unavailable sole provider answers `503 provider.unavailable`. Media
 uses separate local and paid pools so paid work still requires its explicit budget. The synthetic
 stub can join general text routes as a last resort outside production only (`AI_STUB_FALLBACK`).
@@ -653,6 +727,7 @@ mix vectors from different providers (re-embed when the provider changes).
 | Public price/latency page: 200 without auth, rows from seeded stats and rate cards, the empty state, no caller ids, own-key providers, URLs or secrets | `test/stats-page.test.js` |
 | The OpenAI Responses adapter (`kind: responses`) with a stubbed fetch: request shape, output and usage parsing, `text.format`, error mapping, the key never in an error | `test/provider-responses.test.js` |
 | Ported adapters against fake OpenAI/Anthropic servers, stub determinism, whisper filter, templates | `test/providers.test.js` |
+| OpenAI Chat Completions and Anthropic Messages pass the official-client fixtures (tool call + tool result, JSON response_format / structured tool, multi-turn system prompt, exact id, every alias) in JSON and SSE; usage is present and x_openvibe is top-level only | `test/protocol-compat.test.js` |
 | Parakeet: engine by language, 30 s pieces past 45 s, fallback to whisper, `ASR_ENGINE=whisper` | `test/parakeet.test.js` |
 | Word timing (`live.media.transcribe` with `words: true`): whisper's `-ojf` tokens and Parakeet's token lines become each segment's words with their times; punctuation joins a word without moving its end; one unit per token in Japanese; fillers and control tokens are not words | `test/word-timing.test.js` |
 | `media.analyze` on a real 28 s fixture: signals, scenes and loud moments measured, highlights with evidence, the local model's overview from the facts only; the local model down → extractive and said; paid only with `allow_paid` and a `media.paid` budget, never past it; too little disk refused before downloading | `test/media-analysis.test.js` |
@@ -753,7 +828,7 @@ ai.openvibe.network notice from OpenVibe.Sites.
 Part of the [OpenVibe network](https://openvibe.network). Built in the open by [OpenVibers](https://github.com/OpenVibers).
 
 <!-- versions:start -->
-- openvibe-contracts: v0.262.0
-- openvibe-sdk: v0.82.0
-- openvibe-shared: v4.109.2
+- openvibe-contracts: v0.289.1
+- openvibe-sdk: v0.83.0
+- openvibe-shared: v4.110.0
 <!-- versions:end -->

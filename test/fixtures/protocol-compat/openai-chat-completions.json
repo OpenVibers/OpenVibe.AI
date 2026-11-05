@@ -1,0 +1,653 @@
+{
+    "protocol": "openai-chat-completions",
+    "source": "Shapes transcribed from the public OpenAI Chat Completions API reference and the official OpenAI SDK examples (request, non-streaming response, streamed chat.completion.chunk, [DONE]). No production call was made.",
+    "scenarios": {
+        "text": {
+            "request": {
+                "model": "acme/m1:q4_k_m@rev1",
+                "messages": [
+                    { "role": "system", "content": "Be concise." },
+                    { "role": "user", "content": "Say hello." }
+                ]
+            },
+            "stream_request": {
+                "model": "acme/m1:q4_k_m@rev1",
+                "messages": [
+                    { "role": "system", "content": "Be concise." },
+                    { "role": "user", "content": "Say hello." }
+                ],
+                "stream": true,
+                "stream_options": { "include_usage": true }
+            },
+            "response": {
+                "id": "chatcmpl-up-text",
+                "object": "chat.completion",
+                "created": 1762300000,
+                "model": "gpt-up-text",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": { "role": "assistant", "content": "Hello there" },
+                        "finish_reason": "stop",
+                        "logprobs": null
+                    }
+                ],
+                "usage": { "prompt_tokens": 18, "completion_tokens": 3, "total_tokens": 21 },
+                "system_fingerprint": "fp_text"
+            },
+            "stream": [
+                {
+                    "id": "chatcmpl-up-text",
+                    "object": "chat.completion.chunk",
+                    "created": 1762300000,
+                    "model": "gpt-up-text",
+                    "choices": [{ "index": 0, "delta": { "role": "assistant", "content": "Hello" }, "finish_reason": null }]
+                },
+                {
+                    "id": "chatcmpl-up-text",
+                    "object": "chat.completion.chunk",
+                    "created": 1762300000,
+                    "model": "gpt-up-text",
+                    "choices": [{ "index": 0, "delta": { "content": " there" }, "finish_reason": null }]
+                },
+                {
+                    "id": "chatcmpl-up-text",
+                    "object": "chat.completion.chunk",
+                    "created": 1762300000,
+                    "model": "gpt-up-text",
+                    "choices": [{ "index": 0, "delta": {}, "finish_reason": "stop" }]
+                },
+                {
+                    "id": "chatcmpl-up-text",
+                    "object": "chat.completion.chunk",
+                    "created": 1762300000,
+                    "model": "gpt-up-text",
+                    "choices": [],
+                    "usage": { "prompt_tokens": 18, "completion_tokens": 3, "total_tokens": 21 }
+                }
+            ]
+        },
+        "tool_call": {
+            "request": {
+                "model": "acme/m1:q4_k_m@rev1",
+                "messages": [{ "role": "user", "content": "What is the weather in Lisbon?" }],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "description": "Get the current weather for a city.",
+                            "parameters": {
+                                "type": "object",
+                                "properties": { "city": { "type": "string" } },
+                                "required": ["city"],
+                                "additionalProperties": false
+                            },
+                            "strict": true
+                        }
+                    }
+                ],
+                "tool_choice": "auto"
+            },
+            "stream_request": {
+                "model": "acme/m1:q4_k_m@rev1",
+                "messages": [{ "role": "user", "content": "What is the weather in Lisbon?" }],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "description": "Get the current weather for a city.",
+                            "parameters": {
+                                "type": "object",
+                                "properties": { "city": { "type": "string" } },
+                                "required": ["city"],
+                                "additionalProperties": false
+                            },
+                            "strict": true
+                        }
+                    }
+                ],
+                "tool_choice": "auto",
+                "stream": true,
+                "stream_options": { "include_usage": true }
+            },
+            "response": {
+                "id": "chatcmpl-up-tool",
+                "object": "chat.completion",
+                "created": 1762300001,
+                "model": "gpt-up-tool",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": null,
+                            "tool_calls": [
+                                {
+                                    "id": "call_weather_1",
+                                    "type": "function",
+                                    "function": { "name": "get_weather", "arguments": "{\"city\":\"Lisbon\"}" }
+                                }
+                            ]
+                        },
+                        "finish_reason": "tool_calls",
+                        "logprobs": null
+                    }
+                ],
+                "usage": { "prompt_tokens": 42, "completion_tokens": 17, "total_tokens": 59 },
+                "system_fingerprint": "fp_tool"
+            },
+            "stream": [
+                {
+                    "id": "chatcmpl-up-tool",
+                    "object": "chat.completion.chunk",
+                    "created": 1762300001,
+                    "model": "gpt-up-tool",
+                    "choices": [{
+                        "index": 0,
+                        "delta": {
+                            "role": "assistant",
+                            "content": null,
+                            "tool_calls": [{
+                                "index": 0,
+                                "id": "call_weather_1",
+                                "type": "function",
+                                "function": { "name": "get_weather", "arguments": "" }
+                            }]
+                        },
+                        "finish_reason": null
+                    }]
+                },
+                {
+                    "id": "chatcmpl-up-tool",
+                    "object": "chat.completion.chunk",
+                    "created": 1762300001,
+                    "model": "gpt-up-tool",
+                    "choices": [{
+                        "index": 0,
+                        "delta": { "tool_calls": [{ "index": 0, "function": { "arguments": "{\"city\":" } }] },
+                        "finish_reason": null
+                    }]
+                },
+                {
+                    "id": "chatcmpl-up-tool",
+                    "object": "chat.completion.chunk",
+                    "created": 1762300001,
+                    "model": "gpt-up-tool",
+                    "choices": [{
+                        "index": 0,
+                        "delta": { "tool_calls": [{ "index": 0, "function": { "arguments": "\"Lisbon\"}" } }] },
+                        "finish_reason": null
+                    }]
+                },
+                {
+                    "id": "chatcmpl-up-tool",
+                    "object": "chat.completion.chunk",
+                    "created": 1762300001,
+                    "model": "gpt-up-tool",
+                    "choices": [{ "index": 0, "delta": {}, "finish_reason": "tool_calls" }]
+                },
+                {
+                    "id": "chatcmpl-up-tool",
+                    "object": "chat.completion.chunk",
+                    "created": 1762300001,
+                    "model": "gpt-up-tool",
+                    "choices": [],
+                    "usage": { "prompt_tokens": 42, "completion_tokens": 17, "total_tokens": 59 }
+                }
+            ]
+        },
+        "tool_result": {
+            "request": {
+                "model": "acme/m1:q4_k_m@rev1",
+                "messages": [
+                    { "role": "user", "content": "What is the weather in Lisbon?" },
+                    {
+                        "role": "assistant",
+                        "content": null,
+                        "tool_calls": [
+                            {
+                                "id": "call_weather_1",
+                                "type": "function",
+                                "function": { "name": "get_weather", "arguments": "{\"city\":\"Lisbon\"}" }
+                            }
+                        ]
+                    },
+                    { "role": "tool", "tool_call_id": "call_weather_1", "content": "19 C and sunny" }
+                ],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "description": "Get the current weather for a city.",
+                            "parameters": {
+                                "type": "object",
+                                "properties": { "city": { "type": "string" } },
+                                "required": ["city"],
+                                "additionalProperties": false
+                            },
+                            "strict": true
+                        }
+                    }
+                ]
+            },
+            "stream_request": {
+                "model": "acme/m1:q4_k_m@rev1",
+                "messages": [
+                    { "role": "user", "content": "What is the weather in Lisbon?" },
+                    {
+                        "role": "assistant",
+                        "content": null,
+                        "tool_calls": [
+                            {
+                                "id": "call_weather_1",
+                                "type": "function",
+                                "function": { "name": "get_weather", "arguments": "{\"city\":\"Lisbon\"}" }
+                            }
+                        ]
+                    },
+                    { "role": "tool", "tool_call_id": "call_weather_1", "content": "19 C and sunny" }
+                ],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "description": "Get the current weather for a city.",
+                            "parameters": {
+                                "type": "object",
+                                "properties": { "city": { "type": "string" } },
+                                "required": ["city"],
+                                "additionalProperties": false
+                            },
+                            "strict": true
+                        }
+                    }
+                ],
+                "stream": true,
+                "stream_options": { "include_usage": true }
+            },
+            "response": {
+                "id": "chatcmpl-up-tool-result",
+                "object": "chat.completion",
+                "created": 1762300002,
+                "model": "gpt-up-tool-result",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": { "role": "assistant", "content": "It is 19 C and sunny in Lisbon." },
+                        "finish_reason": "stop",
+                        "logprobs": null
+                    }
+                ],
+                "usage": { "prompt_tokens": 58, "completion_tokens": 8, "total_tokens": 66 },
+                "system_fingerprint": "fp_tool_result"
+            },
+            "stream": [
+                {
+                    "id": "chatcmpl-up-tool-result",
+                    "object": "chat.completion.chunk",
+                    "created": 1762300002,
+                    "model": "gpt-up-tool-result",
+                    "choices": [{ "index": 0, "delta": { "role": "assistant", "content": "It is " }, "finish_reason": null }]
+                },
+                {
+                    "id": "chatcmpl-up-tool-result",
+                    "object": "chat.completion.chunk",
+                    "created": 1762300002,
+                    "model": "gpt-up-tool-result",
+                    "choices": [{ "index": 0, "delta": { "content": "19 C and sunny in Lisbon." }, "finish_reason": null }]
+                },
+                {
+                    "id": "chatcmpl-up-tool-result",
+                    "object": "chat.completion.chunk",
+                    "created": 1762300002,
+                    "model": "gpt-up-tool-result",
+                    "choices": [{ "index": 0, "delta": {}, "finish_reason": "stop" }]
+                },
+                {
+                    "id": "chatcmpl-up-tool-result",
+                    "object": "chat.completion.chunk",
+                    "created": 1762300002,
+                    "model": "gpt-up-tool-result",
+                    "choices": [],
+                    "usage": { "prompt_tokens": 58, "completion_tokens": 8, "total_tokens": 66 }
+                }
+            ]
+        },
+        "json_object": {
+            "request": {
+                "model": "acme/m1:q4_k_m@rev1",
+                "messages": [
+                    { "role": "system", "content": "Answer with a JSON object." },
+                    { "role": "user", "content": "Weather in Lisbon as JSON." }
+                ],
+                "response_format": { "type": "json_object" }
+            },
+            "stream_request": {
+                "model": "acme/m1:q4_k_m@rev1",
+                "messages": [
+                    { "role": "system", "content": "Answer with a JSON object." },
+                    { "role": "user", "content": "Weather in Lisbon as JSON." }
+                ],
+                "response_format": { "type": "json_object" },
+                "stream": true,
+                "stream_options": { "include_usage": true }
+            },
+            "response": {
+                "id": "chatcmpl-up-json-object",
+                "object": "chat.completion",
+                "created": 1762300003,
+                "model": "gpt-up-json-object",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": { "role": "assistant", "content": "{\"city\":\"Lisbon\",\"temp_c\":19}" },
+                        "finish_reason": "stop",
+                        "logprobs": null
+                    }
+                ],
+                "usage": { "prompt_tokens": 31, "completion_tokens": 11, "total_tokens": 42 },
+                "system_fingerprint": "fp_json_object"
+            },
+            "stream": [
+                {
+                    "id": "chatcmpl-up-json-object",
+                    "object": "chat.completion.chunk",
+                    "created": 1762300003,
+                    "model": "gpt-up-json-object",
+                    "choices": [{ "index": 0, "delta": { "role": "assistant", "content": "{\"city\":" }, "finish_reason": null }]
+                },
+                {
+                    "id": "chatcmpl-up-json-object",
+                    "object": "chat.completion.chunk",
+                    "created": 1762300003,
+                    "model": "gpt-up-json-object",
+                    "choices": [{ "index": 0, "delta": { "content": "\"Lisbon\",\"temp_c\":19}" }, "finish_reason": null }]
+                },
+                {
+                    "id": "chatcmpl-up-json-object",
+                    "object": "chat.completion.chunk",
+                    "created": 1762300003,
+                    "model": "gpt-up-json-object",
+                    "choices": [{ "index": 0, "delta": {}, "finish_reason": "stop" }]
+                },
+                {
+                    "id": "chatcmpl-up-json-object",
+                    "object": "chat.completion.chunk",
+                    "created": 1762300003,
+                    "model": "gpt-up-json-object",
+                    "choices": [],
+                    "usage": { "prompt_tokens": 31, "completion_tokens": 11, "total_tokens": 42 }
+                }
+            ]
+        },
+        "json_schema": {
+            "request": {
+                "model": "acme/m1:q4_k_m@rev1",
+                "messages": [
+                    { "role": "system", "content": "Answer with a JSON object that matches the schema." },
+                    { "role": "user", "content": "Weather in Lisbon as JSON." }
+                ],
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "weather",
+                        "strict": true,
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "city": { "type": "string" },
+                                "temp_c": { "type": "integer" },
+                                "conditions": { "type": "string" }
+                            },
+                            "required": ["city", "temp_c", "conditions"],
+                            "additionalProperties": false
+                        }
+                    }
+                }
+            },
+            "stream_request": {
+                "model": "acme/m1:q4_k_m@rev1",
+                "messages": [
+                    { "role": "system", "content": "Answer with a JSON object that matches the schema." },
+                    { "role": "user", "content": "Weather in Lisbon as JSON." }
+                ],
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "weather",
+                        "strict": true,
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "city": { "type": "string" },
+                                "temp_c": { "type": "integer" },
+                                "conditions": { "type": "string" }
+                            },
+                            "required": ["city", "temp_c", "conditions"],
+                            "additionalProperties": false
+                        }
+                    }
+                },
+                "stream": true,
+                "stream_options": { "include_usage": true }
+            },
+            "response": {
+                "id": "chatcmpl-up-json-schema",
+                "object": "chat.completion",
+                "created": 1762300004,
+                "model": "gpt-up-json-schema",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": { "role": "assistant", "content": "{\"city\":\"Lisbon\",\"temp_c\":19,\"conditions\":\"sunny\"}" },
+                        "finish_reason": "stop",
+                        "logprobs": null
+                    }
+                ],
+                "usage": { "prompt_tokens": 44, "completion_tokens": 14, "total_tokens": 58 },
+                "system_fingerprint": "fp_json_schema"
+            },
+            "stream": [
+                {
+                    "id": "chatcmpl-up-json-schema",
+                    "object": "chat.completion.chunk",
+                    "created": 1762300004,
+                    "model": "gpt-up-json-schema",
+                    "choices": [{ "index": 0, "delta": { "role": "assistant", "content": "{\"city\":\"Lisbon\"," }, "finish_reason": null }]
+                },
+                {
+                    "id": "chatcmpl-up-json-schema",
+                    "object": "chat.completion.chunk",
+                    "created": 1762300004,
+                    "model": "gpt-up-json-schema",
+                    "choices": [{ "index": 0, "delta": { "content": "\"temp_c\":19,\"conditions\":\"sunny\"}" }, "finish_reason": null }]
+                },
+                {
+                    "id": "chatcmpl-up-json-schema",
+                    "object": "chat.completion.chunk",
+                    "created": 1762300004,
+                    "model": "gpt-up-json-schema",
+                    "choices": [{ "index": 0, "delta": {}, "finish_reason": "stop" }]
+                },
+                {
+                    "id": "chatcmpl-up-json-schema",
+                    "object": "chat.completion.chunk",
+                    "created": 1762300004,
+                    "model": "gpt-up-json-schema",
+                    "choices": [],
+                    "usage": { "prompt_tokens": 44, "completion_tokens": 14, "total_tokens": 58 }
+                }
+            ]
+        },
+        "multi_turn": {
+            "request": {
+                "model": "acme/m1:q4_k_m@rev1",
+                "messages": [
+                    { "role": "system", "content": "You are a concise travel assistant." },
+                    { "role": "user", "content": "I am going to Lisbon." },
+                    { "role": "assistant", "content": "Lisbon is a good choice." },
+                    { "role": "user", "content": "What should I pack?" }
+                ]
+            },
+            "stream_request": {
+                "model": "acme/m1:q4_k_m@rev1",
+                "messages": [
+                    { "role": "system", "content": "You are a concise travel assistant." },
+                    { "role": "user", "content": "I am going to Lisbon." },
+                    { "role": "assistant", "content": "Lisbon is a good choice." },
+                    { "role": "user", "content": "What should I pack?" }
+                ],
+                "stream": true,
+                "stream_options": { "include_usage": true }
+            },
+            "response": {
+                "id": "chatcmpl-up-multi",
+                "object": "chat.completion",
+                "created": 1762300005,
+                "model": "gpt-up-multi",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": { "role": "assistant", "content": "Pack a light jacket and sunscreen." },
+                        "finish_reason": "stop",
+                        "logprobs": null
+                    }
+                ],
+                "usage": { "prompt_tokens": 51, "completion_tokens": 8, "total_tokens": 59 },
+                "system_fingerprint": "fp_multi"
+            },
+            "stream": [
+                {
+                    "id": "chatcmpl-up-multi",
+                    "object": "chat.completion.chunk",
+                    "created": 1762300005,
+                    "model": "gpt-up-multi",
+                    "choices": [{ "index": 0, "delta": { "role": "assistant", "content": "Pack a light jacket" }, "finish_reason": null }]
+                },
+                {
+                    "id": "chatcmpl-up-multi",
+                    "object": "chat.completion.chunk",
+                    "created": 1762300005,
+                    "model": "gpt-up-multi",
+                    "choices": [{ "index": 0, "delta": { "content": " and sunscreen." }, "finish_reason": null }]
+                },
+                {
+                    "id": "chatcmpl-up-multi",
+                    "object": "chat.completion.chunk",
+                    "created": 1762300005,
+                    "model": "gpt-up-multi",
+                    "choices": [{ "index": 0, "delta": {}, "finish_reason": "stop" }]
+                },
+                {
+                    "id": "chatcmpl-up-multi",
+                    "object": "chat.completion.chunk",
+                    "created": 1762300005,
+                    "model": "gpt-up-multi",
+                    "choices": [],
+                    "usage": { "prompt_tokens": 51, "completion_tokens": 8, "total_tokens": 59 }
+                }
+            ]
+        },
+        "exact_id": {
+            "request": {
+                "model": "acme/m1:q4_k_m@rev1",
+                "messages": [{ "role": "user", "content": "Who answered this exact id?" }]
+            },
+            "stream_request": {
+                "model": "acme/m1:q4_k_m@rev1",
+                "messages": [{ "role": "user", "content": "Who answered this exact id?" }],
+                "stream": true,
+                "stream_options": { "include_usage": true }
+            },
+            "response": {
+                "id": "chatcmpl-up-exact",
+                "object": "chat.completion",
+                "created": 1762300006,
+                "model": "gpt-up-exact",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": { "role": "assistant", "content": "the exact artifact answered" },
+                        "finish_reason": "stop",
+                        "logprobs": null
+                    }
+                ],
+                "usage": { "prompt_tokens": 12, "completion_tokens": 5, "total_tokens": 17 },
+                "system_fingerprint": "fp_exact"
+            },
+            "stream": [
+                {
+                    "id": "chatcmpl-up-exact",
+                    "object": "chat.completion.chunk",
+                    "created": 1762300006,
+                    "model": "gpt-up-exact",
+                    "choices": [{ "index": 0, "delta": { "role": "assistant", "content": "the exact artifact" }, "finish_reason": null }]
+                },
+                {
+                    "id": "chatcmpl-up-exact",
+                    "object": "chat.completion.chunk",
+                    "created": 1762300006,
+                    "model": "gpt-up-exact",
+                    "choices": [{ "index": 0, "delta": { "content": " answered" }, "finish_reason": null }]
+                },
+                {
+                    "id": "chatcmpl-up-exact",
+                    "object": "chat.completion.chunk",
+                    "created": 1762300006,
+                    "model": "gpt-up-exact",
+                    "choices": [{ "index": 0, "delta": {}, "finish_reason": "stop" }]
+                },
+                {
+                    "id": "chatcmpl-up-exact",
+                    "object": "chat.completion.chunk",
+                    "created": 1762300006,
+                    "model": "gpt-up-exact",
+                    "choices": [],
+                    "usage": { "prompt_tokens": 12, "completion_tokens": 5, "total_tokens": 17 }
+                }
+            ]
+        }
+    },
+    "refusals": {
+        "exact_missing": {
+            "request": {
+                "model": "acme/nope@rev0",
+                "messages": [{ "role": "user", "content": "This artifact does not exist." }]
+            },
+            "stream_request": {
+                "model": "acme/nope@rev0",
+                "messages": [{ "role": "user", "content": "This artifact does not exist." }],
+                "stream": true,
+                "stream_options": { "include_usage": true }
+            },
+            "status": 404,
+            "code": "ai.model_not_found"
+        },
+        "exact_unavailable": {
+            "request": {
+                "model": "acme/m1:q4_k_m@rev1",
+                "messages": [{ "role": "user", "content": "The artifact has no active deployment." }]
+            },
+            "stream_request": {
+                "model": "acme/m1:q4_k_m@rev1",
+                "messages": [{ "role": "user", "content": "The artifact has no active deployment." }],
+                "stream": true,
+                "stream_options": { "include_usage": true }
+            },
+            "status": 400,
+            "code": "ai.model_unavailable"
+        }
+    },
+    "aliases": [
+        { "model": "openvibe", "policy": "auto" },
+        { "model": "openvibe/auto", "policy": "auto" },
+        { "model": "openvibe/economy", "policy": "cheapest" },
+        { "model": "openvibe/balanced", "policy": "balanced" },
+        { "model": "openvibe/fast", "policy": "fastest" },
+        { "model": "openvibe/private", "policy": "private", "deployment": "local" }
+    ]
+}

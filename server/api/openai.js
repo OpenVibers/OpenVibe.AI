@@ -8,10 +8,13 @@
  *   body                                       OpenAI Chat Completions: messages (with tool calls and tool results),
  *                                              tools, tool_choice, parallel_tool_calls, response_format, stop, seed,
  *                                              temperature, top_p, max_tokens / max_completion_tokens, stream
- *   model                                      "openvibe" (or anything else): AI's router picks the upstream for
- *                                              route default.chat by price, health and what the request needs
- *                                              (tools need a provider that declares them); the answer names the
- *                                              model that ran
+ *   model                                      with AI_MODEL_CATALOG off, ignored (an exact id is refused): AI's router picks the upstream
+ *                                              for route default.chat. On, an exact id
+ *                                              `<org>/<model>[:<quant>]@<revision>` (runs only that artifact, never a
+ *                                              substitute) or a dynamic alias (`openvibe/auto|economy|balanced|fast|
+ *                                              private`, legacy `openvibe` = auto); the answer names the model that ran
+ *                                              and carries the `openvibe` disclosure (an SSE comment first when
+ *                                              streaming, and a field on the final chunk)
  *
  *   x-openvibe-credential                      the person's own key for a provider instead of the router
  *                                              (Codes C3): <provider> or <provider>:<subject>
@@ -19,6 +22,10 @@
  *                                              OpenAI-format API), model, secret (the name of a project secret granted
  *                                              to ai for reveal to that origin, ADR-056) }; the key is revealed for
  *                                              that one run, and the project pays its provider directly
+ *
+ * GET /v1/models lists the registry's real models in ai.model@1 shape plus the dynamic aliases (behind
+ * AI_MODEL_CATALOG; off, the legacy single `openvibe` model); GET /v1/models/{id} answers one. Both protocols share
+ * the path: an Anthropic client (anthropic-version, or ?format=anthropic) is served by server/api/messages.js.
  *
  * Each request is a run of workflow ai.complete, so it has the run's quota, free allowance, cost, audit and explain
  * (x_openvibe in the answer); the prompt is not kept. stream: true answers server-sent events in the Chat Completions
@@ -32,6 +39,9 @@ const express = require('express');
 const { CAPS } = require('../auth');
 const { appAttribution } = require('../apps');
 const { credentialFor } = require('./credential');
+const models = require('./models');
+const modelCatalog = require('../providers/model-catalog');
+const { EXACT_ID } = modelCatalog;
 
 const FIELDS = ['messages', 'tools', 'tool_choice', 'parallel_tool_calls', 'response_format', 'stop', 'seed', 'top_p', 'presence_penalty', 'frequency_penalty', 'temperature'];
 
@@ -44,20 +54,31 @@ const gatewaySafe = (status) => (status === 502 || status === 504 ? 503 : status
  * The event stream of one streamed completion. delta(d) sends a chunk as it arrives (or keeps it until open(run) has
  * sent the headers, which happens once the run exists); write(o) sends any chunk; fail() sends OpenAI's error object as
  * an event; done() ends with [DONE]. A closed connection drops what is left, quietly.
+ *
+ * AI Exchange D3: once the router has picked the offer (route(info)), the stream's first line is the `openvibe`
+ * disclosure as an SSE comment, before any data event. The final chunk carries the same object as `openvibe`.
  */
 function createLiveStream(res) {
     let run = null;
     let opened = false;
     let any = false;
+    let routeInfo = null;
+    let commented = false;
     const waiting = [];
     const finishedIdx = new Set();
     const created = Math.floor(Date.now() / 1000);
     const alive = () => !res.writableEnded && !res.destroyed;
-    const write = (o) => { if (alive()) res.write(`data: ${JSON.stringify(o)}\n\n`); };
+    const comment = () => {
+        if (commented || !routeInfo || !alive()) return;
+        res.write(`: x_openvibe ${JSON.stringify(routeInfo)}\n\n`);
+        commented = true;
+    };
+    const write = (o) => { if (alive()) { comment(); res.write(`data: ${JSON.stringify(o)}\n\n`); } };
     const chunk = (d) => ({ id: `chatcmpl-${run.id}`, object: 'chat.completion.chunk', created, model: d.model || 'openvibe', system_fingerprint: null,
         choices: [{ index: d.index || 0, delta: d.delta || {}, finish_reason: d.finish_reason || null }] });
     const out = {
         get opened() { return opened; },
+        route(info) { if (info) routeInfo = info; },
         delta(d) {
             any = true;
             if (d.finish_reason) finishedIdx.add(d.index || 0);
@@ -79,7 +100,7 @@ function createLiveStream(res) {
         sentAny: () => any,
         finished: (i) => finishedIdx.has(i),
         fail(message, code) {
-            const status = code === 'ai.run_budget_reached' ? 402 : /^(input|validation)\./.test(code || '') ? 400 : /quota|allowance|budget/.test(code || '') ? 429 : 503;
+            const status = code === 'ai.run_budget_reached' || code === 'billing.insufficient_funds' || code === 'billing.payer_required' ? 402 : /^(input|validation)\./.test(code || '') ? 400 : /quota|allowance|budget/.test(code || '') ? 429 : 503;
             write({ error: { message: String(message || 'error').slice(0, 1000), type: status === 400 ? 'invalid_request_error' : status === 429 ? 'rate_limit_error' : status === 402 ? 'insufficient_quota' : 'api_error', code: code || null, param: null } });
             return out.done();
         },
@@ -92,14 +113,18 @@ function openaiError(res, status, message, code, type) {
     res.status(status).json({ error: { message: String(message || 'error').slice(0, 1000), type: type || (status === 401 || status === 403 ? 'authentication_error' : status === 429 ? 'rate_limit_error' : status === 402 ? 'insufficient_quota' : status >= 500 ? 'api_error' : 'invalid_request_error'), code: code || null, param: null } });
 }
 
-function openaiRouter({ runs, auth, config, log = console }) {
+function openaiRouter({ runs, auth, config, registry, log = console }) {
     const r = express.Router();
+    // Developer apps call with ai.app.run, the public capability they already hold (ADR-014; AI Exchange D8').
     const allow = auth.appOrCap(CAPS.appRun, CAPS.runCreate);
 
     // A problem from the auth layer arrives as problem+json; a client built for OpenAI reads { error }: convert it as
     // it is written, whichever way the layer writes it.
     const typeFor = (status) => (status === 401 || status === 403 ? 'authentication_error' : status === 429 ? 'rate_limit_error' : status >= 500 ? 'api_error' : 'invalid_request_error');
     const asOpenAiErrors = (req, res, next) => {
+        // An Anthropic models request is handled by the Messages router (which has Anthropic's error shape); step
+        // out of the way here before that router's auth guard writes anything.
+        if (req.method === 'GET' && /^\/v1\/models(\/|$)/.test(req.path) && models.wantsAnthropic(req)) return next();
         const end = res.end.bind(res);
         res.end = (chunk, ...rest) => {
             const ct = String(res.getHeader('Content-Type') || '');
@@ -124,8 +149,34 @@ function openaiRouter({ runs, auth, config, log = console }) {
         if (b.n != null && Number(b.n) !== 1) return openaiError(res, 400, 'n must be 1', 'input.invalid');
         const input = {};
         for (const k of FIELDS) if (b[k] !== undefined && b[k] !== null) input[k] = b[k];
+        // AI Exchange D3 (AI_MODEL_CATALOG): the `model` the caller names is exact, or one of the dynamic aliases.
+        // With the flag off it is ignored exactly as before (the router picks), except an exact id: that is a pin, and a
+        // pin is never silently run on another model (a rollback of the flag included), so it is refused.
+        const catalogOn = Boolean(config.modelCatalog && config.modelCatalog.enabled);
+        if (!catalogOn && typeof b.model === 'string' && EXACT_ID.test(b.model.trim())) {
+            return openaiError(res, 400, 'an exact model id needs the model catalog, which is off: name a dynamic model (openvibe) instead', 'ai.model_unavailable');
+        }
+        if (catalogOn) {
+            if (b.model !== undefined && b.model !== null && typeof b.model !== 'string') return openaiError(res, 400, 'model must be a string', 'input.invalid');
+            const requested = b.model == null ? 'openvibe/auto' : String(b.model).trim();
+            if (!requested || requested.length > 256) return openaiError(res, 400, 'model must name an exact id or a dynamic alias', 'input.invalid');
+            input.model = requested;
+            // An exact id is a pin: an unknown or inactive artifact is refused here, before the run (and its stream)
+            // exists, so a streaming client gets the 404/400 it expects rather than a 200 SSE error. The engine selects
+            // the same artifact again when the run executes.
+            if (EXACT_ID.test(requested)) {
+                try {
+                    await modelCatalog.select({ registry, model: requested, route: null });
+                } catch (err) {
+                    if (err && err.status) return openaiError(res, err.status, err.detail || err.message, err.code);
+                    throw err;
+                }
+            }
+        }
         const maxTokens = b.max_completion_tokens != null ? b.max_completion_tokens : b.max_tokens;
         if (maxTokens != null) input.max_tokens = Math.max(1, Math.min(Number(maxTokens) || 1, 16000));
+        // AI Exchange F: the caller's liability cap for the Balance hold (an OpenVibe extension, like x_openvibe).
+        if (b.max_cost_usd != null) input.max_cost_usd = b.max_cost_usd;
         let body = { workflow: 'ai.complete', input };
         // L37: the soft preference (provider, and a model if the caller wants one). A wish, not a pin.
         if (b.prefer) body = { ...body, prefer: b.prefer };
@@ -141,7 +192,9 @@ function openaiRouter({ runs, auth, config, log = console }) {
         // delta the upstream sends goes out as it arrives. A delta that came before the stream opened waits for it.
         const live = b.stream === true ? createLiveStream(res) : null;
         try {
-            const created = await runs.create(body, req.principal, { trace: req.ov && req.ov.traceId, requestId: req.ov && req.ov.requestId, ...(live ? { onDelta: live.delta } : {}) });
+            const created = await runs.create(body, req.principal, { trace: req.ov && req.ov.traceId, requestId: req.ov && req.ov.requestId,
+                ...(live ? { onDelta: live.delta } : {}),
+                ...(live && config.modelCatalog && config.modelCatalog.enabled ? { onRoute: (info) => live.route(info) } : {}) });
             if (live) live.open(created.run);
             run = await runs.explained(await runs.wait(created, Math.max(config.runs.maxWaitMs, 120000)));
         } catch (err) {
@@ -157,13 +210,16 @@ function openaiRouter({ runs, auth, config, log = console }) {
         }
         if (run.status === 'failed' || run.status === 'cancelled') {
             const code = (run.error && run.error.code) || 'run.failed';
-            const status = code === 'ai.run_budget_reached' ? 402 : /^(input|validation)\./.test(code) ? 400 : /quota|allowance|budget/.test(code) ? 429
-                : code === 'project_secret.refused' ? 403 : code === 'credential.endpoint_refused' ? 422 : 503;
+            const status = code === 'ai.run_budget_reached' || code === 'billing.insufficient_funds' || code === 'billing.payer_required' ? 402 : /^(input|validation)\./.test(code) ? 400 : /quota|allowance|budget/.test(code) ? 429
+                : code === 'project_secret.refused' ? 403 : code === 'credential.endpoint_refused' ? 422
+                : code === 'ai.model_unavailable' ? 400 : code === 'ai.model_not_found' ? 404 : 503;
             return openaiError(res, status, (run.error && run.error.detail) || code, code);
         }
         if (!['succeeded', 'cached'].includes(run.status) || !run.output || !Array.isArray(run.output.choices)) {
             return openaiError(res, 504, `the completion is still running; GET /api/v1/runs/${run.id}`, 'run.timeout');
         }
+        const disclosure = await models.disclosureOf({ registry, config, run });
+        if (live) live.route(disclosure);
         const created = Math.floor(Date.parse(run.created_at || new Date().toISOString()) / 1000) || Math.floor(Date.now() / 1000);
         const id = `chatcmpl-${run.id}`;
         const model = run.output.model || (run.provenance && run.provenance.model) || 'openvibe';
@@ -184,16 +240,28 @@ function openaiRouter({ runs, auth, config, log = console }) {
                 send({ ...base, choices: [{ index: c.index || 0, delta: {}, finish_reason: c.finish_reason || 'stop' }] });
             }
             if (b.stream_options && b.stream_options.include_usage) send({ ...base, choices: [], usage });
-            send({ ...base, choices: [], x_openvibe: x });
+            send({ ...base, choices: [], x_openvibe: disclosure ? { ...x, ...disclosure } : x });
             return live.done();
         }
-        return res.status(200).json({ id, object: 'chat.completion', created, model, choices: run.output.choices, usage, system_fingerprint: run.output.system_fingerprint || null, x_openvibe: x });
+        return res.status(200).json({ id, object: 'chat.completion', created, model, choices: run.output.choices, usage, system_fingerprint: run.output.system_fingerprint || null, x_openvibe: disclosure ? { ...x, ...disclosure } : x });
     });
 
-    // The model list a client asks for first: one router model, the upstreams are AI's choice.
-    r.get('/v1/models', asOpenAiErrors, allow, (req, res) => {
-        res.json({ object: 'list', data: [{ id: 'openvibe', object: 'model', created: 1760486400, owned_by: 'openvibe' }] });
-    });
+    // The model list a client asks for first. With AI_MODEL_CATALOG on it is the registry's real models plus the
+    // dynamic aliases (ai.model@1 shape); with it off, the legacy single `openvibe` model. An Anthropic client (one
+    // that sends anthropic-version) is served by the Messages router with that protocol's shape and error object.
+    const notAnthropic = (req, res, next) => (models.wantsAnthropic(req) ? next('router') : next());
+    const modelRoute = (fn) => async (req, res) => {
+        try { await fn(req, res); } catch (err) {
+            log.error(`[ai] ${req.method} ${req.path}: ${(err && err.stack) || err}`);
+            if (!res.headersSent) models.sendError(res, 'openai', 500, 'internal error');
+        }
+    };
+    r.get('/v1/models', asOpenAiErrors, notAnthropic, allow, modelRoute(async (req, res) => {
+        await models.sendList(req, res, { registry, config, protocol: 'openai' });
+    }));
+    r.get('/v1/models/*', asOpenAiErrors, notAnthropic, allow, modelRoute(async (req, res) => {
+        await models.sendOne(req, res, { registry, config, protocol: 'openai' });
+    }));
 
     return r;
 }

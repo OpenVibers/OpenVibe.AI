@@ -51,16 +51,16 @@ function sharedProviderRecord(config, env) {
 
 function providerRecords(config, env) {
     const out = [
-        { key: 'stub', display_name: 'Deterministic stub (synthetic output)', kind: 'stub', status: 'active', auth_mode: 'none', default_model: 'stub-1', capabilities: ['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich', 'embed', 'json', 'vision', 'transcribe'], timeout_ms: 10000, priority: 1000, metadata: { synthetic: true, billing_profile: 'free' } },
+        { key: 'stub', display_name: 'Deterministic stub (synthetic output)', kind: 'stub', status: 'active', auth_mode: 'none', default_model: 'stub-1', capabilities: ['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich', 'embed', 'json', 'vision', 'transcribe'], timeout_ms: 10000, priority: 1000, provider_access: 'OWN_DEPLOYMENT', metadata: { synthetic: true, billing_profile: 'free' } },
         sharedProviderRecord(config, env),
-        { key: 'whisper', display_name: 'whisper.cpp (local speech-to-text)', kind: 'whisper', status: 'active', auth_mode: 'none', default_model: 'whisper.cpp', capabilities: ['transcribe'], timeout_ms: 600000, priority: 20, metadata: { configured_by: 'WHISPER_*', billing_profile: 'free' } },
+        { key: 'whisper', display_name: 'whisper.cpp (local speech-to-text)', kind: 'whisper', status: 'active', auth_mode: 'none', default_model: 'whisper.cpp', capabilities: ['transcribe'], timeout_ms: 600000, priority: 20, provider_access: 'OWN_DEPLOYMENT', metadata: { configured_by: 'WHISPER_*', billing_profile: 'free' } },
     ];
     if (config.localLlm && config.localLlm.url) {
         // A local model server (llama.cpp, Ollama) speaking the OpenAI API: no key, never paid (WS-O task 5).
         // No json: the small local model must not be offered the product JSON routes. Embed only with an embedding model.
         const localCaps = ['chat', 'generate', 'summarize', 'classify', 'extract'];
         if (config.localLlm.embedModel) localCaps.push('embed');
-        out.push({ key: 'local', display_name: 'Local model (OpenAI-compatible server on this host)', kind: 'openai', status: 'active', base_url: config.localLlm.url, auth_mode: 'none', secret_ref: null, default_model: config.localLlm.model || 'local', capabilities: localCaps, timeout_ms: config.localLlm.timeoutMs, priority: 5, metadata: { configured_by: 'AI_LOCAL_LLM_URL', embed_url: config.localLlm.embedUrl || config.localLlm.url, local: true, paid: false, billing_profile: 'free' } });
+        out.push({ key: 'local', display_name: 'Local model (OpenAI-compatible server on this host)', kind: 'openai', status: 'active', base_url: config.localLlm.url, auth_mode: 'none', secret_ref: null, default_model: config.localLlm.model || 'local', capabilities: localCaps, timeout_ms: config.localLlm.timeoutMs, priority: 5, provider_access: 'OWN_DEPLOYMENT', metadata: { configured_by: 'AI_LOCAL_LLM_URL', embed_url: config.localLlm.embedUrl || config.localLlm.url, local: true, paid: false, billing_profile: 'free' } });
     }
     if (config.httpSeamUrl) {
         out.push({ key: 'http-seam', display_name: 'Local HTTP seam', kind: 'http', status: 'active', base_url: config.httpSeamUrl, auth_mode: 'none', default_model: null, capabilities: [], timeout_ms: 30000, priority: 60, metadata: { configured_by: 'AI_HTTP_SEAM_URL', billing_profile: 'metered' } });

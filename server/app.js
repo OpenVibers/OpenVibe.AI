@@ -11,6 +11,7 @@ const { actionsRouter } = require('./api/actions');
 const { sendError } = require('./util');
 const openapi = require('./openapi');
 const { adminRouter } = require('./api/admin');
+const { CAPS } = require('./auth');
 const { createOps } = require('./ops');
 const { consoleRouter } = require('./console');
 const { createPersonSessions } = require('./person-session');
@@ -21,7 +22,9 @@ const ovServe = require('openvibe-shared/serve');
 const home = require('./home');
 const pkg = require('../package.json');
 
-function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, credentials = null, preferences = null, grants = null, vault = null, benchEvents = null, runBudgets = null, memory = null }) {
+const { adminRoutes } = require('openvibe-shared/config');
+
+function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, credentials = null, preferences = null, grants = null, vault = null, settings = null, benchEvents = null, runBudgets = null, memory = null }) {
     const app = express();
     // /.well-known/agent.json (openvibe-shared/agent-layer, SEO-2): what this site serves, for agents.
     require('openvibe-shared/agent-layer').mount(app, { descriptor: require('./agent-descriptor') });
@@ -118,20 +121,37 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
     });
     if (benchEvents) app.use(benchEvents.router);
 
+    // D11 owner settings (openvibe-shared/config): Network's admin proxy, acting for the owner, reads and writes
+    // ai.exchange and ai.provider_keys. Loopback only (the /internal guard above), guarded by ai.config.manage; the
+    // actor is Network's X-OV-Subject (usr_…), and a secret or x-danger change needs X-OV-Fresh: 1.
+    if (settings) {
+        const configRoutes = adminRoutes([settings.exchange, settings.providerKeys.proxy], {
+            basePath: '/internal/config',
+            requireAdmin: auth.requireCap(CAPS.configManage),
+            actor: (req) => {
+                const id = String(req.get('x-ov-subject') || '').trim();
+                return /^usr_[0-9A-HJKMNP-TV-Z]{26}$/.test(id) ? { type: 'user', id } : null;
+            },
+            requireFresh: (req) => String(req.get('x-ov-fresh') || '') === '1',
+            log,
+        });
+        app.use(configRoutes.handle);
+    }
+
     // Operator actions shared by the admin API and the operator console (one implementation, one audit row).
     const ops = createOps({ db, registry, pool, quotas, cache, runs });
     app.use(runsRouter({ runs, registry, auth, config, log }));
     app.use(actionsRouter({ runs, registry, auth, log }));
     // The OpenAI-compatible endpoint (POST /v1/chat/completions, GET /v1/models): runs of ai.complete.
-    app.use(require('./api/openai').openaiRouter({ runs, auth, config, log }));
+    app.use(require('./api/openai').openaiRouter({ runs, auth, config, registry, log }));
     // The Anthropic-compatible endpoint (POST /v1/messages, GET /v1/models): runs of ai.messages (Codes C3).
-    app.use(require('./api/messages').messagesRouter({ runs, auth, config, log }));
+    app.use(require('./api/messages').messagesRouter({ runs, auth, config, registry, log }));
     app.use(require('./api/attribution-quotas').attributionQuotasRouter({ db, quotas, auth, clock, sendError: (res, err, ctx) => sendError(res, err, ctx, log) }));
     if (memory) app.use(require('./memory').memoryRouter({ memory, auth, config, clock, log, sendError: (res, err, ctx) => sendError(res, err, ctx, log) }));
     if (credentials) app.use(require('./credentials').credentialsRouter({ credentials, auth, registry, sendError: (res, err, ctx) => sendError(res, err, ctx, log) }));
     // The budget of a Codes run token (Codes C3): Codes registers it when it mints the token.
     if (runBudgets) app.use(require('./api/run-budgets').runBudgetsRouter({ runBudgets, auth, log, sendError: (res, err, ctx) => sendError(res, err, ctx, log) }));
-    app.use(adminRouter({ db, registry, pool, quotas, cache, runs, auth, ops, log }));
+    app.use(adminRouter({ config, db, registry, pool, quotas, cache, runs, auth, settings, ops, log }));
     // The operator console (/console, /auth/*): Network staff, server-rendered, no scripts (server/console).
     // Person sessions are separate, read-only and open one run receipt each (server/person-session.js).
     const personSessions = createPersonSessions({ db, config, clock });
@@ -142,7 +162,7 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
         // The same settings as a page for people (GET /you, plain forms on AI's own person session).
         app.use(require('./you-page').youPageRouter({ credentials, preferences, grants, personSessions, config, log, machines: pool && pool.machines }));
     }
-    app.use(consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, env, clock, fetchImpl, log, vault, personSessions }));
+    app.use(consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, env, clock, fetchImpl, log, vault, settings, personSessions }));
     app.use(runPageRouter({ runs, personSessions, log }));
 
     // Public price and latency (no sign-in, no scripts): provider_stats_daily totals and the rate cards,

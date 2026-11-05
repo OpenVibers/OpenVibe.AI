@@ -24,9 +24,10 @@ const PROVIDER_SECRET = `sentinel-provider-${crypto.randomBytes(12).toString('he
 const CLIENT_SECRET = `sentinel-client-${crypto.randomBytes(12).toString('hex')}`;
 const SESSION_SECRET = crypto.randomBytes(32).toString('hex');
 const VAULT_KEY = crypto.randomBytes(32).toString('hex');
+const KEK = crypto.randomBytes(32).toString('base64');
 const ADDED_KEY = `sentinel-added-${crypto.randomBytes(12).toString('hex')}`;
 const REPLACED_KEY = `sentinel-replaced-${crypto.randomBytes(12).toString('hex')}`;
-const SECRETS = [PROVIDER_SECRET, CLIENT_SECRET, SESSION_SECRET, VAULT_KEY, ADDED_KEY, REPLACED_KEY];
+const SECRETS = [PROVIDER_SECRET, CLIENT_SECRET, SESSION_SECRET, VAULT_KEY, KEK, ADDED_KEY, REPLACED_KEY];
 const ops = token('ops', ALL);
 const live = token('live', ['ai.run.create', 'ai.run.read']);
 const news = token('news', ['ai.run.create', 'ai.run.read']);
@@ -139,6 +140,7 @@ t.test('boot with a provider secret, a seam provider, a failing stub and a few r
         env: {
             BASE_URL: 'https://ai.test', OV_NETWORK_INTERNAL_URL: NETWORK, OV_OAUTH_CLIENT_SECRET: CLIENT_SECRET, AI_CONSOLE_SESSION_SECRET: SESSION_SECRET,
             AI_USER_MODULES: 'off', AI_API_KEY: PROVIDER_SECRET, AI_PROVIDER: 'openai', AI_BASE_URL: 'http://127.0.0.1:1/v1', AI_STUB_FALLBACK: 'false', AI_CREDENTIALS_KEY: VAULT_KEY,
+            OV_CONFIG_KEKS: `k1:${KEK}`, OV_CONFIG_KEK_CURRENT: 'k1',
         },
         fetchImpl: fakeFetch,
     });
@@ -382,12 +384,13 @@ t.test('owner: add a provider with its key (kept encrypted), replace the key, re
     assert.strictEqual(x.status, 303, x.text);
     const p = await h.registry.getProvider('cheapapi');
     assert.deepStrictEqual([p.kind, p.secret_ref, p.base_url, p.default_model, p.auth_mode], ['openai', 'vault:cheapapi', 'https://api.cheap.test/v1', 'cheap-1', 'bearer']);
-    const row = await h.db.prepare('SELECT sealed, hint FROM provider_secrets WHERE provider_key = ?').get('cheapapi');
-    assert.ok(row && !row.sealed.includes(ADDED_KEY), 'encrypted at rest');
-    assert.strictEqual(row.hint, `…${ADDED_KEY.slice(-4)}`);
+    const row = await h.db.prepare("SELECT values_json FROM config_snapshots WHERE namespace = 'ai.provider_keys' AND state = 'active'").get();
+    assert.match(JSON.parse(row.values_json)['cheapapi.key'], /^v1:k1:/, 'sealed at rest in the D11 store');
+    assert.ok(!row.values_json.includes(ADDED_KEY), 'encrypted at rest');
+    assert.strictEqual(h.settings.providerKeys.store.get('cheapapi.key'), ADDED_KEY);
     assert.strictEqual(require('../server/util').resolveSecret('vault:cheapapi'), ADDED_KEY, 'the pool resolves it');
-    assert.strictEqual(require('../server/vault')._open({ credentialsKey: VAULT_KEY }, row.sealed, 'cheapapi'), ADDED_KEY);
-    assert.throws(() => require('../server/vault')._open({ credentialsKey: VAULT_KEY }, row.sealed, 'otherapi'), 'bound to its provider');
+    assert.strictEqual((await h.settings.providerKeys.store.summary()).secrets['cheapapi.key'].bound_to, 'https://api.cheap.test');
+    assert.strictEqual((await h.settings.providerKeys.store.summary()).secrets['cheapapi.key'].hint, ADDED_KEY.slice(-4));
     x = await get('/console/providers', cookies.owner);
     assert.ok(!x.text.includes(ADDED_KEY), 'the page never shows the key');
     assert.match(x.text, new RegExp(`key …${ADDED_KEY.slice(-4)}`));
@@ -396,6 +399,7 @@ t.test('owner: add a provider with its key (kept encrypted), replace the key, re
     x = await post('/console/providers/cheapapi/key', cookies.owner, { api_key: REPLACED_KEY, _csrf: csrf.owner });
     assert.strictEqual(x.status, 303);
     assert.strictEqual(require('../server/util').resolveSecret('vault:cheapapi'), REPLACED_KEY);
+    assert.strictEqual(h.settings.providerKeys.store.get('cheapapi.key'), REPLACED_KEY, 'the store holds the replaced key');
     x = await post('/console/providers/cheapapi/models', cookies.owner, { model_key: 'cheap-2', cost_in: '0.1', cost_out: '0.4', _csrf: csrf.owner });
     assert.ok(x.status >= 400, 'prices name the page they come from');
     x = await post('/console/providers/cheapapi/models', cookies.owner, { model_key: 'cheap-2', cost_in: '0.1', cost_out: '0.4', price_source: 'https://cheap.test/pricing', tools: '1', _csrf: csrf.owner });

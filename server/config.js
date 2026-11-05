@@ -142,6 +142,27 @@ function load(env = process.env) {
         routing: {
             maxAttempts: Math.max(1, int(env.AI_ROUTING_MAX_ATTEMPTS, 3)),
         },
+        // AI Exchange P7 (PLAN §D/§E): alias routes ranked by measured evidence. Off by default; with the flag
+        // off nothing is written and no order changes. The EWMA alpha, the minimum sample count below which
+        // evidence is sparse (and reported, never trusted), the probability floor, the decisions a challenger
+        // must win, and the exploration share (0 = never leave the incumbent).
+        routingEvidence: {
+            enabled: bool(env.AI_ROUTING_EVIDENCE, false),
+            alpha: Math.max(0.01, Math.min(1, float(env.AI_ROUTING_EVIDENCE_ALPHA, 0.2))),
+            minSamples: Math.max(1, int(env.AI_ROUTING_EVIDENCE_MIN_SAMPLES, 20)),
+            successFloor: Math.max(0.01, Math.min(1, float(env.AI_ROUTING_EVIDENCE_SUCCESS_FLOOR, 0.1))),
+            prior: Math.max(0.01, Math.min(1, float(env.AI_ROUTING_EVIDENCE_PRIOR, 0.9))),
+            hysteresisDecisions: Math.max(1, int(env.AI_ROUTING_EVIDENCE_DECISIONS, 3)),
+            explorationShare: Math.max(0, Math.min(1, float(env.AI_ROUTING_EVIDENCE_EXPLORE, 0))),
+            affinityGain: Math.max(0, Math.min(1, float(env.AI_ROUTING_EVIDENCE_AFFINITY, 0.05))),
+            minGain: Math.max(0, Math.min(1, float(env.AI_ROUTING_EVIDENCE_MIN_GAIN, 0.15))),
+            expectedOutputTokens: Math.max(1, int(env.AI_ROUTING_EVIDENCE_OUTPUT_TOKENS, 512)),
+        },
+        // AI Exchange P4 (CHECKPOINT D3): the truthful model catalog, exact ids and dynamic aliases. Off by
+        // default: today's /v1 behaviour, the single `openvibe` model and no disclosure object, is unchanged.
+        modelCatalog: {
+            enabled: bool(env.AI_MODEL_CATALOG, false),
+        },
         // Configurable local HTTP seam: POST {operation, request} JSON to this URL.
         httpSeamUrl: trimUrl(env.AI_HTTP_SEAM_URL),
         // A local model server speaking the OpenAI API (llama.cpp's llama-server, Ollama's /v1): the provider `local`,
@@ -240,6 +261,9 @@ function load(env = process.env) {
             maxInputBytes: int(env.AI_MAX_INPUT_BYTES, 6 * 1024 * 1024),
             retentionDays: int(env.AI_RUN_RETENTION_DAYS, 30),
         },
+        // Aggregate demand for Host's inference planner (GET /api/v1/usage/series): off by default;
+        // the capability gate (ai.usage.read) is still required when it is on.
+        usageSeries: { enabled: bool(env.AI_USAGE_SERIES, false) },
         // Compiled JSON Schema validators (server/schemas.js): an LRU shared by every caller, some of
         // whose schemas are caller-supplied, so it is bounded by count and by total schema size.
         schemaCache: {
@@ -272,6 +296,21 @@ function load(env = process.env) {
             maxBytes: int(env.AI_FETCH_MAX_BYTES, 512 * 1024 * 1024),
             maxImageBytes: int(env.AI_FETCH_MAX_IMAGE_BYTES, 12 * 1024 * 1024),
             timeoutMs: int(env.AI_FETCH_TIMEOUT_MS, 120000),
+        },
+
+        // ── Billing Balance (AI Exchange F, CHECKPOINT D2/D9/D10/D12), off by default. A paid managed request holds
+        // its worst-case cost before any provider call, extends the hold while streaming, and settles once. Reads the
+        // same OV_BILLING_INTERNAL_URL and OV_OAUTH_CLIENT_SECRET as the usage samples; the capability is one per
+        // operation (contracts v0.289.1): billing.credit.hold.{create,extend,settle,release}. An app holds against
+        // its project's Balance and a person against their own; no Network owner lookup is made.
+        credits: {
+            enabled: bool(env.AI_CREDITS, false),
+            billingUrl: trimUrl(env.OV_BILLING_INTERNAL_URL),
+            audience: 'openvibe.billing',
+            timeoutMs: Math.max(200, Math.min(30000, int(env.AI_CREDITS_TIMEOUT_MS, 5000))),
+            // A settle Billing could not take is retried by the background queue with exponential backoff.
+            settleRetryMs: Math.max(1000, Math.min(5 * 60 * 1000, int(env.AI_CREDITS_SETTLE_RETRY_MS, 5000))),
+            settleMaxRetryMs: Math.max(1000, Math.min(60 * 60 * 1000, int(env.AI_CREDITS_SETTLE_MAX_RETRY_MS, 5 * 60 * 1000))),
         },
 
         // ── Billing (plan T5 lane F): one platform.usage-sample@1 reading per accounted run, posted by

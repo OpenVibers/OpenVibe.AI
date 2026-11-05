@@ -19,6 +19,8 @@
  *                                                  Billing readings by delivery state, usage-samples deliveryReport)
  *   GET  /console/cache; POST /console/cache/purge   (writes: ai.provider.manage; ops.purgeCache)
  *   GET  /console/audit[?kind&action&actor&target_type&target_id&before]
+ *   GET  /console/exchange                      AI Exchange state (AI_CREDITS or AI_ROUTING_EVIDENCE)
+ *   POST /console/exchange/credits/:id/resolve  mark a review settle row resolved, never retried
  *
  * Who: a Network person (usr_ subject) whose sign-in token holds staff capabilities of the contracts
  * staff map (policy.staff-role-map@1, ADR-022). A console session holds the AI capability ids of
@@ -39,7 +41,7 @@
  */
 const crypto = require('crypto');
 const express = require('express');
-const { AiError, resolveSecret } = require('../util');
+const { AiError, resolveSecret, iso } = require('../util');
 const usageSamples = require('../usage-samples');
 const { CAPS } = require('../auth');
 const { staff: staffMap } = require('openvibe-contracts');
@@ -98,6 +100,7 @@ const NOTICES = {
     quota_saved: 'Quota saved.',
     cache_purged: 'Cache purged.',
     run_cancelled: 'Run cancelled.',
+    settle_resolved: 'Settle queue row marked resolved. Nothing was retried.',
 };
 const DEF_KINDS = {
     routes: { one: 'route', list: 'listRoutes', get: 'getRoute' },
@@ -106,8 +109,11 @@ const DEF_KINDS = {
 };
 const DAY_MS = 86400000;
 
-function consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, vault = null, personSessions = null }) {
+function consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, vault = null, settings = null, personSessions = null }) {
     const cc = config.console;
+    const creditsOn = Boolean(config.credits && config.credits.enabled);
+    const routingOn = Boolean(config.routingEvidence && config.routingEvidence.enabled);
+    const exchangeOn = creditsOn || routingOn;
     const r = express.Router();
     const scoped = ['/console', '/auth'];
     const baseOrigin = (() => { try { return new URL(config.baseUrl).origin; } catch { return null; } })();
@@ -139,7 +145,8 @@ function consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, e
     }
     const send = async (res, status, text) => res.status(status).type('html').send(await scrub(text));
     const who = (req) => ({ actor: req.staff.subject, trace: req.ov ? req.ov.traceId : null });
-    const common = (req) => ({ staff: req.staff, csrf: req.staff ? req.staff.csrf : '' });
+    // staff.exchange only picks the extra navigation entry; it is a copy, so the signed-in claims stay as read.
+    const common = (req) => ({ staff: req.staff ? { ...req.staff, exchange: exchangeOn } : req.staff, csrf: req.staff ? req.staff.csrf : '' });
     const audit = async (actor, action, targetType, targetId, metadata, req) => await registry.audit(actor || 'anonymous', action, targetType, targetId, { trace: req && req.ov ? req.ov.traceId : null, metadata });
     const notice = (req) => {
         const base = NOTICES[req.query.done];
@@ -328,10 +335,10 @@ function consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, e
     const presets = require('./presets');
     const KEY_RE = /^[a-z0-9][a-z0-9._-]{1,40}$/;
     r.get('/console/providers/new', needs(CAPS.providerManage), wrap(async (req, res) => await send(res, 200, pages.providerNew({
-        ...common(req), presets: presets.PRESETS, preset: presets.byId(String(req.query.preset || '')) || null, vaultReady: !!vault && /^[0-9a-f]{64}$/i.test(String(config.credentialsKey || '')),
+        ...common(req), presets: presets.PRESETS, preset: presets.byId(String(req.query.preset || '')) || null, vaultReady: !!vault && !!settings,
     }))));
     r.post('/console/providers', needs(CAPS.providerManage), wrap(async (req, res) => {
-        if (!vault) throw new AiError(503, 'vault.unavailable', 'provider keys cannot be stored here');
+        if (!vault || !settings) throw new AiError(503, 'vault.unavailable', 'provider keys cannot be stored here');
         const b = req.body || {};
         const preset = presets.byId(String(b.preset || 'custom')) || presets.byId('custom');
         const key = String(b.key || preset.id).trim().toLowerCase();
@@ -339,20 +346,21 @@ function consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, e
         if (await registry.getProvider(key)) throw new AiError(409, 'ai.conflict', `a provider called ${key} already exists: replace its key on the providers page`);
         const baseUrl = String(b.base_url || preset.base_url || '').trim();
         if (!/^https:\/\/[^\s]+$/i.test(baseUrl)) throw new AiError(422, 'ai.invalid', 'the base URL is an https address');
-        await vault.put(key, b.api_key, who(req));
         const caps = [...presets.TEXT_CAPS, ...(b.vision ? ['vision'] : [])];
+        // The provider comes first: its base URL is the origin its key is sealed to (D11).
         await registry.upsertProvider({
             key, display_name: String(b.display_name || preset.name || key).slice(0, 80), kind: preset.kind, status: 'active', base_url: baseUrl.replace(/\/+$/, ''),
             auth_mode: preset.kind === 'anthropic' ? 'x-api-key' : 'bearer', secret_ref: `vault:${key}`, default_model: String(b.default_model || preset.model || '').trim() || null,
             capabilities: caps, timeout_ms: 60000, priority: 50, billing_profile: 'metered', metadata: { added_from: 'console', preset: preset.id },
         }, { ...who(req), origin: 'admin' });
+        await vault.put(key, b.api_key, who(req));
         // Its model list, read right away (best effort: a provider whose list cannot be read is still added).
         const added = await registry.getProvider(key);
         await catalog.sync({ registry, provider: added, apiKey: resolveSecret(added.secret_ref, env), fetchImpl, actor: who(req).actor }).catch(() => null);
         res.redirect(303, '/console/providers?done=provider_added');
     }));
     r.post('/console/providers/:key/key', needs(CAPS.providerManage), wrap(async (req, res) => {
-        if (!vault) throw new AiError(503, 'vault.unavailable', 'provider keys cannot be stored here');
+        if (!vault || !settings) throw new AiError(503, 'vault.unavailable', 'provider keys cannot be stored here');
         const p = await registry.getProvider(req.params.key);
         if (!p) throw new AiError(404, 'ai.not_found', 'no such provider');
         await vault.put(p.key, (req.body || {}).api_key, who(req));
@@ -520,6 +528,37 @@ function consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, e
             free: quotas.freeAllowance ? await quotas.freeAllowance.current() : [], readings: await usageSamples.deliveryReport(db),
         }));
     }));
+
+    // ── AI Exchange (P7): Credits settle queue and routing evidence ──
+    // Read-only except "mark resolved", which acknowledges one review row (a 409/422 needs a person) and
+    // deliberately does not retry it. Both sections are absent unless their flag is on.
+    if (exchangeOn) {
+        r.get('/console/exchange', read, wrap(async (req, res) => {
+            await send(res, 200, pages.exchange({
+                ...common(req), canResolve: req.staff.caps.includes(CAPS.workflowManage), notice: notice(req),
+                credits: creditsOn ? await q.settleQueue(db, clock.now()) : null,
+                routing: routingOn ? await q.routingEvidence(db) : null,
+            }));
+        }));
+    }
+    if (creditsOn) {
+        r.post('/console/exchange/credits/:id/resolve', needs(CAPS.workflowManage), wrap(async (req, res) => {
+            const id = String(req.params.id || '').slice(0, 300);
+            const row = id ? await db.prepare('SELECT id, hold_id, request_id, status FROM credit_settle_queue WHERE id = ?').get(id) : null;
+            if (!row) throw new AiError(404, 'ai.not_found', 'no such settle queue row');
+            if (row.status !== 'review') throw new AiError(409, 'ai.conflict', 'only a row in review can be marked resolved');
+            let changed = false;
+            await db.tx(async () => {
+                const upd = await db.prepare(`UPDATE credit_settle_queue SET status = 'resolved', resolved_at = ?::timestamptz,
+                    resolved_by = ?, updated_at = ?::timestamptz WHERE id = ? AND status = 'review'`)
+                    .run(iso(clock.now()), req.staff.subject, iso(clock.now()), id);
+                changed = Number(upd && upd.changes) > 0;
+                if (changed) await audit(req.staff.subject, 'credit_settle.resolve', 'credit_settle', id, { hold_id: row.hold_id, request_id: row.request_id, from: 'review', to: 'resolved' }, req);
+            });
+            if (!changed) throw new AiError(409, 'ai.conflict', 'the row is no longer in review');
+            return res.redirect(303, '/console/exchange?done=settle_resolved');
+        }));
+    }
 
     // ── Cache ────────────────────────────────────────────────
     const cachePage = async (req, res, status, extra = {}) => await send(res, status, pages.cache({

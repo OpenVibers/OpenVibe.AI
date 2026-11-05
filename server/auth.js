@@ -34,7 +34,10 @@ const CAPS = Object.freeze({
     credentialManage: 'ai.credential.manage',
     quotaAttributionManage: 'ai.quota.attribution.manage',
     appRun: 'ai.app.run',
+    // AI Exchange D8: the public capability a developer app calls the inference routes with (Contracts 0.284.0).
     actionsRead: 'ai.actions.read',
+    // D11: Network's admin proxy, acting for the owner, manages ai.exchange and ai.provider_keys (Contracts 0.288.0).
+    configManage: 'ai.config.manage',
 });
 
 /**
@@ -90,6 +93,8 @@ function principalSubject(sub) {
 }
 
 function createAuth({ config, log = console }) {
+    function allowsLocal(claims, id) { return allows(claims, id); }
+
     /** The kid a token's header names (null when absent or undecodable). */
     function headerKid(token) {
         try { return JSON.parse(Buffer.from(String(token).split('.')[0], 'base64url').toString('utf8')).kid || null; } catch { return null; }
@@ -135,7 +140,7 @@ function createAuth({ config, log = console }) {
                 if (isAppClaims(r.claims)) return http.sendProblem(res, 403, 'capability.denied', { detail: 'app tokens are not accepted on this route', ctx });
                 let decision = null;
                 for (const id of anyOf) {
-                    decision = allows(r.claims, id);
+                    decision = allowsLocal(r.claims, id);
                     if (decision.allowed) break;
                 }
                 if (!decision.allowed) return http.sendProblem(res, 403, decision.code, { detail: anyOf.length > 1 ? `one of ${anyOf.join(', ')} is required` : decision.reason, ctx });
@@ -158,6 +163,7 @@ function createAuth({ config, log = console }) {
      * app's namespaces.
      */
     function appOrCap(appCap, ...anyOf) {
+        const appCaps = Array.isArray(appCap) ? appCap : [appCap];
         const serviceGuard = requireCap(...anyOf);
         return async function appOrCapGuard(req, res, next) {
             const ctx = req.ov;
@@ -168,8 +174,12 @@ function createAuth({ config, log = console }) {
                 if (!r.ok || !isAppClaims(r.claims)) return await serviceGuard(req, res, next);
                 const app = apps.appPrincipal(r.claims);
                 if (app.error) return http.sendProblem(res, 401, 'token.invalid_claims', { detail: app.error, ctx });
-                const decision = allows(r.claims, appCap);
-                if (!decision.allowed) return http.sendProblem(res, 403, decision.code, { detail: decision.reason, ctx });
+                let decision = null;
+                for (const id of appCaps) {
+                    decision = allowsLocal(r.claims, id);
+                    if (decision.allowed) break;
+                }
+                if (!decision.allowed) return http.sendProblem(res, 403, decision.code, { detail: appCaps.length > 1 ? `one of ${appCaps.join(', ')} is required` : decision.reason, ctx });
                 req.principal = {
                     kind: 'app', sub: r.claims.sub, subject: { type: 'project', id: app.projectId },
                     appId: app.appId, projectId: app.projectId, projectKey: app.projectKey, env: app.env, onBehalfOf: app.onBehalfOf,

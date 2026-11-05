@@ -1,0 +1,1055 @@
+{
+    "protocol": "anthropic-messages",
+    "source": "Shapes transcribed from the public Anthropic Messages API reference and the official Anthropic SDK examples (request, non-streaming message, and the named SSE events message_start / content_block_* / message_delta / message_stop). No production call was made. The Messages API has no response_format; structured JSON is requested through a forced tool, which the json_structured scenario covers.",
+    "scenarios": {
+        "text": {
+            "request": {
+                "model": "anthropic/claude-test@revA",
+                "max_tokens": 256,
+                "system": "Be concise.",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "Say hello."
+                    }
+                ]
+            },
+            "stream_request": {
+                "model": "anthropic/claude-test@revA",
+                "max_tokens": 256,
+                "system": "Be concise.",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "Say hello."
+                    }
+                ],
+                "stream": true
+            },
+            "response": {
+                "id": "msg_up_text",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-up-text",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Hello there"
+                    }
+                ],
+                "stop_reason": "end_turn",
+                "stop_sequence": null,
+                "usage": {
+                    "input_tokens": 18,
+                    "output_tokens": 3
+                }
+            },
+            "stream": [
+                {
+                    "event": "message_start",
+                    "data": {
+                        "type": "message_start",
+                        "message": {
+                            "id": "msg_up_text",
+                            "type": "message",
+                            "role": "assistant",
+                            "model": "claude-up-text",
+                            "content": [],
+                            "stop_reason": null,
+                            "stop_sequence": null,
+                            "usage": {
+                                "input_tokens": 18,
+                                "output_tokens": 0
+                            }
+                        }
+                    }
+                },
+                {
+                    "event": "content_block_start",
+                    "data": {
+                        "type": "content_block_start",
+                        "index": 0,
+                        "content_block": {
+                            "type": "text",
+                            "text": ""
+                        }
+                    }
+                },
+                {
+                    "event": "content_block_delta",
+                    "data": {
+                        "type": "content_block_delta",
+                        "index": 0,
+                        "delta": {
+                            "type": "text_delta",
+                            "text": "Hello"
+                        }
+                    }
+                },
+                {
+                    "event": "content_block_delta",
+                    "data": {
+                        "type": "content_block_delta",
+                        "index": 0,
+                        "delta": {
+                            "type": "text_delta",
+                            "text": " there"
+                        }
+                    }
+                },
+                {
+                    "event": "content_block_stop",
+                    "data": {
+                        "type": "content_block_stop",
+                        "index": 0
+                    }
+                },
+                {
+                    "event": "message_delta",
+                    "data": {
+                        "type": "message_delta",
+                        "delta": {
+                            "stop_reason": "end_turn",
+                            "stop_sequence": null
+                        },
+                        "usage": {
+                            "output_tokens": 3
+                        }
+                    }
+                },
+                {
+                    "event": "message_stop",
+                    "data": {
+                        "type": "message_stop"
+                    }
+                }
+            ]
+        },
+        "tool_use": {
+            "request": {
+                "model": "anthropic/claude-test@revA",
+                "max_tokens": 256,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "What is the weather in Lisbon?"
+                    }
+                ],
+                "tools": [
+                    {
+                        "name": "get_weather",
+                        "description": "Get the current weather for a city.",
+                        "input_schema": {
+                            "type": "object",
+                            "properties": {
+                                "city": {
+                                    "type": "string"
+                                }
+                            },
+                            "required": [
+                                "city"
+                            ]
+                        }
+                    }
+                ],
+                "tool_choice": {
+                    "type": "auto"
+                }
+            },
+            "stream_request": {
+                "model": "anthropic/claude-test@revA",
+                "max_tokens": 256,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "What is the weather in Lisbon?"
+                    }
+                ],
+                "tools": [
+                    {
+                        "name": "get_weather",
+                        "description": "Get the current weather for a city.",
+                        "input_schema": {
+                            "type": "object",
+                            "properties": {
+                                "city": {
+                                    "type": "string"
+                                }
+                            },
+                            "required": [
+                                "city"
+                            ]
+                        }
+                    }
+                ],
+                "tool_choice": {
+                    "type": "auto"
+                },
+                "stream": true
+            },
+            "response": {
+                "id": "msg_up_tool",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-up-tool",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Let me check."
+                    },
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_weather_1",
+                        "name": "get_weather",
+                        "input": {
+                            "city": "Lisbon"
+                        }
+                    }
+                ],
+                "stop_reason": "tool_use",
+                "stop_sequence": null,
+                "usage": {
+                    "input_tokens": 50,
+                    "output_tokens": 12
+                }
+            },
+            "stream": [
+                {
+                    "event": "message_start",
+                    "data": {
+                        "type": "message_start",
+                        "message": {
+                            "id": "msg_up_tool",
+                            "type": "message",
+                            "role": "assistant",
+                            "model": "claude-up-tool",
+                            "content": [],
+                            "stop_reason": null,
+                            "stop_sequence": null,
+                            "usage": {
+                                "input_tokens": 50,
+                                "output_tokens": 0
+                            }
+                        }
+                    }
+                },
+                {
+                    "event": "content_block_start",
+                    "data": {
+                        "type": "content_block_start",
+                        "index": 0,
+                        "content_block": {
+                            "type": "text",
+                            "text": ""
+                        }
+                    }
+                },
+                {
+                    "event": "content_block_delta",
+                    "data": {
+                        "type": "content_block_delta",
+                        "index": 0,
+                        "delta": {
+                            "type": "text_delta",
+                            "text": "Let me check."
+                        }
+                    }
+                },
+                {
+                    "event": "content_block_stop",
+                    "data": {
+                        "type": "content_block_stop",
+                        "index": 0
+                    }
+                },
+                {
+                    "event": "content_block_start",
+                    "data": {
+                        "type": "content_block_start",
+                        "index": 1,
+                        "content_block": {
+                            "type": "tool_use",
+                            "id": "toolu_weather_1",
+                            "name": "get_weather",
+                            "input": {}
+                        }
+                    }
+                },
+                {
+                    "event": "content_block_delta",
+                    "data": {
+                        "type": "content_block_delta",
+                        "index": 1,
+                        "delta": {
+                            "type": "input_json_delta",
+                            "partial_json": "{\"city\":\"Lisbon\"}"
+                        }
+                    }
+                },
+                {
+                    "event": "content_block_stop",
+                    "data": {
+                        "type": "content_block_stop",
+                        "index": 1
+                    }
+                },
+                {
+                    "event": "message_delta",
+                    "data": {
+                        "type": "message_delta",
+                        "delta": {
+                            "stop_reason": "tool_use",
+                            "stop_sequence": null
+                        },
+                        "usage": {
+                            "output_tokens": 12
+                        }
+                    }
+                },
+                {
+                    "event": "message_stop",
+                    "data": {
+                        "type": "message_stop"
+                    }
+                }
+            ]
+        },
+        "tool_result": {
+            "request": {
+                "model": "anthropic/claude-test@revA",
+                "max_tokens": 256,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "What is the weather in Lisbon?"
+                    },
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Let me check."
+                            },
+                            {
+                                "type": "tool_use",
+                                "id": "toolu_weather_1",
+                                "name": "get_weather",
+                                "input": {
+                                    "city": "Lisbon"
+                                }
+                            }
+                        ]
+                    },
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "toolu_weather_1",
+                                "content": "19 C and sunny"
+                            }
+                        ]
+                    }
+                ],
+                "tools": [
+                    {
+                        "name": "get_weather",
+                        "description": "Get the current weather for a city.",
+                        "input_schema": {
+                            "type": "object",
+                            "properties": {
+                                "city": {
+                                    "type": "string"
+                                }
+                            },
+                            "required": [
+                                "city"
+                            ]
+                        }
+                    }
+                ]
+            },
+            "stream_request": {
+                "model": "anthropic/claude-test@revA",
+                "max_tokens": 256,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "What is the weather in Lisbon?"
+                    },
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Let me check."
+                            },
+                            {
+                                "type": "tool_use",
+                                "id": "toolu_weather_1",
+                                "name": "get_weather",
+                                "input": {
+                                    "city": "Lisbon"
+                                }
+                            }
+                        ]
+                    },
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "toolu_weather_1",
+                                "content": "19 C and sunny"
+                            }
+                        ]
+                    }
+                ],
+                "tools": [
+                    {
+                        "name": "get_weather",
+                        "description": "Get the current weather for a city.",
+                        "input_schema": {
+                            "type": "object",
+                            "properties": {
+                                "city": {
+                                    "type": "string"
+                                }
+                            },
+                            "required": [
+                                "city"
+                            ]
+                        }
+                    }
+                ],
+                "stream": true
+            },
+            "response": {
+                "id": "msg_up_tool_result",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-up-tool-result",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "It is 19 C and sunny in Lisbon."
+                    }
+                ],
+                "stop_reason": "end_turn",
+                "stop_sequence": null,
+                "usage": {
+                    "input_tokens": 68,
+                    "output_tokens": 8
+                }
+            },
+            "stream": [
+                {
+                    "event": "message_start",
+                    "data": {
+                        "type": "message_start",
+                        "message": {
+                            "id": "msg_up_tool_result",
+                            "type": "message",
+                            "role": "assistant",
+                            "model": "claude-up-tool-result",
+                            "content": [],
+                            "stop_reason": null,
+                            "stop_sequence": null,
+                            "usage": {
+                                "input_tokens": 68,
+                                "output_tokens": 0
+                            }
+                        }
+                    }
+                },
+                {
+                    "event": "content_block_start",
+                    "data": {
+                        "type": "content_block_start",
+                        "index": 0,
+                        "content_block": {
+                            "type": "text",
+                            "text": ""
+                        }
+                    }
+                },
+                {
+                    "event": "content_block_delta",
+                    "data": {
+                        "type": "content_block_delta",
+                        "index": 0,
+                        "delta": {
+                            "type": "text_delta",
+                            "text": "It is 19 C"
+                        }
+                    }
+                },
+                {
+                    "event": "content_block_delta",
+                    "data": {
+                        "type": "content_block_delta",
+                        "index": 0,
+                        "delta": {
+                            "type": "text_delta",
+                            "text": " and sunny in Lisbon."
+                        }
+                    }
+                },
+                {
+                    "event": "content_block_stop",
+                    "data": {
+                        "type": "content_block_stop",
+                        "index": 0
+                    }
+                },
+                {
+                    "event": "message_delta",
+                    "data": {
+                        "type": "message_delta",
+                        "delta": {
+                            "stop_reason": "end_turn",
+                            "stop_sequence": null
+                        },
+                        "usage": {
+                            "output_tokens": 8
+                        }
+                    }
+                },
+                {
+                    "event": "message_stop",
+                    "data": {
+                        "type": "message_stop"
+                    }
+                }
+            ]
+        },
+        "json_structured": {
+            "request": {
+                "model": "anthropic/claude-test@revA",
+                "max_tokens": 256,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "Weather in Lisbon as structured JSON."
+                    }
+                ],
+                "tools": [
+                    {
+                        "name": "weather",
+                        "description": "Return the weather result.",
+                        "input_schema": {
+                            "type": "object",
+                            "properties": {
+                                "city": {
+                                    "type": "string"
+                                },
+                                "temp_c": {
+                                    "type": "integer"
+                                },
+                                "conditions": {
+                                    "type": "string"
+                                }
+                            },
+                            "required": [
+                                "city",
+                                "temp_c",
+                                "conditions"
+                            ]
+                        }
+                    }
+                ],
+                "tool_choice": {
+                    "type": "tool",
+                    "name": "weather"
+                },
+                "system": "Return the answer through the tool."
+            },
+            "stream_request": {
+                "model": "anthropic/claude-test@revA",
+                "max_tokens": 256,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "Weather in Lisbon as structured JSON."
+                    }
+                ],
+                "tools": [
+                    {
+                        "name": "weather",
+                        "description": "Return the weather result.",
+                        "input_schema": {
+                            "type": "object",
+                            "properties": {
+                                "city": {
+                                    "type": "string"
+                                },
+                                "temp_c": {
+                                    "type": "integer"
+                                },
+                                "conditions": {
+                                    "type": "string"
+                                }
+                            },
+                            "required": [
+                                "city",
+                                "temp_c",
+                                "conditions"
+                            ]
+                        }
+                    }
+                ],
+                "tool_choice": {
+                    "type": "tool",
+                    "name": "weather"
+                },
+                "stream": true,
+                "system": "Return the answer through the tool."
+            },
+            "response": {
+                "id": "msg_up_json",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-up-json",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_weather_json",
+                        "name": "weather",
+                        "input": {
+                            "city": "Lisbon",
+                            "temp_c": 19,
+                            "conditions": "sunny"
+                        }
+                    }
+                ],
+                "stop_reason": "tool_use",
+                "stop_sequence": null,
+                "usage": {
+                    "input_tokens": 39,
+                    "output_tokens": 15
+                }
+            },
+            "stream": [
+                {
+                    "event": "message_start",
+                    "data": {
+                        "type": "message_start",
+                        "message": {
+                            "id": "msg_up_json",
+                            "type": "message",
+                            "role": "assistant",
+                            "model": "claude-up-json",
+                            "content": [],
+                            "stop_reason": null,
+                            "stop_sequence": null,
+                            "usage": {
+                                "input_tokens": 39,
+                                "output_tokens": 0
+                            }
+                        }
+                    }
+                },
+                {
+                    "event": "content_block_start",
+                    "data": {
+                        "type": "content_block_start",
+                        "index": 0,
+                        "content_block": {
+                            "type": "tool_use",
+                            "id": "toolu_weather_json",
+                            "name": "weather",
+                            "input": {}
+                        }
+                    }
+                },
+                {
+                    "event": "content_block_delta",
+                    "data": {
+                        "type": "content_block_delta",
+                        "index": 0,
+                        "delta": {
+                            "type": "input_json_delta",
+                            "partial_json": "{\"city\":\"Lisbon\",\"temp_c\":19,"
+                        }
+                    }
+                },
+                {
+                    "event": "content_block_delta",
+                    "data": {
+                        "type": "content_block_delta",
+                        "index": 0,
+                        "delta": {
+                            "type": "input_json_delta",
+                            "partial_json": "\"conditions\":\"sunny\"}"
+                        }
+                    }
+                },
+                {
+                    "event": "content_block_stop",
+                    "data": {
+                        "type": "content_block_stop",
+                        "index": 0
+                    }
+                },
+                {
+                    "event": "message_delta",
+                    "data": {
+                        "type": "message_delta",
+                        "delta": {
+                            "stop_reason": "tool_use",
+                            "stop_sequence": null
+                        },
+                        "usage": {
+                            "output_tokens": 15
+                        }
+                    }
+                },
+                {
+                    "event": "message_stop",
+                    "data": {
+                        "type": "message_stop"
+                    }
+                }
+            ]
+        },
+        "multi_turn": {
+            "request": {
+                "model": "anthropic/claude-test@revA",
+                "max_tokens": 256,
+                "system": "You are a concise travel assistant.",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "I am going to Lisbon."
+                    },
+                    {
+                        "role": "assistant",
+                        "content": "Lisbon is a good choice."
+                    },
+                    {
+                        "role": "user",
+                        "content": "What should I pack?"
+                    }
+                ]
+            },
+            "stream_request": {
+                "model": "anthropic/claude-test@revA",
+                "max_tokens": 256,
+                "system": "You are a concise travel assistant.",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "I am going to Lisbon."
+                    },
+                    {
+                        "role": "assistant",
+                        "content": "Lisbon is a good choice."
+                    },
+                    {
+                        "role": "user",
+                        "content": "What should I pack?"
+                    }
+                ],
+                "stream": true
+            },
+            "response": {
+                "id": "msg_up_multi",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-up-multi",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Pack a light jacket and sunscreen."
+                    }
+                ],
+                "stop_reason": "end_turn",
+                "stop_sequence": null,
+                "usage": {
+                    "input_tokens": 51,
+                    "output_tokens": 8
+                }
+            },
+            "stream": [
+                {
+                    "event": "message_start",
+                    "data": {
+                        "type": "message_start",
+                        "message": {
+                            "id": "msg_up_multi",
+                            "type": "message",
+                            "role": "assistant",
+                            "model": "claude-up-multi",
+                            "content": [],
+                            "stop_reason": null,
+                            "stop_sequence": null,
+                            "usage": {
+                                "input_tokens": 51,
+                                "output_tokens": 0
+                            }
+                        }
+                    }
+                },
+                {
+                    "event": "content_block_start",
+                    "data": {
+                        "type": "content_block_start",
+                        "index": 0,
+                        "content_block": {
+                            "type": "text",
+                            "text": ""
+                        }
+                    }
+                },
+                {
+                    "event": "content_block_delta",
+                    "data": {
+                        "type": "content_block_delta",
+                        "index": 0,
+                        "delta": {
+                            "type": "text_delta",
+                            "text": "Pack a light jacket"
+                        }
+                    }
+                },
+                {
+                    "event": "content_block_delta",
+                    "data": {
+                        "type": "content_block_delta",
+                        "index": 0,
+                        "delta": {
+                            "type": "text_delta",
+                            "text": " and sunscreen."
+                        }
+                    }
+                },
+                {
+                    "event": "content_block_stop",
+                    "data": {
+                        "type": "content_block_stop",
+                        "index": 0
+                    }
+                },
+                {
+                    "event": "message_delta",
+                    "data": {
+                        "type": "message_delta",
+                        "delta": {
+                            "stop_reason": "end_turn",
+                            "stop_sequence": null
+                        },
+                        "usage": {
+                            "output_tokens": 8
+                        }
+                    }
+                },
+                {
+                    "event": "message_stop",
+                    "data": {
+                        "type": "message_stop"
+                    }
+                }
+            ]
+        },
+        "exact_id": {
+            "request": {
+                "model": "anthropic/claude-test@revA",
+                "max_tokens": 256,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "Who answered this exact id?"
+                    }
+                ]
+            },
+            "stream_request": {
+                "model": "anthropic/claude-test@revA",
+                "max_tokens": 256,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "Who answered this exact id?"
+                    }
+                ],
+                "stream": true
+            },
+            "response": {
+                "id": "msg_up_exact",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-up-exact",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "the exact artifact answered"
+                    }
+                ],
+                "stop_reason": "end_turn",
+                "stop_sequence": null,
+                "usage": {
+                    "input_tokens": 12,
+                    "output_tokens": 5
+                }
+            },
+            "stream": [
+                {
+                    "event": "message_start",
+                    "data": {
+                        "type": "message_start",
+                        "message": {
+                            "id": "msg_up_exact",
+                            "type": "message",
+                            "role": "assistant",
+                            "model": "claude-up-exact",
+                            "content": [],
+                            "stop_reason": null,
+                            "stop_sequence": null,
+                            "usage": {
+                                "input_tokens": 12,
+                                "output_tokens": 0
+                            }
+                        }
+                    }
+                },
+                {
+                    "event": "content_block_start",
+                    "data": {
+                        "type": "content_block_start",
+                        "index": 0,
+                        "content_block": {
+                            "type": "text",
+                            "text": ""
+                        }
+                    }
+                },
+                {
+                    "event": "content_block_delta",
+                    "data": {
+                        "type": "content_block_delta",
+                        "index": 0,
+                        "delta": {
+                            "type": "text_delta",
+                            "text": "the exact artifact"
+                        }
+                    }
+                },
+                {
+                    "event": "content_block_delta",
+                    "data": {
+                        "type": "content_block_delta",
+                        "index": 0,
+                        "delta": {
+                            "type": "text_delta",
+                            "text": " answered"
+                        }
+                    }
+                },
+                {
+                    "event": "content_block_stop",
+                    "data": {
+                        "type": "content_block_stop",
+                        "index": 0
+                    }
+                },
+                {
+                    "event": "message_delta",
+                    "data": {
+                        "type": "message_delta",
+                        "delta": {
+                            "stop_reason": "end_turn",
+                            "stop_sequence": null
+                        },
+                        "usage": {
+                            "output_tokens": 5
+                        }
+                    }
+                },
+                {
+                    "event": "message_stop",
+                    "data": {
+                        "type": "message_stop"
+                    }
+                }
+            ]
+        }
+    },
+    "refusals": {
+        "exact_missing": {
+            "request": {
+                "model": "anthropic/nope@rev0",
+                "max_tokens": 64,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "This artifact does not exist."
+                    }
+                ]
+            },
+            "stream_request": {
+                "model": "anthropic/nope@rev0",
+                "max_tokens": 64,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "This artifact does not exist."
+                    }
+                ],
+                "stream": true
+            },
+            "status": 404,
+            "code": "ai.model_not_found"
+        },
+        "exact_unavailable": {
+            "request": {
+                "model": "anthropic/claude-test@revA",
+                "max_tokens": 64,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "The artifact has no active deployment."
+                    }
+                ]
+            },
+            "stream_request": {
+                "model": "anthropic/claude-test@revA",
+                "max_tokens": 64,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "The artifact has no active deployment."
+                    }
+                ],
+                "stream": true
+            },
+            "status": 400,
+            "code": "ai.model_unavailable"
+        }
+    },
+    "aliases": [
+        {
+            "model": "openvibe",
+            "policy": "auto"
+        },
+        {
+            "model": "openvibe/auto",
+            "policy": "auto"
+        },
+        {
+            "model": "openvibe/economy",
+            "policy": "cheapest"
+        },
+        {
+            "model": "openvibe/balanced",
+            "policy": "balanced"
+        },
+        {
+            "model": "openvibe/fast",
+            "policy": "fastest"
+        },
+        {
+            "model": "openvibe/private",
+            "policy": "private",
+            "deployment": "delta-local"
+        }
+    ]
+}

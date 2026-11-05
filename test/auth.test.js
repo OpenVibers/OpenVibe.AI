@@ -41,7 +41,7 @@ t.test('a token without the capability is 403 capability.denied', async () => {
     r = await request(h.base, 'POST', '/api/v1/summarize', { tok: token('live', ['events.event.publish']), body: { text: 'x' } });
     assert.strictEqual(r.status, 403);
     const runner = token('live', ['ai.run.create']);
-    for (const [m, p] of [['GET', '/api/v1/providers'], ['POST', '/api/v1/providers'], ['POST', '/api/v1/templates/ai.generate/versions'], ['GET', '/api/v1/usage'], ['GET', '/api/v1/audit'], ['POST', '/api/v1/quotas'], ['DELETE', '/api/v1/cache']]) {
+    for (const [m, p] of [['GET', '/api/v1/providers'], ['POST', '/api/v1/providers'], ['POST', '/api/v1/templates/ai.generate/versions'], ['GET', '/api/v1/usage'], ['GET', '/api/v1/audit'], ['POST', '/api/v1/quotas'], ['DELETE', '/api/v1/cache'], ['GET', '/internal/config'], ['POST', '/internal/config/ai.exchange']]) {
         const x = await request(h.base, m, p, { tok: runner, body: m === 'GET' || m === 'DELETE' ? undefined : {} });
         assert.strictEqual(x.status, 403, `${m} ${p}`);
     }
