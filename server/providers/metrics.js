@@ -37,6 +37,8 @@ function decodeTps({ ttftMs, latencyMs, outputTokens }) {
 }
 
 function createProviderMetrics({ db, clock = { now: () => Date.now() }, alpha = 0.2 } = {}) {
+    // alpha may be a function: the AI Exchange setting is read live (D11), so an owner change applies to the next attempt.
+    const alphaNow = () => (typeof alpha === 'function' ? alpha() : alpha);
     const selectAll = db.prepare('SELECT * FROM provider_metrics');
     const selectOne = db.prepare('SELECT * FROM provider_metrics WHERE provider_key = ? AND model_key = ?');
     const upsert = db.prepare(`INSERT INTO provider_metrics
@@ -94,8 +96,8 @@ function createProviderMetrics({ db, clock = { now: () => Date.now() }, alpha = 
             ttft_samples: prev ? prev.ttft_samples : 0,
             decode_tps: prev ? prev.decode_tps : null,
             decode_samples: prev ? prev.decode_samples : 0,
-            success_rate: ewma(prev ? prev.success_rate : null, ok ? 1 : 0, alpha) || 0,
-            timeout_rate: ewma(prev ? prev.timeout_rate : null, timeout ? 1 : 0, alpha) || 0,
+            success_rate: ewma(prev ? prev.success_rate : null, ok ? 1 : 0, alphaNow()) || 0,
+            timeout_rate: ewma(prev ? prev.timeout_rate : null, timeout ? 1 : 0, alphaNow()) || 0,
             cache_hit_ratio: prev && prev.cache_samples > 0 ? prev.cache_hit_ratio : null,
             cache_samples: prev ? prev.cache_samples : 0,
             sample_count: samples,
@@ -103,18 +105,18 @@ function createProviderMetrics({ db, clock = { now: () => Date.now() }, alpha = 
         };
         const ttft = ttftMs == null || ttftMs === '' ? null : Number(ttftMs);
         if (ttft != null && Number.isFinite(ttft) && ttft >= 0) {
-            next.ttft_ms = ewma(next.ttft_ms, ttft, alpha);
+            next.ttft_ms = ewma(next.ttft_ms, ttft, alphaNow());
             next.ttft_samples += 1;
         }
         const tps = decodeTps({ ttftMs, latencyMs, outputTokens });
         if (tps != null) {
-            next.decode_tps = ewma(next.decode_tps, tps, alpha);
+            next.decode_tps = ewma(next.decode_tps, tps, alphaNow());
             next.decode_samples += 1;
         }
         const input = Number(inputTokens);
         const cached = Number(cachedTokens);
         if (Number.isFinite(input) && input > 0 && Number.isFinite(cached) && cached >= 0) {
-            next.cache_hit_ratio = clamp01(ewma(next.cache_hit_ratio, clamp01(cached / input), alpha));
+            next.cache_hit_ratio = clamp01(ewma(next.cache_hit_ratio, clamp01(cached / input), alphaNow()));
             next.cache_samples += 1;
         }
         await upsert.run(next);

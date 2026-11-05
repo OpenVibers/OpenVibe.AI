@@ -91,6 +91,7 @@ t.test('every other route is first-party only: an app token gets 403', async () 
         ['POST', `/api/v1/runs/${genRun.id}/cancel`, undefined],
         ['POST', '/api/v1/enrich', { record: {}, instructions: 'x' }],
         ['GET', '/api/v1/providers', undefined],
+        ['GET', '/internal/config', undefined],
     ];
     for (const [method, path, body] of routes) {
         const r = await request(h.base, method, path, { tok: appA, body });

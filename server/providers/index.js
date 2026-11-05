@@ -141,34 +141,33 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
     const stats = {};                 // key -> { calls, failures, ... } (in memory; tests + /api/ready)
     // L36 Y7: the provider that last answered this prompt, for five minutes (server/providers/warm-cache.js).
     const warm = createWarmCache({ now: () => clock.now() });
-    // AI Exchange P7: measured per-deployment evidence for alias routing. Off unless AI_ROUTING_EVIDENCE is on;
-    // when off, no metrics are written and no order changes.
-    const routingEvidence = config.routingEvidence && config.routingEvidence.enabled
-        ? createRoutingEvidence({
-            db, config, clock, log,
-            metrics: createProviderMetrics({ db, clock, alpha: config.routingEvidence.alpha }),
-            bench: variantEvidence || createVariantEvidence({ config, fetchImpl, clock, log }),
-            resolveOffer: async (c) => {
-                const entry = await adapter(c.provider);
-                const p = entry && entry.record;
-                if (!p) return null;
-                const model = c.model || p.default_model || null;
-                const row = model ? await registry.getModel(p.key, model) : null;
-                const artifact = row ? modelCatalog.artifactOf(row, p) : null;
-                return {
-                    id: offerId(p.key, model), provider: p.key, model,
-                    exactId: artifact ? artifact.id : null,
-                    access: modelCatalog.accessOf(p),
-                    free: isFreeProvider(p),
-                    retail: row ? modelCatalog.retailRate(row) : null,
-                    cards: isFreeProvider(p) ? null : await rateCardsFor(p.key, model),
-                };
-            },
-        })
-        : null;
+    // AI Exchange P7: measured per-deployment evidence for alias routing. The feature flag is read live (D11
+    // owner settings), so turning routing_evidence on or off in the config store needs no restart; while it is off
+    // no metrics are written and no order changes.
+    const routingEvidence = createRoutingEvidence({
+        db, config, clock, log,
+        metrics: createProviderMetrics({ db, clock, alpha: () => (config.routingEvidence && config.routingEvidence.alpha) }),
+        bench: variantEvidence || createVariantEvidence({ config, fetchImpl, clock, log }),
+        resolveOffer: async (c) => {
+            const entry = await adapter(c.provider);
+            const p = entry && entry.record;
+            if (!p) return null;
+            const model = c.model || p.default_model || null;
+            const row = model ? await registry.getModel(p.key, model) : null;
+            const artifact = row ? modelCatalog.artifactOf(row, p) : null;
+            return {
+                id: offerId(p.key, model), provider: p.key, model,
+                exactId: artifact ? artifact.id : null,
+                access: modelCatalog.accessOf(p),
+                free: isFreeProvider(p),
+                retail: row ? modelCatalog.retailRate(row) : null,
+                cards: isFreeProvider(p) ? null : await rateCardsFor(p.key, model),
+            };
+        },
+    });
     /** Evidence writes must never fail a run: a metrics problem is logged and routing continues. */
     async function recordEvidence(attempt) {
-        if (!routingEvidence) return;
+        if (!routingEvidence || !routingEvidence.enabled()) return;
         try { await routingEvidence.record(attempt); } catch (err) { log.warn(`[routing-evidence] ${String(err && err.message || err).slice(0, 200)}`); }
     }
 
@@ -982,7 +981,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         // AI_ROUTING_EVIDENCE is on. planAi (openvibe-sdk/placement) is the planner: this only prepares its
         // inputs, keeps the incumbent for N decisions and explains the answer. Private never leaves local
         // capacity, and an exact id never reaches here.
-        if (routingEvidence && ctx.aliasPolicy && ctx.aliasPolicy !== 'private' && !exact) {
+        if (routingEvidence && routingEvidence.enabled() && ctx.aliasPolicy && ctx.aliasPolicy !== 'private' && !exact) {
             const picked = await routingEvidence.choose({ routeKey: route.key, policy: ctx.aliasPolicy, list, req, ctx, warmDeployment, preferred: prefer });
             if (picked && picked.view) {
                 list = picked.order;

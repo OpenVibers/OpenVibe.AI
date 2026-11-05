@@ -36,6 +36,8 @@ const CAPS = Object.freeze({
     appRun: 'ai.app.run',
     // AI Exchange D8: the public capability a developer app calls the inference routes with (Contracts 0.284.0).
     actionsRead: 'ai.actions.read',
+    // D11: Network's admin proxy, acting for the owner, manages ai.exchange and ai.provider_keys (Contracts 0.288.0).
+    configManage: 'ai.config.manage',
 });
 
 /**

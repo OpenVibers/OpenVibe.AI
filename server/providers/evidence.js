@@ -171,7 +171,7 @@ function reasonFor({ policy, chosen = null, samples = 0, sparse = true }) {
 
 /** The incumbent and the challenger's consecutive-decision streak, persisted (migrations/0026). */
 function createIncumbents({ db, clock = { now: () => Date.now() }, decisions = 3 } = {}) {
-    const n = Math.max(1, Number(decisions) || 3);
+    const decisionsNow = () => Math.max(1, Number(typeof decisions === 'function' ? decisions() : decisions) || 3);
     const select = db.prepare('SELECT * FROM routing_incumbents WHERE decision_key = ?');
     const upsert = db.prepare(`INSERT INTO routing_incumbents
             (decision_key, provider_key, model_key, challenger_provider, challenger_model, challenger_streak, updated_at)
@@ -197,32 +197,32 @@ function createIncumbents({ db, clock = { now: () => Date.now() }, decisions = 3
             const chosen = split(chosenId);
             await upsert.run({ decision_key: String(key), provider_key: chosen.provider, model_key: chosen.model,
                 challenger_provider: null, challenger_model: null, challenger_streak: 0, updated_at: stamp() });
-            return { incumbent: chosenId, chosen: chosenId, switched: true, initial: true, streak: 0, decisions: n };
+            return { incumbent: chosenId, chosen: chosenId, switched: true, initial: true, streak: 0, decisions: decisionsNow() };
         }
         const incumbentId = idOf(row.provider_key, row.model_key || '');
         if (!inPool.has(incumbentId)) {
             const chosen = split(chosenId);
             await upsert.run({ decision_key: String(key), provider_key: chosen.provider, model_key: chosen.model,
                 challenger_provider: null, challenger_model: null, challenger_streak: 0, updated_at: stamp() });
-            return { incumbent: chosenId, chosen: chosenId, switched: true, initial: false, failover: true, streak: 0, decisions: n };
+            return { incumbent: chosenId, chosen: chosenId, switched: true, initial: false, failover: true, streak: 0, decisions: decisionsNow() };
         }
         if (chosenId === incumbentId) {
             await upsert.run({ decision_key: String(key), ...row, provider_key: row.provider_key, model_key: row.model_key,
                 challenger_provider: null, challenger_model: null, challenger_streak: 0, updated_at: stamp() });
-            return { incumbent: incumbentId, chosen: chosenId, switched: false, initial: false, streak: 0, decisions: n };
+            return { incumbent: incumbentId, chosen: chosenId, switched: false, initial: false, streak: 0, decisions: decisionsNow() };
         }
         const same = row.challenger_provider === split(chosenId).provider && (row.challenger_model || '') === split(chosenId).model;
         const streak = same ? Number(row.challenger_streak || 0) + 1 : 1;
-        if (streak >= n) {
+        if (streak >= decisionsNow()) {
             const chosen = split(chosenId);
             await upsert.run({ decision_key: String(key), provider_key: chosen.provider, model_key: chosen.model,
                 challenger_provider: null, challenger_model: null, challenger_streak: 0, updated_at: stamp() });
-            return { incumbent: chosenId, chosen: chosenId, switched: true, initial: false, streak: 0, decisions: n };
+            return { incumbent: chosenId, chosen: chosenId, switched: true, initial: false, streak: 0, decisions: decisionsNow() };
         }
         const challenger = split(chosenId);
         await upsert.run({ decision_key: String(key), provider_key: row.provider_key, model_key: row.model_key,
             challenger_provider: challenger.provider, challenger_model: challenger.model, challenger_streak: streak, updated_at: stamp() });
-        return { incumbent: incumbentId, chosen: incumbentId, switched: false, initial: false, streak, decisions: n };
+        return { incumbent: incumbentId, chosen: incumbentId, switched: false, initial: false, streak, decisions: decisionsNow() };
     }
 
     async function get(key) {
@@ -231,24 +231,30 @@ function createIncumbents({ db, clock = { now: () => Date.now() }, decisions = 3
         return { provider: row.provider_key, model: row.model_key || '', id: idOf(row.provider_key, row.model_key || ''), streak: Number(row.challenger_streak) || 0 };
     }
 
-    return { apply, get, n };
+    return { apply, get, decisions: decisionsNow };
 }
 
 function createRoutingEvidence({ db, config = {}, clock = { now: () => Date.now() }, metrics, bench = null, resolveOffer, random = Math.random, log = console } = {}) {
-    const cfg = config.routingEvidence || config || {};
-    const minSamples = Math.max(1, Number(cfg.minSamples) || 20);
-    const alpha = cfg.alpha;
-    const floor = Math.max(0.01, Math.min(1, Number(cfg.successFloor) || 0.1));
-    const prior = Math.max(0.01, Math.min(1, Number(cfg.prior) || 0.9));
-    const affinityGain = Math.max(0, Math.min(1, Number(cfg.affinityGain) || 0.05));
-    const minGain = Math.max(0, Math.min(1, cfg.minGain != null ? Number(cfg.minGain) : Number(config.placement && config.placement.minGain) || 0.15));
-    const decisions = Math.max(1, Number(cfg.hysteresisDecisions) || 3);
-    const share = Math.max(0, Math.min(1, Number(cfg.explorationShare) || 0));
-    const expectedOutput = Math.max(1, Number(cfg.expectedOutputTokens) || 512);
-    const incumbents = createIncumbents({ db, clock, decisions });
-    const store = metrics || require('./metrics').createProviderMetrics({ db, clock, alpha });
+    // D11 owner settings: the feature flag and its parameters are read live, so an ai.exchange change applies from
+    // the next decision (the pool gates record/choose on enabled()).
+    let minSamples, alpha, floor, prior, affinityGain, minGain, decisions, share, expectedOutput;
+    function refreshCfg() {
+        const cfg = config.routingEvidence || config || {};
+        minSamples = Math.max(1, Number(cfg.minSamples) || 20);
+        alpha = cfg.alpha;
+        floor = Math.max(0.01, Math.min(1, Number(cfg.successFloor) || 0.1));
+        prior = Math.max(0.01, Math.min(1, Number(cfg.prior) || 0.9));
+        affinityGain = Math.max(0, Math.min(1, Number(cfg.affinityGain) || 0.05));
+        minGain = Math.max(0, Math.min(1, cfg.minGain != null ? Number(cfg.minGain) : Number(config.placement && config.placement.minGain) || 0.15));
+        decisions = Math.max(1, Number(cfg.hysteresisDecisions) || 3);
+        share = Math.max(0, Math.min(1, Number(cfg.explorationShare) || 0));
+        expectedOutput = Math.max(1, Number(cfg.expectedOutputTokens) || 512);
+    }
+    refreshCfg();
+    const incumbents = createIncumbents({ db, clock, decisions: () => decisions });
+    const store = metrics || require('./metrics').createProviderMetrics({ db, clock, alpha: () => alpha });
 
-    async function record(attempt) { return await store.record(attempt); }
+    async function record(attempt) { refreshCfg(); return await store.record(attempt); }
 
     function promptTokensOf(req) {
         const tokens = tokensOf(leadingText(req || {}));
@@ -271,6 +277,7 @@ function createRoutingEvidence({ db, config = {}, clock = { now: () => Date.now(
      * evidence. `resolveOffer` is the pool's own catalogue lookup, so no second catalogue is read here.
      */
     async function prepare(candidate, { promptTokens, outputTokens, metricsById = null }) {
+        refreshCfg();
         const offer = await resolveOffer(candidate);
         if (!offer) return null;
         const metric = (metricsById ? metricsById.get(offer.id) : (await store.all()).get(offer.id)) || null;
@@ -333,6 +340,7 @@ function createRoutingEvidence({ db, config = {}, clock = { now: () => Date.now(
      * `list` is the router's already-eligible order; `ctx.exact` is never passed here.
      */
     async function choose({ routeKey = null, policy, list = [], req = {}, ctx = {}, warmDeployment = null, preferred = null } = {}) {
+        refreshCfg();
         const preparedRaw = [];
         const promptTokens = promptTokensOf(req);
         const outputTokens = outputTokensOf(req);
@@ -472,7 +480,7 @@ function createRoutingEvidence({ db, config = {}, clock = { now: () => Date.now(
         return { order: [...orderAsCandidates, ...unplanned], view };
     }
 
-    return { record, choose, prepare, incumbents, store, minSamples, alpha, floor, prior, share, decisions };
+    return { record, choose, prepare, incumbents, store, enabled: () => Boolean(config.routingEvidence && config.routingEvidence.enabled), minSamples, alpha, floor, prior, share, decisions };
 }
 
 module.exports = {

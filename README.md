@@ -351,7 +351,7 @@ needs scripts and inline styles), like Billing's staff console. Code: `server/co
 |---|---|
 | `/console` | providers needing attention, runs and failures of the last 24 h by error code, today's spend, the queue, the busiest quota windows |
 | `/console/providers` | every provider (kind, status, **secret reference name and whether it resolves, never a value**, circuit, base URL without query/user info, default model, priority/timeout) and the models; for the owner, per provider: replace its key, register a model (with prices typed from the provider's own price page, which the form requires) |
-| `/console/providers/new` | the owner adds a provider in a few clicks: DeepSeek, OpenRouter, Groq, Gemini, Mistral, Together, Fireworks, Cerebras, xAI, OpenAI, Anthropic or any OpenAI-compatible API (`server/console/presets.js`), with its API key, which is kept encrypted (`vault:<provider>`, below) |
+| `/console/providers/new` | the owner adds a provider in a few clicks: DeepSeek, OpenRouter, Groq, Gemini, Mistral, Together, Fireworks, Cerebras, xAI, OpenAI, Anthropic or any OpenAI-compatible API (`server/console/presets.js`), with its API key, which is kept sealed in the config store, bound to the provider's origin (`vault:<provider>`, below) |
 | `/console/routes/:key` (owner form) | **use another provider**: a new route version whose primary is the provider and model chosen, with the previous primary kept as the first fallback; **back to the default** writes the newest seeded version again |
 | `/console/routes`, `/templates`, `/workflows` (`/:key[?version=]`) | every key's newest version and the version in use; per key every version with its status and content (primary and fallbacks in order, prompts, steps, schemas) |
 | `/console/runs` | runs newest first, filtered by status (tabs), workflow, requester (`live` = `service:live`), error code and a UTC time range; failed runs grouped by error code |
@@ -402,12 +402,16 @@ the Action Center is separate: a first-party service token with `ai.actions.read
 
 ### Provider keys added from the console (`vault:`)
 
-A provider the owner adds from the console keeps its key in `provider_secrets` (migration `0010_provider_secrets.sql`,
-`server/vault.js`): AES-256-GCM with `AI_CREDENTIALS_KEY`, bound to the provider's key so a row copied to another
-provider does not decrypt, with only a four-character hint ever shown. The provider's `secret_ref` is
-`vault:<provider key>`, which `util.resolveSecret` reads from this process's decrypted copy (loaded at boot and after
-every change; providers resolve secrets synchronously). Audit rows say a key was replaced, never what it is. Without
-`AI_CREDENTIALS_KEY` the form says keys cannot be stored and nothing is added.
+A provider the owner adds from the console keeps its key in the `ai.provider_keys` namespace of the configuration
+store (D11, `server/settings.js`, `migrations/0028_config.sql`). For each provider `<p>.origin` is the origin of its
+base URL and `<p>.key` is a write-only secret sealed under `OV_CONFIG_KEKS` and x-bind'ed to `<p>.origin`; changing the
+base URL locks the key until it is entered again. The provider's `secret_ref` is `vault:<provider key>`, which
+`util.resolveSecret` reads from this process's cache (refreshed by the store's `onActivate`; providers resolve secrets
+synchronously). Only a four-character hint is ever shown, and audit rows say a key was replaced, never what it is.
+Without a KEK the store still works and reports `"sealed": false`. At boot, when `AI_CREDENTIALS_KEY` and
+`OV_CONFIG_KEKS` are both set, the old `provider_secrets` rows (migration `0010_provider_secrets.sql`) are opened,
+written as sealed `<p>.key` values bound to their current origin, read back and only then deleted; counts are logged,
+never a value.
 
 ## The eleven record groups
 

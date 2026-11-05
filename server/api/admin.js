@@ -24,8 +24,9 @@ const express = require('express');
 const { CAPS } = require('../auth');
 const { AiError, sendError } = require('../util');
 const { createOps } = require('../ops');
+const { originOf } = require('../settings');
 
-function adminRouter({ db, registry, pool, quotas, cache, runs, auth, ops = createOps({ db, registry, pool, quotas, cache, runs }), log = console }) {
+function adminRouter({ db, registry, pool, quotas, cache, runs, auth, settings = null, ops = createOps({ db, registry, pool, quotas, cache, runs }), log = console }) {
     const r = express.Router();
     const provRead = auth.requireCap(CAPS.providerManage, CAPS.usageRead);
     const provWrite = auth.requireCap(CAPS.providerManage);
@@ -51,14 +52,34 @@ function adminRouter({ db, registry, pool, quotas, cache, runs, auth, ops = crea
     r.post('/api/v1/providers', provWrite, wrap(async (req, res) => {
         const b = body(req);
         if ('api_key' in b || 'secret' in b) throw new AiError(422, 'ai.invalid', 'send secret_ref (env:NAME), never a secret value');
+        const provider = await registry.upsertProvider(b, { ...actor(req), origin: 'admin' });
+        // D11: the provider's origin is the bind of its ai.provider_keys secret; AI writes it itself.
+        if (settings && provider.base_url) {
+            await settings.providerKeys.setOrigin(provider.key, provider.base_url, { actor: { type: 'service', id: 'ai' }, reason: 'provider created' })
+                .catch((err) => log.warn(`[config] ${provider.key} origin: ${err.message}`));
+        }
         res.status(201);
-        return { provider: await view(await registry.upsertProvider(b, { ...actor(req), origin: 'admin' })) };
+        return { provider: await view(provider) };
     }));
     r.patch('/api/v1/providers/:key', provWrite, wrap(async (req) => {
         const b = body(req);
         if ('api_key' in b || 'secret' in b) throw new AiError(422, 'ai.invalid', 'send secret_ref (env:NAME), never a secret value');
-        if (!await registry.getProvider(req.params.key)) throw new AiError(404, 'ai.not_found', 'no such provider');
-        return { provider: await view(await registry.upsertProvider({ ...b, key: req.params.key }, { ...actor(req), origin: 'admin' })) };
+        const prev = await registry.getProvider(req.params.key);
+        if (!prev) throw new AiError(404, 'ai.not_found', 'no such provider');
+        const moved = b.base_url !== undefined && originOf(b.base_url) !== originOf(prev.base_url);
+        // Move the bind before the record: a key sealed to the old origin stops opening at once, so it can never be
+        // sent to the new host while the provider row still points at the old one (or if this request then fails).
+        if (moved && settings) {
+            if (!String(b.base_url || '').trim()) throw new AiError(422, 'ai.invalid', 'a provider needs a base URL');
+            await settings.providerKeys.setOrigin(prev.key, b.base_url, { actor: { type: 'service', id: 'ai' }, reason: 'provider base_url changed' });
+        }
+        const provider = await registry.upsertProvider({ ...b, key: req.params.key }, { ...actor(req), origin: 'admin' });
+        const answer = { provider: await view(provider) };
+        if (moved && String(provider.secret_ref || '').startsWith('vault:')) {
+            answer.key_reentry_required = true;
+            answer.notice = 'the key must be entered again for the new origin';
+        }
+        return answer;
     }));
     for (const [action, status] of [['disable', 'disabled'], ['enable', 'active']]) {
         r.post(`/api/v1/providers/:key/${action}`, provWrite, wrap(async (req) => ({ provider: await view(await ops.setProviderStatus(req.params.key, status, actor(req))) })));
