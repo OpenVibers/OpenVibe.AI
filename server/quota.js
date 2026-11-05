@@ -31,6 +31,30 @@ const WINDOWS = { minute: 60, hour: 3600, day: 86400 };
 const EWMA_ALPHA = 0.2;                                   // documented: 20 % of the new sample, 80 % of the history
 const LATENCY_BUCKETS_MS = [50, 100, 200, 400, 800, 1600, 3200, 6400, 12800, 25600];
 
+// The exact id shape of D3: `<org>/<model>[:<quant>]@<revision>`.
+const EXACT_ID = /^[a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+(:[a-zA-Z0-9._-]+)?@[a-zA-Z0-9._-]+$/;
+
+/**
+ * The usage series names a model with its exact id when the model row's metadata knows the artifact
+ * (metadata.id, or metadata.revision with the org/model/quant facts), else `<provider>/<model_key>`.
+ * Nothing is invented: a row without a revision has no exact id.
+ */
+function exactModelId(provider, modelKey, meta) {
+    const m = meta || {};
+    if (typeof m.id === 'string' && EXACT_ID.test(m.id)) return m.id;
+    if (m.revision) {
+        const key = String(modelKey || '');
+        const at = key.lastIndexOf('@');
+        const base = at > 0 ? key.slice(0, at) : key;
+        const slash = base.indexOf('/');
+        const org = m.org || (slash > 0 ? base.slice(0, slash) : provider);
+        const model = m.model || (slash > 0 ? base.slice(slash + 1) : base);
+        const id = `${org}/${model}${m.quant ? `:${m.quant}` : ''}@${m.revision}`;
+        if (org && model && EXACT_ID.test(id)) return id;
+    }
+    return modelKey ? `${provider}/${modelKey}` : provider;
+}
+
 function latencyBucket(ms) {
     const i = LATENCY_BUCKETS_MS.findIndex((b) => ms <= b);
     return i === -1 ? LATENCY_BUCKETS_MS.length : i;      // -1 → the overflow bucket
@@ -268,6 +292,71 @@ function createQuotas(db, { clock = { now: () => Date.now() }, registry, freeAll
         return await db.prepare(`SELECT * FROM usage_daily ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY day DESC, cost_usd DESC LIMIT 1000`).all(...args);
     }
 
+    /**
+     * Aggregate demand for the inference planner (Host's `HOST_INFERENCE_PLANNER_SOURCE=ai`), never
+     * per person, app or project. One row per UTC day and provider/model:
+     *   requests, successes   provider attempts (provider_stats_daily.requests / .ok), the same counts
+     *                         the router rolls up; a retry is a second attempt
+     *   tokens.input          tokens_in minus cache reads; cache writes are not stored apart on this
+     *                         release, so they are still inside this number
+     *   tokens.cached_read    usage_daily.tokens_cached, summed across every requester and attribution
+     *   tokens.cache_write    0: AI records cache-write tokens inside the whole prompt, not apart
+     *   tokens.output         tokens_out
+     *
+     * `model` is the exact id when the model row's metadata names the artifact, else
+     * `<provider>/<model_key>`. The response carries no caller id, prompt, answer, project or cost.
+     */
+    async function usageSeries({ days } = {}) {
+        let n = 30;
+        if (days !== undefined && days !== null && days !== '') {
+            if (typeof days !== 'string' || !/^\d+$/.test(days)) throw new AiError(422, 'ai.invalid', 'days must be an integer from 1 to 90');
+            n = Number(days);
+            if (!Number.isSafeInteger(n) || n < 1 || n > 90) throw new AiError(422, 'ai.invalid', 'days must be between 1 and 90');
+        }
+        const end = new Date(clock.now());
+        const to = end.toISOString().slice(0, 10);
+        const from = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), end.getUTCDate()) - (n - 1) * 86400000).toISOString().slice(0, 10);
+        const rows = await db.prepare(`
+            SELECT to_char(s.day, 'YYYY-MM-DD') AS day, s.provider, s.model,
+                   SUM(s.requests)::bigint AS requests, SUM(s.ok)::bigint AS successes,
+                   SUM(s.tokens_in)::bigint AS tokens_in, SUM(s.tokens_out)::bigint AS tokens_out,
+                   COALESCE(MAX(u.tokens_cached), 0)::bigint AS tokens_cached
+              FROM provider_stats_daily s
+              LEFT JOIN (
+                  SELECT day, provider_key, model_key,
+                         SUM(tokens_cached)::bigint AS tokens_cached
+                    FROM usage_daily WHERE day >= ? GROUP BY day, provider_key, model_key
+              ) u ON u.day = to_char(s.day, 'YYYY-MM-DD') AND u.provider_key = s.provider AND u.model_key = s.model
+             WHERE s.day >= ?
+             GROUP BY s.day, s.provider, s.model
+             ORDER BY s.day, s.provider, s.model`).all(from, from);
+        const models = new Map((await registry.listModels()).map((m) => [`${m.provider_key}|${m.model_key}`, m]));
+        return {
+            days: n,
+            from,
+            to,
+            note: 'cache_write is 0 on this release: AI records cache-write tokens inside the whole prompt, not apart',
+            series: rows.map((r) => {
+                const meta = (models.get(`${r.provider}|${r.model}`) || {}).metadata || {};
+                const cached = Number(r.tokens_cached) || 0;
+                return {
+                    day: r.day,
+                    model: exactModelId(r.provider, r.model, meta),
+                    provider: r.provider,
+                    model_key: r.model,
+                    requests: Number(r.requests) || 0,
+                    successes: Number(r.successes) || 0,
+                    tokens: {
+                        input: Math.max(0, (Number(r.tokens_in) || 0) - cached),
+                        cached_read: cached,
+                        cache_write: 0,
+                        output: Number(r.tokens_out) || 0,
+                    },
+                };
+            }),
+        };
+    }
+
     async function counters(ctxLike) {
         const qs = ctxLike ? await applicable(ctxLike) : (await list()).filter(q => q.status === 'active' && (q.scope_type === 'global' || q.scope_id !== '*')).map(q => ({ q, cid: q.scope_id }));
         const t = nowSec();
@@ -292,7 +381,7 @@ function createQuotas(db, { clock = { now: () => Date.now() }, registry, freeAll
         return { max_cost_usd: Math.min(...rows.map((r) => r.max_cost_usd)), spent, window: 'day' };
     }
 
-    return { reserve, account, statsFor, list, upsert, usage, counters, paidBudget, freeAllowance, WINDOWS };
+    return { reserve, account, statsFor, list, upsert, usage, usageSeries, counters, paidBudget, freeAllowance, WINDOWS };
 }
 
 module.exports = { createQuotas, WINDOWS };
