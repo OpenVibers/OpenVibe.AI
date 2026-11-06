@@ -14,7 +14,7 @@
  */
 const fs = require('fs');
 const path = require('path');
-const { ProviderError, postJson, deadline, describeAbort, approxTokens, schemaInstruction, exhaustedCode } = require('./common');
+const { ProviderError, postJson, deadline, describeAbort, approxTokens, schemaInstruction } = require('./common');
 const { sseEvents, createAccumulator } = require('./stream');
 const usageParser = require('./usage');
 
@@ -189,8 +189,7 @@ function createOpenAiProvider(record, { apiKey = '', fetchImpl = globalThis.fetc
             let j = {};
             try { j = JSON.parse(text); } catch { /* not JSON */ }
             const msg = (j.error && (j.error.message || j.error)) || `HTTP ${res.status}: ${String(text).slice(0, 200)}`;
-            const code = res.status === 401 || res.status === 403 ? 'provider.auth' : (exhaustedCode(res.status, j) || 'provider.http');
-            throw new ProviderError(typeof msg === 'string' ? msg : JSON.stringify(msg), { status: res.status, code, body: j });
+            throw new ProviderError(typeof msg === 'string' ? msg : JSON.stringify(msg), { status: res.status, code: res.status === 401 || res.status === 403 ? 'provider.auth' : 'provider.http', body: j });
         }
         const acc = createAccumulator();
         let usage = null;
