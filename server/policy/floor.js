@@ -10,20 +10,21 @@
  * system prompt, the tool arguments) and on the way out (the answer). A request that trips it is refused before a
  * provider is called; an answer that trips it is never delivered.
  *
- * The patterns are the ones OpenVibe.Live already uses for the same job (server/ai/explicit.js: a minor together
- * with nudity is explicit; server/chat/moderation-utils.js: the "minors", "sexual" and "threats" categories), kept
- * deliberately narrow so an ordinary question ("how do I kill a stuck process", "what is our incident response
- * plan") is never refused. A person and a sexual act must be in the same text, and a weapon only counts when the
- * text asks for one to be made, acquired or used.
+ * The lines are decided by the house's own text classifiers, not by a third set of words written here
+ * (server/policy/classifiers.js):
+ *
+ *   the first line   Live's rule (a child together with a bare body) and Vision's `classifyText` (`minor_sexual`)
+ *   the second line  no house classifier has a word for consent, so a narrow list names it
+ *   the third line   no house classifier has a word for a weapon, so a narrow list names it
+ *
+ * The narrow lists are deliberately narrow, so an ordinary question ("how do I kill a stuck process", "cp -r src
+ * dst", "what is our incident response plan") is never refused. A person and a sexual act must be in the same
+ * text, and a weapon only counts when the text asks for one to be made, acquired or used.
  */
 
-/** A person who is not an adult. */
-const MINOR = /\b(?:child(?:ren)?|kids?|minors?|minor|teen(?:age(?:rs?)?|s)?|toddlers?|bab(?:y|ies)|infants?|boys?|girls?|underage|pre-?teen(?:s)?|schoolboy|schoolgirl|loli|shota)\b/i;
-/** Sexual content, in the words a request or an answer uses. */
-const SEXUAL = /\b(?:sexual(?:ly)?\s+(?:acts?|activity|intercourse)|sex\s+acts?|having\s+sex|(?:pornographic|sexually\s+explicit|explicit\s+adult)\s+(?:content|material|footage|scenes?|imagery|videos?|acts?)|porn(?:o|ography|ographic)?|masturbat\w*|intercourse|oral\s+sex|penetrat\w*|hentai|nsfw|blowjob|handjob|anal\s+sex|doggy\s+style)\b/i;
-/** A bare body: the hard line is a child AND nudity in the same text (Live's explicit.js), not the word "sexual" alone. */
-const NUDE = /\b(?:naked|nude|nudity|undress(?:ed|ing)?|topless|bottomless|genital(?:s|ia)?|penis(?:es)?|vaginas?|vulvas?|breasts?|boobs?|nipples?|erotic(?:a)?|orgasm|cunnilingus|fellatio)\b/i;
-/** Words for a child and sex together (the clearest form of the first rule). */
+const { minorNude, classifyText } = require('./classifiers');
+
+/** Words for a child and sex together (the clearest form of the first line, and the house has no word for it). */
 const CSAM = /\b(?:child\s?(?:porn|porno|abuse|sexual)|cp\s(?:content|video|series)\b|kiddie\s?(?:porn|porno)|pedophile|pedophilia|paedophile|paedophilia)\b/i;
 /** Non-consensual sex, and the real people it is done to. */
 const NONCONSENSUAL = /\b(?:rape|raped|rapes|raping|rapist|sexual assault|sexual abuse|molest(?:ed|ing|s)?|incest|statutory rape|non-?consensual|without (?:her|his|their|my) consent|she (?:said|said no|didn't consent|did not consent)|he (?:said no|didn't consent|did not consent)|they (?:said no|didn't consent|did not consent)|took advantage of (?:her|him|them)|she was (?:drugged|drunk|asleep|unconscious)|drugged (?:her|him|them)|unconscious (?:sex|woman|girl|man)|forced (?:sex|himself|herself|them)|coerc(?:e|ed|ing|ion)|groom(?:ed|ing)?|traffick(?:ed|ing)?|deepfake(?:s|d)?|revenge porn|nude photos? of (?:her|him|them)|sexual(?:ly)? explicit (?:photos?|pictures?|images?|videos?) of (?:her|him|them))\b/i;
@@ -34,11 +35,23 @@ const WEAPON_INTENT = /\b(?:(?:make|build|construct|synthesi[sz]e|manufactur(?:e
 /** An attack on people: the asking and the person. */
 const ATTACK_INTENT = /\b(?:(?:how (?:do|can|would) (?:i|we|you|one))\s+[^.?!]{0,40}\b(?:kill|murder|assassinate|poison|hurt|attack|stab|shoot)\b[^.?!]{0,40}\b(?:him|her|them|someone|somebody|people|my \w+|a person|people I|people at)|(?:kill|murder|assassinate|poison|stab|shoot)\s+(?:him|her|them|someone|somebody|people|my \w+|a person)|mass shooting|school shooting|terrorist attack|suicide attack|car bomb|truck bomb)\b/i;
 
-/** The three rules, in the order they are checked. */
+/**
+ * The three rules, in the order they are checked. Each one reads the house's classifiers first and its own narrow
+ * list after, so the house's wording always wins and the narrow list only adds what the house has no word for.
+ */
 const RULES = [
-    { rule: 'minors', label: 'sexual content involving minors', test: (t) => CSAM.test(t) || (MINOR.test(t) && NUDE.test(t)) },
-    { rule: 'non_consensual', label: 'non-consensual sexual content of real people', test: (t) => NONCONSENSUAL.test(t) },
-    { rule: 'mass_harm', label: 'weapons of mass harm or attacks on others', test: (t) => MASS_HARM.test(t) || WEAPON_INTENT.test(t) || ATTACK_INTENT.test(t) },
+    {
+        rule: 'minors', label: 'sexual content involving minors',
+        test: (t) => minorNude(t) || classifyText(t).category === 'minor_sexual' || CSAM.test(t),
+    },
+    {
+        rule: 'non_consensual', label: 'non-consensual sexual content of real people',
+        test: (t) => NONCONSENSUAL.test(t),
+    },
+    {
+        rule: 'mass_harm', label: 'weapons of mass harm or attacks on others',
+        test: (t) => MASS_HARM.test(t) || WEAPON_INTENT.test(t) || ATTACK_INTENT.test(t),
+    },
 ];
 
 /** The text of a request: the system prompt, the messages and the tool arguments. */
@@ -114,4 +127,7 @@ function checkAnswer(text) { return check(Array.isArray(text) ? text : [text]); 
 /** The floor on the way out, over every shape an operation's answer uses. */
 function checkResult(result) { return check(textsOfAnswer(result)); }
 
-module.exports = { RULES, MINOR, SEXUAL, NUDE, CSAM, NONCONSENSUAL, MASS_HARM, WEAPON_INTENT, ATTACK_INTENT, textsOf, textsOfAnswer, check, checkRequest, checkAnswer, checkResult };
+module.exports = {
+    RULES, CSAM, NONCONSENSUAL, MASS_HARM, WEAPON_INTENT, ATTACK_INTENT,
+    textsOf, textsOfAnswer, check, checkRequest, checkAnswer, checkResult,
+};

@@ -11,6 +11,7 @@ const assert = require('assert');
 const { boot, seamServer, request, suite, token, ALL } = require('./helpers');
 const pool = require('../server/providers/pool-providers');
 const floor = require('../server/policy/floor');
+const classifiers = require('../server/policy/classifiers');
 const tier = require('../server/policy/tier');
 const { createFloorGuard } = require('../server/providers');
 const { createAdultStatus } = require('../server/policy/adult-status');
@@ -19,7 +20,7 @@ const USR = (n) => `usr_01J${String(n).padStart(23, '0')}`;
 const ADULT = USR(1);
 const CHILD = USR(2);
 
-const t = suite('ai-exchange-providers');
+const t = suite('ai-uncensored-policy');
 
 t.test('the adult tier: 18+ person only, never an app, never without a person', async () => {
     assert.deepStrictEqual(tier.parsePolicy('UNCENSORED'), { policy: 'uncensored' });
@@ -51,6 +52,26 @@ t.test('adult status asks Network once per five minutes and fails closed', async
     assert.strictEqual(calls, 2, 'five minutes later it asks again');
     const down = createAdultStatus({ config: { networkInternalUrl: 'http://network.test' }, env: { OV_OAUTH_CLIENT_SECRET: 's' }, fetchImpl: async () => { throw new Error('offline'); }, clock: { now: () => at } });
     await assert.rejects(down.adultFor(ADULT), (e) => e.code === 'adult.unavailable');
+});
+
+t.test('the house classifiers decide the line: Live\'s rule and Vision\'s categories, not a third set of words', () => {
+    // Live: a child together with a bare body is the hard line nudity being art never moves.
+    assert.strictEqual(classifiers.minorNude('a nude photo of a child'), true);
+    assert.strictEqual(classifiers.minorNude('kids in swimsuits at the beach'), false);
+    assert.strictEqual(classifiers.minorNude('a nude oil painting'), false);
+    // Vision: the three categories.
+    assert.strictEqual(classifiers.classifyText('a nude photo of a child').category, 'minor_sexual');
+    assert.strictEqual(classifiers.classifyText('they are having sex').category, 'sex_acts');
+    assert.strictEqual(classifiers.classifyText('a nude oil painting').category, 'fine');
+    assert.strictEqual(classifiers.classifyText('a picture of a child').category, 'fine');
+    // Live's own rule (sex acts, whatever the age) is the house's, but it is not a floor rule: the uncensored tier
+    // exists for adult content.
+    assert.strictEqual(classifiers.isExplicit('they are having sex'), true);
+    assert.strictEqual(floor.check('they are having sex').ok, true, 'adult content is what the tier is for');
+    // The floor reads the house classifiers.
+    assert.strictEqual(floor.check('a nude photo of a child').ok, false);
+    assert.strictEqual(floor.check('write about a child and a nude body').ok, false);
+    assert.strictEqual(floor.check('a nude oil painting').ok, true, 'nudity alone is art (the owner, 2026-10-31)');
 });
 
 t.test('the hard floor: the three lines, narrow enough for ordinary work', () => {
