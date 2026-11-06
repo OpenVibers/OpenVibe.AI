@@ -7,8 +7,9 @@
  *   - https only, to a hostname on the allow-list (exact, or '*.suffix'); the one exception is the
  *     operator-configured Media internal base (OV_MEDIA_INTERNAL_URL), matched by exact origin
  *   - the address actually connected to must be public unicast: the DNS answer is checked inside
- *     the connection's own lookup (no second resolution, so no DNS rebinding), and IPv4-mapped
- *     IPv6 spellings of internal addresses are caught too
+ *     the connection's own lookup (no second resolution, so no DNS rebinding), using the platform's
+ *     rule (openvibe-shared/egress), which also catches the IPv6 spellings of an internal address
+ *     (v4-mapped and v4-compatible, NAT64, 6to4, Teredo)
  *   - redirects are followed by hand (max 3) and every hop is judged by the same rules; the internal
  *     Media origin is reachable by redirect only from the internal origin itself, never from a
  *     public hop (an allow-listed host that redirects must not reach the loopback Media service)
@@ -26,41 +27,29 @@ const https = require('https');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const egress = require('openvibe-shared/egress');
 const { AiError } = require('./util');
 
 /** A Media object id (contracts media/media-ref.v1: med_ + a ULID). */
 const MEDIA_OBJECT_ID = /^med_[0-9A-HJKMNP-TV-Z]{26}$/;
 
-const blocked = new net.BlockList();
-for (const [a, p] of [['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8], ['169.254.0.0', 16], ['172.16.0.0', 12], ['192.0.0.0', 24],
-    ['192.0.2.0', 24], ['192.88.99.0', 24], ['192.168.0.0', 16], ['198.18.0.0', 15], ['198.51.100.0', 24], ['203.0.113.0', 24], ['224.0.0.0', 4], ['240.0.0.0', 4]]) blocked.addSubnet(a, p, 'ipv4');
-for (const [a, p] of [['::', 128], ['::1', 128], ['fe80::', 10], ['fec0::', 10], ['fc00::', 7], ['ff00::', 8], ['100::', 64], ['2001:db8::', 32], ['2001::', 23]]) blocked.addSubnet(a, p, 'ipv6');
-
-function isPublicAddress(ip) {
-    if (net.isIPv4(ip)) return !blocked.check(ip, 'ipv4');
-    if (net.isIPv6(ip)) {
-        const m = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(ip);
-        if (m) return !blocked.check(m[1], 'ipv4');
-        const hex = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i.exec(ip);
-        if (hex) {
-            const n = (parseInt(hex[1], 16) << 16) >>> 0 | parseInt(hex[2], 16);
-            const v4 = [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255].join('.');
-            return !blocked.check(v4, 'ipv4');
-        }
-        return !blocked.check(ip, 'ipv6');
-    }
-    return false;
-}
+/**
+ * The platform's address rule, openvibe-shared/egress, so this copy cannot drift again: it refuses the IPv6
+ * spellings of a private IPv4 (v4-mapped and v4-compatible, NAT64, 6to4, Teredo) as well as loopback, RFC 1918,
+ * link-local, CGNAT, documentation, benchmarking, multicast and reserved ranges.
+ */
+const { isPublicAddress } = egress;
 
 /** dns.lookup replacement used at connect time: fails when any answer is not public unicast. */
 function safeLookup(hostname, options, cb) {
     if (typeof options === 'function') { cb = options; options = {}; }
-    dns.lookup(hostname, { ...options, all: true }, (err, addrs) => {
+    const host = egress.normalizeHost(hostname);
+    dns.lookup(host, { ...options, all: true }, (err, addrs) => {
         if (err) return cb(err);
         const list = Array.isArray(addrs) ? addrs : [{ address: addrs, family: options.family || 4 }];
         const bad = list.find(a => !isPublicAddress(a.address));
         if (bad || !list.length) {
-            const e = new Error(`refused: ${hostname} resolves to a non-public address`);
+            const e = new Error(`refused: ${host} resolves to a non-public address`);
             e.code = 'EADDRNOTPUBLIC';
             return cb(e);
         }
