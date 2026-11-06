@@ -40,6 +40,9 @@ const TABLES = [
     { table: 'memory_items', subject: 'owner', value: (usr) => `user:${usr}`, file: null, erase: 'delete' },
     { table: 'memory_profiles', subject: 'owner', value: (usr) => `user:${usr}`, file: null, erase: 'delete' },
     { table: 'memory_reads', subject: 'owner', value: (usr) => `user:${usr}`, file: null, erase: 'delete' },
+    // Memory M3: import previews are drafts, never part of the person's export; they go with the account like the
+    // notes they would become. The payload is sealed, and the row is never read by the account export.
+    { table: 'memory_imports', subject: 'owner', value: (usr) => `user:${usr}`, file: null, erase: 'delete' },
     { table: 'free_allowance_usage', subject: 'subject', file: 'free-allowance.json', erase: { keep: ledger } },
     // D11 owner settings: the revisions are the service's configuration audit trail, kept like the catalogues.
     { table: 'config_snapshots', subject: 'created_by', file: null, erase: { keep: 'the configuration history is the service\'s; created_by is the operator audit trail' } },
