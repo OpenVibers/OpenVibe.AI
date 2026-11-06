@@ -234,6 +234,9 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             }
         }
         const options = body.options && typeof body.options === 'object' ? body.options : {};
+        // Community capacity is opt-in per request: a person's machine sees the prompt, so only a caller that says so
+        // may be placed there. The OpenAI and Messages routes set body.community from x-openvibe-community.
+        const communityOptIn = body.community === true || options.community === true;
         // A person's own key (WS-O task 2): only the service that stored it, within its daily budget; never cached.
         // A person's own key: the default one, or the provider the run names (Codes C3: one credential per provider).
         const credentialSubject = body.credential && typeof body.credential === 'object' ? String(body.credential.subject || '') : null;
@@ -279,6 +282,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             // A credential or a project's own provider never reaches managed supply: no Balance hold for that run.
             ...(credentialSubject !== null || projectProvider ? { byok: true } : {}),
             ...(maxCostNano != null ? { maxCostNano: String(maxCostNano) } : {}),
+            ...(communityOptIn ? { communityOptIn: true } : {}),
             ...(pinned ? { routePin: pinned } : {}),
             // POST /v1/chat/completions with stream: true: the upstream's deltas, as they arrive (kept in memory only).
             ...(typeof onDelta === 'function' ? { onDelta } : {}),
@@ -298,11 +302,11 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             source_service: requester.type === 'service' ? requester.id : null,
             target: body.target ? JSON.stringify(body.target) : null, target_key: ctx.targetKey,
             input: null, input_hash: inputHash, idempotency_key: idem, trace_id: trace, request_id: requestId, retry_of: retryOf,
-            options: JSON.stringify({ cache: options.cache !== false && credentialSubject === null && !projectProvider && !pinned && !selfKeys, debug: Boolean(options.debug), input_retained: kept.full,
+            options: JSON.stringify({ cache: options.cache !== false && credentialSubject === null && !projectProvider && !pinned && !selfKeys && !communityOptIn, debug: Boolean(options.debug), input_retained: kept.full,
                 ...(credentialSubject !== null ? { credential_subject: credentialSubject } : {}), ...(credentialProvider !== null ? { credential_provider: credentialProvider } : {}),
                 ...(selfKeys ? { self_subject: personSubject } : {}),
                 ...(projectProvider ? { project_provider: projectProvider } : {}), ...(pinned ? { pinned_offer: pinned } : {}),
-                ...(prefer ? { prefer } : {}) }), created_at: now,
+                ...(communityOptIn ? { community: true } : {}), ...(prefer ? { prefer } : {}) }), created_at: now,
         };
         base.input = stableStringify(kept.value);
 
@@ -310,7 +314,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         // A pinned run is never served from (or written to) the shared cache: the caller asked for THIS model,
         // and another model's answer under the same prompt would silently break the pin. A run that may use the
         // person's own key is never cached either: their key must be used, and the answer is theirs, not the scope's.
-        const scope = options.cache === false || credentialSubject !== null || projectProvider || pinned || selfKeys ? null : cache.scopeFor(wf.cache_mode, ctx);
+        const scope = options.cache === false || credentialSubject !== null || projectProvider || pinned || selfKeys || communityOptIn ? null : cache.scopeFor(wf.cache_mode, ctx);
         let cacheKey = null;
         if (scope) {
             // Some workflows key the cache on less than their whole input (hooks.js CACHE_INPUT: a signed URL's signature).
@@ -590,6 +594,9 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                 const changed = await credentials.markFailed(failure.owner, failure.subject, failure.provider, failure.error);
                 if (changed) await events.credentialFailed({ subject: failure.subject, provider: failure.provider, error: failure.error, owner: failure.owner });
             } : undefined;
+            // With Credits off there is no Balance payer at all, so every run is the free tier for a new community machine;
+            // with it on only a run that could not hold a paid offer is.
+            const communityFree = !(credits && credits.enabled) || Boolean(ctx.creditsRequired);
             const r = await engine.execute(wf, row, input, { signal: controller.signal, logRequest, debugRaw: Boolean(config.debugRawLog && opts.debug), inputHash: row.input_hash, preferences,
                 // A developer app's run (ADR-014): the provider pool excludes a person's byok key, and the run is
                 // limited to free and local capacity when it is a sandbox run or when no tier budget governs its
@@ -599,6 +606,9 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                 requesterType: ctx.requesterType, requesterId: ctx.requesterId,
                 // AI Exchange F: no payer on this run (and not BYOK): the pool skips paid offers with a card.
                 creditsRequired: Boolean(ctx.creditsRequired),
+                // Opted in to community capacity: the pool may place this run on a person's machine.
+                communityOptIn: Boolean(ctx.communityOptIn),
+                communityFree,
                 ...(ctx.routePin ? { routePin: ctx.routePin } : {}),
                 // L37: the soft preference the caller made (provider, and a model if it named one).
                 prefer: opts.prefer || null,

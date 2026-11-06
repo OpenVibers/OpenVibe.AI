@@ -178,6 +178,9 @@ function openaiRouter({ runs, auth, config, registry, log = console }) {
         // AI Exchange F: the caller's liability cap for the Balance hold (an OpenVibe extension, like x_openvibe).
         if (b.max_cost_usd != null) input.max_cost_usd = b.max_cost_usd;
         let body = { workflow: 'ai.complete', input };
+        // Opt in to community capacity (the design's "Offer to the network"): the caller accepts that a person's machine
+        // sees the prompt. Off unless asked for, per request.
+        if (req.get('x-openvibe-community') === '1' || (b.x_openvibe && b.x_openvibe.community === true)) body.community = true;
         // L37: the soft preference (provider, and a model if the caller wants one). A wish, not a pin.
         if (b.prefer) body = { ...body, prefer: b.prefer };
         if (req.principal.kind === 'app') body = { ...body, attribution: appAttribution(req.principal) };
@@ -219,12 +222,17 @@ function openaiRouter({ runs, auth, config, registry, log = console }) {
             return openaiError(res, 504, `the completion is still running; GET /api/v1/runs/${run.id}`, 'run.timeout');
         }
         const disclosure = await models.disclosureOf({ registry, config, run });
-        if (live) live.route(disclosure);
+        // A community answer is labelled even with the model catalog flag off: the caller must see that the prompt ran
+        // on a person's machine.
+        const community = (disclosure && disclosure.community) || (run.explain && run.explain.community) || null;
+        if (community && !live) res.setHeader('X-OpenVibe-Community', '1');
+        if (live) live.route(disclosure || (community ? { community } : null));
         const created = Math.floor(Date.parse(run.created_at || new Date().toISOString()) / 1000) || Math.floor(Date.now() / 1000);
         const id = `chatcmpl-${run.id}`;
         const model = run.output.model || (run.provenance && run.provenance.model) || 'openvibe';
         const usage = { prompt_tokens: run.usage.tokens_in || 0, completion_tokens: run.usage.tokens_out || 0, total_tokens: (run.usage.tokens_in || 0) + (run.usage.tokens_out || 0) };
-        const x = { run_id: run.id, provider: run.provenance && run.provenance.provider, fallback_used: Boolean(run.provenance && run.provenance.fallback_used), cost_usd: run.usage.cost_usd, synthetic: Boolean(run.synthetic) };
+        const x = { run_id: run.id, provider: run.provenance && run.provenance.provider, fallback_used: Boolean(run.provenance && run.provenance.fallback_used), cost_usd: run.usage.cost_usd, synthetic: Boolean(run.synthetic),
+            ...(community ? { community } : {}) };
         if (!live) res.setHeader('X-OpenVibe-Run-Id', run.id);   // a stream sent it with its headers
         if (live) {
             const send = (o) => live.write(o);

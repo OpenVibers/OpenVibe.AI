@@ -134,7 +134,7 @@ function selfModelFor(cred, operation, req, ctx, prefs) {
     return { model, kind, why };
 }
 
-function createProviderPool({ db, registry, config, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, credentialFetch = null, machineModels = null, bench = null, variantEvidence = null }) {
+function createProviderPool({ db, registry, config, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, credentialFetch = null, machineModels = null, community = null, bench = null, variantEvidence = null }) {
     // A person's own machine as their model (credential provider node, server/machines.js).
     const machines = machineModels || require('../machines').createMachineModels({ config, env, fetchImpl });
     const cache = new Map();          // key -> { stamp, adapter }
@@ -883,6 +883,19 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             }
         }
 
+        // Community capacity (design: "Offer to the network"; plan E4): only a request that opted in may run on a
+        // person's machine, never an exact pin, never a BYOK run. The canaries run before the first answer; a failure
+        // stops that machine and the ordinary network answers instead. The answer is labelled in explain.openvibe.
+        if (community && ctx.communityOptIn && !ctx.credential && !ctx.byok && !ctx.exact) {
+            try {
+                const out = await community.execute({ route, operation, req, ctx });
+                if (out) return out;
+            } catch (err) {
+                const why = String((err && (err.detail || err.message)) || err).slice(0, 300);
+                tried.push({ provider: 'community', error: why });
+                log.warn(`[ai] community ${operation} failed, falling back to the network: ${why}`);
+            }
+        }
         // CHECKPOINT D3: an exact id runs only its own artifact. The candidates are the catalog's deployments of
         // that id, filtered first by commercial access and what the request needs; no other model is ever added.
         const exact = ctx.exact || null;

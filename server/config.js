@@ -330,6 +330,19 @@ function load(env = process.env) {
         // it); OV_BOT_INTERNAL_URL= (empty) turns it off.
         bot: { url: trimUrl(env.OV_BOT_INTERNAL_URL != null ? env.OV_BOT_INTERNAL_URL : 'http://127.0.0.1:4630') },
 
+        // ── Community AI offers (the design's "Offer to the network"; plan E4): requests that opt in to community
+        // capacity may run on a person's Node, only after its canaries and model fingerprint pass. AI reads the offers
+        // from Network's resource registry (network.registry.read), dispatches through Bot (bot.machine.ai), and keeps
+        // the verification and earnings ledger. On by default: without a Network service secret the list is empty.
+        community: {
+            enabled: bool(env.AI_COMMUNITY, true),
+            refreshMs: Math.max(1000, int(env.AI_COMMUNITY_REFRESH_MS, 30000)),
+            canaryMaxAgeMs: Math.max(60000, int(env.AI_COMMUNITY_CANARY_MAX_AGE_MS, 6 * 60 * 60 * 1000)),
+            canaryTimeoutMs: Math.max(2000, Math.min(120000, int(env.AI_COMMUNITY_CANARY_TIMEOUT_MS, 30000))),
+            // About 1% of community answers are re-run on a trusted machine with the same model; a mismatch stops traffic.
+            spotRate: Math.max(0, Math.min(1, float(env.AI_COMMUNITY_SPOT_RATE, 0.01))),
+        },
+
         // ── Tier budgets (T6 step 8, server/govern.js): openvibe-sdk/govern in Valkey, off unless AI_GOVERN_TIERS=1.
         govern: loadGovern(env, { bool, int, num: float }),
     };
