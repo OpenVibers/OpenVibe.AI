@@ -14,9 +14,10 @@ const dayOf = (ms) => new Date(ms).toISOString().slice(0, 10);
 
 const NUM_COLUMNS = 'COUNT(*)::bigint AS requests, SUM(tokens_in)::bigint AS tokens_in, SUM(tokens_out)::bigint AS tokens_out, SUM(cost_usd)::double precision AS cost_usd';
 const DAY = "to_char(created_at::timestamptz AT TIME ZONE 'UTC', 'YYYY-MM-DD')";
-// A real answer: the provider was called and answered. A cached run called nobody; a failed one
-// answered nothing.
-const REAL = "status = 'succeeded' AND synthetic = 0";
+// A real answer: a provider was called and answered. A cached run called nobody, a failed one
+// answered nothing, and a workflow that finished without an AI call (provider_key null: zero tokens,
+// zero cost) has no model to attribute.
+const REAL = "status = 'succeeded' AND synthetic = 0 AND provider_key IS NOT NULL";
 
 const shape = (r) => ({
     requests: Number(r.requests) || 0,
