@@ -201,6 +201,26 @@ t.test('the same switch reaches a project’s keys (a project acts as itself, no
     await request(h.base, 'DELETE', '/api/v1/presets/default', { tok: service, body: { on_behalf_of: { type: 'project', id: PRJ } } });
 });
 
+t.test('only a first-party service names whom it acts for: an app key may not touch another person or project', async () => {
+    const OTHER_PRJ = 'prj_01JAB2C3D4E5F6G7H8J9K0MNZZ';
+    const asPerson = await request(h.base, 'POST', '/api/v1/presets', {
+        tok: key, body: { on_behalf_of: DANA, name: 'default', policy: { data_policy: 'standard', community: true } },
+    });
+    assert.strictEqual(asPerson.status, 403, asPerson.text);
+    assert.ok(asPerson.text.includes('capability.denied'), asPerson.text);
+    const otherProject = await request(h.base, 'POST', '/api/v1/presets', {
+        tok: key, body: { on_behalf_of: { type: 'project', id: OTHER_PRJ }, name: 'default', policy: { data_policy: 'standard', community: true } },
+    });
+    assert.strictEqual(otherProject.status, 403, otherProject.text);
+    const readOther = await request(h.base, 'GET', `/api/v1/presets?on_behalf_of=${DANA}`, { tok: key });
+    assert.strictEqual(readOther.status, 403, 'nor read them');
+    const ownProject = await request(h.base, 'POST', '/api/v1/presets', {
+        tok: key, body: { on_behalf_of: { type: 'project', id: PRJ }, name: 'noted', policy: { data_policy: 'private', community: false } },
+    });
+    assert.strictEqual(ownProject.status, 201, 'naming its own project is still fine: ' + ownProject.text);
+    await request(h.base, 'DELETE', '/api/v1/presets/noted', { tok: key, body: { on_behalf_of: { type: 'project', id: PRJ } } });
+});
+
 t.test('shutdown', async () => {
     await h.stop();
     for (const name of Object.keys(upstreams)) await upstreams[name].close();

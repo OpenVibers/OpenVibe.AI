@@ -75,14 +75,23 @@ function exchangeRouter({ db, registry, pool, env = process.env, clock = { now: 
         if (!id) throw new AiError(422, 'ai.invalid', 'on_behalf_of must name a person (usr_…) or a project (prj_…)');
         if (type === 'project') {
             if (!/^prj_[0-9A-HJKMNP-TV-Z]{26}$/.test(String(id))) throw new AiError(422, 'ai.invalid', 'on_behalf_of must name a project (prj_…)');
-            return { type: 'project', id: String(id) };
+            return mayActFor(req, { type: 'project', id: String(id) });
         }
         if (!/^usr_[0-9A-HJKMNP-TV-Z]{26}$/.test(String(id))) throw new AiError(422, 'ai.invalid', 'on_behalf_of must name a person (usr_…)');
-        const p = req.principal;
-        if (p && p.kind === 'user' && p.subject && p.subject.id !== String(id)) {
-            throw new AiError(403, 'capability.denied', 'a person manages their own presets, never someone else\'s');
-        }
-        return { type: 'user', id: String(id) };
+        return mayActFor(req, { type: 'user', id: String(id) });
+    };
+
+    /**
+     * Only a first-party service token (requireCap's principal has no kind) names whom it acts for. A person, an
+     * app or a developer key may name only an owner it already is (presets.ownersOf): never another person, and
+     * never a project it merely knows the id of.
+     */
+    const mayActFor = (req, target) => {
+        const p = req.principal || {};
+        if (!p.kind) return target;
+        const mine = presets.ownersOf(p);
+        if (mine.some((o) => o.type === target.type && o.id === target.id)) return target;
+        throw new AiError(403, 'capability.denied', 'a preset belongs to its own person or project; this token may not name that one');
     };
 
     /** Every preset a target may name: its own rows first, then the built-in ones it does not shadow. */
