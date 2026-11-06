@@ -567,7 +567,8 @@ function consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, e
     r.get('/console/pricebook', read, wrap(async (req, res) => {
         await send(res, 200, pages.pricebook({
             ...common(req), canManage: req.staff.caps.includes(CAPS.providerManage), notice: notice(req),
-            state: priceBook ? priceBook.last : null,
+            report: priceBook ? priceBook.last : null,
+            state: priceBook ? await priceBook.state.read() : null,
             pending: priceBook ? await priceBook.pending(50) : [],
             recent: priceBook ? await priceBook.changes({ status: 'applied', limit: 50 }) : [],
         }));

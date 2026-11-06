@@ -673,6 +673,13 @@ smaller one the job applies at once, and the model row carries the new price wit
 listing that cannot be read leaves every price alone: an unreadable page is not evidence of a change. A price a
 person typed by hand is never touched.
 
+The book is **due-based**, not timer-based: AI is deployed several times a day, so a timer in the process
+would be reset every time and the week would never come round. The last finished run is a row in the database
+(`price_book_state`, migration 0037) and the service asks once an hour whether the interval has passed since
+then; the first ask is a few minutes after a boot, so the boot path stays free. AI runs several workers, so a
+run is claimed before it starts: only one of them reads the listings at a time, and the claim expires on its own
+if a worker dies.
+
 The catalog says when a price was checked (`price_checked_at`, `price_checked`), and
 `GET /api/v1/exchange/price-changes` is the changelog Exchange renders: what a price was, what it became, the
 listing it was read from and the day it was read.
@@ -680,7 +687,9 @@ listing it was read from and the day it was read.
 | Setting | Default | Meaning |
 |---|---|---|
 | `AI_PRICE_BOOK` | on (off in test mode, off under `AI_DRILL=1`) | the weekly job |
-| `AI_PRICE_BOOK_INTERVAL_MS` | 604800000 (a week) | how often the listings are read |
+| `AI_PRICE_BOOK_INTERVAL_MS` | 604800000 (a week) | how long between two runs |
+| `AI_PRICE_BOOK_TICK_MS`, `AI_PRICE_BOOK_FIRST_TICK_MS` | 3600000, 300000 | how often the service asks whether the book is due, and how long after a boot the first ask is |
+| `AI_PRICE_BOOK_CLAIM_TTL_MS` | 900000 | how long a claimed run holds the claim |
 | `AI_PRICE_BOOK_THRESHOLD_PCT` | 20 | a change of more than this waits for the owner |
 | `AI_PRICE_BOOK_TIMEOUT_MS`, `AI_PRICE_BOOK_MAX_BYTES` | 20000, 8 MiB | the guard's timeout and size cap |
 
@@ -882,7 +891,7 @@ mix vectors from different providers (re-embed when the provider changes).
 | Import from a Live snapshot: dry run, holds, idempotent re-run | `test/import.test.js` |
 | Routing presets: the five built-in ones, a caller's own stored per account and per project, each knob applied (floor, ceiling, max_price, quantization, region, data policy, community), a hard max_price refused before the call with a problem document, every answer's receipt (offer, price, tokens, cache hits, latency, why, fallbacks, privacy label, BYOK at 0 %) in the headers and at `GET /v1/receipts/{id}`, and the Anthropic endpoint and the stream carrying the same receipt | `test/exchange-presets-receipts.test.js` |
 | Capability proposals are valid contracts documents matching what is enforced | `test/proposals.test.js` |
-| The living price book: every listing read in its own shape, the guard refusing an IP literal, a change of 20% or less applied at once, one of more than 20% waiting for the owner and applied only on approval, the change log, the catalog's "price checked" date, the public changelog, the job off under a drill | `test/price-book.test.js` |
+| The living price book: every listing read in its own shape, the guard refusing an IP literal, a change of 20% or less applied at once, one of more than 20% waiting for the owner and applied only on approval, the change log, the catalog's "price checked" date, the public changelog, the job off under a drill, the book due-based (a restart before the week does not run it, a restart after it does) and two instances at the same moment never both running | `test/price-book.test.js` |
 
 ## Security
 

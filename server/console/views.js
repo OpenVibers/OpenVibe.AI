@@ -722,20 +722,22 @@ function priceChangeRow(c, { csrf, canManage, actions = false } = {}) {
 </tr>`;
 }
 
-function pricebook({ staff, csrf, state, pending, recent, canManage, notice, error }) {
-    const st = state || {};
+function pricebook({ staff, csrf, report, state, pending, recent, canManage, notice, error }) {
+    const st = report || {};
     const unreadable = st.unreadable || [];
     const cross = st.cross_reference || null;
+    const row = state || {};
     return layout({
         title: 'Price book', section: 'pricebook', staff, csrf, notice, error, body: html`<h1>Price book</h1>
 <p class="muted">Every catalogued provider's own price listing, read once a week. A price comes from the provider that sells it and never from a guess; a listing that cannot be read leaves every price alone. A change of more than 20% waits here for the owner; a smaller one the job applies at once.</p>
 <div class="grid">
-  <div class="card"><div class="k">Last run</div><div class="v">${st.checked_at || 'never'}</div><div class="muted">${st.sources ? st.sources.length + ' listing(s) read' : 'the job has not run yet'}</div></div>
+  <div class="card"><div class="k">Last run</div><div class="v">${row.last_run_at ? String(row.last_run_at).slice(0, 10) : (st.checked_at || 'never')}</div><div class="muted">${row.last_run_at ? 'finished ' + when(row.last_run_at) : 'the job has not run yet'}</div></div>
   <div class="card"><div class="k">Waiting for the owner</div><div class="v">${n((pending || []).length)}</div><div class="muted">a change of more than 20%</div></div>
   <div class="card"><div class="k">Changed by the job</div><div class="v">${n((st.applied || []).length)}</div><div class="muted">a change of 20% or less</div></div>
   <div class="card"><div class="k">Listings unreadable</div><div class="v">${n(unreadable.length)}</div><div class="muted">their prices stand</div></div>
 </div>
 ${canManage ? html`<form class="inline" method="post" action="/console/pricebook/run">${csrfField(csrf)}<button type="submit">Read the prices now</button></form>` : html`<p class="muted">Reading the prices on demand needs <code>ai.provider.manage</code> (the owner's <code>staff.secrets.manage</code>).</p>`}
+${row.claimed_by ? html`<p class="muted">Another instance is running the book right now (${row.claimed_by}).</p>` : ''}
 ${unreadable.length ? html`${table('Listings that could not be read', ['Listing', 'Why'], unreadable.map((u) => html`<tr><td><code>${u.source}</code></td><td>${u.error}</td></tr>`), 'every listing was read.')}` : ''}
 ${cross ? html`${table('OpenRouter as a second opinion', ['Models compared', 'The same price', 'A different price'], [html`<tr><td>${n(cross.models)}</td><td>${n(cross.agree)}</td><td>${n(cross.differ)}</td></tr>`], 'nothing was compared.')}` : ''}
 <h2>Waiting for the owner</h2>

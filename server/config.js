@@ -364,7 +364,15 @@ function load(env = process.env) {
         // test mode, where the recorded listings are replayed instead.
         priceBook: {
             enabled: bool(env.AI_PRICE_BOOK, !bool(env.AI_DRILL, false) && nodeEnv !== 'test'),
+            // How long between two runs. The service is deployed several times a day, so the book is due-based:
+            // the last finished run is a row in the database and the tick only reads the listings when the
+            // interval has passed since then.
             intervalMs: Math.max(3600000, int(env.AI_PRICE_BOOK_INTERVAL_MS, 7 * 24 * 60 * 60 * 1000)),
+            // How often the service asks whether the book is due, and how long after a boot the first ask is.
+            tickMs: Math.max(60000, int(env.AI_PRICE_BOOK_TICK_MS, 60 * 60 * 1000)),
+            firstTickMs: Math.max(1000, int(env.AI_PRICE_BOOK_FIRST_TICK_MS, 5 * 60 * 1000)),
+            // How long a claimed run holds the claim, so a worker that dies does not block the next one.
+            claimTtlMs: Math.max(60000, int(env.AI_PRICE_BOOK_CLAIM_TTL_MS, 15 * 60 * 1000)),
             timeoutMs: Math.max(1000, int(env.AI_PRICE_BOOK_TIMEOUT_MS, 20000)),
             maxBytes: Math.max(1024, int(env.AI_PRICE_BOOK_MAX_BYTES, 8 * 1024 * 1024)),
             thresholdPct: Number(env.AI_PRICE_BOOK_THRESHOLD_PCT || 20) / 100,

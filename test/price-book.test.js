@@ -177,9 +177,13 @@ t.test('the Exchange changelog serves the changes that are live', async () => {
 t.test('the job is off under a drill and off in test mode', async () => {
     const book = createPriceBook({ db: h.db, registry: h.registry, config: { priceBook: { enabled: false }, nodeEnv: 'test' }, clock: CLOCK, log: silent, transport: recorded });
     assert.deepStrictEqual(await book.runOnce(), { skipped: 'disabled' });
-    const drilled = createPriceBook({ db: h.db, registry: h.registry, config: { priceBook: { enabled: true }, nodeEnv: 'test' }, clock: CLOCK, log: silent, transport: recorded });
+    assert.deepStrictEqual(await book.tick(), { skipped: 'disabled' });
+    // A clock past the interval, so the book is due: the drill is what stops it.
+    const later = { now: () => Date.parse('2026-12-20T09:00:00Z') };
+    const drilled = createPriceBook({ db: h.db, registry: h.registry, config: { priceBook: { enabled: true }, nodeEnv: 'test' }, clock: later, log: silent, transport: recorded });
     await h.registry.upsertProvider({ key: 'qwen', display_name: 'Qwen', kind: 'openai', auth_mode: 'bearer', secret_ref: 'vault:qwen', metadata: { drill: true } });
     assert.deepStrictEqual(await drilled.runOnce(), { skipped: 'drill' });
+    assert.deepStrictEqual(await drilled.tick(), { skipped: 'drill' });
 });
 
 t.test('the operator page shows the change that waits for the owner', async () => {
@@ -189,7 +193,8 @@ t.test('the operator page shows the change that waits for the owner', async () =
     const html = pages.pricebook({
         staff: { subject: 'usr_owner', username: 'owner', role: 'owner', caps: ['ai.provider.manage'] },
         csrf: 'csrf-token', canManage: true,
-        state: { checked_at: DAY, sources: [{ source: 'glm' }], applied: [], pending: pending, unreadable: [] },
+        report: { checked_at: DAY, sources: [{ source: 'glm' }], applied: [], pending: pending, unreadable: [] },
+        state: { last_run_at: '2026-11-13T09:00:00.000Z' },
         pending, recent: [],
     });
     assert.match(html, /Price book/);
@@ -197,6 +202,65 @@ t.test('the operator page shows the change that waits for the owner', async () =
     assert.ok(html.includes(pending[0].model_key), 'the waiting change is on the page');
     assert.match(html, /Approve/);
     assert.ok(!/<script/i.test(html), 'no script on the operator page');
+});
+
+t.test('the book is due-based: a restart before the week does not run it, a restart after it does', async () => {
+    // Its own database, so the last run of the other tests is not this one's history.
+    const own = await boot({ env: { DEEPSEEK_KEY: 'test-deepseek-key', DEEPSEEK_API_KEY: 'test-deepseek-key' } });
+    try {
+        const at = Date.parse('2026-11-20T09:00:00Z');
+        const book = (now) => createPriceBook({
+            db: own.db, registry: own.registry, config: { priceBook: { enabled: true }, nodeEnv: 'test' },
+            clock: { now: () => now }, log: silent, transport: recorded,
+        });
+
+        // The first boot has no row: the book has never run, so it is due at once.
+        const first = await book(at).tick();
+        assert.ok(first && !first.skipped, 'the first run happens');
+        assert.ok(first.sources.length > 0, 'the listings were read');
+
+        // A restart a minute later: the week has not passed, so nothing runs.
+        assert.deepStrictEqual(await book(at + 60 * 1000).tick(), { skipped: 'not due' });
+
+        // A restart after the interval: the book runs once.
+        const later = book(at + 8 * 24 * 60 * 60 * 1000);
+        const again = await later.tick();
+        assert.ok(again && !again.skipped, 'the week came round');
+        assert.deepStrictEqual(await later.tick(), { skipped: 'not due' });
+
+        // The row says when the last run finished, and nobody holds the claim.
+        const row = await own.db.prepare("SELECT * FROM price_book_state WHERE id = 'pricebook'").get();
+        assert.ok(row.last_run_at, 'the last run is remembered in the database');
+        assert.strictEqual(row.claimed_until, null);
+        assert.strictEqual(row.claimed_by, null);
+    } finally {
+        await own.stop();
+    }
+});
+
+t.test('two instances at the same moment: only one reads the listings', async () => {
+    const own = await boot({ env: { DEEPSEEK_KEY: 'test-deepseek-key', DEEPSEEK_API_KEY: 'test-deepseek-key' } });
+    try {
+        const at = Date.parse('2026-11-27T09:00:00Z');
+        // A listing that takes a moment, so the first instance still holds the claim when the second asks.
+        const slow = async ({ url }) => { await new Promise((r) => setTimeout(r, 120)); return recorded({ url }); };
+        const instance = () => createPriceBook({
+            db: own.db, registry: own.registry, config: { priceBook: { enabled: true }, nodeEnv: 'test' },
+            clock: { now: () => at }, log: silent, transport: slow,
+        });
+        const [one, two] = await Promise.all([instance().tick(), instance().tick()]);
+        const ran = [one, two].filter((r) => r && !r.skipped);
+        const skipped = [one, two].filter((r) => r && r.skipped);
+        assert.strictEqual(ran.length, 1, 'one instance read the listings');
+        assert.strictEqual(skipped.length, 1);
+        assert.strictEqual(skipped[0].skipped, 'claimed');
+        // The claim was given back when the run ended.
+        const row = await own.db.prepare("SELECT * FROM price_book_state WHERE id = 'pricebook'").get();
+        assert.strictEqual(row.claimed_until, null);
+        assert.strictEqual(row.claimed_by, null);
+    } finally {
+        await own.stop();
+    }
 });
 
 t.test('stop', async () => {

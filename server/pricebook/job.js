@@ -14,16 +14,25 @@
  *
  * The job is off under drill mode and off in the tests, and the tests replay the recorded listings through the
  * transport seam, so CI never touches the network.
+ *
+ * It is due-based rather than timer-based: the last finished run is a row in the database (server/pricebook/
+ * state.js), because AI is deployed several times a day and a timer in the process would be reset every time.
+ * The service ticks once an hour and reads the listings only when the interval has passed; the first tick after a
+ * boot is a few minutes in, so the boot path stays free. Several workers run this service, so a run is claimed
+ * before it starts: only one of them reads the listings at a time.
  */
+const os = require('os');
 const pool = require('../providers/pool-providers');
 const { SOURCES } = require('./sources');
 const { readListing } = require('./read');
 const { createPriceStore, FIELDS, FIELD_NAMES } = require('./store');
+const { createPriceState } = require('./state');
 
 /** A price that differs by less than this is the same price: the providers publish floats (0.205999992). */
 const EPSILON = 1e-6;
 const DEFAULT_THRESHOLD = 0.2;
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+const HOUR_MS = 60 * 60 * 1000;
 
 /** The sources the catalogue itself names, so a row the catalogue wrote is recognisable. */
 function catalogueSources() {
@@ -66,10 +75,17 @@ function createPriceBook({ db, registry, config = {}, clock = { now: () => Date.
         timeoutMs: 20000,
         maxBytes: 8 * 1024 * 1024,
         intervalMs: WEEK_MS,
+        tickMs: HOUR_MS,
+        firstTickMs: 5 * 60 * 1000,
+        claimTtlMs: 15 * 60 * 1000,
         ...(config.priceBook || {}),
     };
     const limit = threshold === null || threshold === undefined ? Number(settings.threshold) : Number(threshold);
     const store = createPriceStore({ db, clock });
+    // When the book last ran and which instance is running it now (server/pricebook/state.js).
+    const state = createPriceState({ db, clock });
+    // Who this instance is: the claim says which one holds the run.
+    const who = `${os.hostname()}:${process.pid}`;
     // In test mode the book reads nothing from the internet: a test that wants a listing replays a recorded one
     // through the transport seam, and the service's own instance refuses to open a socket at all.
     const reader = transport || (config.nodeEnv === 'test'
@@ -77,6 +93,7 @@ function createPriceBook({ db, registry, config = {}, clock = { now: () => Date.
         : null);
     let running = false;
     let timer = null;
+    let first = null;
     let last = null;
 
     const iso = () => new Date(clock.now()).toISOString();
@@ -223,6 +240,16 @@ function createPriceBook({ db, registry, config = {}, clock = { now: () => Date.
         report.cross_reference = out;
     }
 
+    /**
+     * Is the book due? A run that finished less than an interval ago is not: the service may be deployed several
+     * times a day, and the week must not restart with every restart.
+     */
+    async function due() {
+        const last = await state.lastRunAt();
+        if (last === null) return true;                       // the book has never run: it is due at once
+        return clock.now() - last >= Number(settings.intervalMs);
+    }
+
     /** One run of the book: read every listing, compare, record. */
     async function runOnce({ force = false } = {}) {
         if (running) return { skipped: 'running' };
@@ -246,29 +273,38 @@ function createPriceBook({ db, registry, config = {}, clock = { now: () => Date.
         const readings = {};
         try {
             if (await drillActive()) return { skipped: 'drill' };
-            for (const source of sources) {
-                const res = await readListing(source.url, {
-                    transport: reader,
-                    lookup,
-                    timeoutMs: Number(settings.timeoutMs),
-                    maxBytes: Number(settings.maxBytes),
-                });
-                if (!res.ok) {
-                    report.unreadable.push({ source: source.key, url: source.url, error: res.error });
-                    continue;
+            // Only one worker reads the listings at a time (the service runs several).
+            if (!await state.claim({ ttlMs: Number(settings.claimTtlMs), who })) return { skipped: 'claimed' };
+            try {
+                for (const source of sources) {
+                    const res = await readListing(source.url, {
+                        transport: reader,
+                        lookup,
+                        timeoutMs: Number(settings.timeoutMs),
+                        maxBytes: Number(settings.maxBytes),
+                    });
+                    if (!res.ok) {
+                        report.unreadable.push({ source: source.key, url: source.url, error: res.error });
+                        continue;
+                    }
+                    let prices;
+                    try {
+                        prices = source.parse(source.kind === 'json' ? JSON.parse(res.body) : res.body);
+                    } catch {
+                        report.unreadable.push({ source: source.key, url: source.url, error: 'the listing could not be read' });
+                        continue;
+                    }
+                    report.sources.push({ source: source.key, url: source.url, role: source.role, listed: Object.keys(prices).length });
+                    if (source.role === 'cross-reference') { await crossCheck(prices, readings, report); continue; }
+                    readings[source.provider] = prices;
+                    await priceProvider(source, prices, report, checkedAt);
                 }
-                let prices;
-                try {
-                    prices = source.parse(source.kind === 'json' ? JSON.parse(res.body) : res.body);
-                } catch {
-                    report.unreadable.push({ source: source.key, url: source.url, error: 'the listing could not be read' });
-                    continue;
-                }
-                report.sources.push({ source: source.key, url: source.url, role: source.role, listed: Object.keys(prices).length });
-                if (source.role === 'cross-reference') { await crossCheck(prices, readings, report); continue; }
-                readings[source.provider] = prices;
-                await priceProvider(source, prices, report, checkedAt);
+            } finally {
+                // The claim goes back whatever happened, so the next worker may run.
+                await state.release({ who });
             }
+            // The run is over: the next one is due when the interval has passed (whether or not a price moved).
+            await state.markRun();
         } catch (err) {
             report.error = err && err.code ? err.code : 'error';
             log.warn('[pricebook] the run stopped early: ' + report.error);
@@ -315,19 +351,37 @@ function createPriceBook({ db, registry, config = {}, clock = { now: () => Date.
         return { ok: true, change: decided };
     }
 
+    /**
+     * One tick: run the book when it is due. The due check reads the last finished run from the database, so a
+     * restart in the middle of the week does not run it again and a restart after it does.
+     */
+    async function tick() {
+        if (running) return { skipped: 'running' };
+        if (settings.enabled === false) return { skipped: 'disabled' };
+        if (!await due()) return { skipped: 'not due' };
+        return await runOnce();
+    }
+
+    /**
+     * The service ticks once an hour and reads the listings only when the interval has passed. The first tick
+     * after a boot is a few minutes in, so the boot path stays free and a restart does not restart the week.
+     */
     function start() {
         if (timer) return timer;
-        const every = Math.max(60000, Number(settings.intervalMs) || WEEK_MS);
-        timer = setInterval(() => { runOnce().catch(() => {}); }, every);
+        const every = Math.max(60000, Number(settings.tickMs) || HOUR_MS);
+        timer = setInterval(() => { tick().catch(() => {}); }, every);
         timer.unref?.();
+        first = setTimeout(() => { tick().catch(() => {}); }, Math.max(1000, Number(settings.firstTickMs) || 5 * 60 * 1000));
+        first.unref?.();
         return timer;
     }
 
     function stop() {
         if (timer) { clearInterval(timer); timer = null; }
+        if (first) { clearTimeout(first); first = null; }
     }
 
-    return { runOnce, start, stop, decide, pending, live, changes, store, settings, threshold: limit, get last() { return last; } };
+    return { runOnce, tick, due, start, stop, decide, pending, live, changes, store, state, settings, threshold: limit, get last() { return last; } };
 }
 
 module.exports = { createPriceBook, eligible, findPrice, catalogueSources, EPSILON, DEFAULT_THRESHOLD, WEEK_MS };
