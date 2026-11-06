@@ -406,9 +406,19 @@ route('get', '/exchange/seller/offers', {
 });
 route('delete', '/exchange/seller/offers/{id}', {
     operationId: 'deleteSellerEndpointOffer', summary: 'Remove one of the caller\'s endpoint offers', tags: ['exchange'], security: SERVICE_OR_APP,
-    description: 'ai.app.run, or a person\'s own token. The offer stops receiving traffic at once; its verification and earnings stay as history.',
+    description: 'ai.app.run, or a person\'s own token. The offer stops receiving traffic on the next offer refresh (within 30 seconds); its verification and earnings stay as history.',
     parameters: [path('id', str({ pattern: '^ep_[0-9A-HJKMNP-TV-Z]{26}$' }))],
     responses: { 200: json('The removal', { type: 'object', properties: { id: str(), removed: { type: 'boolean' } } }), 404: problem, ...errors([401, 403]) },
+});
+route('post', '/exchange/tryit/challenge', {
+    operationId: 'exchangeTryitChallenge', summary: 'A proof-of-work challenge for the anonymous Try it', tags: ['exchange'], security: [],
+    description: 'Public. The anonymous Try it (no account, no Balance) must send a solved challenge in x-ov-pow: <challenge>:<nonce>, where sha256("<challenge>:<nonce>") has `bits` leading zero bits. The challenge is single use and expires; AI stores only its hash. The response also sets the signed, HttpOnly `ovai_device` cookie (when it is not already present), which counts accounts per device. A first-party service may forward the client address in x-ov-client-ip.',
+    requestBody: { required: false, content: { 'application/json': { schema: { type: 'object', properties: {} } } } },
+    responses: {
+        200: json('The challenge', { type: 'object', required: ['challenge', 'bits', 'expires_at'], properties: { challenge: str(), bits: integer(), expires_at: str({ format: 'date-time' }) } }),
+        429: problem,
+        503: problem,
+    },
 });
 
 // ── Action Center ────────────────────────────────────────────────────────────────────────────

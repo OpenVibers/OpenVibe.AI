@@ -149,7 +149,13 @@ t.test('usage: day, model and product aggregates from runs, and never an attribu
     assert.strictEqual(live.models[0].model, 'gpt-5-nano-2025-08-07', 'the model that actually answered');
     assert.strictEqual(live.models[0].requests, 5);
     assert.ok(live.models.every((m) => m.model), 'a product names only models that actually answered');
-    assert.ok(!r.body.by_product.some((p) => p.product.includes('app_')), 'only services are products');
+    const apps = r.body.by_product.find((p) => p.type === 'apps');
+    assert.ok(apps, 'developer apps are one row beside the products');
+    assert.strictEqual(apps.apps, 1, 'with how many apps it covers');
+    assert.strictEqual(apps.requests, 1);
+    assert.strictEqual(apps.models[0].model, 'deepseek-chat');
+    assert.ok(!r.text.includes('app_ABC'), 'a developer\'s app is never named on the public read');
+    assert.ok(r.body.by_product.filter((p) => p.type === 'service').every((p) => !String(p.product).startsWith('app_')), 'a service and an app never merge');
     assert.ok(!r.text.includes('SECRETPERSON') && !r.text.includes('usr_'), 'no person in the aggregate');
     assert.ok(r.body.by_model.some((m) => m.model === 'gpt-5-nano-2025-08-07' && m.requests === 5));
     assert.ok(r.body.by_model.some((m) => m.model === 'deepseek-chat' && m.requests === 6));

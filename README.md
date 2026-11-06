@@ -613,6 +613,18 @@ not capped this way. The check is admission, not pricing: it never changes a pri
 The Exchange catalog marks each offer `free_tier` by the same two rules (distinct from `free`, which means
 prepaid capacity with no per-token price).
 
+Abuse prevention for the free tier (plan E5; `server/abuse/`, `docs/abuse-prevention.md`, privacy note
+`docs/privacy.md`): the daily free allowance is `AI_FREE_DAILY_TOKENS` (default 20,000) scaled by trust — ¼ for a
+new or unvouched account, ½ after 7 days, full when Network says a passkey, a linked account or 30 days with
+activity verifies it, plus up to one extra full for a volunteer's kudos. A **hosting/data-centre ASN** is always
+the new tier and a lower rate; the address is looked up in a local monthly iptoasn.com table and only the ASN and
+an HMAC of its `/24`–`/48` are kept, for 24 h. A signed `HttpOnly` device cookie counts accounts per device, and
+more than three accounts on one device share one allowance at the lowest tier. The anonymous Try it needs one
+in-house hashcash proof of work (`POST /api/v1/exchange/tryit/challenge`). Every finished free run feeds a
+per-minute velocity check per ASN, device and input bucket against the last week's baseline; above it the run is
+`429 ai.abuse_throttled` and an `abuse.throttled` row goes to `/console/abuse` and the
+`ai_abuse_throttles` gauge (OpenVibe.Host alerts on it). No raw IP, device id or prompt is stored.
+
 Tier budgets (T6 step 8, decision D5; `server/govern.js`, off unless `AI_GOVERN_TIERS=1`): the SaaS tiers
 `free`, `paid` and `staff` on `openvibe-sdk/govern`, counted in Valkey. Before a run touches a provider
 (and before `reserve()` counts it), it holds an estimate of the units `ai-token` and `ai-usd` against two
@@ -816,6 +828,8 @@ mix vectors from different providers (re-embed when the provider changes).
 | Hourly DeepSeek balance gauge, no key in logs, off under a drill | `test/provider-balance.test.js` |
 | Quotas refuse with 429 + Retry-After **before** any provider call; per-service, attribution, cost caps | `test/quota.test.js` |
 | Free allowance: free up to the card's allowance then fully priced, reset per day/month (never for `none`), per subject, never past the cap under concurrent claims, absent at 0 | `test/free-allowance.test.js` |
+| Abuse prevention (plan E5): allowance by trust tier, kudos bonus, hosting override, `/24`–`/48` hashes, ASN table, signed device cookie, >3 accounts share one allowance, rate limit, per-minute velocity against the week's baseline, single-use proof of work, operator events and prune | `test/abuse-trust.test.js`, `test/abuse.test.js`, `test/abuse-pow.test.js` |
+| The run path refuses a spent daily allowance (402) and the anonymous Try it without/with a used proof of work (403) | `test/abuse-runs.test.js` |
 | Tier budgets: enforced per subject and per project and reset per window, two concurrent runs never both take the last unit, the free allowance's numbers unchanged on the Valkey store, one reading per accounted run from govern's `onUsage`, Valkey unreachable (paid 503, free admitted), off by default | `test/govern-tiers.test.js` |
 | The cache never crosses requester, actor, target or attribution scope | `test/cache.test.js` |
 | Queue caps: one caller cannot fill the run queue (per-caller and global 429 `queue.full` + Retry-After) | `test/queue.test.js` |

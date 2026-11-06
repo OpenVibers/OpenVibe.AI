@@ -235,7 +235,7 @@ function openaiRouter({ runs, auth, config, registry, presets = null, receipts =
         // delta the upstream sends goes out as it arrives. A delta that came before the stream opened waits for it.
         const live = b.stream === true ? createLiveStream(res) : null;
         try {
-            const created = await runs.create(body, req.principal, { trace: req.ov && req.ov.traceId, requestId: req.ov && req.ov.requestId,
+            const created = await runs.create(body, req.principal, { trace: req.ov && req.ov.traceId, requestId: req.ov && req.ov.requestId, abuse: req.abuse,
                 ...(live ? { onDelta: live.delta } : {}),
                 ...(live && config.modelCatalog && config.modelCatalog.enabled ? { onRoute: (info) => live.route(info) } : {}) });
             if (live) live.open(created.run);

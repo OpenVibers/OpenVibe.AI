@@ -106,7 +106,7 @@ function routePinRequest(value, principal, wf) {
     return { provider, model };
 }
 
-function createRuns({ db, registry, engine, cache, quotas, config, clock = { now: () => Date.now() }, log = console, userModules = null, credentials = null, preferences: personPreferences = null, tiers = null, projectSecrets = null, pool = null, runBudgets = null, credits = null, community = null, presets = null, receipts = null }) {
+function createRuns({ db, registry, engine, cache, quotas, config, clock = { now: () => Date.now() }, log = console, userModules = null, credentials = null, preferences: personPreferences = null, tiers = null, projectSecrets = null, pool = null, runBudgets = null, credits = null, community = null, presets = null, receipts = null, abuse = null }) {
     const inflight = new Map();     // run id -> { controller, promise, release, caller }
     const queue = [];               // run ids waiting for the worker
     let active = 0;
@@ -187,7 +187,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
      * principal: { sub, subject: {type, id} }
      * Returns { run, created, promise? }.
      */
-    async function create(body, principal, { trace = null, requestId = null, retryOf = null, onDelta = null, onRoute = null } = {}) {
+    async function create(body, principal, { trace = null, requestId = null, retryOf = null, onDelta = null, onRoute = null, abuse: requestAbuse = null } = {}) {
         if (!body || typeof body !== 'object') throw new AiError(400, 'input.invalid', 'JSON body required');
         const wfKey = String(body.workflow || '');
         const wf = body.version ? await registry.getWorkflow(wfKey, Number(body.version)) : await registry.activeWorkflow(wfKey);
@@ -271,13 +271,28 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         const prefer = preferredTarget(body.prefer);
         // The routing preset the request named (server/exchange/presets.js): its policy rides the run into the
         // router, which filters the offers with it and refuses a hard max_price no offer fits. The policy is
-        // normalised here, so a caller cannot smuggle a rule the presets store would never have written.
-        const preset = body.preset && typeof body.preset === 'object' && !Array.isArray(body.preset) ? body.preset : null;
+        // normalised here, so a caller cannot smuggle a rule the presets store would never have written. A preset
+        // named without a policy is resolved by name (the built-in ones, or the caller's own), so the Exchange can
+        // ask for "private" and get the one definition of it. It is named top-level (`preset`) or in the run's
+        // options (`options.preset`, the shape the Exchange's chat sends).
+        const preset = body.preset && typeof body.preset === 'object' && !Array.isArray(body.preset)
+            ? body.preset
+            : (body.options && body.options.preset && typeof body.options.preset === 'object' && !Array.isArray(body.options.preset) ? body.options.preset : null);
         let presetPolicy = null;
+        let presetName = null;
         if (preset) {
             const name = String(preset.name || '').trim();
             if (!name) throw new AiError(422, 'input.invalid', 'a preset must name itself');
-            presetPolicy = presets ? presets.normalizePolicy(preset.policy) : (preset.policy && typeof preset.policy === 'object' ? preset.policy : {});
+            presetName = name;
+            const inline = preset.policy && typeof preset.policy === 'object' && Object.keys(preset.policy).length;
+            if (inline) {
+                presetPolicy = presets ? presets.normalizePolicy(preset.policy) : preset.policy;
+            } else if (presets) {
+                const resolved = await presets.resolve({ principal, name });
+                presetPolicy = presets.normalizePolicy(resolved.policy);
+            } else {
+                presetPolicy = {};
+            }
         }
         if (presetPolicy && typeof presetPolicy.community === 'boolean') communityOptIn = presetPolicy.community;
         if (projectProvider) {
@@ -343,7 +358,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             ...(communityOptIn ? { communityOptIn: true } : {}),
             ...(pinned ? { routePin: pinned } : {}),
             // The preset's policy, and the name it was named by: the router filters the offers with the policy.
-            ...(preset ? { presetPolicy, presetName: String(preset.name).trim() } : {}),
+            ...(preset ? { presetPolicy, presetName } : {}),
             // POST /v1/chat/completions with stream: true: the upstream's deltas, as they arrive (kept in memory only).
             ...(typeof onDelta === 'function' ? { onDelta } : {}),
             // The offer the router picked, before the first token: the SSE disclosure's first comment (D3).
@@ -352,6 +367,13 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         const now = iso(clock.now());
         const id = newRunId();
         ctx.runId = id;
+        // Plan E5: the free tier's allowance, device count, network signals and anomaly throttle. Paid runs only
+        // teach the device table; a refusal here is a 402 (allowance spent) or a 429 (throttled) before any
+        // provider or queue slot is touched.
+        if (abuse && requestAbuse) {
+            const admission = await abuse.admit({ principal, ctx, request: requestAbuse, inputHash, free: freeUse, anonymous: freeUse && anonymousTryIt, selfKeys });
+            if (admission) ctx.abuse = admission;
+        }
         const kept = retainedInput(input, wf, Boolean(config.debugRawLog && options.debug));
         const base = {
             id, workflow_key: wf.key, workflow_version: wf.version, template_key: tpl ? tpl.key : null, template_version: tpl ? tpl.version : null,
@@ -549,6 +571,24 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
     }
 
     /**
+     * The privacy label of an answer, from the offer that answered: the provider's declared policy, the person's
+     * own machine, or the host's own deployment (server/exchange/privacy.js). The receipt and the run's explain
+     * both carry it, so every surface that reads the run shows the same label.
+     */
+    async function privacyLabelFor({ provider = null, explain = null } = {}) {
+        const byok = Boolean(provider && String(provider).startsWith('byo:'));
+        const credentialProvider = byok && explain && Array.isArray(explain.attempts) && explain.attempts[0] && explain.attempts[0].provider
+            ? explain.attempts[0].provider : null;
+        const record = (provider ? await registry.getProvider(provider) : null)
+            || (credentialProvider ? await registry.getProvider(credentialProvider) : null);
+        // A community machine (`community:`) or a registered community endpoint (`community-endpoint:`) sees the prompt.
+        const communityAnswer = Boolean(provider && /^community[:-]/.test(String(provider))) || Boolean(explain && explain.community);
+        return communityAnswer
+            ? privacy.labelFor({ record: { metadata: { data_policy: { trust: 'community' } } } })
+            : privacy.labelFor({ record, credential: byok ? { provider: credentialProvider } : null });
+    }
+
+    /**
      * The receipt of a finished run (server/exchange/receipts.js): the offer, the price, the tokens, the cache,
      * the latency, why the router chose it, the fallbacks it would have used, who paid and the privacy label.
      * A receipt that cannot be written never fails the answer: it is written after it.
@@ -569,12 +609,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                 in: cards.in.unit_price_usd, out: cards.out.unit_price_usd, cached: cards.cached.unit_price_usd,
                 source: cards.in.source,
             } : null;
-            const record = (answerProvider ? await registry.getProvider(answerProvider) : null)
-                || (credentialProvider ? await registry.getProvider(credentialProvider) : null);
-            const communityAnswer = Boolean(answerProvider && /^community[:-]/.test(String(answerProvider))) || Boolean(explain && explain.community);
-            const label = communityAnswer
-                ? privacy.labelFor({ record: { metadata: { data_policy: { trust: 'community' } } } })
-                : privacy.labelFor({ record, credential: byok ? { provider: credentialProvider } : null });
+            const label = await privacyLabelFor({ provider: answerProvider, explain });
             const paidBy = (payer && payer.paid_by) || 'openvibe_key';
             const feeRate = paidBy === 'openvibe_key' ? Number((config.usage && config.usage.feeRate) || 0) : 0;
             const opts = parseJson(row.options, {});
@@ -776,6 +811,9 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             if (r.output && r.label) {
                 r.output = { ...r.output, policy: r.contentPolicy || 'uncensored', label: r.label };
             }
+            // The privacy label of the answer, in the run's own explain: the API routes, the Exchange's chat and every
+            // product that reads a run show the same label the receipt carries.
+            r.explain = { ...(r.explain || {}), privacy: privacy.view(await privacyLabelFor({ provider: r.provider, explain: r.explain })) };
             if (controller.signal.aborted) throw new AiError(409, 'run.cancelled', 'cancelled');
             // The status, its citations and the ai.run.succeeded event commit together.
             const done = await db.tx(async () => {
@@ -796,6 +834,12 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             // recorded (the fallback is named in explain). A run that used the person's own key spends nothing here.
             const usedOwnKey = String(r.provider || '').startsWith('byo:self:');
             if (r.provider && (reserved || (opts.self_subject && !usedOwnKey))) await quotas.account(ctx, reserved, { provider: r.provider, model: r.model, tokensIn: r.usage.input, tokensOut: r.usage.output, tokensCached: r.usage.cached, cost: r.cost, attempts: logged, runId: id, traceId: row.trace_id, hold });
+            // Plan E5: the free tokens this run spent go on its allowance (or its shared device counter) and on the
+            // per-minute velocity buckets. A failure here is logged, never allowed to fail an answer already made.
+            if (abuse && ctx.abuse && !usedOwnKey && !String(r.provider || '').startsWith('byo:')) {
+                try { await abuse.record({ admission: ctx.abuse, tokens: (r.usage.input || 0) + (r.usage.output || 0), inputHash: row.input_hash }); }
+                catch (err) { log.warn(`[runs] ${id}: the abuse counters were not written: ${err && err.message}`); }
+            }
             // The record of the run (L40): the tokens with the cache apart, the money and who paid.
             const published = await publishUsage({ row: await getRow(id), outcome: 'succeeded', usage: r.usage, provider: r.provider, model: r.model, attempts, latencyMs: r.latencyMs, ttftMs: r.ttftMs });
             // The receipt of the answer (server/exchange/receipts.js): the offer, the price, the tokens, the cache,

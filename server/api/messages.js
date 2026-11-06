@@ -232,7 +232,7 @@ function messagesRouter({ runs, auth, config, registry, presets = null, receipts
         const live = b.stream === true ? createEventStream(res) : null;
         let run;
         try {
-            const created = await runs.create(body, req.principal, { trace: req.ov && req.ov.traceId, requestId: req.ov && req.ov.requestId,
+            const created = await runs.create(body, req.principal, { trace: req.ov && req.ov.traceId, requestId: req.ov && req.ov.requestId, abuse: req.abuse,
                 ...(live ? { onDelta: live.event } : {}),
                 ...(live && config.modelCatalog && config.modelCatalog.enabled ? { onRoute: (info) => live.route(info) } : {}) });
             if (live) live.open(created.run);

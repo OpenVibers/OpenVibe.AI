@@ -110,7 +110,7 @@ const DEF_KINDS = {
 };
 const DAY_MS = 86400000;
 
-function consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, vault = null, settings = null, personSessions = null }) {
+function consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, vault = null, settings = null, personSessions = null, abuse = null }) {
     const cc = config.console;
     const creditsOn = Boolean(config.credits && config.credits.enabled);
     const routingOn = Boolean(config.routingEvidence && config.routingEvidence.enabled);
@@ -598,6 +598,14 @@ function consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, e
         if (!workflow && (req.body || {}).confirm_all !== 'yes') return await cachePage(req, res, 422, { error: 'give a workflow key, or tick the box to purge every entry', notice: null });
         const removed = await ops.purgeCache(workflow || null, who(req));
         return res.redirect(303, `/console/cache?done=cache_purged&removed=${removed}`);
+    }));
+
+    // ── Abuse prevention (plan E5) ───────────────────────────
+    // A read-only page: the counters, the throttles the module already recorded in the audit log, and the size of
+    // the network/device signals. The actions (throttling, allowance) are automatic; this is where a person looks.
+    r.get('/console/abuse', read, wrap(async (req, res) => {
+        const report = abuse ? await abuse.overview() : null;
+        await send(res, 200, pages.abuse({ ...common(req), report }));
     }));
 
     // ── Audit ────────────────────────────────────────────────

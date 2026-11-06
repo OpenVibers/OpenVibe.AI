@@ -62,19 +62,61 @@ function exchangeRouter({ db, registry, pool, env = process.env, clock = { now: 
         const owners = presets.ownersOf(req.principal);
         return owners[0] || null;
     };
+    /**
+     * A service acting for a person or a project (the Exchange's own switch on a person's keys): `on_behalf_of`
+     * names them in the body or the query, as `{ type, id }` or as a bare id. A person's own token never names
+     * someone else.
+     */
+    const ownerOfRequest = (req, b) => {
+        const raw = (b && b.on_behalf_of) || req.query.on_behalf_of;
+        if (!raw) return null;
+        const id = typeof raw === 'object' ? raw.id : raw;
+        const type = typeof raw === 'object' && raw.type ? String(raw.type) : (/^prj_/.test(String(id || '')) ? 'project' : 'user');
+        if (!id) throw new AiError(422, 'ai.invalid', 'on_behalf_of must name a person (usr_…) or a project (prj_…)');
+        if (type === 'project') {
+            if (!/^prj_[0-9A-HJKMNP-TV-Z]{26}$/.test(String(id))) throw new AiError(422, 'ai.invalid', 'on_behalf_of must name a project (prj_…)');
+            return mayActFor(req, { type: 'project', id: String(id) });
+        }
+        if (!/^usr_[0-9A-HJKMNP-TV-Z]{26}$/.test(String(id))) throw new AiError(422, 'ai.invalid', 'on_behalf_of must name a person (usr_…)');
+        return mayActFor(req, { type: 'user', id: String(id) });
+    };
+
+    /**
+     * Only a first-party service token (requireCap's principal has no kind) names whom it acts for. A person, an
+     * app or a developer key may name only an owner it already is (presets.ownersOf): never another person, and
+     * never a project it merely knows the id of.
+     */
+    const mayActFor = (req, target) => {
+        const p = req.principal || {};
+        if (!p.kind) return target;
+        const mine = presets.ownersOf(p);
+        if (mine.some((o) => o.type === target.type && o.id === target.id)) return target;
+        throw new AiError(403, 'capability.denied', 'a preset belongs to its own person or project; this token may not name that one');
+    };
+
+    /** Every preset a target may name: its own rows first, then the built-in ones it does not shadow. */
+    const presetsForOwner = async (owner) => {
+        const own = await presets.list(owner);
+        const seen = new Set(own.map((p) => p.name));
+        return [...own, ...presets.builtins().filter((x) => !seen.has(x.name))];
+    };
 
     if (presets) {
-        r.get('/api/v1/presets', read, wrap(async (req) => ({ presets: await presets.visible(req.principal) })));
+        r.get('/api/v1/presets', read, wrap(async (req) => {
+            const owner = ownerOfRequest(req);
+            if (owner) return { presets: await presetsForOwner(owner) };
+            return { presets: await presets.visible(req.principal) };
+        }));
         r.post('/api/v1/presets', write, wrap(async (req, res) => {
             const b = body(req);
-            const owner = ownerOf(req);
+            const owner = ownerOfRequest(req, b) || ownerOf(req);
             if (!owner) throw new AiError(422, 'ai.invalid', 'a preset belongs to an account or a project');
             const preset = await presets.put({ owner, name: b.name, policy: b.policy });
             res.status(201);
             return { preset };
         }));
         r.delete('/api/v1/presets/:name', write, wrap(async (req) => {
-            const owner = ownerOf(req);
+            const owner = ownerOfRequest(req, body(req)) || ownerOf(req);
             if (!owner) throw new AiError(422, 'ai.invalid', 'a preset belongs to an account or a project');
             return presets.remove({ owner, name: req.params.name });
         }));

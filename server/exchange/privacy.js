@@ -6,7 +6,8 @@
  * The label is read off the offer that answered, never guessed:
  *
  *   private      the offer keeps nothing (no retention) and trains on nothing, and it is not a stranger's
- *                machine. A person's own machine is private: the prompt never leaves their hardware.
+ *                machine. A person's own machine is private, and so is an offer on the host's own hardware
+ *                (metadata.local): the prompt never leaves the deployment OpenVibe runs.
  *   community    the offer runs on a community machine: that machine sees the prompt (as on AI Horde).
  *   anonymized   everything else: an external provider that may keep what it is sent.
  *
@@ -48,6 +49,10 @@ function labelFor({ record = null, credential = null } = {}) {
     // A person's own machine (a Node credential): the prompt never left their hardware.
     if (credential && credential.provider === 'node') {
         return { label: 'private', retention: 'none', training: false, region: null, trust: 'own_machine', known: true, source: 'your own machine' };
+    }
+    // The host's own deployment (the local models OpenVibe runs itself): nothing leaves the machine it manages.
+    if (record && record.metadata && record.metadata.local === true) {
+        return { label: 'private', retention: 'none', training: false, region: null, trust: 'own_deployment', known: true, source: 'OpenVibe\'s own deployment on its own hardware' };
     }
     const policy = dataPolicyOf(record);
     if (!policy) {
