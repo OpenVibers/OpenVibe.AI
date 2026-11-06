@@ -948,6 +948,13 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         // L36 Y1: a run on behalf of a person tries the person's OWN keys first, for the providers that can serve the
         // request. With only_my_keys it never falls back; otherwise the network is the fallback and the explain says so.
         const prefs = ctx.selfPreferences || {};
+        // Spend safety: the free allowance and the anonymous Try it (ctx.freeUse, server/runs.js) may use only
+        // offers at or below this output price. A person's own token (their Balance) or their own key is not capped
+        // this way. A person's own price ceiling still applies to the network fallback as before.
+        const configuredFreeCeiling = Number(config.freeUse && config.freeUse.maxOutputPricePerMtok);
+        const freeCeiling = ctx.freeUse && Number.isFinite(configuredFreeCeiling) ? configuredFreeCeiling : null;
+        const ceiling = freeCeiling != null ? freeCeiling : prefs.price_ceiling_usd_per_mtok;
+        let freeCeilingSkipped = false;   // every capable offer was dearer than the free ceiling
         const selfAttempts = [];
         // The adult tier is network supply only: a person's own provider key is not an offer marked uncensored, and
         // only such an offer may answer an uncensored request. Their key is still used for every standard request.
@@ -1052,18 +1059,25 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                 else if (!policyOk) why.push('content_policy');
                 else if (ctx.creditsRequired && !isFreeProvider(p) && card && card.version) { why.push('payer_required'); payerSkipped = true; }
                 else {
-                    if (!accessOffered(p)) why.push(`provider_access ${modelCatalog.accessOf(p)}`);
-                    const skip = await skipReason(p, entry && entry.adapter, features);
-                    if (skip) why.push(skip);
+                    // The free allowance / anonymous Try it cannot pin a model above the output price ceiling.
+                    const price = freeCeiling != null && !isFreeProvider(p) ? await priceFor(offer.provider, offer.model) : null;
+                    if (price && Number(price.out) > freeCeiling) { why.push('over_price_ceiling'); freeCeilingSkipped = true; }
+                    else {
+                        if (!accessOffered(p)) why.push(`provider_access ${modelCatalog.accessOf(p)}`);
+                        const skip = await skipReason(p, entry && entry.adapter, features);
+                        if (skip) why.push(skip);
+                    }
                 }
                 if (missing.length) why.push(...missing);
                 const reason = why.length ? [...new Set(why)].join(',') : null;
                 candidatesView.push({ provider: offer.provider, model: offer.model, eligible: !reason, excluded_reason: reason, cost: null, latency: null });
                 if (!reason) usable.push({ provider: offer.provider, model: offer.model });
             }
-            explain = { objective: 'exact', policy: 'exact', reasons: [`exact model ${exact.id}: only its own deployment may answer`], selected: null, candidates: candidatesView };
+            explain = { objective: 'exact', policy: 'exact', reasons: [`exact model ${exact.id}: only its own deployment may answer`], selected: null, candidates: candidatesView,
+                ...(freeCeiling != null ? { free_ceiling_usd_per_mtok: freeCeiling } : {}) };
             if (!usable.length) {
                 if (payerSkipped) throw new AiError(402, 'billing.payer_required', `the exact model ${exact.id} needs a Balance payer (a person, or an app with its project); it was not run`, { explain });
+                if (freeCeilingSkipped) throw new AiError(402, 'billing.payer_required', `the exact model ${exact.id} is above the free-use ceiling of $${freeCeiling} per 1M output tokens; use your own key, or run with your own token so your Balance pays`, { explain });
                 throw new AiError(400, 'ai.model_unavailable', `the artifact ${exact.id} cannot run this request`, { explain });
             }
             list = usable;
@@ -1100,7 +1114,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             : await rankCandidates({
                 list, explain, task, route, warmProvider,
                 preferred: preferredModelFor(prefs, operation, req, ctx),
-                ceiling: prefs.price_ceiling_usd_per_mtok,
+                ceiling,
                 tierFirst: task.weight === 'heavy' || !freeFirst,
                 policy,
                 // A pinned route keeps its own order: the pin is the admin's decision, not the router's.
@@ -1199,12 +1213,14 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             const chosen = ranked.reasons.get(c.provider + ':' + (model || '')) || null;
             const fallback = i > 0;
             const base = { operation, provider_key: c.provider, model_key: model, route_key: ctx.routeKey || null, route_version: ctx.routeVersion || null, fallback: fallback ? 1 : 0, prompt_hash: ctx.promptHash || null, input_hash: ctx.inputHash || null };
-            // L36 Y3: a price ceiling caps the network's fallback; the person's own keys are never capped (above).
-            if (prefs.price_ceiling_usd_per_mtok != null) {
+            // L36 Y3 / spend safety: a price ceiling caps the network's fallback; the person's own keys are never
+            // capped (above). The free allowance's ceiling is the network's, so an over-ceiling offer is skipped.
+            if (ceiling != null) {
                 const cards = await rateCardsFor(c.provider, model);
                 const outputPrice = cards ? Number(rates.pricesOf(cards).out) || 0 : 0;
-                if (outputPrice > Number(prefs.price_ceiling_usd_per_mtok)) {
-                    const whyPrice = `over_price_ceiling (${outputPrice} > ${prefs.price_ceiling_usd_per_mtok} USD/Mtok)`;
+                if (outputPrice > Number(ceiling)) {
+                    const whyPrice = `over_price_ceiling (${outputPrice} > ${ceiling} USD/Mtok)`;
+                    if (freeCeiling != null) freeCeilingSkipped = true;
                     if (preferState && preferMatches(c.provider, model, prefer)) { preferState.honoured = false; preferState.why = 'it is over your price ceiling'; }
                     statFor(c.provider).skipped++;
                     tried.push({ provider: c.provider, skipped: 'over_price_ceiling' });
@@ -1362,6 +1378,13 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         if (unreadable) {
             explain.reasons = [...(explain.reasons || []), 'the media could not be read'];
             throw new AiError(422, 'media.unreadable', String(unreadable.message || 'the media could not be read').slice(0, 300), { tried, explain });
+        }
+        // The free allowance / anonymous Try it had capable offers, but every one was above its ceiling. That is
+        // not an outage: the caller needs their own key, or their own token so their Balance can pay.
+        if (freeCeilingSkipped && attemptsMade === 0) {
+            explain.free_ceiling_usd_per_mtok = freeCeiling;
+            explain.reasons = [...(explain.reasons || []), `every capable offer costs more than the free-use ceiling of $${freeCeiling} per 1M output tokens`];
+            throw new AiError(402, 'billing.payer_required', `this run has no payer, so its free allowance may use models up to $${freeCeiling} per 1M output tokens; the model it needs is dearer. Use your own key, or run with your own token so your Balance pays.`, { tried, explain });
         }
         explain.reasons = [...(explain.reasons || []), 'no provider on this route could answer'];
         throw new AiError(503, 'provider.unavailable', 'no provider on this route could answer', { tried, explain });

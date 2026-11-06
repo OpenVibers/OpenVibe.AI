@@ -292,14 +292,17 @@ route('get', '/run-budgets/{jti}', {
 
 // ── Exchange read API (OpenVibe.Exchange) ───────────────────────────────────────────────────
 const exchangeOffer = {
-    type: 'object', required: ['provider', 'provider_name', 'model', 'trust', 'free', 'price'],
+    type: 'object', required: ['provider', 'provider_name', 'model', 'kind', 'trust', 'free', 'price'],
     properties: {
-        provider: str(), provider_name: str(), model: str(),
+        provider: str({ description: 'The real upstream, never the router\'s internal provider key' }), provider_name: str(), model: str(),
+        kind: str({ enum: ['chat', 'embedding', 'stt', 'image'] }),
         id: nullable('string', { description: 'The exact artifact id a request may pin, when the registry records one' }),
         trust: { type: 'string', enum: ['first-party', 'community'] },
         access: str({ enum: ['OWN_DEPLOYMENT', 'AUTHORIZED_WHOLESALE', 'UNVERIFIED'] }),
         free: { type: 'boolean', description: 'Prepaid capacity with no per-token price (a free server, a subscription, a local machine).' },
         price: nullable('object', { properties: { in: { type: 'number' }, out: { type: 'number' }, cached: { type: 'number' }, per: str(), currency: str() } }),
+        price_source: nullable('string', { description: 'The price page the card was read from, when recorded' }),
+        price_checked_at: nullable('string', { description: 'The date someone checked the price, when recorded' }),
         speed: { type: 'object', properties: { p50_ms: nullable('number'), p95_ms: nullable('number') } },
         uptime: nullable('number', { minimum: 0, maximum: 1 }),
         requests_7d: integer({ minimum: 0 }), requests_today: integer({ minimum: 0 }),
@@ -308,10 +311,10 @@ const exchangeOffer = {
     },
 };
 const exchangeModel = {
-    type: 'object', required: ['slug', 'name', 'family', 'uncensored', 'offers'],
+    type: 'object', required: ['slug', 'name', 'family', 'kind', 'uncensored', 'offers'],
     properties: {
         slug: str(), canonical: str(), name: str(), family: str(), variant: nullable('string'), uncensored: { type: 'boolean' },
-        type: str(), context: nullable('integer'), max_output: nullable('integer'),
+        kind: str({ enum: ['chat', 'embedding', 'stt', 'image'] }), type: str(), context: nullable('integer'), max_output: nullable('integer'),
         capabilities: { type: 'object', properties: { tools: { type: 'boolean' }, json: { type: 'boolean' }, vision: { type: 'boolean' }, stream: { type: 'boolean' } } },
         modalities: arrayOf(str()), description: nullable('string'),
         requests_7d: integer({ minimum: 0 }), requests_today: integer({ minimum: 0 }), community: { type: 'boolean' },
@@ -320,16 +323,19 @@ const exchangeModel = {
 };
 route('get', '/exchange/catalog', {
     operationId: 'exchangeCatalog', summary: 'Every model and every offer that serves it', tags: ['exchange'], security: [],
-    description: 'Public. The live offers: price in, out and cached per million tokens, measured p50/p95, uptime, requests, and the provider data policy. A prepaid offer has no price (free: true). The window is 7 days.',
+    description: 'Public. The live offers: price in, out and cached per million tokens, measured p50/p95, uptime, requests, and the provider data policy. A prepaid offer has no price (free: true). The window is 7 days. Models carry a kind (chat, embedding, stt, image); chat lists must use kind "chat" and never mix embeddings or speech-to-text.',
+    parameters: [query('kind', str({ enum: ['chat', 'embedding', 'stt', 'image'] }), 'Only models of this kind')],
     responses: { 200: json('The models, grouped by model, with their offers', { type: 'object', required: ['models'], properties: {
         generated_at: str({ format: 'date-time' }), window_days: integer(), count: integer(),
+        kind: str({ enum: ['chat', 'embedding', 'stt', 'image'] }),
         families: arrayOf({ type: 'object', properties: { name: str(), models: integer(), offers: integer() } }),
+        kinds: arrayOf({ type: 'object', properties: { kind: str(), models: integer(), offers: integer() } }),
         models: arrayOf(exchangeModel),
     } }) },
 });
 route('get', '/exchange/models/{slug}', {
     operationId: 'exchangeModel', summary: 'One model and its offers', tags: ['exchange'], security: [],
-    description: 'Public. The slug is "<org>/<model>", lowercased, e.g. deepseek/deepseek-chat.',
+    description: 'Public. The slug is "<org>/<model>", lowercased, e.g. deepseek/deepseek-flash.',
     parameters: [path('slug', str())],
     responses: { 200: json('The model', exchangeModel), 404: problem },
 });

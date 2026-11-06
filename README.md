@@ -500,6 +500,7 @@ definition, but never over an admin's version.
 |---|---|---|
 | `stub` | Deterministic, no key, realistically shaped output (schema-shaped JSON, sentences, unit-vector embeddings, timed transcript segments), clearly marked synthetic (`(synthetic)` text, `synthetic: true` on the run). Never cached. | always present |
 | `openai` | Any OpenAI-compatible API (OpenAI, OpenRouter, Groq, Together, Ollama, LM Studio, llama.cpp): chat with structured-output step-down, embeddings, Whisper-style transcription, image generation (`POST {base}/images/generations`). Ported from Live's `llm.js` / `ai-provider.js`. | `AI_PROVIDER`, `AI_BASE_URL`, `AI_API_KEY`, `AI_MODEL` — Live's setting names |
+| `openai`, key `deepseek` | DeepSeek's own API, registered when its key is configured: `deepseek-flash` and `deepseek-v4-pro`, priced from DeepSeek's price page (peak rates; off-peak is half). A missing key leaves the provider disabled, so none of its models is an offer. | `DEEPSEEK_API_KEY` (or `AI_DEEPSEEK_KEY_REF`), `AI_DEEPSEEK_BASE_URL` |
 | `responses` | The OpenAI Responses API (`POST {base}/responses`) for GPT-family models that only speak it, at any OpenAI-compatible `base_url` (default `https://api.openai.com/v1`): chat and every text operation, structured output through `text.format` with the same step-down, vision; no embeddings or transcription. | the admin API (`kind: "responses"`, `base_url`, `secret_ref`) |
 | `anthropic` | Messages API with cached system blocks and forced-tool JSON. Ported from Live's `llm.js`. | same, with `AI_PROVIDER=anthropic` |
 | `http` | The local HTTP seam: `POST {operation, …}` → `{text, json, usage}` | `AI_HTTP_SEAM_URL` or the admin API |
@@ -589,6 +590,14 @@ are the reading's `free_allowance_used` on its `platform.usage-sample@1`, and it
 their price out. It is pricing, never admission: quotas, request counting and the run's own cost are
 unchanged, and no call is ever refused because the allowance is used up. Every card defaults to 0, so
 nothing is free and the field is absent until an operator configures an allowance.
+
+Free-use price ceiling (`AI_FREE_MAX_OUTPUT_PRICE_USD_PER_MTOK`, default 1): a run that nobody pays for
+— the free allowance (a first-party service naming a person, without that person's own token) or the
+Exchange's anonymous Try it — may use only offers at or below this output price per million tokens.
+The router skips dearer offers and answers `402 billing.payer_required` when every capable offer is
+above it. A person's own token (and so their Balance, AI #311), their own provider key, an app's
+project and a service's own run-token budget are not capped this way. The check is admission, not
+pricing: it never changes a price or a Balance reading.
 
 Tier budgets (T6 step 8, decision D5; `server/govern.js`, off unless `AI_GOVERN_TIERS=1`): the SaaS tiers
 `free`, `paid` and `staff` on `openvibe-sdk/govern`, counted in Valkey. Before a run touches a provider

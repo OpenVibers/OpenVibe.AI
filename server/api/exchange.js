@@ -19,7 +19,7 @@ const express = require('express');
 const { CAPS } = require('../auth');
 const { AiError, sendError } = require('../util');
 const { http } = require('openvibe-contracts');
-const { createCatalog } = require('../exchange/catalog');
+const { createCatalog, KINDS: catalogKinds } = require('../exchange/catalog');
 const { createUsage } = require('../exchange/usage');
 
 const CATALOG_MS = 30_000;
@@ -34,10 +34,17 @@ function memo(fn, ttlMs, clock) {
     };
 }
 
-function exchangeRouter({ db, registry, pool, clock = { now: () => Date.now() }, presets, receipts, auth, log = console }) {
-    const catalog = createCatalog({ db, registry, pool, clock });
+function exchangeRouter({ db, registry, pool, env = process.env, clock = { now: () => Date.now() }, presets, receipts, auth, log = console }) {
+    const catalog = createCatalog({ db, registry, pool, env, clock });
     const usage = createUsage({ db, clock });
-    const all = memo(() => catalog.models({ days: 7 }), CATALOG_MS, clock);
+    // One cached read per kind (?kind=chat, screenshot, …); the unfiltered read is the full catalog.
+    const hits = new Map();
+    const allFor = (kind) => {
+        const key = kind || '';
+        if (!hits.has(key)) hits.set(key, memo(() => catalog.models({ days: 7, kind: kind || null }), CATALOG_MS, clock));
+        return hits.get(key)();
+    };
+    const all = () => allFor(null);
     const usageByWindow = new Map();
     const r = express.Router();
 
@@ -97,7 +104,13 @@ function exchangeRouter({ db, registry, pool, clock = { now: () => Date.now() },
     }
 
     r.get('/api/v1/exchange/catalog', publicCache(30), async (req, res, next) => {
-        try { res.json(await all()); } catch (err) { next(err); }
+        try {
+            const kind = req.query.kind == null || req.query.kind === '' ? null : String(req.query.kind).toLowerCase();
+            if (kind && !catalogKinds.includes(kind)) {
+                return http.sendProblem(res, 422, 'exchange.kind_invalid', { detail: `kind must be one of ${catalogKinds.join(', ')}`, ctx: req.ov });
+            }
+            res.json(await allFor(kind));
+        } catch (err) { next(err); }
     });
 
     r.get('/api/v1/exchange/models/:slug', publicCache(30), async (req, res, next) => {
