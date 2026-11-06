@@ -7,7 +7,7 @@
 const assert = require('assert');
 const nodeHttp = require('http');
 const { boot, request, token, suite, ALL } = require('./helpers');
-const { createFetcher, isPublicAddress } = require('../server/fetcher');
+const { createFetcher, isPublicAddress, safeLookup } = require('../server/fetcher');
 const { load } = require('../server/config');
 
 const t = suite('ssrf');
@@ -22,10 +22,29 @@ const refused = async (fetcher, url) => {
 };
 
 t.test('address policy: internal, loopback, link-local, mapped IPv6 are not public', () => {
-    for (const ip of ['127.0.0.1', '10.1.2.3', '192.168.1.1', '172.16.0.1', '169.254.169.254', '0.0.0.0', '::1', '::ffff:127.0.0.1', '::ffff:7f00:1', '::ffff:a9fe:a9fe', 'fe80::1', 'fc00::1', '100.64.0.1']) {
+    for (const ip of ['127.0.0.1', '10.1.2.3', '192.168.1.1', '172.16.0.1', '169.254.169.254', '0.0.0.0', '192.0.2.1', '198.51.100.7', '203.0.113.9', '192.88.99.1',
+        '::1', '::', '::ffff:127.0.0.1', '::ffff:7f00:1', '::ffff:a9fe:a9fe', '::127.0.0.1', '64:ff9b::7f00:1', '64:ff9b:1::a9fe:a9fe', '2002:7f00:1::',
+        '2001:0:4136:e378:8000:63bf:80ff:fffe', 'fe80::1', 'fc00::1', '100.64.0.1']) {
         assert.strictEqual(isPublicAddress(ip), false, ip);
     }
-    for (const ip of ['1.1.1.1', '93.184.216.34', '2606:4700:4700::1111']) assert.strictEqual(isPublicAddress(ip), true, ip);
+    for (const ip of ['1.1.1.1', '93.184.216.34', '2606:4700:4700::1111', '::ffff:8.8.8.8', '64:ff9b::808:808']) assert.strictEqual(isPublicAddress(ip), true, ip);
+    // One address rule for the platform: this file uses openvibe-shared/egress's own function, not a copy.
+    assert.strictEqual(isPublicAddress, require('openvibe-shared/egress').isPublicAddress, 'the platform address rule, not a local copy');
+});
+
+t.test('a DNS answer in an IPv6 spelling of a private IPv4 is refused at connect time', async () => {
+    const dns = require('dns');
+    const real = dns.lookup;
+    dns.lookup = (host, opts, cb) => {
+        if (String(host).toLowerCase() === 'nat64.test') return process.nextTick(() => cb(null, [{ address: '64:ff9b::7f00:1', family: 6 }]));
+        return real(host, opts, cb);
+    };
+    try {
+        const err = await new Promise((resolve) => safeLookup('nat64.test', {}, resolve));
+        assert.ok(err && err.code === 'EADDRNOTPUBLIC', 'the NAT64 spelling of 127.0.0.1 is refused');
+    } finally {
+        dns.lookup = real;
+    }
 });
 
 t.test('object storage is followed only as a redirect from Media', async () => {
