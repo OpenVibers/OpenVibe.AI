@@ -21,7 +21,7 @@
  * A volunteer (price 0) earns kudos in an append-only ledger; they never expire, buy queue priority and a bigger free
  * output allowance, and are never cash.
  *
- *   createCommunity({ db, config, env, machines, clock, fetchImpl, log, tokens, random })
+ *   createCommunity({ db, config, env, machines, endpoints, clock, fetchImpl, log, tokens, random })
  *     .enabled
  *     .offers()                         the live offers (refreshed from Network at most refreshMs)
  *     .choose({ ctx, operation })       one eligible {offer, model, key}, or null
@@ -118,7 +118,7 @@ function similar(a, b) {
     return same / Math.max(x.size, y.size) >= 0.5;
 }
 
-function createCommunity({ db, config, env = process.env, machines = null, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, tokens = null, random = Math.random }) {
+function createCommunity({ db, config, env = process.env, machines = null, endpoints = null, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, tokens = null, random = Math.random }) {
     const cfg = (config && config.community) || {};
     const network = String((config && config.networkInternalUrl) || '').replace(/\/+$/, '');
     const secret = env.OV_OAUTH_CLIENT_SECRET || '';
@@ -135,7 +135,11 @@ function createCommunity({ db, config, env = process.env, machines = null, clock
     if (!identityTokens && secret && network) {
         identityTokens = createServiceTokenClient({ tokenUrl: `${network}/oauth/token`, clientId, clientSecret: secret, scope: { 'openvibe.network': 'identity.subject.resolve' }, fetch: fetchImpl });
     }
-    const enabled = Boolean(cfg.enabled && db && machines && network && registryTokens);
+    // A Node offer comes from Network and is reached through Bot; a community endpoint is registered here and reached
+    // through its own https address. Each works without the other.
+    const registryEnabled = Boolean(cfg.enabled && db && machines && network && registryTokens);
+    const endpointsEnabled = Boolean(cfg.enabled && db && endpoints && endpoints.enabled);
+    const enabled = registryEnabled || endpointsEnabled;
     let cache = { at: 0, offers: [] };
     let refreshing = null;
     const followersCache = new Map();
@@ -167,23 +171,37 @@ function createCommunity({ db, config, env = process.env, machines = null, clock
 
     async function fetchOffers() {
         if (!enabled) return [];
-        const token = await registryTokens.getToken({ audience: 'openvibe.network' });
-        let res;
-        try {
-            res = await fetchImpl(`${network}/internal/ai/offers`, { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' }, signal: AbortSignal.timeout(8000) });
-        } catch (err) {
-            throw new AiError(503, 'community.unavailable', `Network did not answer for community offers: ${String(err && err.message || err).slice(0, 200)}`);
+        let offers = [];
+        if (registryEnabled) {
+            try {
+                const token = await registryTokens.getToken({ audience: 'openvibe.network' });
+                let res;
+                try {
+                    res = await fetchImpl(`${network}/internal/ai/offers`, { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' }, signal: AbortSignal.timeout(8000) });
+                } catch (err) {
+                    throw new AiError(503, 'community.unavailable', `Network did not answer for community offers: ${String(err && err.message || err).slice(0, 200)}`);
+                }
+                const body = await res.json().catch(() => null);
+                if (!res.ok) throw new AiError(503, 'community.unavailable', `Network answered ${res.status} for community offers`);
+                offers = ((body && body.offers) || []).map(normalize).filter(Boolean);
+            } catch (err) {
+                // With endpoints registered here, Network being away must not take them down.
+                if (!endpointsEnabled) throw err;
+                log.warn(`[community] ${err.message}`);
+            }
         }
-        const body = await res.json().catch(() => null);
-        if (!res.ok) throw new AiError(503, 'community.unavailable', `Network answered ${res.status} for community offers`);
-        const offers = ((body && body.offers) || []).map(normalize).filter(Boolean);
+        if (endpointsEnabled) {
+            try { offers = offers.concat(await endpoints.liveOffers()); } catch (err) { log.warn(`[community] endpoints: ${err.message}`); }
+        }
         await noteHealth(offers);
         return offers;
     }
 
-    /** Keep a simple uptime denominator: each refresh is one observation of each offer and model. */
+    /** Keep a simple uptime denominator: each refresh is one observation of each Node offer and model. A community
+     *  endpoint has no reporter, so its observations are its own calls (noteDispatch). */
     async function noteHealth(offers) {
         for (const offer of offers) {
+            if (offer.kind === 'endpoint') continue;
             for (const model of offer.models) {
                 try {
                     const key = keyOf(offer, model);
@@ -209,6 +227,22 @@ function createCommunity({ db, config, env = process.env, machines = null, clock
                 .finally(() => { refreshing = null; });
         }
         return await refreshing;
+    }
+
+    /** One observation of a community endpoint: its answer arrived or it did not. Machines report their own health. */
+    async function noteDispatch(offer, model, ok) {
+        if (!offer || offer.kind !== 'endpoint') return;
+        const key = keyOf(offer, model);
+        const at = nowIso(clock);
+        try {
+            await db.prepare(`INSERT INTO community_offers (offer_key, offer_id, machine_id, owner_subject, model, models, price_in, price_out, status, checks, up_checks, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'new', 1, ?, ?, ?)
+                ON CONFLICT (offer_key) DO UPDATE SET models = excluded.models, price_in = excluded.price_in, price_out = excluded.price_out,
+                    checks = community_offers.checks + 1, up_checks = community_offers.up_checks + excluded.up_checks, updated_at = excluded.updated_at`)
+                .run(key, offer.offer_id, offer.machine_id, offer.owner, model, JSON.stringify(offer.models), offer.price.in_per_million, offer.price.out_per_million,
+                    ok ? 1 : 0, at, at);
+            await refreshReputation(key);
+        } catch (err) { log.warn(`[community] endpoint health ${key}: ${err.message}`); }
     }
 
     async function stateOf(key) {
@@ -250,8 +284,20 @@ function createCommunity({ db, config, env = process.env, machines = null, clock
         await refreshReputation(key);
     }
 
-    /** Low-level: one chat completion on the person's machine, through Bot, as its owner. */
+    /** Low-level: one chat completion on the person's machine (through Bot), or on a registered endpoint (through the
+     *  egress guard), as its owner. */
     async function dispatch(offer, model, messages, { maxTokens = 512, temperature = null, tools = null, timeoutMs = 60000, requestId = null } = {}) {
+        if (offer.kind === 'endpoint') {
+            try {
+                return await endpoints.chat(offer, {
+                    model, messages, maxTokens, temperature, tools,
+                    timeoutMs: Math.max(5000, Math.min(300000, timeoutMs)), signal: AbortSignal.timeout(Math.max(5000, timeoutMs) + 10000),
+                });
+            } catch (err) {
+                if (err && err.code === 'community.busy') throw new AiError(503, 'community.busy', String(err.message || 'the endpoint is busy'));
+                throw err;
+            }
+        }
         if (!machines || !machines.enabled) throw new AiError(503, 'community.unavailable', 'OpenVibe.Bot is not configured, so a community machine cannot be reached');
         try {
             return await machines.chat({
@@ -278,8 +324,10 @@ function createCommunity({ db, config, env = process.env, machines = null, clock
             let answer;
             try {
                 answer = await dispatch(offer, model, canary.messages, { maxTokens: 64, temperature: 0, timeoutMs: cfg.canaryTimeoutMs || 30000, requestId: `canary-${key}` });
+                await noteDispatch(offer, model, true);
             } catch (err) {
                 if (err && (err.code === 'community.busy' || err.code === 'community.not_open')) throw err;
+                await noteDispatch(offer, model, false);
                 await markCanary(key, { ok: false, reason: `canary_call: ${String(err && err.message || err).slice(0, 200)}` });
                 throw new AiError(502, 'community.verification_failed', `community machine ${offer.machine_id} failed its canary: ${String(err && err.message || err).slice(0, 200)}`);
             }
@@ -410,7 +458,10 @@ function createCommunity({ db, config, env = process.env, machines = null, clock
     /** About 1%: the same prompt on a trusted machine with the same model, compared. No trusted peer, no spot. */
     async function spotCheck(chosen, messages, answer) {
         if (!(cfg.spotRate > 0) || random() >= cfg.spotRate) return;
-        const peers = (await offers()).filter((o) => o.offer_id !== chosen.offer.offer_id && o.health === 'up' && o.ready && o.models.includes(chosen.model));
+        const peers = (await offers()).filter((o) => o.offer_id !== chosen.offer.offer_id
+            // A second registration of the same endpoint is not an independent machine.
+            && !(o.endpoint && chosen.offer.endpoint && o.endpoint.base_url === chosen.offer.endpoint.base_url)
+            && o.health === 'up' && o.ready && o.models.includes(chosen.model));
         const trusted = [];
         for (const peer of peers) {
             const s = await stateOf(keyOf(peer, chosen.model));
@@ -441,12 +492,14 @@ function createCommunity({ db, config, env = process.env, machines = null, clock
      *   - until the machine has `trustDays` of verified service a seller earns at most the daily cap;
      *   - a volunteer (price 0) earns kudos instead, never cash.
      */
-    async function recordUsage(chosen, { requestId, usage, verified, requester = null, latencyMs = null, chargeId = null }) {
+    async function recordUsage(chosen, { requestId, usage, verified, requester = null, projectId = null, latencyMs = null, chargeId = null }) {
         const tin = Math.max(0, Math.trunc(Number(usage && usage.input) || 0));
         const tout = Math.max(0, Math.trunc(Number(usage && usage.output) || 0));
         const owner = await survivor(chosen.offer.owner);
         const person = requester ? await survivor(requester) : null;
-        const selfServed = Boolean(person && owner && person === owner);
+        // Self-dealing: the owner themselves, an account merged into it, or the project that registered the endpoint.
+        const selfServed = Boolean((person && owner && person === owner)
+            || (projectId && chosen.offer.projectId && String(projectId) === String(chosen.offer.projectId)));
         let credits = verified && !selfServed ? Math.round(tin * chosen.offer.price.in_per_million + tout * chosen.offer.price.out_per_million) : 0;
         let earning = !verified ? 'free' : selfServed ? 'self' : (chargeId ? 'spendable' : 'pending');
         let capped = false;
@@ -506,11 +559,14 @@ function createCommunity({ db, config, env = process.env, machines = null, clock
         const timeoutMs = Math.max(5000, Math.min(Number(req.timeoutMs) || 60000, 300000));
         const requestId = String(ctx.runId || `community-${clock.now()}`);
         const requester = requesterOf(ctx);
-        const selfServed = Boolean(requester && (await survivor(requester)) === (await survivor(chosen.offer.owner)));
+        const selfServed = Boolean((requester && (await survivor(requester)) === (await survivor(chosen.offer.owner)))
+            || (ctx.projectId && chosen.offer.projectId && String(ctx.projectId) === String(chosen.offer.projectId)));
+        const isEndpoint = chosen.offer.kind === 'endpoint';
+        const source = isEndpoint ? `community-endpoint:${chosen.offer.endpoint.id}` : `community:${chosen.offer.machine_id}`;
         const facts = {
-            resolved_model: `community/${chosen.model}`, revision: null, deployment: `community:${chosen.offer.machine_id}`,
-            provider_access: 'COMMUNITY', rate_version: 'community', policy: 'community',
-            community: { machine_id: chosen.offer.machine_id, owner: chosen.offer.owner, model: chosen.model, price: chosen.offer.price,
+            resolved_model: `community/${chosen.model}`, revision: null, deployment: source,
+            provider_access: isEndpoint ? 'COMMUNITY_ENDPOINT' : 'COMMUNITY', rate_version: 'community', policy: 'community',
+            community: { kind: isEndpoint ? 'endpoint' : 'machine', machine_id: chosen.offer.machine_id, owner: chosen.offer.owner, model: chosen.model, price: chosen.offer.price,
                 verification: chosen.status, reputation: chosen.reputation, free_tier: freeTier(ctx), self_served: selfServed },
         };
         if (typeof ctx.onRoute === 'function') {
@@ -525,14 +581,16 @@ function createCommunity({ db, config, env = process.env, machines = null, clock
                 temperature: req.temperature == null ? null : Number(req.temperature),
                 tools, timeoutMs, requestId,
             });
+            await noteDispatch(chosen.offer, chosen.model, true);
         } catch (err) {
             if (err && (err.code === 'community.busy' || err.code === 'community.not_open')) return null;
+            await noteDispatch(chosen.offer, chosen.model, false);
             throw err;
         }
         const usage = answer.usage || { input: 0, output: 0, cached: 0 };
         await spotCheck(chosen, messages, answer);
         const latencyMs = clock.now() - t0;
-        const recorded = await recordUsage(chosen, { requestId, usage, verified: chosen.status !== 'new', requester, latencyMs,
+        const recorded = await recordUsage(chosen, { requestId, usage, verified: chosen.status !== 'new', requester, projectId: ctx.projectId || null, latencyMs,
             chargeId: ctx.requesterChargeId || null });
         const text = answer.text || '';
         const message = answer.message || { role: 'assistant', content: text };
@@ -545,14 +603,14 @@ function createCommunity({ db, config, env = process.env, machines = null, clock
             credits_micro: recorded.credits_micro, earning_status: recorded.earning_status, self_served: recorded.self_served, kudos: recorded.kudos };
         const explain = {
             objective: 'community', reasons: [recorded.self_served
-                ? 'self-served: the requester owns this machine, so the answer earns no credits'
-                : `a community machine offered ${chosen.model}${chosen.offer.price.in_per_million || chosen.offer.price.out_per_million ? ` at ${chosen.offer.price.in_per_million}/${chosen.offer.price.out_per_million} credits per million` : ' for free'}`],
-            selected: `community:${chosen.offer.machine_id}/${chosen.model}`, paid_by: 'community', candidates: [],
-            attempts: [{ key: 'community', provider: `community:${chosen.offer.machine_id}`, model: chosen.model, why: 'an opted-in request placed on a verified community machine', status: 'ok', error: null }],
+                ? 'self-served: the requester owns this offer, so the answer earns no credits'
+                : `${isEndpoint ? 'a community endpoint' : 'a community machine'} offered ${chosen.model}${chosen.offer.price.in_per_million || chosen.offer.price.out_per_million ? ` at ${chosen.offer.price.in_per_million}/${chosen.offer.price.out_per_million} credits per million` : ' for free'}`],
+            selected: `${source}/${chosen.model}`, paid_by: 'community', candidates: [],
+            attempts: [{ key: 'community', provider: source, model: chosen.model, why: isEndpoint ? 'an opted-in request placed on a verified community endpoint' : 'an opted-in request placed on a verified community machine', status: 'ok', error: null }],
             community, openvibe: facts,
         };
         return {
-            result, provider: `community:${chosen.offer.machine_id}`, providerKind: 'community', model: answer.model || chosen.model,
+            result, provider: source, providerKind: 'community', model: answer.model || chosen.model,
             fallbackUsed: false, usage, cost: 0, latencyMs, ttftMs: null, synthetic: false, tried: [], startedAt: t0, explain,
         };
     }
@@ -617,7 +675,7 @@ function createCommunity({ db, config, env = process.env, machines = null, clock
         const kudos = Math.max(0, Number(kudosRow.balance) || 0);
         const offerViews = await Promise.all(list.map(async (o) => {
             const openNow = o.hours ? withinHours(o, clock.now()) : null;
-            const out = { offer_id: o.offer_id, machine_id: o.machine_id, models: o.models, hours: o.hours, concurrency: o.concurrency,
+            const out = { offer_id: o.offer_id, kind: o.kind || 'machine', machine_id: o.machine_id, models: o.models, hours: o.hours, concurrency: o.concurrency,
                 price: o.price, audience: o.audience, group: o.group, health: o.health, open_now: openNow, ready: o.ready && openNow !== false,
                 verification: null, reputation: 0, free_only: true, verified: false,
                 tokens_per_s: Math.max(0, ...served.filter((x) => x.offer_key.startsWith(`${o.offer_id}|`)).map((x) => x.tokens_per_s || 0)) || null };
@@ -671,7 +729,7 @@ function createCommunity({ db, config, env = process.env, machines = null, clock
             const openNow = withinHours(o, clock.now());
             return {
                 // The public id is a stable hash: Exchange can list and link an offer without publishing which machine it is.
-                offer_id: `community_${sha256(o.offer_id).slice(0, 16)}`, models: o.models, hours: o.hours, concurrency: o.concurrency,
+                offer_id: `community_${sha256(o.offer_id).slice(0, 16)}`, kind: o.kind || 'machine', models: o.models, hours: o.hours, concurrency: o.concurrency,
                 price: o.price, audience: o.audience, health: o.health, open_now: openNow, ready: o.ready && openNow,
             };
         });

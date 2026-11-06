@@ -32,7 +32,7 @@ const { AiError } = require('./util');
 const { gracefulStop, telemetry } = require('openvibe-sdk/service');
 const { createPgTelemetrySink, startTelemetryRetention } = require('openvibe-sdk/telemetry');
 
-async function start({ config, db: givenDb = null, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, listen = true, credentialFetch = null, valkey = null, research = null, machineModels = null, variantEvidence = null, community: givenCommunity = null, abuse: givenAbuse = null } = {}) {
+async function start({ config, db: givenDb = null, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, listen = true, credentialFetch = null, valkey = null, research = null, machineModels = null, variantEvidence = null, community: givenCommunity = null, communityEndpoints: givenEndpoints = null, abuse: givenAbuse = null } = {}) {
     config = config || load(env);
     schemas.configure(config.schemaCache);
     // PostgreSQL (ADR-035): opened and migrated here unless the caller (a test) hands in a migrated handle.
@@ -65,7 +65,12 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     const machines = machineModels || require('./machines').createMachineModels({ config, env, fetchImpl });
     // Community AI offers (the design's "Offer to the network"; plan E4): read Network's user-owned offers, verify a
     // machine before traffic, and keep its seller ledger. Empty without a Network service secret or Bot.
-    const community = givenCommunity || require('./community').createCommunity({ db, config, env, machines, clock, fetchImpl, log });
+    // A community endpoint (the design's SDK gap) is registered here with the seller's own developer key and reached
+    // through the egress guard; it joins the same offer list, verification and ledger.
+    const endpoints = givenEndpoints || (config.community.endpoints && config.community.endpoints.enabled === false
+        ? null
+        : require('./community/endpoints').createEndpointOffers({ db, config, env, clock, fetchImpl, log }));
+    const community = givenCommunity || require('./community').createCommunity({ db, config, env, machines, endpoints, clock, fetchImpl, log });
     // Plan E5: the free tier's allowance by trust, device and network signals, proof of work and anomaly throttling.
     const abuse = givenAbuse || require('./abuse').createAbuse({ db, config, env, clock, fetchImpl, log, registry, community });
     // BENCH-11: Bench's ratings as routing evidence, and the opted-in tie rule inside placement.
@@ -152,7 +157,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         clientSecret: env.OV_OAUTH_CLIENT_SECRET, fetch: fetchImpl,
     }) : null;
     const benchEvents = createBenchEvents({ bench, accountData, accountSend, config, log, fetchImpl, clientSecret: env.OV_OAUTH_CLIENT_SECRET });
-    const app = createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, grants, vault, settings, benchEvents, runBudgets, memory, memoryImport, community, presets, receipts, balance, gpus, abuse });
+    const app = createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, grants, vault, settings, benchEvents, runBudgets, memory, memoryImport, community, endpoints, presets, receipts, balance, gpus, abuse });
     let jwks = null;
     let keyLoaded = Promise.resolve(null);
     if (!keys.pinned && config.nodeEnv !== 'test') {
@@ -241,7 +246,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         if (!givenDb) await db.close();
     }
 
-    return { config, db, registry, pool, quotas, tiers, cache, fetcher, engine, runs, keys, keyLoaded, auth, app, server, bench, benchEvents, memory, memoryJobs, credits: creditsRef, settings, vault, community, gpus, abuse, close };
+    return { config, db, registry, pool, quotas, tiers, cache, fetcher, engine, runs, keys, keyLoaded, auth, app, server, bench, benchEvents, memory, memoryJobs, credits: creditsRef, settings, vault, community, endpoints, gpus, abuse, close };
 }
 
 if (require.main === module) {

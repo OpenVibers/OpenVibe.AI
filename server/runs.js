@@ -581,7 +581,8 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             ? explain.attempts[0].provider : null;
         const record = (provider ? await registry.getProvider(provider) : null)
             || (credentialProvider ? await registry.getProvider(credentialProvider) : null);
-        const communityAnswer = Boolean(provider && String(provider).startsWith('community:')) || Boolean(explain && explain.community);
+        // A community machine (`community:`) or a registered community endpoint (`community-endpoint:`) sees the prompt.
+        const communityAnswer = Boolean(provider && /^community[:-]/.test(String(provider))) || Boolean(explain && explain.community);
         return communityAnswer
             ? privacy.labelFor({ record: { metadata: { data_policy: { trust: 'community' } } } })
             : privacy.labelFor({ record, credential: byok ? { provider: credentialProvider } : null });

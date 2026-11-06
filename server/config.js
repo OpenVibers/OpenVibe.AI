@@ -429,6 +429,17 @@ function load(env = process.env) {
             trustDays: Math.max(1, Math.min(365, int(env.AI_COMMUNITY_TRUST_DAYS, 7))),
             dailyEarningCapMicro: Math.max(0, Math.min(1e15, int(env.AI_COMMUNITY_DAILY_CAP_CREDITS, 100) * 1e6)),
             kudosPerThousandTokens: Math.max(1, Math.min(1000, int(env.AI_COMMUNITY_KUDOS_PER_1K, 1))),
+            // A community endpoint is a standalone OpenAI-compatible server registered by its own https address with
+            // the seller's Network developer key (server/community/endpoints.js). AI reaches it only through the egress
+            // guard: https, a public DNS answer, no IP literal, a timeout, a response byte cap, and never the buyer's
+            // identity in a header. maxPerOwner bounds one seller's registrations.
+            endpoints: {
+                enabled: bool(env.AI_COMMUNITY_ENDPOINTS, true),
+                timeoutMs: Math.max(5000, Math.min(120000, int(env.AI_COMMUNITY_ENDPOINT_TIMEOUT_MS, 60000))),
+                maxBytes: Math.max(65536, Math.min(16 * 1024 * 1024, int(env.AI_COMMUNITY_ENDPOINT_MAX_BYTES, 2 * 1024 * 1024))),
+                maxRedirects: Math.max(0, Math.min(3, int(env.AI_COMMUNITY_ENDPOINT_MAX_REDIRECTS, 2))),
+                maxPerOwner: Math.max(1, Math.min(100, int(env.AI_COMMUNITY_ENDPOINT_MAX_PER_OWNER, 20))),
+            },
         },
 
         // ── Tier budgets (T6 step 8, server/govern.js): openvibe-sdk/govern in Valkey, off unless AI_GOVERN_TIERS=1.

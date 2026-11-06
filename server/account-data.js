@@ -54,6 +54,10 @@ const TABLES = [
     // counter; listing them here is what makes the guard (and the export count) know they exist.
     { table: 'abuse_daily_usage', subject: 'subject', value: (usr) => `user:${usr}`, file: null, erase: { keep: 'erased by extraErase after the device rows are read' } },
     { table: 'abuse_devices', subject: 'subject', file: null, erase: { keep: 'erased by extraErase after the shared counter is found' } },
+    // A community endpoint (the design's SDK gap) is the person's own capacity: it goes in their export and is
+    // removed when the account goes, so it stops receiving traffic too.
+    { table: 'community_endpoint_offers', subject: 'owner_subject', file: 'community-endpoint-offers.json', order: 'created_at',
+        columns: ['id', 'name', 'base_url', 'models', 'hours', 'concurrency', 'price_in', 'price_out', 'audience', 'group_id', 'created_at', 'updated_at'] },
     // The person's own quota (server/quota.js): a limit that only means something while the account lives.
     { table: 'quotas', subject: 'scope_id', value: (usr) => `user:${usr}`, file: null },
     // What the person used, counted against their allowance: the spend ledger, kept.
