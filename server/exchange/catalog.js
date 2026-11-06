@@ -13,6 +13,7 @@
  * says nothing about training, retention or region.
  */
 const rates = require('../providers/rate-cards');
+const upstream = require('../providers/upstream');
 
 const DAY_MS = 86400000;
 const FAMILY_BY_PREFIX = [
@@ -64,6 +65,16 @@ function familyOf(row, provider, canonical) {
     return familyFrom(canonical) || provider.display_name || provider.key;
 }
 
+/**
+ * The kind a model is offered as. `vision` is a chat model that also sees images, so it is chat here; the
+ * catalog has separate kinds for embeddings, speech-to-text and image generation, never mixed into chat.
+ */
+function kindOf(row) {
+    const type = (row && row.type) || 'chat';
+    return type === 'vision' ? 'chat' : type;
+}
+const KINDS = ['chat', 'embedding', 'stt', 'image'];
+
 function policyOf(provider) {
     const p = provider && provider.metadata && provider.metadata.data_policy;
     if (!p || typeof p !== 'object') return null;
@@ -90,7 +101,7 @@ function modalitiesOf(row) {
     return [...out];
 }
 
-function createCatalog({ db, registry, pool, clock = { now: () => Date.now() } }) {
+function createCatalog({ db, registry, pool, env = process.env, clock = { now: () => Date.now() } }) {
     const getStats = db.prepare(`SELECT provider, model,
             SUM(requests)::bigint AS requests, SUM(ok)::bigint AS ok, SUM(errors)::bigint AS errors,
             CASE WHEN SUM(requests) > 0 THEN SUM(COALESCE(latency_p50_ms, 0) * requests) / SUM(requests) END AS p50,
@@ -120,17 +131,16 @@ function createCatalog({ db, registry, pool, clock = { now: () => Date.now() } }
     /**
      * Every live offer, grouped by the model it serves.
      * days: the window the measured speed, uptime and request counts cover.
+     * kind: only models of this kind (chat, embedding, stt, image); null for every kind.
      */
-    async function models({ days = 7 } = {}) {
+    async function models({ days = 7, kind = null } = {}) {
         const now = clock.now();
         const today = dayOf(now);
         const stats = await statsFor(days, today);
         const providers = await registry.listProviders();
         const byKey = new Map(providers.map((p) => [p.key, p]));
-        const health = new Map();
-        for (const p of providers) {
-            try { health.set(p.key, await pool.health(p.key)); } catch (e) { health.set(p.key, null); }
-        }
+        const upstreamByKey = new Map();
+        for (const p of providers) upstreamByKey.set(p.key, upstream.upstreamOf(p));
 
         const groups = new Map();
         for (const row of await registry.listModels()) {
@@ -138,11 +148,18 @@ function createCatalog({ db, registry, pool, clock = { now: () => Date.now() } }
             if (!provider || provider.kind === 'stub' || (provider.metadata && provider.metadata.synthetic)) continue;
             if (provider.metadata && provider.metadata.hidden === true) continue;
             if (row.status !== 'active' || provider.status !== 'active') continue;
+            // A model is an offer only when the key its provider needs is configured now. A record with no
+            // usable upstream (the internal `shared` label with no real provider behind it) is never shown.
+            if (!upstream.configured(provider, env)) continue;
+            const up = upstreamByKey.get(provider.key);
+            if (!up || !upstream.serves(up, provider, row)) continue;
             // Capacity the network may not resell is never an offer: a person's own key, or a restricted one.
             if (provider.provider_access === 'CUSTOMER_BYOK' || provider.provider_access === 'RESTRICTED') continue;
             if (!['chat', 'vision', 'embedding', 'stt', 'image'].includes(row.type)) continue;
 
-            const canonical = canonicalOf(row, provider);
+            // The catalog shows the real upstream, never the router's internal key ("shared").
+            const shown = { key: up.key, display_name: up.name };
+            const canonical = canonicalOf(row, shown);
             const slug = slugOf(canonical);
             if (!slug) continue;
             const cards = await pool.rateCardsFor(provider.key, row.model_key);
@@ -150,15 +167,19 @@ function createCatalog({ db, registry, pool, clock = { now: () => Date.now() } }
             const st = stats.get(`${provider.key}\u0000${row.model_key}`) || { requests: 0, ok: 0, errors: 0, p50: null, p95: null, today: 0 };
             const uptime = st.requests > 0 ? st.ok / st.requests : null;
             const offer = {
-                provider: provider.key,
-                provider_name: provider.display_name || provider.key,
+                provider: up.key,
+                provider_name: up.name,
                 model: row.model_key,
+                kind: kindOf(row),
                 // The exact artifact id a caller may pin (`org/model[:quant]@revision`); null when nobody recorded one.
                 id: (row.metadata && typeof row.metadata.id === 'string') ? row.metadata.id : null,
                 trust: isCommunity(provider) ? 'community' : 'first-party',
                 access: provider.provider_access || 'UNVERIFIED',
                 free: cards == null,
                 price: price ? { in: price.in, out: price.out, cached: price.cached, per: '1M tokens', currency: 'USD' } : null,
+                // Where the number came from and when someone checked it; null when nobody recorded it.
+                price_source: cards && cards.out.source && !String(cards.out.source).startsWith('urn:openvibe:ai:unverified:') ? cards.out.source : null,
+                price_checked_at: cards && cards.out.verified_at && cards.out.verified_at !== rates.UNKNOWN_DATE ? cards.out.verified_at : null,
                 speed: { p50_ms: st.p50, p95_ms: st.p95 },
                 uptime,
                 requests_7d: st.requests,
@@ -170,7 +191,8 @@ function createCatalog({ db, registry, pool, clock = { now: () => Date.now() } }
                 groups.set(slug, {
                     slug, canonical,
                     name: row.display_name || row.model_key,
-                    family: familyOf(row, provider, canonical),
+                    family: familyOf(row, shown, canonical),
+                    kind: kindOf(row),
                     variant: (row.metadata && row.metadata.variant) || null,
                     uncensored: UNCENSORED.test(`${canonical} ${(row.metadata && row.metadata.variant) || ''}`) || Boolean(row.metadata && row.metadata.uncensored === true),
                     type: row.type,
@@ -190,7 +212,8 @@ function createCatalog({ db, registry, pool, clock = { now: () => Date.now() } }
             if (!g.description && row.metadata && typeof row.metadata.description === 'string') g.description = row.metadata.description;
         }
 
-        const models = [...groups.values()];
+        let models = [...groups.values()];
+        if (kind) models = models.filter((m) => m.kind === kind);
         for (const m of models) {
             m.offers.sort((a, b) => {
                 const pa = a.price ? a.price.in + a.price.out : Number.POSITIVE_INFINITY;
@@ -206,17 +229,24 @@ function createCatalog({ db, registry, pool, clock = { now: () => Date.now() } }
         models.sort((a, b) => b.requests_7d - a.requests_7d || b.requests_today - a.requests_today || a.name.localeCompare(b.name));
 
         const families = new Map();
+        const kinds = new Map();
         for (const m of models) {
             const f = families.get(m.family) || { name: m.family, models: 0, offers: 0 };
             f.models += 1;
             f.offers += m.offers.length;
             families.set(m.family, f);
+            const k = kinds.get(m.kind) || { kind: m.kind, models: 0, offers: 0 };
+            k.models += 1;
+            k.offers += m.offers.length;
+            kinds.set(m.kind, k);
         }
         return {
             generated_at: new Date(now).toISOString(),
             window_days: days,
+            ...(kind ? { kind } : {}),
             count: models.length,
             families: [...families.values()].sort((a, b) => b.models - a.models || a.name.localeCompare(b.name)),
+            kinds: [...kinds.values()].sort((a, b) => KINDS.indexOf(a.kind) - KINDS.indexOf(b.kind)),
             models,
         };
     }
@@ -233,4 +263,5 @@ function createCatalog({ db, registry, pool, clock = { now: () => Date.now() } }
 createCatalog.dayOf = dayOf;
 createCatalog.slugOf = slugOf;
 createCatalog.familyOf = familyOf;
-module.exports = { createCatalog, slugOf, canonicalOf, dayOf };
+createCatalog.kindOf = kindOf;
+module.exports = { createCatalog, slugOf, canonicalOf, dayOf, kindOf, KINDS };

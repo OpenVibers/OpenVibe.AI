@@ -284,6 +284,14 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         // use paid capacity, counted against that budget; without it, only free capacity serves the run.
         const tokenBudget = runBudgets && principal.jti ? await runBudgets.spent(principal.jti) : null;
         const serviceBudgeted = Boolean(tokenBudget && (tokenBudget.budget_usd != null || tokenBudget.budget_tokens != null));
+        // Spend safety (server/providers/index.js): a run nobody pays for — the free allowance (a service naming
+        // a person, without their own token) or the Exchange's anonymous Try it (its service token, no person and
+        // no run-token budget, on ai.complete) — may use only offers under the free-use output price ceiling. A
+        // person's own token (their Balance), a project's run, a service's own run-token budget and a person's own
+        // key are paid by someone else, so the ceiling never applies to them.
+        const anonymousTryIt = principal.kind !== 'app' && requester.type === 'service' && requester.id === 'exchange';
+        const freeUse = !personPays && !serviceBudgeted && !app && credentialSubject === null && !projectProvider
+            && (Boolean(runPerson) || (anonymousTryIt && wf.key === 'ai.complete'));
         // The injected run record names the person a user runs for, so preferences and cache scope follow them.
         if (runPerson && !personSubject) body = { ...body, on_behalf_of: { type: 'user', id: runPerson } };
         const selfKeys = Boolean(credentials && runPerson && credentialSubject === null && !projectProvider && !pinned && await credentials.hasSelf(runPerson));
@@ -307,7 +315,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             onBehalfOf: runPerson || principal.onBehalfOf || null,
             // Only the person's own token may hold their Balance; a service naming them draws free capacity only
             // (or its own run-token budget). The run still records the person, so preferences and cache follow them.
-            personSubject: runPerson || null, personPays, serviceBudgeted,
+            personSubject: runPerson || null, personPays, serviceBudgeted, freeUse,
             // A credential or a project's own provider never reaches managed supply: no Balance hold for that run.
             ...(credentialSubject !== null || projectProvider ? { byok: true } : {}),
             ...(maxCostNano != null ? { maxCostNano: String(maxCostNano) } : {}),
@@ -647,6 +655,8 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                 requesterType: ctx.requesterType, requesterId: ctx.requesterId,
                 // AI Exchange F: no payer on this run (and not BYOK): the pool skips paid offers with a card.
                 creditsRequired: Boolean(ctx.creditsRequired),
+                // The free allowance / anonymous Try it: the router may use only offers under the output price ceiling.
+                freeUse: Boolean(ctx.freeUse),
                 // Opted in to community capacity: the pool may place this run on a person's machine.
                 communityOptIn: Boolean(ctx.communityOptIn),
                 communityFree,

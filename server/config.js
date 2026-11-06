@@ -130,6 +130,21 @@ function load(env = process.env) {
             model: String(env.AI_MODEL || '').trim(),
             timeoutMs: int(env.AI_PROVIDER_TIMEOUT_MS, 30000),
         },
+        // ── DeepSeek, its own provider when its key is configured ──
+        // DEEPSEEK_API_KEY is also the research fallback's key; this makes its chat models managed offers.
+        deepseek: {
+            enabled: bool(env.AI_DEEPSEEK_ENABLED, true),
+            baseUrl: trimUrl(env.AI_DEEPSEEK_BASE_URL || 'https://api.deepseek.com'),
+            apiKeyRef: String(env.AI_DEEPSEEK_KEY_REF || 'env:DEEPSEEK_API_KEY').trim(),
+            timeoutMs: int(env.AI_DEEPSEEK_TIMEOUT_MS, 90000),
+        },
+        // ── Spend safety for runs nobody pays for (the free allowance, the anonymous Try it) ──
+        // A run with no person's own token, no app project, no service run-token budget and no own key may
+        // use only offers at or below this output price (USD per 1M tokens). Dearer models need the person's
+        // own Balance or their own key; the router answers 402 billing.payer_required instead.
+        freeUse: {
+            maxOutputPricePerMtok: Math.max(0, float(env.AI_FREE_MAX_OUTPUT_PRICE_USD_PER_MTOK, 1)),
+        },
         // ── Placement (T6 provider router): openvibe-sdk/placement orders a route's capability pool ──
         placement: {
             // A candidate replaces the route's current placement only when it scores this much better,
