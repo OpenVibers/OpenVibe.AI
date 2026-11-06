@@ -22,7 +22,6 @@ const { parseCostUsd } = require('./credits');
 const { CACHE_INPUT } = require('./workflows/hooks');
 const { preferenceLines } = require('./user-modules');
 const { preferredTarget } = require('./providers/task');
-const tier = require('./policy/tier');
 const schemas = require('./schemas');
 const events = require('./events');
 const usageRecord = require('./usage-record');
@@ -104,7 +103,7 @@ function routePinRequest(value, principal, wf) {
     return { provider, model };
 }
 
-function createRuns({ db, registry, engine, cache, quotas, config, clock = { now: () => Date.now() }, log = console, userModules = null, credentials = null, preferences: personPreferences = null, tiers = null, projectSecrets = null, pool = null, runBudgets = null, credits = null }) {
+function createRuns({ db, registry, engine, cache, quotas, config, clock = { now: () => Date.now() }, log = console, userModules = null, credentials = null, preferences: personPreferences = null, tiers = null, projectSecrets = null, pool = null, runBudgets = null, credits = null, community = null }) {
     const inflight = new Map();     // run id -> { controller, promise, release, caller }
     const queue = [];               // run ids waiting for the worker
     let active = 0;
@@ -194,11 +193,6 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         const pinned = routePinRequest(body.route, principal, wf);
         if (pinned && body.credential != null) throw new AiError(422, 'input.invalid', 'a pinned route cannot be combined with a person\'s credential; the pin is the provider');
         validateRefs(body);
-        // The Exchange remake's content policy. It is a control field, never part of the workflow's input; the pool
-        // enforces the 18+ gate and the offer filter (server/providers/index.js), and the answer carries the label.
-        const askedPolicy = tier.parsePolicy(body.policy != null ? body.policy : body.options && body.options.policy);
-        if (askedPolicy.error) throw new AiError(422, askedPolicy.error, askedPolicy.detail);
-        const contentPolicy = askedPolicy.policy;
         const input = body.input === undefined ? {} : body.input;
         const inputJson = stableStringify(input);
         if (Buffer.byteLength(inputJson) > config.runs.maxInputBytes) throw new AiError(413, 'input.too_large', `input is larger than ${config.runs.maxInputBytes} bytes`);
@@ -240,6 +234,9 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             }
         }
         const options = body.options && typeof body.options === 'object' ? body.options : {};
+        // Community capacity is opt-in per request: a person's machine sees the prompt, so only a caller that says so
+        // may be placed there. The OpenAI and Messages routes set body.community from x-openvibe-community.
+        const communityOptIn = body.community === true || options.community === true;
         // A person's own key (WS-O task 2): only the service that stored it, within its daily budget; never cached.
         // A person's own key: the default one, or the provider the run names (Codes C3: one credential per provider).
         const credentialSubject = body.credential && typeof body.credential === 'object' ? String(body.credential.subject || '') : null;
@@ -282,10 +279,10 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             ...(app ? { appRun: true, projectId: app.projectId, sandbox: app.sandbox, appId: principal.appId } : {}),
             // Who pays a Balance hold (D12): the app and its project, else the person a token acts for, else the service.
             onBehalfOf: personSubject || principal.onBehalfOf || null,
-            ...(contentPolicy !== 'standard' ? { contentPolicy } : {}),
             // A credential or a project's own provider never reaches managed supply: no Balance hold for that run.
             ...(credentialSubject !== null || projectProvider ? { byok: true } : {}),
             ...(maxCostNano != null ? { maxCostNano: String(maxCostNano) } : {}),
+            ...(communityOptIn ? { communityOptIn: true } : {}),
             ...(pinned ? { routePin: pinned } : {}),
             // POST /v1/chat/completions with stream: true: the upstream's deltas, as they arrive (kept in memory only).
             ...(typeof onDelta === 'function' ? { onDelta } : {}),
@@ -305,11 +302,11 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             source_service: requester.type === 'service' ? requester.id : null,
             target: body.target ? JSON.stringify(body.target) : null, target_key: ctx.targetKey,
             input: null, input_hash: inputHash, idempotency_key: idem, trace_id: trace, request_id: requestId, retry_of: retryOf,
-            options: JSON.stringify({ cache: options.cache !== false && credentialSubject === null && !projectProvider && !pinned && !selfKeys, debug: Boolean(options.debug), input_retained: kept.full,
+            options: JSON.stringify({ cache: options.cache !== false && credentialSubject === null && !projectProvider && !pinned && !selfKeys && !communityOptIn, debug: Boolean(options.debug), input_retained: kept.full,
                 ...(credentialSubject !== null ? { credential_subject: credentialSubject } : {}), ...(credentialProvider !== null ? { credential_provider: credentialProvider } : {}),
                 ...(selfKeys ? { self_subject: personSubject } : {}),
                 ...(projectProvider ? { project_provider: projectProvider } : {}), ...(pinned ? { pinned_offer: pinned } : {}),
-                ...(prefer ? { prefer } : {}), ...(contentPolicy !== 'standard' ? { policy: contentPolicy } : {}) }), created_at: now,
+                ...(communityOptIn ? { community: true } : {}), ...(prefer ? { prefer } : {}) }), created_at: now,
         };
         base.input = stableStringify(kept.value);
 
@@ -317,9 +314,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         // A pinned run is never served from (or written to) the shared cache: the caller asked for THIS model,
         // and another model's answer under the same prompt would silently break the pin. A run that may use the
         // person's own key is never cached either: their key must be used, and the answer is theirs, not the scope's.
-        // The adult tier is never cached: its answer is labelled, and a standard request must never be served it (or
-        // the other way round) from a shared cache entry keyed only on the workflow and the input.
-        const scope = options.cache === false || credentialSubject !== null || projectProvider || pinned || selfKeys || contentPolicy !== 'standard' ? null : cache.scopeFor(wf.cache_mode, ctx);
+        const scope = options.cache === false || credentialSubject !== null || projectProvider || pinned || selfKeys || communityOptIn ? null : cache.scopeFor(wf.cache_mode, ctx);
         let cacheKey = null;
         if (scope) {
             // Some workflows key the cache on less than their whole input (hooks.js CACHE_INPUT: a signed URL's signature).
@@ -352,6 +347,8 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
 
         // Queue caps, then quota: both before any provider call (a refused run is not counted).
         const caller = `${requester.type}:${requester.id}`;
+        // Kudos bought with volunteer service start this run earlier in the queue (never cash, never a bypass of limits).
+        const priority = community && typeof community.queuePriority === 'function' ? await community.queuePriority(ctx.onBehalfOf).catch(() => 0) : 0;
         admit(caller);
         // A run with a person's own key spends their money, not the shared quotas (its own budget was checked above).
         // The tier budgets (server/govern.js, AI_GOVERN_TIERS) hold first, so a run they refuse is not counted by reserve().
@@ -388,7 +385,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         const gate = new Promise((r) => { release = r; });
         // Whatever the run's end, a tier hold it did not settle (accounted) goes back.
         const promise = gate.then(async () => { try { await execute(id, { controller, reserved, scope, ctx, input, hold }); } finally { if (hold) await tiers.release(hold); } }).catch((err) => { log.error(`[runs] ${id}: ${err.stack || err}`); });
-        inflight.set(id, { controller, promise, release, caller });
+        inflight.set(id, { controller, promise, release, caller, priority });
         queue.push(id);
         pump();
         return { run: await get(id), created: true, promise };
@@ -406,7 +403,14 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
 
     function pump() {
         while (active < config.runs.maxConcurrent && queue.length) {
-            const id = queue.shift();
+            // The highest kudos priority first; equal priorities keep their arrival order.
+            let at = 0;
+            for (let i = 1; i < queue.length; i++) {
+                const have = inflight.get(queue[at]);
+                const next = inflight.get(queue[i]);
+                if (next && (!have || (next.priority || 0) > (have.priority || 0))) at = i;
+            }
+            const [id] = queue.splice(at, 1);
             const h = inflight.get(id);
             if (!h) continue;
             active++;
@@ -599,6 +603,9 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                 const changed = await credentials.markFailed(failure.owner, failure.subject, failure.provider, failure.error);
                 if (changed) await events.credentialFailed({ subject: failure.subject, provider: failure.provider, error: failure.error, owner: failure.owner });
             } : undefined;
+            // With Credits off there is no Balance payer at all, so every run is the free tier for a new community machine;
+            // with it on only a run that could not hold a paid offer is.
+            const communityFree = !(credits && credits.enabled) || Boolean(ctx.creditsRequired);
             const r = await engine.execute(wf, row, input, { signal: controller.signal, logRequest, debugRaw: Boolean(config.debugRawLog && opts.debug), inputHash: row.input_hash, preferences,
                 // A developer app's run (ADR-014): the provider pool excludes a person's byok key, and the run is
                 // limited to free and local capacity when it is a sandbox run or when no tier budget governs its
@@ -608,23 +615,17 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                 requesterType: ctx.requesterType, requesterId: ctx.requesterId,
                 // AI Exchange F: no payer on this run (and not BYOK): the pool skips paid offers with a card.
                 creditsRequired: Boolean(ctx.creditsRequired),
+                // Opted in to community capacity: the pool may place this run on a person's machine.
+                communityOptIn: Boolean(ctx.communityOptIn),
+                communityFree,
                 ...(ctx.routePin ? { routePin: ctx.routePin } : {}),
                 // L37: the soft preference the caller made (provider, and a model if it named one).
                 prefer: opts.prefer || null,
-                // The Exchange remake's content policy (standard, or uncensored for an 18+ account), and the person
-                // the run is for: the pool asks Network whether that account confirmed it is 18+.
-                ...(ctx.contentPolicy ? { contentPolicy: ctx.contentPolicy } : {}),
-                ...(ctx.onBehalfOf ? { onBehalfOf: ctx.onBehalfOf } : {}),
                 ...(onCredentialFailed ? { onCredentialFailed } : {}),
                 ...(selfSubject ? { selfSubject, selfCredentials: selfCredentials || [], selfPreferences } : {}),
                 ...(credential ? { credential, role: input && typeof input.role === 'string' ? input.role : null } : {}),
                 ...(billingDelta ? { onDelta: billingDelta } : {}),
                 ...(onRoute ? { onRoute } : {}) });
-            // The Exchange remake: an uncensored answer is labelled in the run's own output, whatever its shape, so
-            // every surface that reads it (the API routes, the console, a product) shows what produced it.
-            if (r.output && r.label) {
-                r.output = { ...r.output, policy: r.contentPolicy || 'uncensored', label: r.label };
-            }
             if (controller.signal.aborted) throw new AiError(409, 'run.cancelled', 'cancelled');
             // The status, its citations and the ai.run.succeeded event commit together.
             const done = await db.tx(async () => {

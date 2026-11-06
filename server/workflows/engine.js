@@ -384,7 +384,6 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
             grounding: wf.steps.some((s) => s.kind === 'research') ? researchGrounding(last.output) : groundingOf(last.output, sources.length, citeStep),
             synthetic: Boolean(exec && exec.synthetic),
             provider: exec ? exec.provider : null, model: exec ? exec.model : null, fallbackUsed: Boolean(exec && exec.fallbackUsed),
-            ...(exec && exec.result && exec.result.label ? { contentPolicy: exec.result.policy || 'uncensored', label: exec.result.label } : {}),
             usage, cost,
             route: last.route || null,
             explain: exec ? exec.explain || null : null,

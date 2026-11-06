@@ -196,11 +196,10 @@ function messagesRouter({ runs, auth, config, registry, log = console }) {
             }
         }
         let body = { workflow: 'ai.messages', input };
+        // Opt in to community capacity: the caller accepts that a person's machine sees the prompt.
+        if (req.get('x-openvibe-community') === '1' || (b.x_openvibe && b.x_openvibe.community === true)) body.community = true;
         // L37: the soft preference (provider, and a model if the caller wants one). A wish, not a pin.
         if (b.prefer) body = { ...body, prefer: b.prefer };
-        // The Exchange remake's content policy (`policy: "uncensored"`), enforced by the router.
-        if (b.policy != null) body = { ...body, policy: b.policy };
-        if (b.on_behalf_of != null) body = { ...body, on_behalf_of: b.on_behalf_of };
         if (req.principal.kind === 'app') body = { ...body, attribution: appAttribution(req.principal) };
         const own = credentialFor(req);
         if (own.error) return anthropicError(res, own.status, own.error);
@@ -228,8 +227,6 @@ function messagesRouter({ runs, auth, config, registry, log = console }) {
             const code = (run.error && run.error.code) || 'run.failed';
             const status = code === 'ai.run_budget_reached' || code === 'billing.insufficient_funds' || code === 'billing.payer_required' ? 402 : /^(input|validation)\./.test(code) ? 400 : /quota|allowance|budget/.test(code) ? 429
                 : code === 'credential.unsupported' ? 422 : code === 'credential.not_found' ? 404
-                : code === 'policy.adult_required' || code === 'policy.uncensored_refused' || code === 'policy.floor_refused' ? 403
-                : code === 'policy.uncensored_needs_person' ? 400
                 : code === 'ai.model_unavailable' ? 400 : code === 'ai.model_not_found' ? 404 : 529;
             return anthropicError(res, status, (run.error && run.error.detail) || code, null, code);
         }
@@ -249,17 +246,14 @@ function messagesRouter({ runs, auth, config, registry, log = console }) {
             },
         };
         const disclosure = await models.disclosureOf({ registry, config, run });
-        if (live) live.route(disclosure);
+        // A community answer is labelled even with the model catalog flag off: the prompt ran on a person's machine.
+        const community = (disclosure && disclosure.community) || (run.explain && run.explain.community) || null;
+        if (live) live.route(disclosure || (community ? { community } : null));
+        if (community && !live) res.setHeader('X-OpenVibe-Community', '1');
         // D8': the route disclosure joins the existing x_openvibe object (run, provider, fallback, cost), never a second object.
         const x = { run_id: run.id, provider: run.provenance && run.provenance.provider, fallback_used: Boolean(run.provenance && run.provenance.fallback_used),
-            cost_usd: run.usage.cost_usd, synthetic: Boolean(run.synthetic),
-            ...(run.output.label ? { policy: run.output.policy || 'uncensored', label: run.output.label } : {}) };
-        if (run.output.label) {
-            message.label = run.output.label;
-            message.policy = run.output.policy || 'uncensored';
-            res.setHeader('X-OpenVibe-Content-Policy', message.policy);
-        }
-        const xOpenVibe = disclosure ? { ...x, ...disclosure } : (run.output.label ? x : null);
+            cost_usd: run.usage.cost_usd, synthetic: Boolean(run.synthetic), ...(community ? { community } : {}) };
+        const xOpenVibe = (disclosure || community) ? { ...x, ...(disclosure || {}) } : null;
         if (live) {
             // The events already went out as they arrived; an answer that came in one piece (an upstream that cannot
             // stream, a replayed run) is sent as the events it is. finish() sends the held message_stop with the whole

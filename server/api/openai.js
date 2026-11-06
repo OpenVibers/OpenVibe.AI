@@ -7,9 +7,7 @@
  *                                              (ai.run.create), exactly as POST /api/v1/chat takes them
  *   body                                       OpenAI Chat Completions: messages (with tool calls and tool results),
  *                                              tools, tool_choice, parallel_tool_calls, response_format, stop, seed,
- *                                              temperature, top_p, max_tokens / max_completion_tokens, stream; the
- *                                              OpenVibe extensions `policy` ("standard" | "uncensored", the adult tier:
- *                                              see docs/provider-adapters.md) and `on_behalf_of` (the person it is for)
+ *                                              temperature, top_p, max_tokens / max_completion_tokens, stream
  *   model                                      with AI_MODEL_CATALOG off, ignored (an exact id is refused): AI's router picks the upstream
  *                                              for route default.chat. On, an exact id
  *                                              `<org>/<model>[:<quant>]@<revision>` (runs only that artifact, never a
@@ -180,12 +178,11 @@ function openaiRouter({ runs, auth, config, registry, log = console }) {
         // AI Exchange F: the caller's liability cap for the Balance hold (an OpenVibe extension, like x_openvibe).
         if (b.max_cost_usd != null) input.max_cost_usd = b.max_cost_usd;
         let body = { workflow: 'ai.complete', input };
+        // Opt in to community capacity (the design's "Offer to the network"): the caller accepts that a person's machine
+        // sees the prompt. Off unless asked for, per request.
+        if (req.get('x-openvibe-community') === '1' || (b.x_openvibe && b.x_openvibe.community === true)) body.community = true;
         // L37: the soft preference (provider, and a model if the caller wants one). A wish, not a pin.
         if (b.prefer) body = { ...body, prefer: b.prefer };
-        // The Exchange remake's content policy (`policy: "uncensored"`): an OpenVibe extension, enforced by the router
-        // (18+ account, uncensored offers only, the floor, the label). on_behalf_of names the person it is for.
-        if (b.policy != null) body = { ...body, policy: b.policy };
-        if (b.on_behalf_of != null) body = { ...body, on_behalf_of: b.on_behalf_of };
         if (req.principal.kind === 'app') body = { ...body, attribution: appAttribution(req.principal) };
         // The person's own key (Codes C3): x-openvibe-credential names the provider whose key this request uses.
         const personKey = credentialFor(req);
@@ -218,8 +215,6 @@ function openaiRouter({ runs, auth, config, registry, log = console }) {
             const code = (run.error && run.error.code) || 'run.failed';
             const status = code === 'ai.run_budget_reached' || code === 'billing.insufficient_funds' || code === 'billing.payer_required' ? 402 : /^(input|validation)\./.test(code) ? 400 : /quota|allowance|budget/.test(code) ? 429
                 : code === 'project_secret.refused' ? 403 : code === 'credential.endpoint_refused' ? 422
-                : code === 'policy.adult_required' || code === 'policy.uncensored_refused' || code === 'policy.floor_refused' ? 403
-                : code === 'policy.uncensored_needs_person' ? 400
                 : code === 'ai.model_unavailable' ? 400 : code === 'ai.model_not_found' ? 404 : 503;
             return openaiError(res, status, (run.error && run.error.detail) || code, code);
         }
@@ -227,14 +222,17 @@ function openaiRouter({ runs, auth, config, registry, log = console }) {
             return openaiError(res, 504, `the completion is still running; GET /api/v1/runs/${run.id}`, 'run.timeout');
         }
         const disclosure = await models.disclosureOf({ registry, config, run });
-        if (live) live.route(disclosure);
+        // A community answer is labelled even with the model catalog flag off: the caller must see that the prompt ran
+        // on a person's machine.
+        const community = (disclosure && disclosure.community) || (run.explain && run.explain.community) || null;
+        if (community && !live) res.setHeader('X-OpenVibe-Community', '1');
+        if (live) live.route(disclosure || (community ? { community } : null));
         const created = Math.floor(Date.parse(run.created_at || new Date().toISOString()) / 1000) || Math.floor(Date.now() / 1000);
         const id = `chatcmpl-${run.id}`;
         const model = run.output.model || (run.provenance && run.provenance.model) || 'openvibe';
         const usage = { prompt_tokens: run.usage.tokens_in || 0, completion_tokens: run.usage.tokens_out || 0, total_tokens: (run.usage.tokens_in || 0) + (run.usage.tokens_out || 0) };
         const x = { run_id: run.id, provider: run.provenance && run.provenance.provider, fallback_used: Boolean(run.provenance && run.provenance.fallback_used), cost_usd: run.usage.cost_usd, synthetic: Boolean(run.synthetic),
-            ...(run.output.label ? { policy: run.output.policy || 'uncensored', label: run.output.label } : {}) };
-        if (run.output.label) res.setHeader('X-OpenVibe-Content-Policy', run.output.policy || 'uncensored');
+            ...(community ? { community } : {}) };
         if (!live) res.setHeader('X-OpenVibe-Run-Id', run.id);   // a stream sent it with its headers
         if (live) {
             const send = (o) => live.write(o);
