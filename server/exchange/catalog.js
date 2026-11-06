@@ -4,9 +4,9 @@
  * serves it, with the price, the measured speed and uptime, and the provider's data policy.
  *
  * It is a read over what the router already knows — the registry's providers and models, the rate
- * cards (server/providers/rate-cards.js) and the daily stats (provider_stats_daily) — never a second
- * list of models or prices. Nothing here is per person: a person's own key is not a registry
- * provider, and CUSTOMER_BYOK capacity is never sold as a managed offer.
+ * cards (server/providers/rate-cards.js) and the runs that actually happened (server/exchange/observed.js)
+ * — never a second list of models or prices. Nothing here is per person: a person's own key is not a
+ * registry provider, and CUSTOMER_BYOK capacity is never sold as a managed offer.
  *
  * Facts stay visibly unknown when nobody recorded them: a prepaid provider has no per-token price,
  * a model with no traffic has no latency or uptime, and a provider without metadata.data_policy
@@ -14,9 +14,9 @@
  */
 const rates = require('../providers/rate-cards');
 const upstream = require('../providers/upstream');
+const observed = require('./observed');
 const { allowsOffer } = require('../free-tier');
 
-const DAY_MS = 86400000;
 const FAMILY_BY_PREFIX = [
     ['deepseek', 'DeepSeek'], ['qwen', 'Qwen'], ['qwq', 'Qwen'], ['kimi', 'Kimi'], ['moonshot', 'Kimi'],
     ['glm', 'GLM'], ['zhipu', 'GLM'], ['minimax', 'MiniMax'], ['llama', 'Llama'], ['mistral', 'Mistral'],
@@ -107,31 +107,7 @@ function createCatalog({ db, registry, pool, env = process.env, clock = { now: (
     // the free allowance and the anonymous Try it may actually use. config.freeUse is fixed at boot, like the
     // provider keys and upstreams the rest of this read shows.
     const freeUse = config && config.freeUse ? config.freeUse : undefined;
-    const getStats = db.prepare(`SELECT provider, model,
-            SUM(requests)::bigint AS requests, SUM(ok)::bigint AS ok, SUM(errors)::bigint AS errors,
-            CASE WHEN SUM(requests) > 0 THEN SUM(COALESCE(latency_p50_ms, 0) * requests) / SUM(requests) END AS p50,
-            CASE WHEN SUM(requests) > 0 THEN SUM(COALESCE(latency_p95_ms, 0) * requests) / SUM(requests) END AS p95
-        FROM provider_stats_daily WHERE day >= ? GROUP BY provider, model`);
-    const getToday = db.prepare(`SELECT provider, model, SUM(requests)::bigint AS requests
-        FROM provider_stats_daily WHERE day = ? GROUP BY provider, model`);
-
-    async function statsFor(days, today) {
-        const from = dayOf(clock.now() - Math.max(1, days) * DAY_MS);
-        const map = new Map();
-        for (const r of await getStats.all(from)) {
-            map.set(`${r.provider}\u0000${r.model || ''}`, {
-                requests: Number(r.requests) || 0, ok: Number(r.ok) || 0, errors: Number(r.errors) || 0,
-                p50: num(r.p50), p95: num(r.p95),
-            });
-        }
-        for (const r of await getToday.all(today)) {
-            const key = `${r.provider}\u0000${r.model || ''}`;
-            const hit = map.get(key);
-            if (hit) hit.today = Number(r.requests) || 0;
-            else map.set(key, { requests: 0, ok: 0, errors: 0, p50: null, p95: null, today: Number(r.requests) || 0 });
-        }
-        return map;
-    }
+    const seen = observed.createObserved({ db, clock });
 
     /**
      * Every live offer, grouped by the model it serves.
@@ -140,14 +116,13 @@ function createCatalog({ db, registry, pool, env = process.env, clock = { now: (
      */
     async function models({ days = 7, kind = null } = {}) {
         const now = clock.now();
-        const today = dayOf(now);
-        const stats = await statsFor(days, today);
         const providers = await registry.listProviders();
         const byKey = new Map(providers.map((p) => [p.key, p]));
         const upstreamByKey = new Map();
         for (const p of providers) upstreamByKey.set(p.key, upstream.upstreamOf(p));
 
         const groups = new Map();
+        const drafts = [];
         for (const row of await registry.listModels()) {
             const provider = byKey.get(row.provider_key);
             if (!provider || provider.kind === 'stub' || (provider.metadata && provider.metadata.synthetic)) continue;
@@ -169,8 +144,6 @@ function createCatalog({ db, registry, pool, env = process.env, clock = { now: (
             if (!slug) continue;
             const cards = await pool.rateCardsFor(provider.key, row.model_key);
             const price = cards ? rates.pricesOf(cards) : null;
-            const st = stats.get(`${provider.key}\u0000${row.model_key}`) || { requests: 0, ok: 0, errors: 0, p50: null, p95: null, today: 0 };
-            const uptime = st.requests > 0 ? st.ok / st.requests : null;
             const offer = {
                 provider: up.key,
                 provider_name: up.name,
@@ -189,10 +162,6 @@ function createCatalog({ db, registry, pool, env = process.env, clock = { now: (
                 // Where the number came from and when someone checked it; null when nobody recorded it.
                 price_source: cards && cards.out.source && !String(cards.out.source).startsWith('urn:openvibe:ai:unverified:') ? cards.out.source : null,
                 price_checked_at: cards && cards.out.verified_at && cards.out.verified_at !== rates.UNKNOWN_DATE ? cards.out.verified_at : null,
-                speed: { p50_ms: st.p50, p95_ms: st.p95 },
-                uptime,
-                requests_7d: st.requests,
-                requests_today: st.today || 0,
                 data_policy: policyOf(provider),
                 updated_at: row.updated_at || provider.updated_at || null,
             };
@@ -216,10 +185,16 @@ function createCatalog({ db, registry, pool, env = process.env, clock = { now: (
             const g = groups.get(slug);
             g.offers.push(offer);
             g.offers_listed += 1;
+            drafts.push({ providerKey: provider.key, modelKey: row.model_key, offer });
             if (row.type === 'vision') g.capabilities.vision = true;
             if (!g.context && row.context_window) g.context = num(row.context_window);
             if (!g.description && row.metadata && typeof row.metadata.description === 'string') g.description = row.metadata.description;
         }
+
+        // What those offers actually did: real runs (cached answers counted apart), TTFT where recorded,
+        // else the answering attempt's total latency.
+        const measured = await seen.read({ days });
+        observed.fold(measured, drafts);
 
         let models = [...groups.values()];
         if (kind) models = models.filter((m) => m.kind === kind);
@@ -231,6 +206,8 @@ function createCatalog({ db, registry, pool, env = process.env, clock = { now: (
             });
             m.requests_7d = m.offers.reduce((n, o) => n + o.requests_7d, 0);
             m.requests_today = m.offers.reduce((n, o) => n + o.requests_today, 0);
+            m.cached_7d = m.offers.reduce((n, o) => n + o.cached_7d, 0);
+            m.cached_today = m.offers.reduce((n, o) => n + o.cached_today, 0);
             m.community = m.offers.some((o) => o.trust === 'community');
             m.priced = m.offers.some((o) => o.price);
             delete m.offers_listed;
