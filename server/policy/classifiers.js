@@ -11,6 +11,9 @@
  *   Live    server/ai/explicit.js    EXPLICIT, MINOR, NUDE, minorNude(), isExplicit()
  *   Vision  server/vision/review.js  MINOR, NUDE, SEX, classifyText() → fine | sex_acts | minor_sexual
  *
+ * Live's MINOR and NUDE carry, besides Live's own words, the terms the floor on main already used, so the floor
+ * never gets weaker than the one it replaces (the terms are named where they are).
+ *
  * What a caller may use:
  *
  *   minorNude(text)     a child and a bare body in the same text (Live's rule, the hard line nudity never moves)
@@ -23,11 +26,17 @@
 /** Live: what a scene shows, not what someone talks about in passing — sex acts and pornography. */
 const EXPLICIT = /\b(?:sexual(?:ly)?\s+(?:acts?|activity|intercourse)|sex\s+acts?|having\s+sex|(?:pornographic|sexually\s+explicit|explicit\s+adult)\s+(?:content|material|footage|scenes?|imagery|videos?|acts?)|adult\s+(?:films?|videos?)|porn(?:o|ography|ographic)?|masturbat\w*|intercourse|oral\s+sex|penetrat\w*)\b/i;
 
-/** Live: a person who is not an adult. */
-const MINOR = /\b(?:child(?:ren)?|kids?|minors?|teen(?:age(?:rs?)?|s)?|toddlers?|bab(?:y|ies)|infants?|boys?|girls?|underage)\b/i;
+/**
+ * Live: a person who is not an adult, plus the words the floor on main already carried ('minor', 'pre-teen',
+ * 'schoolboy', 'schoolgirl', 'loli', 'shota'), so the floor never gets weaker than the one it replaces.
+ */
+const MINOR = /\b(?:child(?:ren)?|kids?|minors?|minor|teen(?:age(?:rs?)?|s)?|toddlers?|bab(?:y|ies)|infants?|boys?|girls?|underage|pre-?teen(?:s)?|schoolboy|schoolgirl|loli|shota)\b/i;
 
-/** Live: a bare body. Nudity is art (the owner, 2026-10-31); a child and a bare body in the same text is not. */
-const NUDE = /\b(?:naked|nude|nudity|undress(?:ed|ing)?|topless|bottomless|genital(?:s|ia)?|penis(?:es)?|vaginas?|vulvas?|breasts?|nipples?)\b/i;
+/**
+ * Live: a bare body, plus the words the floor on main already carried ('boobs', 'erotic', 'orgasm', 'cunnilingus',
+ * 'fellatio'). Nudity is art (the owner, 2026-10-31); a child and a bare body in the same text is not.
+ */
+const NUDE = /\b(?:naked|nude|nudity|undress(?:ed|ing)?|topless|bottomless|genital(?:s|ia)?|penis(?:es)?|vaginas?|vulvas?|breasts?|boobs?|nipples?|erotic(?:a)?|orgasm|cunnilingus|fellatio)\b/i;
 
 /** Live: the hard line that nudity being art never moves. */
 const minorNude = (t) => MINOR.test(String(t || '')) && NUDE.test(String(t || ''));

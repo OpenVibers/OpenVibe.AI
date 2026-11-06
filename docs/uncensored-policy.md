@@ -46,6 +46,17 @@ ordinary work is never refused: "how do I kill a stuck process", "cp -r src dst"
 plan" all pass. A person and a sexual act must be in the same text, and a weapon only counts when the text asks for
 one to be made, acquired or used.
 
+### Instructions and content
+
+The narrow lists are unambiguous wherever they appear, so they hold on every text. The house's classifiers read what
+a text *shows* — a child with a bare body, a child with sex acts — so they are read on the **content**: the person's
+words and the answer. They are not read on the **instructions** (the system prompt), because an instruction that
+names a category is not that category: our own templates say "nothing sexual involving minors" and "flag any sexual
+content involving minors", and the moderation desk has to be able to say so. The answer is still read: a model that
+writes what was asked for is refused there.
+
+So a person's request for such content is refused before a provider is called, and our own desks keep working.
+
 Nudity on its own is art (the owner, 2026-10-31) and is allowed; a child and nudity together is not.
 
 ## What the tier is not

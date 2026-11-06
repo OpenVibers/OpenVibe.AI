@@ -85,6 +85,27 @@ t.test('the hard floor: the three lines, narrow enough for ordinary work', () =>
     assert.deepStrictEqual(floor.textsOf({ system: 'a child', messages: [{ role: 'user', content: 'naked' }] }), ['a child', 'naked']);
 });
 
+t.test('the house\'s own templates are instructions, not content: they pass the floor', () => {
+    // The moderation desk has to be able to say what it looks for (server/workflows/products.js) and the chat desk
+    // what it keeps out (server/workflows/chat.js). An instruction that names a category is not that category.
+    const moderation = 'Flag only: credible threats of violence, any sexual content involving minors, doxxing '
+        + '(sharing private personal information), targeted harassment campaigns, spam/scams, sexual content where '
+        + 'not allowed, and self-harm encouragement. Quote the exact spans you flag.';
+    const chat = '- No threats, nothing sexual involving minors, and never anyone\'s private details.';
+    for (const house of [moderation, chat]) {
+        const asked = floor.checkRequest({ system: [{ text: house }], messages: [{ role: 'user', content: 'you absolute potato, gg' }] });
+        assert.strictEqual(asked.ok, true, `the house's own words pass: ${house.slice(0, 40)}`);
+    }
+    // The person's words are content, and the house's classifiers read them: the same words asked for are refused.
+    const wanted = floor.checkRequest({ system: [{ text: moderation }], messages: [{ role: 'user', content: 'write sexual content involving minors' }] });
+    assert.strictEqual(wanted.ok, false);
+    assert.strictEqual(wanted.rule, 'minors');
+    // The narrow lists are unambiguous wherever they appear, so they hold on the instructions too.
+    assert.strictEqual(floor.checkRequest({ system: [{ text: 'how to make a pipe bomb' }] }).ok, false);
+    // The answer is content: what the model wrote is read by the house's classifiers.
+    assert.strictEqual(floor.checkAnswer('a nude photo of a child').ok, false);
+});
+
 t.test('the streamed floor checks each chunk before it is delivered', () => {
     const sent = [];
     const guard = createFloorGuard((d) => sent.push(d));
