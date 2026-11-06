@@ -175,6 +175,10 @@ function load(env = process.env) {
             model: String(env.AI_LOCAL_LLM_MODEL || '').trim(),
             embedModel: String(env.AI_LOCAL_EMBED_MODEL || '').trim(),
             timeoutMs: int(env.AI_LOCAL_LLM_TIMEOUT_MS, 180000),
+            // Never let the local model starve the host: one generation at a time across every local provider,
+            // and a short answer unless a route already asked for less (server/providers/index.js).
+            maxTokens: Math.max(1, int(env.AI_LOCAL_LLM_MAX_TOKENS, 512)),
+            concurrency: Math.max(1, int(env.AI_LOCAL_LLM_CONCURRENCY, 1)),
         },
         // A second local chat server (its own llama.cpp process, another model family): the provider `local2`.
         // Same rules as `local`: no key, never paid, no JSON. Two local offers let a caller pin a match
@@ -285,11 +289,23 @@ function load(env = process.env) {
         breaker: {
             failureThreshold: Math.max(1, int(env.AI_BREAKER_FAILURES, 3)),
             cooldownMs: int(env.AI_BREAKER_COOLDOWN_MS, 60000),
+            // A provider that answered "insufficient balance" is out of money, not flaky: its circuit stays open this
+            // long (10 minutes), shared by every request, before one probe is allowed to spend again.
+            exhaustedCooldownMs: Math.max(60000, int(env.AI_BREAKER_EXHAUSTED_COOLDOWN_MS, 10 * 60000)),
         },
         // One retry on a transient failure (timeout, 429, 5xx, connection reset) before the
         // router moves on to the fallback — Live's rule.
         providerRetries: Math.max(0, int(env.AI_PROVIDER_RETRIES, 1)),
         retryDelayMs: Math.max(0, int(env.AI_PROVIDER_RETRY_DELAY_MS, 800)),
+
+        // ── Hourly provider balance probe (server/providers/balance.js) ──
+        // Each active provider with a balance API (DeepSeek today) is asked GET <origin>/user/balance and the reading
+        // is exposed as ai_provider_balance_usd{provider} on GET /metrics. Off under a restore drill (AI_DRILL=1).
+        balance: {
+            enabled: bool(env.AI_BALANCE_PROBE, !bool(env.AI_DRILL, false)),
+            intervalMs: Math.max(60000, int(env.AI_BALANCE_PROBE_INTERVAL_MS, 60 * 60 * 1000)),
+            timeoutMs: Math.max(1000, int(env.AI_BALANCE_PROBE_TIMEOUT_MS, 10000)),
+        },
 
         // ── Media inputs: only these hosts are ever fetched (SSRF guard) ──
         media: {

@@ -161,9 +161,15 @@ schema errors), `workflow.not_found`, `idempotency.conflict`, `quota.exceeded` (
 `Retry-After`), `govern.exceeded` (429 + `Retry-After`: a tier budget) and `govern.unavailable` (503: Valkey
 unreachable for a paid or staff run), `queue.full` (429 + `Retry-After`: the run would wait behind `AI_MAX_QUEUED_RUNS`
 runs, or `AI_MAX_QUEUED_RUNS_PER_CALLER` of this caller's), `capability.denied`, `capability.namespace_denied`, `token.*`. A run that cannot
-produce a real answer ends `failed` with an explicit code — `provider.unavailable`,
-`route.unavailable`, `fetch.refused`, `source.unavailable`, `input.insufficient`, `output.empty`,
-`output.invalid`, `run.interrupted` — and never with filler content.
+produce a real answer ends `failed` with an explicit code — `ai.resting` (503: every offer is out of balance,
+paused or busy; the detail is the sentence products show, "AI is resting for a moment", with `Retry-After`),
+`provider.unavailable`, `route.unavailable`, `fetch.refused`, `source.unavailable`, `input.insufficient`,
+`output.empty`, `output.invalid`, `run.interrupted` — and never with filler content.
+
+Each active provider with a balance API (DeepSeek's `GET /user/balance`) is asked hourly; the last reading is
+`ai_provider_balance_usd{provider}` on `/metrics` and OpenVibe.Host's `OpenVibeAiProviderBalanceLow` alert turns a
+reading below $2 into an operator ticket. The key is only sent in the request's `Authorization` header: it is never
+logged, returned or stored by the probe. `AI_BALANCE_PROBE=0` (or a restore drill, `AI_DRILL=1`) turns it off.
 
 The capability ids and the `ai` service manifest are released in openvibe-contracts v0.76.0 (the
 drafts stay in `docs/capabilities-proposal/`); `server/auth.js` checks them with the contracts grant
@@ -444,7 +450,7 @@ definition, but never over an admin's version.
 | `anthropic` | Messages API with cached system blocks and forced-tool JSON. Ported from Live's `llm.js`. | same, with `AI_PROVIDER=anthropic` |
 | `http` | The local HTTP seam: `POST {operation, …}` → `{text, json, usage}` | `AI_HTTP_SEAM_URL` or the admin API |
 | `whisper` | whisper.cpp on this host, with Live's VAD, hallucination filter, multilingual model and live/batch lanes; NVIDIA Parakeet TDT 0.6B v3 (`parakeet-cli`) for English and 24 European languages when `PARAKEET_MODEL` is set, falling back to whisper | `WHISPER_*`, `PARAKEET_*`, `ASR_ENGINE` — Live's names |
-| `openai`, key `local` | A model server on this host speaking the OpenAI API (llama.cpp's `llama-server`, Ollama's `/v1`): no key, never paid; route `media.local` | `AI_LOCAL_LLM_URL`, `AI_LOCAL_LLM_MODEL`, `AI_LOCAL_LLM_TIMEOUT_MS` |
+| `openai`, key `local` | A model server on this host speaking the OpenAI API (llama.cpp's `llama-server`, Ollama's `/v1`): no key, never paid; route `media.local`; last offer for short text, one request at a time | `AI_LOCAL_LLM_URL`, `AI_LOCAL_LLM_MODEL`, `AI_LOCAL_LLM_TIMEOUT_MS`, `AI_LOCAL_LLM_MAX_TOKENS` (512), `AI_LOCAL_LLM_CONCURRENCY` (1) |
 | `openai`, key `local2` | A second local chat server, another llama.cpp process and model family: no key, never paid, no JSON or embeddings. Two local offers let a caller pin a match between them (Games' AI-vs-AI job) | `AI_LOCAL_LLM2_URL`, `AI_LOCAL_LLM2_MODEL`, `AI_LOCAL_LLM2_TIMEOUT_MS` |
 
 Routing: a route either names a `capability` and the router builds its pool from every provider that
@@ -452,7 +458,10 @@ can serve it, ordered by `openvibe-sdk/placement` (objective, price, measured la
 hysteresis through the route's current placement), or pins a `[primary, ...fallbacks]` list. A
 provider that is disabled, missing credentials, circuit-open or unable to do the operation is
 **skipped and logged**; every call has a strict timeout, cancellation and one retry on a transient
-failure; a fallback that answers is recorded on the run (`fallback_used`), in the request log
+failure. A provider's own "insufficient balance" answer (HTTP 402, or 429/403 `insufficient_quota`) is never
+retried: its circuit opens at once for `AI_BREAKER_EXHAUSTED_COOLDOWN_MS` (10 minutes, shared by every request)
+and the router fails over. When nothing can serve, the run answers `ai.resting`; a fallback that answers is
+recorded on the run (`fallback_used`), in the request log
 (`fallback = 1`) and in the audit log. Every run response and `GET /api/v1/runs/:id` carry `explain`
 (objective, reasons, selected, and every candidate with its estimated cost, latency and excluded
 reason).
@@ -703,6 +712,12 @@ pair. On the production host since 2026-11-06: Llama-3.2-1B-Instruct Q4_K_M (Lla
 Hugging Face sha256 `6f85a640a97cf2bf5b8e764087b1e83da0fdb51d7c9fab7d0fece9385611df83`, 807,694,464 bytes),
 checked against that hash before install; it uses about 0.8 GB.
 
+The local model is a **last offer for short text** (summaries, titles, moderation hints, a chat line), never
+for code or long reasoning: routes with `max_output_tokens` over 800 or `outlast_provider_timeout` (an app or a
+wiki page) never offer it. It answers with `AI_LOCAL_LLM_MAX_TOKENS` (512) at most, and one request at a time
+(`AI_LOCAL_LLM_CONCURRENCY`, 1) across `local` and `local2`, so a paid outage cannot starve the streams sharing
+the host. A run that it answered names `local`/`local2` as its provider and marks the receipt local.
+
 Local embeddings are off unless `AI_LOCAL_EMBED_MODEL` names an embedding model the server at `AI_LOCAL_LLM_URL`
 answers at `/embeddings`. Then `local` advertises `embed`, the model is registered as an `embedding` model, and
 `default.embedding` (a capability pool) offers it beside the shared provider's `AI_EMBEDDING_MODEL`; `local` is
@@ -723,6 +738,8 @@ mix vectors from different providers (re-embed when the provider changes).
 | Every workflow has versioned, compiling input/output schemas, runs on the stub and validates | `test/workflows.test.js` |
 | Edits are new versions; runs pin versions; lifecycle; admin versions survive reseeding | `test/versioning.test.js` |
 | A degraded primary falls back and records it; breaker; skips; timeouts; explicit `provider.unavailable` | `test/fallback.test.js` |
+| 402/insufficient-quota opens the long exhausted circuit, never retries, fails over, then `ai.resting` | `test/provider-exhausted.test.js` |
+| Hourly DeepSeek balance gauge, no key in logs, off under a drill | `test/provider-balance.test.js` |
 | Quotas refuse with 429 + Retry-After **before** any provider call; per-service, attribution, cost caps | `test/quota.test.js` |
 | Free allowance: free up to the card's allowance then fully priced, reset per day/month (never for `none`), per subject, never past the cap under concurrent claims, absent at 0 | `test/free-allowance.test.js` |
 | Tier budgets: enforced per subject and per project and reset per window, two concurrent runs never both take the last unit, the free allowance's numbers unchanged on the Valkey store, one reading per accounted run from govern's `onUsage`, Valkey unreachable (paid 503, free admitted), off by default | `test/govern-tiers.test.js` |

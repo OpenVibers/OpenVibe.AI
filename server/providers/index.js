@@ -18,12 +18,16 @@
  * reasons, selected, candidates with their excluded reasons) rides every run response.
  *
  * Circuit breaker per provider: `failureThreshold` consecutive failures open it for `cooldownMs`;
- * after that one half-open probe decides whether it closes again.
+ * after that one half-open probe decides whether it closes again. A provider's own "insufficient balance"
+ * answer opens it at once for the long exhausted cooldown, is never retried, and the router fails over.
+ * When nothing can serve because offers are exhausted or paused, the route answers 503 ai.resting with a
+ * human sentence and Retry-After. The host's local model is a last offer for short text only, one request at
+ * a time, labelled local on the receipt.
  */
 const placement = require('openvibe-sdk/placement');
 const contracts = require('openvibe-contracts');
 const { AiError, resolveSecret, sha256 } = require('../util');
-const { retryable, sleep, ProviderError, schemaInstruction } = require('./common');
+const { retryable, sleep, ProviderError, schemaInstruction, insufficientBalance } = require('./common');
 const { createStubProvider } = require('./stub');
 const { createOpenAiProvider } = require('./openai');
 const { createResponsesProvider } = require('./responses');
@@ -42,7 +46,8 @@ const { createRoutingEvidence } = require('./evidence');
 /** 4xx that the request itself caused (bad image, schema, max_tokens...), as opposed to auth, rate or availability. */
 function callerFault(err) {
     const st = err && err.status;
-    return Number.isInteger(st) && st >= 400 && st < 500 && ![401, 403, 404, 408, 429].includes(st);
+    // 402 payment required is the provider's account, not the caller's request: it opens the circuit (exhausted).
+    return Number.isInteger(st) && st >= 400 && st < 500 && ![401, 402, 403, 404, 408, 429].includes(st);
 }
 
 /** An upstream 429 is rate-limit capacity, not provider ill health: it shifts to the next candidate but must not open the circuit. */
@@ -139,6 +144,11 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
     const machines = machineModels || require('../machines').createMachineModels({ config, env, fetchImpl });
     const cache = new Map();          // key -> { stamp, adapter }
     const stats = {};                 // key -> { calls, failures, ... } (in memory; tests + /api/ready)
+    // One local generation at a time (AI_LOCAL_LLM_CONCURRENCY, default 1): the host's model shares its CPU
+    // with live streams, so a paid outage must not turn into a local-model stampede.
+    const localLimit = Math.max(1, (config.localLlm && config.localLlm.concurrency) || 1);
+    let localActive = 0;
+    const exhaustedCooldownMs = () => Math.max(60000, Number(config.breaker.exhaustedCooldownMs) || 10 * 60000);
     // L36 Y7: the provider that last answered this prompt, for five minutes (server/providers/warm-cache.js).
     const warm = createWarmCache({ now: () => clock.now() });
     // AI Exchange P7: measured per-deployment evidence for alias routing. The feature flag is read live (D11
@@ -200,26 +210,35 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
 
     // ── Circuit breaker ────────────────────────────────────
     const getHealth = db.prepare('SELECT * FROM provider_health WHERE provider_key = ?');
-    const putHealth = db.prepare(`INSERT INTO provider_health (provider_key, state, consecutive_failures, opened_at, last_error, last_success_at, last_failure_at)
-        VALUES (@provider_key, @state, @consecutive_failures, @opened_at, @last_error, @last_success_at, @last_failure_at)
+    const putHealth = db.prepare(`INSERT INTO provider_health (provider_key, state, consecutive_failures, opened_at, exhausted_at, last_error, last_success_at, last_failure_at)
+        VALUES (@provider_key, @state, @consecutive_failures, @opened_at, @exhausted_at, @last_error, @last_success_at, @last_failure_at)
         ON CONFLICT(provider_key) DO UPDATE SET state = excluded.state, consecutive_failures = excluded.consecutive_failures, opened_at = excluded.opened_at,
-          last_error = excluded.last_error, last_success_at = excluded.last_success_at, last_failure_at = excluded.last_failure_at`);
+          exhausted_at = excluded.exhausted_at, last_error = excluded.last_error, last_success_at = excluded.last_success_at, last_failure_at = excluded.last_failure_at`);
     async function health(key) {
-        const h = await getHealth.get(key) || { provider_key: key, state: 'closed', consecutive_failures: 0, opened_at: null, last_error: null, last_success_at: null, last_failure_at: null };
-        if (h.state === 'open' && clock.now() - (h.opened_at || 0) >= config.breaker.cooldownMs) return { ...h, state: 'half_open' };
+        const h = await getHealth.get(key) || { provider_key: key, state: 'closed', consecutive_failures: 0, opened_at: null, exhausted_at: null, last_error: null, last_success_at: null, last_failure_at: null };
+        if (h.state === 'open') {
+            // Out of balance: a long cooldown (10 minutes), so every request shares the same pause instead of each
+            // one retrying a provider that cannot answer until someone tops it up.
+            const cooldown = h.exhausted_at ? exhaustedCooldownMs() : config.breaker.cooldownMs;
+            if (clock.now() - (h.opened_at || 0) >= cooldown) return { ...h, state: 'half_open' };
+        }
         return h;
     }
     async function recordSuccess(key) {
         const h = await health(key);
         if (h.state !== 'closed') await registry.audit('system', 'provider.circuit_closed', 'provider', key, { metadata: { after_failures: h.consecutive_failures } });
-        await putHealth.run({ ...h, provider_key: key, state: 'closed', consecutive_failures: 0, opened_at: null, last_success_at: clock.now() });
+        await putHealth.run({ ...h, provider_key: key, state: 'closed', consecutive_failures: 0, opened_at: null, exhausted_at: null, last_success_at: clock.now() });
     }
     async function recordFailure(key, err) {
         const h = await health(key);
         const failures = (h.consecutive_failures || 0) + 1;
-        const open = h.state === 'half_open' || failures >= config.breaker.failureThreshold;
-        if (open && h.state !== 'open') await registry.audit('system', 'provider.circuit_opened', 'provider', key, { metadata: { failures, error: String(err && err.message || err).slice(0, 200) } });
-        await putHealth.run({ ...h, provider_key: key, state: open ? 'open' : 'closed', consecutive_failures: failures, opened_at: open ? clock.now() : h.opened_at, last_error: String(err && err.message || err).slice(0, 500), last_failure_at: clock.now() });
+        const exhausted = insufficientBalance(err);
+        // A balance answer opens the circuit at once (it will not recover on its own), not after failureThreshold.
+        const open = exhausted || h.state === 'half_open' || failures >= config.breaker.failureThreshold;
+        if (open && h.state !== 'open') await registry.audit('system', 'provider.circuit_opened', 'provider', key, { metadata: { failures, exhausted, error: String(err && err.message || err).slice(0, 200) } });
+        await putHealth.run({ ...h, provider_key: key, state: open ? 'open' : 'closed', consecutive_failures: failures,
+            opened_at: open ? clock.now() : h.opened_at, exhausted_at: exhausted ? clock.now() : (h.exhausted_at || null),
+            last_error: String(err && err.message || err).slice(0, 500), last_failure_at: clock.now() });
     }
     async function resetHealth(key) { await db.prepare('DELETE FROM provider_health WHERE provider_key = ?').run(key); }
 
@@ -260,6 +279,30 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
     /** Local execution never enters the media paid pool, even if a record has no explicit price flag. */
     function isLocalProvider(p) {
         return p.kind === 'whisper' || Boolean(p.metadata && p.metadata.local);
+    }
+    /** The host's text model (local / local2), not its local speech-to-text: the caps below are for text generation. */
+    function isLocalModel(p) {
+        return Boolean(p.metadata && p.metadata.local);
+    }
+    /**
+     * What the host's local model is offered: short text only (summaries, titles, moderation hints, a chat line),
+     * never code or long reasoning. Routes that write whole apps or wiki pages (max_output_tokens well over a chat
+     * answer, or outlast_provider_timeout), and an OpenAI completion carrying tools (an agent's loop), are not for
+     * it; embeddings are small and stay welcome, and speech-to-text is a different local provider.
+     */
+    function localCanServe(route, operation, req = null) {
+        if (operation === 'embed' || operation === 'transcribe') return true;
+        if (!['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich', 'complete', 'messages'].includes(operation)) return false;
+        // A request carrying tools is an agent's loop, not a short chat answer.
+        if (operation === 'complete' && req && req.openai && Array.isArray(req.openai.tools) && req.openai.tools.length) return false;
+        if (operation === 'messages' && req && Array.isArray(req.tools) && req.tools.length) return false;
+        if (route && route.options && route.options.outlast_provider_timeout) return false;
+        // The answer this request actually asked for decides (engine.js puts input.max_tokens on req); a route's own
+        // cap is the fallback. Over 800 tokens is long reasoning, not a short text answer.
+        const wanted = Number(req && req.maxTokens);
+        if (Number.isFinite(wanted)) return wanted <= 800;
+        const max = Number(route && route.max_output_tokens);
+        return !Number.isFinite(max) || max <= 800;
     }
     /**
      * Billing profiles whose capacity is already paid for: a subscription, a free server or a person's own key.
@@ -611,7 +654,8 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         if (p.status !== 'active') return 'disabled';
         if (p.auth_mode !== 'none' && !credentialNotRequired(p) && !resolveSecret(p.secret_ref, env)) return 'no_credentials';
         if (features.some(f => !a.supports(f))) return 'unsupported';
-        if ((await health(p.key)).state === 'open') return 'circuit_open';
+        const h = await health(p.key);
+        if (h.state === 'open') return h.exhausted_at ? 'exhausted' : 'circuit_open';
         return null;
     }
 
@@ -816,6 +860,8 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         const preferState = prefer ? { provider: prefer.provider, model: prefer.model, honoured: false, why: '' } : null;
         const tried = [];
         let unreadable = null;   // a candidate could not read the caller's media (whisper's ffmpeg): no other will either
+        let resting = false;     // a paid provider is out of balance, or every remaining offer is paused: answer ai.resting
+
         // A streamed answer (/v1/chat/completions, stream: true) is the caller's once a delta has gone out: a failure
         // after that is final, never retried or handed to a fallback whose words would follow the first one's.
         let streamed = false;
@@ -1063,15 +1109,39 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             }
             const why = await skipReason(p, a, features);
             if (why) {
+                if (why === 'exhausted' || why === 'circuit_open') resting = true;
                 statFor(c.provider).skipped++;
                 tried.push({ provider: c.provider, skipped: why });
                 attempts.push({ key: 'openvibe', provider: c.provider, model, why: chosen || 'the router chose it', status: 'skipped', error: why });
                 if (ctx.logRequest) ctx.logRequest({ ...base, status: 'skipped', skip_reason: why });
                 continue;
             }
+            // The host's local model is the last offer, and only for short text: never code or long reasoning, and
+            // one request at a time (AI_LOCAL_LLM_CONCURRENCY) so a paid outage cannot starve the streams it shares
+            // the machine with. Its answer is labelled local on the run's receipt (provider_key = local / local2).
+            const local = isLocalModel(p);
+            if (local && !localCanServe(route, operation, req)) {
+                statFor(c.provider).skipped++;
+                tried.push({ provider: c.provider, skipped: 'unsupported' });
+                attempts.push({ key: 'openvibe', provider: c.provider, model, why: chosen || 'the router chose it', status: 'skipped', error: 'the local model is not offered this job' });
+                if (ctx.logRequest) ctx.logRequest({ ...base, status: 'skipped', skip_reason: 'unsupported' });
+                continue;
+            }
+            if (local && localActive >= localLimit) {
+                resting = true;
+                statFor(c.provider).skipped++;
+                tried.push({ provider: c.provider, skipped: 'busy' });
+                attempts.push({ key: 'openvibe', provider: c.provider, model, why: chosen || 'the router chose it', status: 'skipped', error: 'the local model is busy with another answer' });
+                if (ctx.logRequest) ctx.logRequest({ ...base, status: 'skipped', skip_reason: 'busy' });
+                continue;
+            }
             // L36 Y7: the fallback chain stops after three providers.
             if (attemptsMade >= maxAttempts) break;
             attemptsMade += 1;
+            // Claim the local slot synchronously, before any await, so two requests cannot both pass the check.
+            if (local) localActive++;
+            let lastErr = null;
+            try {
             // An image generation outlasts the shared provider's chat timeout (AI_PROVIDER_TIMEOUT_MS): the route's wins. So does a
             // route that says so (options.outlast_provider_timeout: space.build writes a whole app, a minute or two). Otherwise
             // the provider's timeout stays strict, so a slow provider fails over quickly.
@@ -1080,7 +1150,6 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             const cap = outlast ? Math.max(own, Number(route.timeout_ms) || 0, operation === 'image' ? 600000 : 0) : (own || 600000);
             const timeoutMs = Math.max(1000, Math.min(req.timeoutMs || route.timeout_ms || own || DEFAULT_PROVIDER_TIMEOUT_MS, cap));
             const retries = config.providerRetries;
-            let lastErr = null;
             for (let attempt = 0; attempt <= retries; attempt++) {
                 if (ctx.signal && ctx.signal.aborted) throw new AiError(409, 'run.cancelled', 'run was cancelled');
                 const started = clock.now();
@@ -1107,7 +1176,12 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                 }
                 // max_cost_usd, when it binds, comes back as the affordable output cap for this attempt.
                 const callMax = routed && Number.isSafeInteger(routed.maxTokens) && routed.maxTokens >= 1 && routed.maxTokens !== req.maxTokens ? routed.maxTokens : null;
-                const callReq = callMax == null ? req : { ...req, maxTokens: callMax };
+                let callReq = callMax == null ? req : { ...req, maxTokens: callMax };
+                // The host's model writes a short answer: its own cap, never more, whatever the route asked for.
+                if (local && operation !== 'embed') {
+                    const localMax = Math.max(1, (config.localLlm && config.localLlm.maxTokens) || 512);
+                    callReq = { ...callReq, maxTokens: Math.min(Number(callReq.maxTokens) || localMax, localMax) };
+                }
                 try {
                     const fn = a[operation];
                     if (typeof fn !== 'function') throw new ProviderError(`${operation} not implemented`, { code: 'provider.unsupported' });
@@ -1145,7 +1219,8 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                     warm.remember(warmSubject(ctx, route), leadingText(req), c.provider, model);
                     explain.attempts = attempts;
                     explain.openvibe = attemptFacts;
-                    return { result, provider: c.provider, providerKind: p.kind, model: result.model || model, fallbackUsed: fallback || selfAttempts.some(a => a.status !== 'skipped'), usage, cost, latencyMs: latency, ttftMs, synthetic: Boolean(result.synthetic || a.synthetic), tried, startedAt: started, explain };
+                    if (local) { explain.provider_local = true; explain.receipt = { ...(explain.receipt || {}), provider: c.provider, model: result.model || model, local: true }; }
+                    return { result, provider: c.provider, providerKind: p.kind, local, model: result.model || model, fallbackUsed: fallback || selfAttempts.some(a => a.status !== 'skipped'), usage, cost, latencyMs: latency, ttftMs, synthetic: Boolean(result.synthetic || a.synthetic), tried, startedAt: started, explain };
                 } catch (err) {
                     lastErr = err;
                     if (ctx.signal && ctx.signal.aborted) {
@@ -1157,15 +1232,21 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                     if (ctx.logRequest) ctx.logRequest({ ...base, status: err && err.code === 'provider.timeout' ? 'timeout' : 'error', latency_ms: Date.now() - t0, error: String(err && err.message || err).slice(0, 500) });
                     if (streamed) throw new AiError(502, 'provider.stream_broken', `the answer broke off after it began streaming: ${String(err && err.message || err).slice(0, 200)}`, { tried: [...tried, { provider: c.provider, error: String(err && err.message || err).slice(0, 200) }], explain });
                     // A timed-out image may still be generated and billed upstream: never pay for it twice.
-                    if (attempt < retries && retryable(err) && !(operation === 'image' && err.code === 'provider.timeout')) { await sleep(config.retryDelayMs + Math.floor(Math.random() * Math.min(700, config.retryDelayMs)), ctx.signal).catch(() => {}); continue; }
+                    // An insufficient-balance answer is never retried: the same provider cannot answer until it is topped up.
+                    if (insufficientBalance(err)) resting = true;
+                    if (attempt < retries && !insufficientBalance(err) && retryable(err) && !(operation === 'image' && err.code === 'provider.timeout')) { await sleep(config.retryDelayMs + Math.floor(Math.random() * Math.min(700, config.retryDelayMs)), ctx.signal).catch(() => {}); continue; }
                     break;
                 }
+            }
+            } finally {
+                if (local) localActive--;
             }
             // A request the provider rejected as malformed is the caller's fault, not a sign the
             // provider is unhealthy; a 429 is capacity, not health either, and moves on without
             // opening the circuit. Neither must take a shared provider away from other callers.
             if (lastErr && lastErr.code === 'media.unreadable') unreadable = lastErr;
-            if (!callerFault(lastErr) && !rateLimited(lastErr)) await recordFailure(c.provider, lastErr);
+            // An insufficient-balance 429 is not ordinary capacity: it must open the long exhausted circuit.
+            if (insufficientBalance(lastErr) || (!callerFault(lastErr) && !rateLimited(lastErr))) await recordFailure(c.provider, lastErr);
             tried.push({ provider: c.provider, error: String(lastErr && lastErr.message || lastErr).slice(0, 200) });
             attempts.push({ key: 'openvibe', provider: c.provider, model: lastErr && lastErr.model || model, why: chosen || (fallback ? 'the next network provider after an earlier attempt failed' : 'the first network offer for this route'), status: lastErr && lastErr.code === 'provider.timeout' ? 'timeout' : 'failed', error: String(lastErr && lastErr.message || lastErr).slice(0, 300) });
             log.warn(`[ai] ${operation} via ${c.provider}/${model || '-'} failed: ${lastErr && lastErr.message}`);
@@ -1178,6 +1259,10 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         if (unreadable) {
             explain.reasons = [...(explain.reasons || []), 'the media could not be read'];
             throw new AiError(422, 'media.unreadable', String(unreadable.message || 'the media could not be read').slice(0, 300), { tried, explain });
+        }
+        if (resting) {
+            explain.reasons = [...(explain.reasons || []), 'a provider is out of balance or paused; AI is resting'];
+            throw new AiError(503, 'ai.resting', 'AI is resting for a moment', { retry_after_seconds: Math.ceil(exhaustedCooldownMs() / 1000), tried, explain });
         }
         explain.reasons = [...(explain.reasons || []), 'no provider on this route could answer'];
         throw new AiError(503, 'provider.unavailable', 'no provider on this route could answer', { tried, explain });

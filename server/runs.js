@@ -704,7 +704,9 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                 detail = `The free AI allowance for ${ctx.personSubject} is spent, and the calling service has no budget to cover this run. Add a key for the person, or wait for the allowance to reset.`;
             }
             if (!(err instanceof AiError) && !cancelled) log.error(`[runs] ${id} crashed: ${err && err.stack || err}`);
-            const extra = err instanceof AiError && err.extra ? JSON.stringify(err.extra).slice(0, 2000) : null;
+            // ai.resting's detail is the one sentence products show; its tries and Retry-After live in the problem body
+            // and the explain, never appended to that sentence.
+            const extra = err instanceof AiError && err.extra && err.code !== 'ai.resting' ? JSON.stringify(err.extra).slice(0, 2000) : null;
             const explain = err instanceof AiError && err.extra && err.extra.explain ? JSON.stringify(err.extra.explain) : null;
             await db.tx(async () => {
                 const f = await db.prepare(`UPDATE runs SET status = ?, error_code = ?, error_detail = ?, attempts = ?, explain = COALESCE(?, explain), finished_at = ? WHERE id = ? AND status IN ('queued', 'running')`)

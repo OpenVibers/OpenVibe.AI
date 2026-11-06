@@ -81,7 +81,7 @@ function createAiReadiness({ db, registry, pool, keys, runs, release = null }) {
 }
 
 /** AI gauges on the openvibe-shared/metrics registry. */
-function registerAiGauges(registry, { runs, registry: ai, pool }) {
+function registerAiGauges(registry, { runs, registry: ai, pool, balance = null }) {
     registry.gauge({
         name: 'ai_runs', help: 'Runs waiting for a slot (queued) and holding one (running)', labelNames: ['state'],
         collect: () => {
@@ -98,6 +98,11 @@ function registerAiGauges(registry, { runs, registry: ai, pool }) {
     registry.gauge({
         name: 'ai_provider_credentials_missing', help: 'Active providers whose secret reference does not resolve (1 = missing)', labelNames: ['provider'],
         collect: async () => (await providerView(ai, pool)).filter(p => p.credentials !== 'not_required').map(p => ({ labels: { provider: p.key }, value: p.credentials === 'missing' ? 1 : 0 })),
+    });
+    // The hourly balance probe's last reading (server/providers/balance.js), never a live call on scrape.
+    registry.gauge({
+        name: 'ai_provider_balance_usd', help: 'Provider account balance in USD, as last read by the hourly probe', labelNames: ['provider'],
+        collect: () => (balance ? balance.values() : []).map(r => ({ labels: { provider: r.provider }, value: r.usd })),
     });
 }
 

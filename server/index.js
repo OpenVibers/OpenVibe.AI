@@ -65,6 +65,9 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     // BENCH-11: Bench's ratings as routing evidence, and the opted-in tie rule inside placement.
     const bench = createBenchEvidence({ db, registry, config, clock, fetchImpl, log });
     const pool = createProviderPool({ db, registry, config, clock, fetchImpl, env, log, credentialFetch, machineModels: machines, community, bench, variantEvidence });
+    // The hourly provider balance probe (server/providers/balance.js): a gauge for the operator alert, started
+    // only when the service listens (never in tests) and off under a restore drill.
+    const balance = require('./providers/balance').createBalanceProbe({ registry, config, env, fetchImpl, clock, log });
     // T6 step 8: the SaaS tier budgets on openvibe-sdk/govern in Valkey (server/govern.js); off unless AI_GOVERN_TIERS=1.
     const tiers = createTiers({ config, valkey, clock, log });
     // §2.1.8: the provider free allowance per subject, priced off the pool's own rate cards (server/free-allowance.js);
@@ -138,7 +141,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         clientSecret: env.OV_OAUTH_CLIENT_SECRET, fetch: fetchImpl,
     }) : null;
     const benchEvents = createBenchEvents({ bench, accountData, accountSend, config, log, fetchImpl, clientSecret: env.OV_OAUTH_CLIENT_SECRET });
-    const app = createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, grants, vault, settings, benchEvents, runBudgets, memory, memoryImport, community });
+    const app = createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, grants, vault, settings, benchEvents, runBudgets, memory, memoryImport, community, balance });
     let jwks = null;
     let keyLoaded = Promise.resolve(null);
     if (!keys.pinned && config.nodeEnv !== 'test') {
@@ -161,6 +164,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     let benchSubscription = null;
     let accountSubscription = null;
     if (listen) userModules.start();
+    if (listen) balance.start();
     if (listen && config.memoryJobs && config.memoryJobs.enabled) memoryJobs.start();
     // Durable Credit settles: the same jobs rule as Memory (never in test mode, never under a provider drill; the
     // queue's runOnce checks the drill itself).
@@ -191,6 +195,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
 
     async function close() {
         clearInterval(housekeeping);
+        balance.stop();
         if (benchSubscription) benchSubscription.stop();
         if (accountSubscription) accountSubscription.stop();
         userModules.stop();

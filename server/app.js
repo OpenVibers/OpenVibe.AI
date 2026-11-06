@@ -24,7 +24,7 @@ const pkg = require('../package.json');
 
 const { adminRoutes } = require('openvibe-shared/config');
 
-function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, credentials = null, preferences = null, grants = null, vault = null, settings = null, benchEvents = null, runBudgets = null, memory = null, memoryImport = null, community = null }) {
+function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, credentials = null, preferences = null, grants = null, vault = null, settings = null, benchEvents = null, runBudgets = null, memory = null, memoryImport = null, community = null, balance = null }) {
     const app = express();
     // /.well-known/agent.json (openvibe-shared/agent-layer, SEO-2): what this site serves, for agents.
     require('openvibe-shared/agent-layer').mount(app, { descriptor: require('./agent-descriptor') });
@@ -36,7 +36,7 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
     // GET /metrics answers direct loopback callers only (Track O).
     const metrics = instrument(app, { service: 'ai', release: release.release });
     app.use(require('openvibe-sdk/service').telemetryMiddleware);   // request telemetry: a no-op until server/index.js calls telemetry.init()
-    registerAiGauges(metrics.registry, { runs, registry, pool });
+    registerAiGauges(metrics.registry, { runs, registry, pool, balance });
     app.use(http.middleware());
     // Browser reads of the two public GETs (/stats, /release.json) only: an exact origin from
     // AI_CORS_ORIGINS is echoed back, never credentials, and OPTIONS answers their preflight.

@@ -31,14 +31,14 @@ const PROBLEMS = { name: 'api', internalCode: 'ai.internal', internalDetail: 'in
 
 /**
  * Any error -> problem+json (openvibe-sdk/service sendError). Only an AiError answers with its own status,
- * code and extra (extra.errors is the problem's errors list; a 429 with retry_after_seconds sets Retry-After).
- * Anything else is logged and answers 500 ai.internal: it is passed on as its stack alone, so a provider
- * error's upstream HTTP status never becomes AI's answer.
+ * code and extra (extra.errors is the problem's errors list; extra.retry_after_seconds sets Retry-After, for a
+ * 429 refusal and for a 503 ai.resting alike). Anything else is logged and answers 500 ai.internal: it is passed
+ * on as its stack alone, so a provider error's upstream HTTP status never becomes AI's answer.
  */
 function sendError(res, err, ctx, log = console) {
     const req = { ov: ctx };
     if (!(err instanceof AiError)) return svc.sendError(res, req, { stack: (err && err.stack) || String(err) }, log, PROBLEMS);
-    if (err.status === 429 && err.extra && err.extra.retry_after_seconds && !res.headersSent) res.setHeader('Retry-After', String(err.extra.retry_after_seconds));
+    if (err.extra && err.extra.retry_after_seconds && !res.headersSent) res.setHeader('Retry-After', String(err.extra.retry_after_seconds));
     return svc.sendError(res, req, err, log, PROBLEMS);
 }
 
