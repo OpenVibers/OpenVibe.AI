@@ -354,6 +354,19 @@ function openapi() {
     };
 }
 
+// ── Community AI offers (the design's "Offer to the network") ───────────────────────────────
+route('get', '/community/offers', {
+    operationId: 'communityOffers', summary: 'Live community offers for Exchange', tags: ['community'],
+    description: 'No token. Models, price in credits per million, hours, concurrency, audience, health and open_now; never an owner subject or a machine id (offer_id is a stable hash).',
+    responses: { 200: json('The live community offers'), 503: problem },
+});
+route('get', '/community/sell', {
+    operationId: 'communitySell', summary: 'The seller dashboard for Exchange', tags: ['community'], security: SERVICE,
+    description: 'ai.run.read or ai.usage.read, acting for the owner in X-OV-Subject. Tokens served, credits recorded (1 credit = 1,000,000 micro), uptime, verification (canaries, spot re-runs) and reputation; nothing here moves money.',
+    parameters: [{ name: 'X-OV-Subject', in: 'header', required: true, schema: str({ pattern: '^usr_[0-9A-HJKMNP-TV-Z]{26}$' }), description: 'The owner whose offers and ledger these are' }],
+    responses: { 200: json('The owner\'s offers and totals'), 422: problem, 503: problem, ...errors([401, 403]) },
+});
+
 /** The documented routes as "METHOD /api/v1/path": what the app must mount. */
 function routes() {
     return Object.entries(PATHS).flatMap(([p, item]) => Object.keys(item).map((method) => `${method.toUpperCase()} ${MOUNT}${p}`)).sort();

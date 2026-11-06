@@ -338,6 +338,24 @@ function load(env = process.env) {
         // it); OV_BOT_INTERNAL_URL= (empty) turns it off.
         bot: { url: trimUrl(env.OV_BOT_INTERNAL_URL != null ? env.OV_BOT_INTERNAL_URL : 'http://127.0.0.1:4630') },
 
+        // ── Community AI offers (the design's "Offer to the network"; plan E4): requests that opt in to community
+        // capacity may run on a person's Node, only after its canaries and model fingerprint pass. AI reads the offers
+        // from Network's resource registry (network.registry.read), dispatches through Bot (bot.machine.ai), and keeps
+        // the verification and earnings ledger. On by default: without a Network service secret the list is empty.
+        community: {
+            enabled: bool(env.AI_COMMUNITY, true),
+            refreshMs: Math.max(1000, int(env.AI_COMMUNITY_REFRESH_MS, 30000)),
+            canaryMaxAgeMs: Math.max(60000, int(env.AI_COMMUNITY_CANARY_MAX_AGE_MS, 6 * 60 * 60 * 1000)),
+            canaryTimeoutMs: Math.max(2000, Math.min(120000, int(env.AI_COMMUNITY_CANARY_TIMEOUT_MS, 30000))),
+            // About 1% of community answers are re-run on a trusted machine with the same model; a mismatch stops traffic.
+            spotRate: Math.max(0, Math.min(1, float(env.AI_COMMUNITY_SPOT_RATE, 0.01))),
+            // Until a machine has this many days of verified service, a seller earns at most the daily cap. Credits are
+            // pending (not spendable) until the requester's own Balance charge exists; kudos are the volunteer reward.
+            trustDays: Math.max(1, Math.min(365, int(env.AI_COMMUNITY_TRUST_DAYS, 7))),
+            dailyEarningCapMicro: Math.max(0, Math.min(1e15, int(env.AI_COMMUNITY_DAILY_CAP_CREDITS, 100) * 1e6)),
+            kudosPerThousandTokens: Math.max(1, Math.min(1000, int(env.AI_COMMUNITY_KUDOS_PER_1K, 1))),
+        },
+
         // ── Tier budgets (T6 step 8, server/govern.js): openvibe-sdk/govern in Valkey, off unless AI_GOVERN_TIERS=1.
         govern: loadGovern(env, { bool, int, num: float }),
     };
