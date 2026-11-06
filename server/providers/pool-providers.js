@@ -49,13 +49,27 @@ const CHECKED = '2026-11-06';
 const PROVIDER_KEYS = ['qwen', 'kimi', 'glm', 'minimax', 'deepinfra', 'novita', 'featherless', 'refuseless', 'abliteration', 'openrouter'];
 
 /**
- * What a provider says it does with a prompt, as the price book recorded it. `trains_on_prompts` is one of
- * no | not_stated | yes | unknown; `retention` and `region` are free text (the provider's own words).
+ * What a provider says it does with a prompt.
+ *
+ * The first fields are the facts the house reads (server/exchange/privacy.js: `retention`, `training`, `region`,
+ * `trust`; server/exchange/catalog.js: `trains`, `retention_days`, `anonymized`). A fact the provider did not
+ * state is null, never a guess: an offer that declares nothing is labelled anonymized and says that it is unknown
+ * (server/exchange/privacy.js). The rest is the catalogue's own record of where the facts came from.
+ *
+ *   retention   'none' | 'limited' | 'standard' | null  (null: the provider does not say)
+ *   trains      true | false | null                       (null: the provider does not say)
+ *   trust       'first-party' | 'community' | null
  */
 const policy = (o) => ({
-    trains_on_prompts: o.trains || 'not_stated',
-    retention: o.retention || 'not stated',
-    region: o.region || 'not stated',
+    trains: o.trains === true ? true : (o.trains === false ? false : null),
+    training: o.trains === true ? true : (o.trains === false ? false : null),
+    retention: o.retention || null,
+    retention_days: o.retention_days == null ? null : o.retention_days,
+    region: o.region || null,
+    anonymized: o.anonymized === true ? true : (o.anonymized === false ? false : null),
+    trust: o.trust || null,
+    // The catalogue's own words about the same thing.
+    retention_note: o.retention_note || null,
     terms_url: o.terms || null,
     resale: o.resale || null,
     checked: o.checked || CHECKED,
@@ -94,7 +108,8 @@ const PROVIDERS = [
             wording: 'no promise of zero retention or no training was found on Alibaba Cloud\'s own pages (the data security page returned an error page on 2026-11-06)',
         }),
         data_policy: policy({
-            trains: 'not_stated', retention: 'not stated', region: 'international (Singapore)',
+            trains: null, retention: null, region: 'singapore',
+            retention_note: 'the international deployment we call is in Singapore; nothing says what it keeps',
             terms: 'https://www.alibabacloud.com/help/en/model-studio/model-pricing',
             resale: 'no resale clause verified (the 2026-11-03 matrix does not list Alibaba)',
         }),
@@ -140,7 +155,8 @@ const PROVIDERS = [
             wording: 'Moonshot\'s own pages carry no promise of zero retention or no training (no readable privacy page was found on 2026-11-06)',
         }),
         data_policy: policy({
-            trains: 'not_stated', retention: 'not stated', region: 'not stated',
+            trains: null, retention: null, region: null,
+            retention_note: 'not stated on the provider\'s own pages',
             terms: 'https://platform.kimi.ai/docs/pricing/chat',
             resale: 'no resale clause verified (the 2026-11-03 matrix does not list Moonshot)',
         }),
@@ -186,7 +202,8 @@ const PROVIDERS = [
             wording: 'Z.ai publishes no privacy policy page (the address returns its home page on 2026-11-06), so nothing says zero retention or no training',
         }),
         data_policy: policy({
-            trains: 'not_stated', retention: 'pay-as-you-go; not stated on the pricing page', region: 'not stated',
+            trains: null, retention: null, region: null,
+            retention_note: 'pay-as-you-go; not stated on the pricing page',
             terms: 'https://docs.z.ai/guides/overview/pricing.md',
             resale: 'no resale clause verified (the 2026-11-03 matrix does not list Z.ai)',
         }),
@@ -245,7 +262,8 @@ const PROVIDERS = [
             wording: 'MiniMax publishes no readable privacy policy page (the address returns a not-found page on 2026-11-06), so nothing says zero retention or no training',
         }),
         data_policy: policy({
-            trains: 'not_stated', retention: 'pay-as-you-go; retention not stated on the pricing page', region: 'not stated',
+            trains: null, retention: null, region: null,
+            retention_note: 'pay-as-you-go; retention not stated on the pricing page',
             terms: 'https://platform.minimax.io/docs/pricing.md',
             resale: 'no resale clause verified (the 2026-11-03 matrix does not list MiniMax)',
         }),
@@ -283,7 +301,8 @@ const PROVIDERS = [
             checked: CHECKED,
         }),
         data_policy: policy({
-            trains: 'no', retention: 'not stored to disk during inference; deleted from memory after the answer', region: 'not stated',
+            trains: false, retention: 'none', trust: 'first-party', region: null,
+            retention_note: 'input data is not stored to disk during inference; output is deleted from memory after the answer',
             terms: 'https://deepinfra.com/privacy',
             resale: 'RESTRICTED (2026-11-03 matrix): "resell, sublicense, rent, distribute, or otherwise make the Services available to any third party except as expressly permitted under this Agreement or the applicable Service Order" (Terms §11(a)(viii), modified 2026-10-15)',
         }),
@@ -350,7 +369,8 @@ const PROVIDERS = [
             wording: 'Novita has no readable privacy policy page (the address returns a not-found page on 2026-11-06), so nothing says zero retention or no training',
         }),
         data_policy: policy({
-            trains: 'not_stated', retention: 'not stated', region: 'not stated',
+            trains: null, retention: null, region: null,
+            retention_note: 'not stated (the provider has no readable privacy page)',
             terms: 'https://api.novita.ai/v3/openai/models',
             resale: 'UNVERIFIED (2026-11-03 matrix): the terms page returned 404',
         }),
@@ -410,7 +430,8 @@ const PROVIDERS = [
             checked: CHECKED,
         }),
         data_policy: policy({
-            trains: 'not_stated', retention: 'prompts and completions are not collected or stored; training is not mentioned', region: 'not stated',
+            trains: null, retention: 'none', trust: 'first-party', region: null,
+            retention_note: 'prompts and completions are not collected or stored; training is not mentioned',
             terms: 'https://featherless.ai/privacy',
             resale: 'AUTHORIZED_WHOLESALE, Scale plans only (2026-11-03 matrix): "Scale plans are not subject to said limits and may be used in arbitrary applications, including inference resale." (Terms §3, last updated 2024-06-10). It needs an executed Scale agreement before the managed pool may use it.',
         }),
@@ -472,7 +493,8 @@ const PROVIDERS = [
             wording: 'Refuseless\'s privacy page could not be read (a bot check answers it on 2026-11-06), so nothing says zero retention or no training',
         }),
         data_policy: policy({
-            trains: 'unknown', retention: 'unknown', region: 'unknown',
+            trains: null, retention: null, region: null,
+            retention_note: 'unknown: the provider\'s privacy page answers a bot check',
             terms: 'https://docs.refuseless.com/api/models.md',
             resale: 'UNVERIFIED (2026-11-03 matrix): no terms URL was located',
         }),
@@ -544,7 +566,8 @@ const PROVIDERS = [
             checked: CHECKED,
         }),
         data_policy: policy({
-            trains: 'no', retention: 'processed transiently and not stored; operational metadata is kept for billing, security and reliability', region: 'not stated',
+            trains: false, retention: 'none', trust: 'first-party', region: null,
+            retention_note: 'processed transiently and not stored; operational metadata is kept for billing, security and reliability',
             terms: 'https://docs.abliteration.ai/security-and-compliance',
             resale: 'no resale clause verified (the 2026-11-03 matrix does not list Abliteration.ai)',
         }),
@@ -591,8 +614,9 @@ const PROVIDERS = [
             wording: '"Some Models may store or train on your Inputs for improving their own large language models" (terms of service, read 2026-11-06); OpenRouter itself opts out where it can',
         }),
         data_policy: policy({
-            trains: 'provider_dependent', retention: 'prompts and completions are not logged by default; the providers that log are not routed unless the training toggle is on',
-            region: 'not stated', terms: 'https://openrouter.ai/terms',
+            trains: true, retention: 'standard', trust: 'first-party', region: null,
+            retention_note: 'prompts and completions are not logged by default; some models may store or train on them',
+            terms: 'https://openrouter.ai/terms',
             resale: 'UNVERIFIED (2026-11-03 matrix does not list OpenRouter). The price book (2026-10-30) records that its terms contemplate selling capacity inside your own product; that is not the same as an executed agreement.',
         }),
         // OpenRouter lists hundreds of models and prices each one itself; the catalogue sync reads its own list with

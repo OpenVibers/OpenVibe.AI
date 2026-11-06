@@ -18,6 +18,7 @@ const assert = require('assert');
 const fixtures = require('./fixtures/pool-providers.json');
 const { suite, seamServer, boot, request, token, ALL } = require('./helpers');
 const pool = require('../server/providers/pool-providers');
+const privacy = require('../server/exchange/privacy');
 const seed = require('../server/providers/pool-seed');
 const { createProviderPool } = require('../server/providers');
 const { createOpenAiProvider } = require('../server/providers/openai');
@@ -47,8 +48,12 @@ t.test('ten providers, each OpenAI-compatible, with a base URL, a timeout, an ac
         assert.ok(/^https:\/\//.test(p.base_url), `${p.key} base_url`);
         assert.ok(p.timeout_ms >= 1000, `${p.key} timeout`);
         assert.ok(['OWN_DEPLOYMENT', 'AUTHORIZED_WHOLESALE', 'CUSTOMER_BYOK', 'RESTRICTED', 'UNVERIFIED'].includes(p.provider_access), p.key);
-        assert.ok(p.data_policy && typeof p.data_policy.trains_on_prompts === 'string', `${p.key} data policy`);
+        assert.ok(p.data_policy, `${p.key} data policy`);
         assert.ok(p.data_policy.terms_url && p.data_policy.checked, `${p.key} terms + checked`);
+        // The facts the house reads (server/exchange/privacy.js): a fact nobody stated is null, never a guess.
+        assert.ok(p.data_policy.retention === null || ['none', 'limited', 'standard'].includes(p.data_policy.retention), `${p.key} retention`);
+        assert.ok(p.data_policy.trains === null || typeof p.data_policy.trains === 'boolean', `${p.key} trains`);
+        assert.ok(p.data_policy.trust === null || ['first-party', 'community'].includes(p.data_policy.trust), `${p.key} trust`);
         assert.ok(['private', 'anonymized'].includes(p.privacy.label), `${p.key} privacy label`);
         assert.ok(p.privacy.terms_url && p.privacy.wording && p.privacy.checked, `${p.key} privacy page + wording + day`);
         assert.ok(onItsOwnSite(p.privacy.terms_url, p.key), `${p.key} privacy page is its own`);
@@ -62,6 +67,13 @@ t.test('ten providers, each OpenAI-compatible, with a base URL, a timeout, an ac
         assert.ok(w.includes('train') && w.includes('stor'), `${key} says what it does with a prompt`);
     }
     assert.ok(/not (collect or )?store/.test(pool.byKey.get('featherless').privacy.wording.toLowerCase()), 'Featherless says what it keeps');
+    // The facts reach the label on every answer (server/exchange/privacy.js).
+    const label = (key) => privacy.labelFor({ record: { metadata: { data_policy: pool.byKey.get(key).data_policy } } });
+    assert.strictEqual(label('deepinfra').label, 'private', 'DeepInfra keeps nothing and trains on nothing');
+    assert.strictEqual(label('abliteration').label, 'private', 'Abliteration.ai keeps nothing and trains on nothing');
+    assert.strictEqual(label('featherless').label, 'anonymized', 'Featherless keeps nothing but never says it does not train');
+    assert.strictEqual(label('qwen').label, 'anonymized');
+    assert.strictEqual(label('kimi').known, false, 'a provider that declares nothing says so');
     // The commercial gate: only Featherless may serve managed paid routes, and only with an agreement.
     assert.strictEqual(pool.byKey.get('featherless').provider_access, 'AUTHORIZED_WHOLESALE');
     assert.strictEqual(pool.byKey.get('deepinfra').provider_access, 'RESTRICTED');
