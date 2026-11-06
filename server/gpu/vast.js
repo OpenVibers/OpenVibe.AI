@@ -63,6 +63,32 @@ function vastAdapter({ fetchImpl = globalThis.fetch, key = null, baseUrl = BASE_
             }));
         },
 
+        /**
+         * The instances of this account that carry our label. Vast lists them at GET /api/v1/instances
+         * (25 per page, keyset pagination); the sweep reads them to find the ones no live row owns.
+         */
+        async listInstances() {
+            const out = [];
+            let after = null;
+            for (let page = 0; page < 20; page++) {
+                const url = baseUrl + '/api/v1/instances?limit=25&select_cols=id,label,actual_status,dph_total'
+                    + (after ? '&after_token=' + encodeURIComponent(after) : '');
+                const body = await apiJson(fetchImpl, url, { ...auth, label: 'Vast.ai' });
+                const list = (body && (body.instances || body.results || body.data)) || [];
+                for (const inst of list) {
+                    out.push({
+                        id: String(inst.id == null ? '' : inst.id),
+                        label: String(inst.label || ''),
+                        state: String(inst.actual_status || inst.status || 'unknown').toLowerCase(),
+                        price_per_hour: inst.dph_total == null ? '' : String(inst.dph_total),
+                    });
+                }
+                after = body && body.next_token;
+                if (!after) break;
+            }
+            return out;
+        },
+
         async createInstance(offer, spec, opts = {}) {
             const r = spec.runtime;
             const body = {
@@ -75,7 +101,9 @@ function vastAdapter({ fetchImpl = globalThis.fetch, key = null, baseUrl = BASE_
                 },
                 disk: spec.requirements.disk_gb,
                 runtype: 'args',
-                label: 'openvibe-' + spec.key,
+                // the label carries our row id: the sweep finds the instance again and gives it back
+                // when no live row of ours owns it.
+                label: String(opts.label || ('openvibe-' + spec.key)),
             };
             const out = await apiJson(fetchImpl, baseUrl + '/api/v0/asks/' + offer.id + '/', { method: 'POST', body, ...auth, label: 'Vast.ai' });
             if (!out || out.success === false) {

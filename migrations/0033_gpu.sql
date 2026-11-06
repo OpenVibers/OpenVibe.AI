@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS gpu_instances (
     marketplace          text COLLATE "C" NOT NULL,
     offer_id             text COLLATE "C",
     remote_id            text COLLATE "C",
-    status               text COLLATE "C" NOT NULL CHECK (status IN ('starting','running','stopping','destroyed','dead','refused')),
+    status               text COLLATE "C" NOT NULL CHECK (status IN ('starting','running','stopping','destroyed','dead','refused','orphan')),
     endpoint             text COLLATE "C",
     month                text COLLATE "C" NOT NULL,
     gpu_name             text COLLATE "C",
@@ -29,6 +29,9 @@ CREATE TABLE IF NOT EXISTS gpu_instances (
     last_used_at         timestamptz,
     last_health_at       timestamptz,
     health_failures      integer NOT NULL DEFAULT 0,
+    destroy_failures     integer NOT NULL DEFAULT 0,   -- how many times in a row giving it back failed
+    label                text COLLATE "C",            -- the label we gave the marketplace instance
+    cold_start_ms        bigint,                      -- from the launch to the first answered request
     destroyed_at         timestamptz,
     error                text COLLATE "C",
     created_at           timestamptz NOT NULL,

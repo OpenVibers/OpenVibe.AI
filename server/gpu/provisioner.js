@@ -32,6 +32,13 @@ const DEFAULT_MAX_RUNTIME_MINUTES = 720;
 const DEFAULT_REGION = 'US';
 const LIVE = ['starting', 'running', 'stopping'];
 const DEAD_STATES = ['exited', 'unknown', 'offline', 'dead', 'terminated', 'stopped', 'error'];
+// Every instance we rent carries our row id as its label (an openvibe- prefix), so the sweep can find
+// it again and give it back when no live row of ours owns it.
+const LABEL_PREFIX = 'openvibe-';
+const LABEL_RE = /^openvibe-[0-9a-f]{12}$/;
+// Three failed destroys in a row: the instance is still running and still being paid for, so the
+// operator is alerted (the gauge ai_gpu_destroy_failures and the rule in OpenVibe.Host's prometheus rules).
+const ALERT_AFTER = 3;
 const PRICE_SOURCE = { vast: 'https://vast.ai/pricing', runpod: 'https://www.runpod.io/pricing' };
 
 function clampInt(value, min, max, fallback) {
@@ -275,37 +282,51 @@ function createGpuProvisioner({
             return { ok: false, code: 'gpu.cap', reason: 'the monthly cap leaves no room for ' + spec.display_name };
         }
 
-        // 3. rent it
+        // 3. the row comes first. The marketplace is told the label of a row that already exists and
+        //    holds the reservation, so an instance we paid for is never an orphan: the sweep finds it by
+        //    the label and gives it back when no live row of ours owns it.
+        const id = LABEL_PREFIX + randomUUID().replace(/-/g, '').slice(0, 12);
+        const t = now();
+        await db.prepare(`INSERT INTO gpu_instances (id, model_key, provider_key, marketplace, offer_id, remote_id, status, endpoint, month,
+                gpu_name, gpu_ram_mb, num_gpus, disk_gb, reliability, region, price_per_hour, hourly_nano, reserved_nano, spent_nano,
+                max_runtime_minutes, started_at, charged_at, destroy_failures, label, cold_start_ms, health_failures, created_at, updated_at)
+            VALUES (@id, @model_key, @provider_key, @marketplace, @offer_id, NULL, 'starting', NULL, @month,
+                @gpu_name, @gpu_ram_mb, @num_gpus, @disk_gb, @reliability, @region, @price_per_hour, @hourly_nano, @reserved_nano, 0,
+                @max_runtime_minutes, @started_at, @charged_at, 0, @label, NULL, 0, @created_at, @updated_at)`)
+            .run({
+                id, model_key: spec.key, provider_key: spec.provider_key, marketplace: spec.marketplace,
+                offer_id: String(offer.id), month: monthOf(t),
+                gpu_name: String(offer.gpu_name || ''), gpu_ram_mb: Number(offer.gpu_ram_mb) || 0,
+                num_gpus: Number(offer.num_gpus) || 1, disk_gb: Number(offer.disk_gb) || 0,
+                reliability: Number(offer.reliability) || 0, region: String(offer.region || ''),
+                price_per_hour: String(offer.price_per_hour), hourly_nano: hourly.toString(), reserved_nano: reserved.toString(),
+                max_runtime_minutes: maxMinutes, started_at: iso(t), charged_at: iso(t), label: id,
+                created_at: iso(t), updated_at: iso(t),
+            });
+        await audit(actor, 'gpu.instance.requested', 'gpu_instance', id, {
+            model: spec.key, marketplace: spec.marketplace, offer_id: String(offer.id), hourly_nano: hourly.toString(),
+            reserved_nano: reserved.toString(), max_runtime_minutes: maxMinutes, label: id,
+        });
+
+        // 4. rent it. The marketplace is given the label of the row above, so the instance can always be
+        //    found again. If the rental fails the row says so and the reservation is free again.
         let created;
         try {
             created = await adapter.createInstance(offer, spec, {
                 command: catalog.commandOf(spec),
                 weights_url: catalog.weightsUrl(spec),
+                label: id,
             });
         } catch (err) {
-            return { ok: false, code: 'gpu.create_failed', reason: String(err && err.message).slice(0, 200) };
+            const reason = String(err && err.message).slice(0, 200);
+            await db.prepare("UPDATE gpu_instances SET status = 'refused', error = ?, updated_at = ? WHERE id = ?")
+                .run(reason, iso(now()), id);
+            await audit(actor, 'gpu.instance.refused', 'gpu_instance', id, { reason });
+            return { ok: false, code: 'gpu.create_failed', reason };
         }
-        const id = 'gpu_' + randomUUID().replace(/-/g, '');
-        const t = now();
-        await db.prepare(`INSERT INTO gpu_instances (id, model_key, provider_key, marketplace, offer_id, remote_id, status, endpoint, month,
-                gpu_name, gpu_ram_mb, num_gpus, disk_gb, reliability, region, price_per_hour, hourly_nano, reserved_nano, spent_nano,
-                max_runtime_minutes, started_at, charged_at, health_failures, created_at, updated_at)
-            VALUES (@id, @model_key, @provider_key, @marketplace, @offer_id, @remote_id, 'starting', NULL, @month,
-                @gpu_name, @gpu_ram_mb, @num_gpus, @disk_gb, @reliability, @region, @price_per_hour, @hourly_nano, @reserved_nano, 0,
-                @max_runtime_minutes, @started_at, @charged_at, 0, @created_at, @updated_at)`)
-            .run({
-                id, model_key: spec.key, provider_key: spec.provider_key, marketplace: spec.marketplace,
-                offer_id: String(offer.id), remote_id: String(created.remote_id || ''), month: monthOf(t),
-                gpu_name: String(offer.gpu_name || ''), gpu_ram_mb: Number(offer.gpu_ram_mb) || 0,
-                num_gpus: Number(offer.num_gpus) || 1, disk_gb: Number(offer.disk_gb) || 0,
-                reliability: Number(offer.reliability) || 0, region: String(offer.region || ''),
-                price_per_hour: String(offer.price_per_hour), hourly_nano: hourly.toString(), reserved_nano: reserved.toString(),
-                max_runtime_minutes: maxMinutes, started_at: iso(t), charged_at: iso(t), created_at: iso(t), updated_at: iso(t),
-            });
-        await audit(actor, 'gpu.instance.create', 'gpu_instance', id, {
-            model: spec.key, marketplace: spec.marketplace, offer_id: String(offer.id), hourly_nano: hourly.toString(),
-            reserved_nano: reserved.toString(), max_runtime_minutes: maxMinutes,
-        });
+        await db.prepare('UPDATE gpu_instances SET remote_id = ?, updated_at = ? WHERE id = ?')
+            .run(String(created.remote_id || ''), iso(now()), id);
+        await audit(actor, 'gpu.instance.create', 'gpu_instance', id, { remote_id: String(created.remote_id || '') });
         const row = await db.prepare('SELECT * FROM gpu_instances WHERE id = ?').get(id);
         return { ok: true, instance: describe(row), offer, reserved_nano: reserved, hourly_nano: hourly };
     }
@@ -381,7 +402,13 @@ function createGpuProvisioner({
         }
     }
 
-    /** Give the instance back and settle what it cost. */
+    /**
+     * Give the instance back and settle what it cost.
+     *
+     * A destroy that fails leaves the instance running (and being paid for): the row keeps its place,
+     * the try is counted, the next pass tries again and after three tries the operator is alerted
+     * (the gauge ai_gpu_destroy_failures and the rule in OpenVibe.Host's prometheus rules).
+     */
     async function destroy(row, reason, { actor = 'service:ai' } = {}) {
         const cfg = config();
         const adapter = adapterFor(row.marketplace, cfg);
@@ -389,18 +416,119 @@ function createGpuProvisioner({
             try {
                 await adapter.destroyInstance(row.remote_id);
             } catch (err) {
-                log.warn && log.warn('[gpu] could not give instance ' + row.id + ' back: ' + String(err && err.message));
+                const failures = Number(row.destroy_failures || 0) + 1;
+                await db.prepare('UPDATE gpu_instances SET destroy_failures = ?, updated_at = ? WHERE id = ?')
+                    .run(failures, iso(now()), row.id);
+                log.warn && log.warn('[gpu] could not give instance ' + row.id + ' back (' + failures + ' tries): ' + String(err && err.message));
+                if (failures >= ALERT_AFTER) {
+                    await audit(actor, 'gpu.instance.destroy_failed', 'gpu_instance', row.id, { reason, failures, marketplace: row.marketplace });
+                    log.error && log.error('[gpu] an instance could not be given back after ' + failures + ' tries: it is still running and still being paid for');
+                }
+                return { ok: false, failed: true, reason, failures };
             }
         }
         const t = now();
         // the freshest row: the money already on the ledger is not charged twice
         const fresh = await db.prepare('SELECT * FROM gpu_instances WHERE id = ?').get(row.id);
         await charge(fresh || row, t, reason);
-        await db.prepare("UPDATE gpu_instances SET status = 'destroyed', destroyed_at = ?, endpoint = NULL, updated_at = ? WHERE id = ?")
+        await db.prepare("UPDATE gpu_instances SET status = 'destroyed', destroyed_at = ?, endpoint = NULL, destroy_failures = 0, updated_at = ? WHERE id = ?")
             .run(iso(t), iso(t), row.id);
         await disableProvider(row.provider_key, reason);
         await audit(actor, 'gpu.instance.destroy', 'gpu_instance', row.id, { reason, model: row.model_key });
         return { ok: true, reason };
+    }
+
+    /**
+     * Every pass: the marketplace instances that carry our label, and what to do with them.
+     *
+     *   - one whose label is a live row of ours: left alone, and linked when the row does not know its
+     *     marketplace id yet (a crash between the marketplace's answer and the row's update).
+     *   - one no live row of ours owns: an orphan. It is given back and the fact is logged.
+     *
+     * A destroy that fails is tried again on the next pass; after three tries the operator is alerted.
+     */
+    async function sweepOrphans(cfg) {
+        let seen = 0;
+        for (const marketplace of ['vast', 'runpod']) {
+            const adapter = adapterFor(marketplace, cfg);
+            if (!adapter) continue;
+            let instances = [];
+            try {
+                instances = await adapter.listInstances();
+            } catch (err) {
+                log.warn && log.warn('[gpu] could not list the ' + marketplace + ' instances: ' + String(err && err.message).slice(0, 200));
+                continue;
+            }
+            for (const inst of instances) {
+                const label = String(inst.label || '');
+                if (!LABEL_RE.test(label)) continue;    // not ours
+                seen += 1;
+                const row = await db.prepare('SELECT * FROM gpu_instances WHERE id = ?').get(label);
+                if (row && LIVE.includes(row.status)) {
+                    // ours and alive: a crash after the marketplace accepted but before the row knew the
+                    // id is repaired here, not thrown away.
+                    if (!row.remote_id && inst.id) {
+                        await db.prepare('UPDATE gpu_instances SET remote_id = ?, updated_at = ? WHERE id = ?')
+                            .run(String(inst.id), iso(now()), row.id);
+                        await audit('service:ai', 'gpu.instance.recovered', 'gpu_instance', row.id, { marketplace, remote_id: String(inst.id) });
+                        log.log && log.log('[gpu] recovered the instance ' + inst.id + ' of the row ' + row.id + ' from the ' + marketplace + ' label');
+                    }
+                    continue;
+                }
+                await destroyOrphan({ marketplace, remote_id: String(inst.id), label }, row, cfg);
+            }
+        }
+        return seen;
+    }
+
+    /** An instance with our label that no live row owns: give it back, and keep the tries. */
+    async function destroyOrphan(inst, row, cfg) {
+        const adapter = adapterFor(inst.marketplace, cfg);
+        const id = row ? row.id : inst.label;
+        const t = now();
+        if (!row) {
+            // the row the orphan needs: its retries and its money need a home of their own
+            await db.prepare(`INSERT INTO gpu_instances (id, model_key, provider_key, marketplace, offer_id, remote_id, status, endpoint, month,
+                    gpu_name, hourly_nano, reserved_nano, spent_nano, max_runtime_minutes, started_at, charged_at, destroy_failures, label, cold_start_ms, health_failures, created_at, updated_at)
+                VALUES (@id, '', '', @marketplace, '', @remote_id, 'orphan', NULL, @month, '', 0, 0, 0, 0, @started_at, @charged_at, 0, @label, NULL, 0, @created_at, @updated_at)`)
+                .run({
+                    id, marketplace: inst.marketplace, remote_id: inst.remote_id, month: monthOf(t),
+                    started_at: iso(t), charged_at: iso(t), label: inst.label, created_at: iso(t), updated_at: iso(t),
+                });
+            row = await db.prepare('SELECT * FROM gpu_instances WHERE id = ?').get(id);
+        }
+        // the orphan ran and was paid for: the seconds since the last charge are on the ledger
+        await charge(row, t, 'the orphan ran');
+        try {
+            await adapter.destroyInstance(inst.remote_id);
+        } catch (err) {
+            const failures = Number(row.destroy_failures || 0) + 1;
+            await db.prepare('UPDATE gpu_instances SET destroy_failures = ?, updated_at = ? WHERE id = ?')
+                .run(failures, iso(t), id);
+            log.warn && log.warn('[gpu] could not give the orphan ' + inst.remote_id + ' back (' + failures + ' tries): ' + String(err && err.message).slice(0, 200));
+            if (failures >= ALERT_AFTER) {
+                await audit('service:ai', 'gpu.orphan.destroy_failed', 'gpu_instance', id, { marketplace: inst.marketplace, remote_id: inst.remote_id, failures });
+                log.error && log.error('[gpu] an orphan instance could not be given back after ' + failures + ' tries: it is still running and still being paid for');
+            }
+            return { ok: false, failed: true };
+        }
+        await db.prepare("UPDATE gpu_instances SET status = 'destroyed', destroyed_at = ?, destroy_failures = 0, updated_at = ? WHERE id = ?")
+            .run(iso(t), iso(t), id);
+        await audit('service:ai', 'gpu.orphan.destroyed', 'gpu_instance', id, { marketplace: inst.marketplace, remote_id: inst.remote_id });
+        log.warn && log.warn('[gpu] gave back an orphan instance ' + inst.remote_id + ' (' + inst.marketplace + '): it carried our label but no live row owned it');
+        return { ok: true };
+    }
+
+    /** The destroy failures that are still open, per marketplace (the operator alert reads them). */
+    async function destroyFailures() {
+        const rows = await db.prepare('SELECT marketplace, MAX(destroy_failures) AS failures FROM gpu_instances WHERE destroy_failures > 0 GROUP BY marketplace').all();
+        return (rows || []).map((r) => ({ labels: { marketplace: r.marketplace }, value: Number(r.failures) || 0 }));
+    }
+
+    /** The instances with our label that no live row owns and that are still waiting to be given back. */
+    async function orphanCount() {
+        const rows = await db.prepare("SELECT marketplace, COUNT(*) AS n FROM gpu_instances WHERE status = 'orphan' GROUP BY marketplace").all();
+        return (rows || []).map((r) => ({ labels: { marketplace: r.marketplace }, value: Number(r.n) || 0 }));
     }
 
     /** One pass over the live instances: the reservation, the idle timer, the health. */
@@ -434,6 +562,9 @@ function createGpuProvisioner({
         if (row.status === 'starting') {
             const adapter = adapterFor(row.marketplace, cfg);
             if (!adapter) return { changed: false };
+            // a row without a marketplace id: the crash between the rental and the row's update. The
+            // sweep finds the instance by the label and links it; until then there is nothing to poll.
+            if (!row.remote_id) return { changed: false };
             let info = null;
             try {
                 info = await adapter.showInstance(row.remote_id);
@@ -448,8 +579,9 @@ function createGpuProvisioner({
             }
             const endpoint = info && info.endpoint ? String(info.endpoint) : '';
             if (endpoint && await healthy(endpoint)) {
-                await db.prepare("UPDATE gpu_instances SET status = 'running', endpoint = ?, ready_at = ?, last_health_at = ?, health_failures = 0, updated_at = ? WHERE id = ?")
-                    .run(endpoint, iso(t), iso(t), iso(t), row.id);
+                // the cold start: from the launch to the first answered request
+                await db.prepare("UPDATE gpu_instances SET status = 'running', endpoint = ?, ready_at = ?, last_health_at = ?, health_failures = 0, cold_start_ms = ?, updated_at = ? WHERE id = ?")
+                    .run(endpoint, iso(t), iso(t), String(Math.max(0, t - started)), iso(t), row.id);
                 await register(spec, { ...row, endpoint });
                 return { changed: true, action: 'ready' };
             }
@@ -513,6 +645,9 @@ function createGpuProvisioner({
             reserved_nano: String(toNano(row.reserved_nano)),
             spent_nano: String(toNano(row.spent_nano)),
             max_runtime_minutes: row.max_runtime_minutes,
+            label: row.label,
+            cold_start_ms: row.cold_start_ms == null ? null : String(row.cold_start_ms),
+            destroy_failures: Number(row.destroy_failures || 0),
             started_at: row.started_at,
             ready_at: row.ready_at,
             last_used_at: row.last_used_at,
@@ -531,6 +666,9 @@ function createGpuProvisioner({
         let launched = 0;
         let stopped = 0;
         let destroyed = 0;
+
+        // 0. the marketplace instances that carry our label: the ones no live row owns are given back
+        await sweepOrphans(cfg);
 
         // 1. the owner's requests
         const requests = await db.prepare('SELECT * FROM gpu_requests WHERE done_at IS NULL ORDER BY id').all();
@@ -583,6 +721,8 @@ function createGpuProvisioner({
         const rows = await instanceRows();
         const list = models.map((spec) => {
             const live = rows.find((r) => r.model_key === spec.key && LIVE.includes(r.status)) || null;
+            // the last measured cold start (the rows are newest first)
+            const measured = rows.find((r) => r.model_key === spec.key && r.cold_start_ms != null) || null;
             return {
                 key: spec.key,
                 display_name: spec.display_name,
@@ -591,6 +731,7 @@ function createGpuProvisioner({
                 requirements: spec.requirements,
                 weights_url: catalog.weightsUrl(spec),
                 command: catalog.commandOf(spec),
+                cold_start_ms: measured ? String(measured.cold_start_ms) : null,
                 instance: describe(live),
             };
         });
@@ -619,6 +760,9 @@ function createGpuProvisioner({
         request,
         config,
         moneySummary,
+        sweepOrphans,
+        destroyFailures,
+        orphanCount,
         /** For the tests: the same thing the reconciler does with one instance. */
         reconcileInstance,
         inWarmWindow,

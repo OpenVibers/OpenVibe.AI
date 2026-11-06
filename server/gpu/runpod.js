@@ -78,10 +78,27 @@ function runpodAdapter({ fetchImpl = globalThis.fetch, key = null, baseUrl = BAS
             return offers;
         },
 
+        /**
+         * The pods of this account that carry our name. Runpod lists them at GET /v2/pods; the sweep
+         * reads them to find the ones no live row owns.
+         */
+        async listInstances() {
+            const body = await apiJson(fetchImpl, baseUrl + '/v2/pods', { ...auth, label: 'RunPod' });
+            const list = (body && (body.pods || body.items || body.data)) || [];
+            return list.map((pod) => ({
+                id: String(pod.id == null ? '' : pod.id),
+                label: String(pod.name || ''),
+                state: String(pod.status || 'unknown').toLowerCase(),
+                price_per_hour: pod.costPerHour == null ? '' : String(pod.costPerHour),
+            }));
+        },
+
         async createInstance(offer, spec, opts = {}) {
             const r = spec.runtime;
             const body = {
-                name: 'openvibe-' + spec.key,
+                // the name carries our row id: the sweep finds the pod again and gives it back
+                // when no live row of ours owns it.
+                name: String(opts.label || ('openvibe-' + spec.key)),
                 image: r.image,
                 gpu: { id: offer.gpu_type_id, count: spec.requirements.num_gpus },
                 disk: { size: spec.requirements.disk_gb, type: 'volume' },

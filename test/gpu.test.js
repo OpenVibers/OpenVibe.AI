@@ -22,6 +22,21 @@ async function settings(h, { key = 'vast-test-key', cap = '50000000000', idle = 
     if (key) await store.setSecret('vast.key', key, { actor: OWNER, reason: 'the test' });
 }
 
+
+/**
+ * The row a crash between the marketplace's answer and the row's update leaves behind: the row is
+ * there (it was written before the rental) but it does not know the marketplace id yet.
+ */
+async function crashedRow(h, id, at) {
+    const iso = (ms) => new Date(ms).toISOString();
+    await h.db.prepare(`INSERT INTO gpu_instances (id, model_key, provider_key, marketplace, offer_id, remote_id, status, endpoint, month,
+            gpu_name, gpu_ram_mb, num_gpus, disk_gb, reliability, region, price_per_hour, hourly_nano, reserved_nano, spent_nano,
+            max_runtime_minutes, started_at, charged_at, destroy_failures, label, cold_start_ms, health_failures, created_at, updated_at)
+        VALUES (?, ?, ?, 'vast', '111', NULL, 'starting', NULL, ?, 'RTX 3090', 24576, 1, 100, 0.998, 'US', '0.1348', '134800000', '134800000', 0,
+            720, ?, ?, 0, ?, NULL, 0, ?, ?)`)
+        .run(id, 'deepseek-r1-32b', 'gpu.deepseek-r1-32b', '2026-11', iso(at), iso(at), id, iso(at), iso(at));
+}
+
 const t = suite('gpu');
 
 t.test('the provisioner is off without a key and without a cap', async () => {
@@ -146,6 +161,73 @@ t.test('an instance that dies is replaced and the router gets the new endpoint',
         assert.strictEqual(provider.base_url, 'https://gw.vast.ai:12346/v1', 'the router got the new endpoint');
         const st = await h.gpus.state();
         assert.ok(BigInt(st.committed_nano) <= BigInt(st.cap_nano), 'the money is inside the cap');
+    } finally { await h.stop(); }
+});
+
+
+t.test('an instance the marketplace accepted before the row knew its id is recovered, not thrown away', async () => {
+    const api = createGpuFetch();
+    let now = T0;
+    const h = await boot({ clock: { now: () => now }, fetchImpl: api.fetchImpl });
+    try {
+        await settings(h, { cap: '50000000000' });
+        // the crash: the marketplace accepted the instance, the row never learned its id
+        const id = 'openvibe-abc123def456';
+        api.extra.push({ id: 'inst-crash', label: id, state: 'running' });
+        await crashedRow(h, id, now);
+        now += 60_000;
+        await h.gpus.tick();
+        const row = await h.db.prepare('SELECT * FROM gpu_instances WHERE id = ?').get(id);
+        assert.strictEqual(row.remote_id, 'inst-crash', 'the row knows its instance again');
+        assert.strictEqual(row.status, 'running', 'and the instance serves');
+        assert.strictEqual(api.calls.destroy.length, 0, 'a paid instance of ours is never thrown away');
+        const audit = await h.registry.listAudit({ action: 'gpu.instance.recovered', targetId: id });
+        assert.strictEqual(audit.length, 1, 'the recovery is on the audit log');
+    } finally { await h.stop(); }
+});
+
+t.test('an instance with our label and no row of ours is found and given back', async () => {
+    const api = createGpuFetch();
+    let now = T0;
+    const h = await boot({ clock: { now: () => now }, fetchImpl: api.fetchImpl });
+    try {
+        await settings(h, { cap: '50000000000' });
+        const label = 'openvibe-111111111111';
+        api.extra.push({ id: 'inst-orphan', label, state: 'running' });
+        now += 60_000;
+        await h.gpus.tick();
+        assert.ok(api.calls.destroy.some((u) => u.includes('inst-orphan')), 'the orphan was given back');
+        const row = await h.db.prepare('SELECT * FROM gpu_instances WHERE id = ?').get(label);
+        assert.strictEqual(row.status, 'destroyed');
+        const audit = await h.registry.listAudit({ action: 'gpu.orphan.destroyed' });
+        assert.strictEqual(audit.length, 1, 'the orphan is on the audit log');
+        assert.deepStrictEqual(await h.gpus.orphanCount(), [], 'no orphan is left waiting');
+    } finally { await h.stop(); }
+});
+
+t.test('a destroy that keeps failing is tried again every pass and the operator is alerted', async () => {
+    const api = createGpuFetch();
+    let now = T0;
+    const h = await boot({ clock: { now: () => now }, fetchImpl: api.fetchImpl });
+    try {
+        await settings(h, { cap: '50000000000' });
+        api.destroyFails = true;
+        const label = 'openvibe-222222222222';
+        api.extra.push({ id: 'inst-stuck', label, state: 'running' });
+        for (let i = 0; i < 3; i++) {
+            now += 60_000;
+            await h.gpus.tick();
+        }
+        const row = await h.db.prepare('SELECT * FROM gpu_instances WHERE id = ?').get(label);
+        assert.strictEqual(Number(row.destroy_failures), 3, 'the tries are counted');
+        assert.strictEqual(row.status, 'orphan', 'and the instance is still running');
+        assert.strictEqual(api.calls.destroy.filter((u) => u.includes('inst-stuck')).length, 3, 'every pass tries again');
+        const gauges = await h.gpus.destroyFailures();
+        assert.strictEqual(gauges.length, 1);
+        assert.strictEqual(gauges[0].labels.marketplace, 'vast');
+        assert.strictEqual(gauges[0].value, 3, 'the gauge the operator alert reads');
+        const audit = await h.registry.listAudit({ action: 'gpu.orphan.destroy_failed' });
+        assert.strictEqual(audit.length, 1, 'the operator alert is on the audit log');
     } finally { await h.stop(); }
 });
 

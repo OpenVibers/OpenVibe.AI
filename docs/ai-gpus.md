@@ -41,6 +41,27 @@ Without a key **or** without a cap the provisioner does nothing: no search, no i
    rented.
 5. **Scale to zero.** An instance that served nobody for `idle_minutes` is given back (unless it is
    inside the warm window). An instance that has run for `max_runtime_minutes` is given back too.
+6. **Cold start.** The time from the launch to the first answered request is measured and shown on the
+   console page (the design asks for the cold start to be said up front).
+
+## Orphans: an instance we paid for is never lost
+
+The row is written **before** the marketplace is called, and the instance is given the label of that
+row (`openvibe-<row id>`). Every pass:
+
+- the marketplace instances that carry our label are listed (Vast: `GET /api/v1/instances`, RunPod:
+  `GET /v2/pods`);
+- one whose label is a live row of ours is left alone - and **linked** when the row does not know its
+  marketplace id yet (a crash between the marketplace's answer and the row's update costs nothing: the
+  instance is found by its label and adopted);
+- one that no live row of ours owns is an **orphan**: it is given back and the fact is logged
+  (`gpu.orphan.destroyed` on the audit log).
+
+A destroy the marketplace refuses leaves the instance running and still being paid for. The try is
+counted on the row, the next pass tries again, and after **three** tries the operator is alerted: the
+audit row `gpu.orphan.destroy_failed`, the log, and the gauge `ai_gpu_destroy_failures` that the
+Host rule `OpenVibeAiGpuInstanceNotDestroyed` pages on
+([OpenVibe.Host #303](https://github.com/OpenVibers/OpenVibe.Host/pull/303)).
 
 ## The money
 
@@ -51,14 +72,20 @@ fits under the cap; if it does not, the launch is refused and the reason is retu
 given back when its reservation has run out, so the money stops there. The worst case (the
 committed spend) therefore never passes the cap.
 
-The ledger is `gpu_spend` (one row per settled instance); the instances and their reservations are
-in `gpu_instances`.
+Vast and RunPod bill **per second**, so the money is charged for the seconds an instance really ran
+(the ledger rounds up to the nano, so it never charges less than the GPU was paid for). The console page
+shows the price per hour and the price per second next to it.
+
+The ledger is `gpu_spend` (one row per settled instance); the instances, their reservations, their spent
+money, their destroy failures and their measured cold start are in `gpu_instances` (migration
+`0033_gpu.sql`).
 
 ## The console page
 
 `GET /console/gpus` (the "GPUs" entry in the console) shows whether the provisioner is on and why not,
 the spend this month, the committed worst case and the cap, the models with their weights and their
-state, and every instance with its price, endpoint and money. "Start" and "Stop" write a request row;
+state, the measured cold start (from the launch to the first answered request), and every instance
+with its price (the hour and the second), endpoint, cold start and money. "Start" and "Stop" write a request row;
 the reconciler (one implementation, the same one the service runs) does the work.
 
 ## The tests
@@ -70,7 +97,10 @@ the reconciler (one implementation, the same one the service runs) does the work
 - the cheapest offer that fits is rented, registered as an offer and health-checked,
 - the monthly cap is never passed: the launch is refused and says why,
 - an idle instance scales to zero and the money is settled,
-- an instance that dies is replaced and the router gets the new endpoint.
+- an instance that dies is replaced and the router gets the new endpoint,
+- an instance the marketplace accepted before the row knew its id is recovered, not thrown away,
+- an instance with our label and no row of ours is found and given back,
+- a destroy that keeps failing is tried again every pass and the operator is alerted.
 
 ## What the owner has to check before the first launch
 

@@ -568,21 +568,35 @@ function usdNano(nano) {
     return (n < 0n ? '-' : '') + '$' + whole.toString() + (frac ? '.' + frac : '');
 }
 
+/** A measured cold start: from the launch to the first answered request. */
+function coldStart(ms) {
+    const n = Math.max(0, Math.round(Number(ms) || 0));
+    if (n < 1000) return n + ' ms';
+    return (n / 1000).toFixed(1) + ' s';
+}
+
+/** The price of one second of a GPU, from its hourly nano-USD rate (Vast and RunPod bill per second). */
+function usdPerSecond(hourlyNano) {
+    const n = BigInt(hourlyNano == null ? 0 : hourlyNano);
+    return usdNano(n / 3600n);
+}
+
 function gpuModelRow(m, canManage, csrf) {
     return html`<tr>
   <td><code>${m.key}</code><br><span class="muted">${m.display_name}</span><br><span class="muted">${clip(m.weights_url, 90)}</span></td>
   <td>${m.marketplace}</td><td>${m.runtime}</td>
   <td>${m.instance ? m.instance.gpu_name + ' · $' + m.instance.price_per_hour + '/h' : '—'}</td>
   <td>${m.instance ? badge(m.instance.status) : html`<span class="muted">stopped</span>`}</td>
+  <td>${m.cold_start_ms == null ? html`<span class="muted">not measured yet</span>` : coldStart(m.cold_start_ms)}</td>
   <td>${canManage ? html`<form class="inline" method="post" action="/console/gpus/${enc(m.key)}/${m.instance ? 'stop' : 'launch'}">${csrfField(csrf)}<button type="submit">${m.instance ? 'Stop' : 'Start'}</button></form>` : ''}</td>
 </tr>`;
 }
 
 function gpuInstanceRow(i) {
     return html`<tr>
-  <td><code>${i.model_key}</code></td><td>${i.marketplace}</td><td>${i.gpu_name}</td><td>$${i.price_per_hour}/h</td>
+  <td><code>${i.model_key}</code></td><td>${i.marketplace}</td><td>${i.gpu_name}</td><td>$${i.price_per_hour}/h · ${usdPerSecond(i.hourly_nano)}/s</td>
   <td>${badge(i.status)}</td><td>${i.endpoint ? html`<span class="muted">${clip(i.endpoint, 60)}</span>` : '—'}</td>
-  <td>${when(i.started_at)}</td><td>${usdNano(i.reserved_nano)}</td><td>${usdNano(i.spent_nano)}</td>
+  <td>${when(i.started_at)}</td><td>${i.cold_start_ms == null ? '—' : coldStart(i.cold_start_ms)}</td><td>${usdNano(i.reserved_nano)}</td><td>${usdNano(i.spent_nano)}</td>
 </tr>`;
 }
 
@@ -606,8 +620,9 @@ function gpus({ staff, csrf, state, canManage, notice, error }) {
   <div class="card"><div class="k">Monthly cap</div><div class="v">${st.cap_nano ? usdNano(st.cap_nano) : '—'}</div><div class="muted">never passed</div></div>
 </div>
 <p class="muted">Idle ${n(st.idle_minutes)} minute(s) before an instance scales to zero · max runtime ${n(st.max_runtime_minutes)} minute(s) · warm window ${st.warm_window || 'none'} · region ${st.region} · Vast.ai key ${mk.vast ? 'set' : 'not set'} · RunPod key ${mk.runpod ? 'set' : 'not set'}</p>
-${table('Models', ['Model', 'Marketplace', 'Runtime', 'GPU', 'Status', 'Actions'], models.map((m) => gpuModelRow(m, canManage, csrf)), 'no model is known.')}
-${table('Instances', ['Model', 'Marketplace', 'GPU', 'Price / hour', 'Status', 'Endpoint', 'Started', 'Reserved', 'Spent'], instances.map((i) => gpuInstanceRow(i)), 'no instance has been rented.')}
+<p class="muted">Vast and RunPod bill per second, so the ledger charges the seconds an instance really ran: the price per second is next to the hourly price. The cold start is measured from the launch to the first answered request.</p>
+${table('Models', ['Model', 'Marketplace', 'Runtime', 'GPU', 'Status', 'Cold start', 'Actions'], models.map((m) => gpuModelRow(m, canManage, csrf)), 'no model is known.')}
+${table('Instances', ['Model', 'Marketplace', 'GPU', 'Price / hour', 'Status', 'Endpoint', 'Started', 'Cold start', 'Reserved', 'Spent'], instances.map((i) => gpuInstanceRow(i)), 'no instance has been rented.')}
 `,
     });
 }
