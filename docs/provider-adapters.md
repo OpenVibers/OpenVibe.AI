@@ -63,11 +63,16 @@ The prompt is never published under the person's name, whoever the provider is.
 
 ## Data policy
 
-Each provider row records what the provider says it does with a prompt, in `metadata.data_policy`:
-`trains_on_prompts` (`no` / `not_stated` / `unknown` / `provider_dependent`), `retention`, `region`, `terms_url`,
-`resale`, `checked` and `source`. The pages are in `server/providers/pool-providers.js` next to each provider; the
-catalogue surfaces them on a model's page. A provider whose policy is unknown is still recorded as unknown, never as
-"no training".
+Each provider row records what the provider says it does with a prompt, in `metadata.data_policy`. The facts are the
+ones the house reads (`server/exchange/privacy.js`, `server/exchange/catalog.js`): `retention`
+(`none` / `limited` / `standard`), `trains` and `training` (a boolean), `region`, `anonymized` and `trust`
+(`first-party` / `community`). A fact the provider did not state is null, never a guess: an offer that declares
+nothing is labelled `anonymized` and says that it is unknown. Beside them the catalogue keeps its own record:
+`retention_note` (the provider's own words), `terms_url`, `resale`, `checked` and `source`. The pages are in
+`server/providers/pool-providers.js` next to each provider; the catalogue surfaces them on a model's page.
+
+These facts are what the label on every answer is built from: DeepInfra and Abliteration.ai keep nothing and train
+on nothing, so their answers are `private`; the rest are `anonymized`.
 
 ## Errors
 
