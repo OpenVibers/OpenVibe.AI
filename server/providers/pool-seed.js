@@ -108,6 +108,7 @@ async function seedPoolProviders({ registry, actor = 'system' }) {
                 continue;
             }
             if (row.status !== 'active') continue;                       // the owner turned it off: it stays off
+            if (row.metadata && row.metadata.price_book) continue;    // the price book owns this price: it refreshes it
             if (row.cost.in_per_mtok != null && !cataloguePrice(row)) continue;   // a person's own price: it stays
             const next = modelOf(p, m);
             await registry.upsertModel({
@@ -137,6 +138,7 @@ async function applyCatalogPrices({ registry, provider, actor = 'system' }) {
     for (const row of rows) {
         const price = pool.priceOf(provider.key, row.model_key);
         if (!price) continue;
+        if (row.metadata && row.metadata.price_book) continue;         // the price book owns this price
         const own = row.cost.in_per_mtok != null && !cataloguePrice(row);
         if (own) continue;                                  // a person's own price: the catalogue does not touch it
         if (row.cost.in_per_mtok === price.cost.in_per_mtok && row.cost.source === price.source) continue;

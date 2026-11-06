@@ -123,6 +123,7 @@ const NAV = [
     ['/console/templates', 'Templates', 'templates'], ['/console/workflows', 'Workflows', 'workflows'], ['/console/runs', 'Runs', 'runs'],
     ['/console/quotas', 'Quotas', 'quotas'], ['/console/usage', 'Usage', 'usage'], ['/console/cache', 'Cache', 'cache'], ['/console/abuse', 'Abuse', 'abuse'], ['/console/audit', 'Audit', 'audit'],
     ['/console/gpus', 'GPUs', 'gpus'],
+    ['/console/pricebook', 'Prices', 'pricebook'],
 ];
 
 // The console's pages are noindex; the one public page drawn with this layout (/stats) passes robots, a description and
@@ -697,6 +698,54 @@ ${table('Audit rows, newest first', ['#', 'At', 'Actor', 'Action', 'Target', 'De
     });
 }
 
+/**
+ * The price book: what the weekly job found, what waits for the owner and what it changed.
+ *
+ * A price never changes silently. A change of more than 20% waits here until the owner approves it; a smaller
+ * one was applied by the job and is in the log. The listing the price was read from is on every row, so the
+ * owner can go and read it before saying yes.
+ */
+function priceChangeRow(c, { csrf, canManage, actions = false } = {}) {
+    const pct = c.change_pct == null ? null : Number(c.change_pct) * 100;
+    return html`<tr>
+  <td><code>${c.provider_key}</code> / <code>${c.model_key}</code></td>
+  <td>${c.field.replace(/_per_mtok$/, '')}</td>
+  <td>${c.old_price == null ? html`<span class="muted">no price</span>` : usd(Number(c.old_price))}</td>
+  <td>${usd(Number(c.new_price))}</td>
+  <td>${pct == null ? html`<span class="muted">new price</span>` : (pct >= 0 ? '+' : '') + pct.toFixed(1) + ' %'}</td>
+  <td>${c.checked_at}</td>
+  <td><span class="muted">${clip(c.source, 70)}</span></td>
+  ${actions ? html`<td>${canManage ? html`<form class="inline" method="post" action="/console/pricebook/changes/${enc(c.id)}">${csrfField(csrf)}
+      <input type="hidden" name="decision" value="approve"><button type="submit">Approve</button></form>
+      <form class="inline" method="post" action="/console/pricebook/changes/${enc(c.id)}">${csrfField(csrf)}
+      <input type="hidden" name="decision" value="reject"><button type="submit">Reject</button></form>` : html`<span class="muted">needs ai.provider.manage</span>`}</td>` : ''}
+</tr>`;
+}
+
+function pricebook({ staff, csrf, state, pending, recent, canManage, notice, error }) {
+    const st = state || {};
+    const unreadable = st.unreadable || [];
+    const cross = st.cross_reference || null;
+    return layout({
+        title: 'Price book', section: 'pricebook', staff, csrf, notice, error, body: html`<h1>Price book</h1>
+<p class="muted">Every catalogued provider's own price listing, read once a week. A price comes from the provider that sells it and never from a guess; a listing that cannot be read leaves every price alone. A change of more than 20% waits here for the owner; a smaller one the job applies at once.</p>
+<div class="grid">
+  <div class="card"><div class="k">Last run</div><div class="v">${st.checked_at || 'never'}</div><div class="muted">${st.sources ? st.sources.length + ' listing(s) read' : 'the job has not run yet'}</div></div>
+  <div class="card"><div class="k">Waiting for the owner</div><div class="v">${n((pending || []).length)}</div><div class="muted">a change of more than 20%</div></div>
+  <div class="card"><div class="k">Changed by the job</div><div class="v">${n((st.applied || []).length)}</div><div class="muted">a change of 20% or less</div></div>
+  <div class="card"><div class="k">Listings unreadable</div><div class="v">${n(unreadable.length)}</div><div class="muted">their prices stand</div></div>
+</div>
+${canManage ? html`<form class="inline" method="post" action="/console/pricebook/run">${csrfField(csrf)}<button type="submit">Read the prices now</button></form>` : html`<p class="muted">Reading the prices on demand needs <code>ai.provider.manage</code> (the owner's <code>staff.secrets.manage</code>).</p>`}
+${unreadable.length ? html`${table('Listings that could not be read', ['Listing', 'Why'], unreadable.map((u) => html`<tr><td><code>${u.source}</code></td><td>${u.error}</td></tr>`), 'every listing was read.')}` : ''}
+${cross ? html`${table('OpenRouter as a second opinion', ['Models compared', 'The same price', 'A different price'], [html`<tr><td>${n(cross.models)}</td><td>${n(cross.agree)}</td><td>${n(cross.differ)}</td></tr>`], 'nothing was compared.')}` : ''}
+<h2>Waiting for the owner</h2>
+${table('Pending price changes', ['Model', 'Price', 'Was', 'Now', 'Change', 'Checked', 'Read from', 'Decision'], (pending || []).map((c) => priceChangeRow(c, { csrf, canManage, actions: true })), 'no price change is waiting.')}
+<h2>What the job changed</h2>
+${table('Applied price changes', ['Model', 'Price', 'Was', 'Now', 'Change', 'Checked', 'Read from'], (recent || []).map((c) => priceChangeRow(c, { csrf, canManage })), 'the job has not changed a price yet.')}
+`,
+    });
+}
+
 // ── Person: one run (GET /runs/:id, signed in) ───────────────
 /**
  * A person's receipt for one run: status, workflow, model, cost, times, and the output or the error.
@@ -755,4 +804,4 @@ function allowance(cards) {
 /** The price and latency cells, as plain HTML strings for the public /stats page (server/home.js renderStats). */
 const statsFormat = { ms, rate, price: (cards) => render(price(cards)), allowance: (cards) => render(allowance(cards)) };
 
-module.exports = { CSP, html, esc, safeUrl, statsFormat, pages: { signIn, message, overview, providers, providerNew, definitions, definition, runs, run, runReceipt, quotas, usage, cache, abuse: abusePage, audit, exchange, gpus } };
+module.exports = { CSP, html, esc, safeUrl, statsFormat, pages: { signIn, message, overview, providers, providerNew, definitions, definition, runs, run, runReceipt, quotas, usage, cache, abuse: abusePage, audit, exchange, gpus, pricebook } };

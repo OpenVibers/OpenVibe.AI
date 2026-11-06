@@ -1,0 +1,315 @@
+{
+  "data": [
+    {
+      "created": 1792375957,
+      "id": "deepseek/deepseek-v4.1-flash-1017",
+      "object": "model",
+      "owned_by": "novita",
+      "permission": null,
+      "root": "",
+      "parent": "",
+      "input_token_price_per_m": 3000,
+      "output_token_price_per_m": 12000,
+      "pricing": {
+        "prompt": {
+          "origin_price_per_m": 3000,
+          "price_per_m": 3000,
+          "origin_price_per_m_decimal": "0.3",
+          "price_per_m_decimal": "0.3"
+        },
+        "completion": {
+          "origin_price_per_m": 12000,
+          "price_per_m": 12000,
+          "origin_price_per_m_decimal": "1.2",
+          "price_per_m_decimal": "1.2"
+        },
+        "input_cache_read": {
+          "origin_price_per_m": 60,
+          "price_per_m": 60,
+          "origin_price_per_m_decimal": "0.006",
+          "price_per_m_decimal": "0.006"
+        }
+      },
+      "is_tiered_billing": false,
+      "title": "deepseek/deepseek-v4.1-flash-1017",
+      "description": "",
+      "tags": [],
+      "context_size": 1048576,
+      "status": 1,
+      "display_name": "DeepSeek V4.1 Flash 1017",
+      "model_type": "chat",
+      "max_output_tokens": 393216,
+      "features": [
+        "serverless",
+        "function-calling",
+        "structured-outputs",
+        "reasoning"
+      ],
+      "endpoints": [
+        "chat/completions",
+        "anthropic",
+        "responses"
+      ],
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "output_modalities": [
+        "text"
+      ]
+    },
+    {
+      "created": 1792803011,
+      "id": "moonshotai/kimi-k3.1-pro",
+      "object": "model",
+      "owned_by": "novita",
+      "permission": null,
+      "root": "",
+      "parent": "",
+      "input_token_price_per_m": 20000,
+      "output_token_price_per_m": 100000,
+      "pricing": {
+        "prompt": {
+          "origin_price_per_m": 20000,
+          "price_per_m": 20000,
+          "origin_price_per_m_decimal": "2",
+          "price_per_m_decimal": "2"
+        },
+        "completion": {
+          "origin_price_per_m": 100000,
+          "price_per_m": 100000,
+          "origin_price_per_m_decimal": "10",
+          "price_per_m_decimal": "10"
+        },
+        "input_cache_read": {
+          "origin_price_per_m": 2000,
+          "price_per_m": 2000,
+          "origin_price_per_m_decimal": "0.2",
+          "price_per_m_decimal": "0.2"
+        },
+        "input_cache_write": {
+          "origin_price_per_m": 20000,
+          "price_per_m": 20000,
+          "origin_price_per_m_decimal": "2",
+          "price_per_m_decimal": "2"
+        },
+        "input_cache_write_1h": {
+          "origin_price_per_m": 40000,
+          "price_per_m": 40000,
+          "origin_price_per_m_decimal": "4",
+          "price_per_m_decimal": "4"
+        }
+      },
+      "is_tiered_billing": false,
+      "title": "moonshotai/kimi-k3.1-pro",
+      "description": "Kimi K3.1 Pro is Moonshot AI's flagship open-weight multimodal reasoning model and a post-trained successor to Kimi K3, with a 1M-token context window. It is built for long-horizon coding, 3D creation, financial research, and end-to-end agentic knowledge work, with native image and video understanding.",
+      "tags": [],
+      "context_size": 1048576,
+      "status": 1,
+      "display_name": "Kimi K3.1 Pro",
+      "model_type": "chat",
+      "max_output_tokens": 1048576,
+      "features": [
+        "serverless",
+        "function-calling",
+        "structured-outputs",
+        "reasoning"
+      ],
+      "endpoints": [
+        "chat/completions",
+        "anthropic",
+        "responses"
+      ],
+      "input_modalities": [
+        "text",
+        "image",
+        "video"
+      ],
+      "output_modalities": [
+        "text"
+      ]
+    },
+    {
+      "created": 1790230295,
+      "id": "xiaomimimo/mimo-v2.6-flash",
+      "object": "model",
+      "owned_by": "novita",
+      "permission": null,
+      "root": "",
+      "parent": "",
+      "input_token_price_per_m": 1400,
+      "output_token_price_per_m": 2800,
+      "pricing": {
+        "prompt": {
+          "origin_price_per_m": 1400,
+          "price_per_m": 1400,
+          "origin_price_per_m_decimal": "0.14",
+          "price_per_m_decimal": "0.14"
+        },
+        "completion": {
+          "origin_price_per_m": 2800,
+          "price_per_m": 2800,
+          "origin_price_per_m_decimal": "0.28",
+          "price_per_m_decimal": "0.28"
+        },
+        "input_cache_read": {
+          "origin_price_per_m": 28,
+          "price_per_m": 28,
+          "origin_price_per_m_decimal": "0.0028",
+          "price_per_m_decimal": "0.0028"
+        }
+      },
+      "is_tiered_billing": false,
+      "title": "xiaomimimo/mimo-v2.6-flash",
+      "description": "MiMo V2.6 Flash is Xiaomi's cost-efficient open-source reasoning model for high-frequency calls and large-scale professional workflows. It combines native text, image, video, and audio understanding with a 1M-token context window and up to 128K output tokens, while supporting controllable deep thinking, tool calling, JSON mode, streaming, and prompt caching.",
+      "tags": [],
+      "context_size": 1048576,
+      "status": 1,
+      "display_name": "MiMo V2.6 Flash",
+      "model_type": "chat",
+      "max_output_tokens": 131072,
+      "features": [
+        "serverless",
+        "function-calling",
+        "structured-outputs",
+        "reasoning"
+      ],
+      "endpoints": [
+        "chat/completions",
+        "anthropic",
+        "responses"
+      ],
+      "input_modalities": [
+        "text",
+        "image",
+        "video",
+        "audio"
+      ],
+      "output_modalities": [
+        "text"
+      ]
+    },
+    {
+      "created": 1787105676,
+      "id": "zai-org/glm-5.3",
+      "object": "model",
+      "owned_by": "novita",
+      "permission": null,
+      "root": "",
+      "parent": "",
+      "input_token_price_per_m": 14000,
+      "output_token_price_per_m": 44000,
+      "pricing": {
+        "prompt": {
+          "origin_price_per_m": 14000,
+          "price_per_m": 14000,
+          "origin_price_per_m_decimal": "1.4",
+          "price_per_m_decimal": "1.4"
+        },
+        "completion": {
+          "origin_price_per_m": 44000,
+          "price_per_m": 44000,
+          "origin_price_per_m_decimal": "4.4",
+          "price_per_m_decimal": "4.4"
+        },
+        "input_cache_read": {
+          "origin_price_per_m": 2600,
+          "price_per_m": 2600,
+          "origin_price_per_m_decimal": "0.26",
+          "price_per_m_decimal": "0.26"
+        }
+      },
+      "is_tiered_billing": false,
+      "title": "zai-org/glm-5.3",
+      "description": "GLM-5.3 is a large-scale reasoning model from Z.ai, built for complex software engineering and long-horizon agent tasks. It supports text input and output with a 1M-token context window, and improves on GLM-5.2 in coding and in the balance between performance and token efficiency.\nReasoning is always on and cannot be disabled. Reasoning efforts low, high, and max are supported; max is the default.",
+      "tags": [],
+      "context_size": 1048576,
+      "status": 1,
+      "display_name": "GLM 5.3",
+      "model_type": "chat",
+      "max_output_tokens": 131072,
+      "features": [
+        "function-calling",
+        "structured-outputs",
+        "reasoning",
+        "serverless"
+      ],
+      "endpoints": [
+        "chat/completions",
+        "anthropic",
+        "responses"
+      ],
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ]
+    },
+    {
+      "created": 1785494178,
+      "id": "qwen/qwen3.8-max",
+      "object": "model",
+      "owned_by": "novita",
+      "permission": null,
+      "root": "",
+      "parent": "",
+      "input_token_price_per_m": 20000,
+      "output_token_price_per_m": 60000,
+      "pricing": {
+        "prompt": {
+          "origin_price_per_m": 20000,
+          "price_per_m": 20000,
+          "origin_price_per_m_decimal": "2",
+          "price_per_m_decimal": "2"
+        },
+        "completion": {
+          "origin_price_per_m": 60000,
+          "price_per_m": 60000,
+          "origin_price_per_m_decimal": "6",
+          "price_per_m_decimal": "6"
+        },
+        "input_cache_read": {
+          "origin_price_per_m": 2500,
+          "price_per_m": 2500,
+          "origin_price_per_m_decimal": "0.25",
+          "price_per_m_decimal": "0.25"
+        },
+        "input_cache_write": {
+          "origin_price_per_m": 25000,
+          "price_per_m": 25000,
+          "origin_price_per_m_decimal": "2.5",
+          "price_per_m_decimal": "2.5"
+        }
+      },
+      "is_tiered_billing": false,
+      "title": "qwen/qwen3.8-max",
+      "description": " A 2.4T-parameter MoE flagship for coding and knowledge work. Programs autonomously for days to deliver complete projects end to end, with native visual understanding across planning, execution, and verification, plus deep semantic analysis of ultra-long documents and video.",
+      "tags": [],
+      "context_size": 1000000,
+      "status": 1,
+      "display_name": "Qwen3.8 Max",
+      "model_type": "chat",
+      "max_output_tokens": 131072,
+      "features": [
+        "serverless",
+        "reasoning",
+        "structured-outputs",
+        "function-calling"
+      ],
+      "endpoints": [
+        "chat/completions",
+        "anthropic",
+        "responses"
+      ],
+      "input_modalities": [
+        "text",
+        "image",
+        "video"
+      ],
+      "output_modalities": [
+        "text"
+      ]
+    }
+  ]
+}

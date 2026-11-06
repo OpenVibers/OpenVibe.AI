@@ -654,6 +654,39 @@ the service boots without Valkey; with it on, production refuses to boot without
 | `AI_GOVERN_TIMEOUT_MS` | `1000` | longest wait for Valkey before it counts as unreachable |
 | `VALKEY_URL`, `VALKEY_PREFIX` | empty | the shared Valkey (ADR-035) the counters live in |
 
+## The living price book
+
+The price the router charges and the Exchange shows is read from the provider that sells it, and from nowhere
+else. A price nobody publishes stays unknown: it is never guessed, never averaged, never taken from an
+aggregator.
+
+Once a week (plan E1, 2026-10-30 §8) a job reads each catalogued provider's own model and price listing —
+DeepSeek's price page, Alibaba Model Studio's price table, Kimi's pricing page, Z.ai's and MiniMax's price
+pages, DeepInfra's, Novita's, Featherless', Refuseless' and Abliteration.ai's listings — through the same egress
+guard the rest of the platform uses: https only, a public host, never an IP literal, a timeout and a size cap.
+OpenRouter's public model list is read as well, but only as a second opinion; no price ever comes from it.
+
+A price never changes silently. Every change lands in the `price_changes` log with the old price, the new
+price, the listing it was read from and the day it was read. A change of **more than 20%** waits there for the
+owner, who approves or rejects it on the operator console (`/console/pricebook`, `ai.provider.manage`); a
+smaller one the job applies at once, and the model row carries the new price with the day it was checked. A
+listing that cannot be read leaves every price alone: an unreadable page is not evidence of a change. A price a
+person typed by hand is never touched.
+
+The catalog says when a price was checked (`price_checked_at`, `price_checked`), and
+`GET /api/v1/exchange/price-changes` is the changelog Exchange renders: what a price was, what it became, the
+listing it was read from and the day it was read.
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `AI_PRICE_BOOK` | on (off in test mode, off under `AI_DRILL=1`) | the weekly job |
+| `AI_PRICE_BOOK_INTERVAL_MS` | 604800000 (a week) | how often the listings are read |
+| `AI_PRICE_BOOK_THRESHOLD_PCT` | 20 | a change of more than this waits for the owner |
+| `AI_PRICE_BOOK_TIMEOUT_MS`, `AI_PRICE_BOOK_MAX_BYTES` | 20000, 8 MiB | the guard's timeout and size cap |
+
+The tests never touch the network: the listings are recorded (`test/fixtures/pricebook/`, written by
+`scripts/record-price-book.js`) and replayed through the reader's transport seam.
+
 ## Workflows
 
 - **Seed product workflows** — `wiki.generate_space`, `wiki.generate_page` (both on route `wiki.write`, see [MegaSource](#megasource-research)), `blog.draft_post`,
@@ -849,6 +882,7 @@ mix vectors from different providers (re-embed when the provider changes).
 | Import from a Live snapshot: dry run, holds, idempotent re-run | `test/import.test.js` |
 | Routing presets: the five built-in ones, a caller's own stored per account and per project, each knob applied (floor, ceiling, max_price, quantization, region, data policy, community), a hard max_price refused before the call with a problem document, every answer's receipt (offer, price, tokens, cache hits, latency, why, fallbacks, privacy label, BYOK at 0 %) in the headers and at `GET /v1/receipts/{id}`, and the Anthropic endpoint and the stream carrying the same receipt | `test/exchange-presets-receipts.test.js` |
 | Capability proposals are valid contracts documents matching what is enforced | `test/proposals.test.js` |
+| The living price book: every listing read in its own shape, the guard refusing an IP literal, a change of 20% or less applied at once, one of more than 20% waiting for the owner and applied only on approval, the change log, the catalog's "price checked" date, the public changelog, the job off under a drill | `test/price-book.test.js` |
 
 ## Security
 

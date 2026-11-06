@@ -1,0 +1,404 @@
+{
+  "data": [
+    {
+      "id": "zetasepic/Qwen2.5-72B-Instruct-abliterated",
+      "is_gated": false,
+      "created": 1728604928,
+      "model_class": "qwen25-72b",
+      "owned_by": "Feather",
+      "context_length": 32768,
+      "concurrency_cost": 4,
+      "pricing": {
+        "prompt": "0.00000148",
+        "completion": "0.0000016",
+        "image": "0",
+        "request": "0",
+        "input": 1.48,
+        "output": 1.6
+      },
+      "features": {
+        "tool_use": true
+      }
+    },
+    {
+      "id": "huihui-ai/Qwen2.5-72B-Instruct-abliterated",
+      "is_gated": false,
+      "created": 1733530235,
+      "model_class": "qwen25-72b",
+      "owned_by": "Feather",
+      "context_length": 32768,
+      "concurrency_cost": 4,
+      "pricing": {
+        "prompt": "0.00000148",
+        "completion": "0.0000016",
+        "image": "0",
+        "request": "0",
+        "input": 1.48,
+        "output": 1.6
+      },
+      "features": {
+        "tool_use": true
+      }
+    },
+    {
+      "id": "Qwen/Qwen3-0.6B",
+      "is_gated": false,
+      "created": 1751086102,
+      "model_class": "qwen3-0b6",
+      "owned_by": "Feather",
+      "context_length": 32768,
+      "concurrency_cost": 1,
+      "pricing": {
+        "prompt": "0.00000004",
+        "completion": "0.00000008",
+        "image": "0",
+        "request": "0",
+        "input": 0.04,
+        "output": 0.08
+      },
+      "features": {
+        "tool_use": true
+      }
+    },
+    {
+      "id": "mlabonne/Meta-Llama-3.1-8B-Instruct-abliterated",
+      "is_gated": false,
+      "created": 1722075281,
+      "model_class": "llama31-8b",
+      "owned_by": "Feather",
+      "context_length": 32768,
+      "concurrency_cost": 1,
+      "pricing": {
+        "prompt": "0.00000005",
+        "completion": "0.00000008",
+        "image": "0",
+        "request": "0",
+        "input": 0.05,
+        "output": 0.08
+      },
+      "features": {
+        "tool_use": true
+      }
+    },
+    {
+      "id": "NousResearch/Meta-Llama-3.1-8B-Instruct",
+      "is_gated": false,
+      "created": 1722624089,
+      "model_class": "llama31-8b",
+      "owned_by": "Feather",
+      "context_length": 32768,
+      "concurrency_cost": 1,
+      "pricing": {
+        "prompt": "0.0000002",
+        "completion": "0.00000032",
+        "image": "0",
+        "request": "0",
+        "input": 0.2,
+        "output": 0.32
+      },
+      "features": {
+        "tool_use": true
+      }
+    },
+    {
+      "id": "unsloth/Meta-Llama-3.1-8B-Instruct",
+      "is_gated": false,
+      "created": 1722624089,
+      "model_class": "llama31-8b",
+      "owned_by": "Feather",
+      "context_length": 32768,
+      "concurrency_cost": 1,
+      "pricing": {
+        "prompt": "0.0000002",
+        "completion": "0.00000032",
+        "image": "0",
+        "request": "0",
+        "input": 0.2,
+        "output": 0.32
+      },
+      "features": {
+        "tool_use": true
+      }
+    },
+    {
+      "id": "SillyTilly/Meta-Llama-3.1-8B-Instruct",
+      "is_gated": false,
+      "created": 1722624098,
+      "model_class": "llama31-8b",
+      "owned_by": "Feather",
+      "context_length": 32768,
+      "concurrency_cost": 1,
+      "pricing": {
+        "prompt": "0.0000002",
+        "completion": "0.00000032",
+        "image": "0",
+        "request": "0",
+        "input": 0.2,
+        "output": 0.32
+      },
+      "features": {
+        "tool_use": true
+      }
+    },
+    {
+      "id": "Crystalcareai/Meta-llama-3.1-8b-instruct",
+      "is_gated": false,
+      "created": 1722624104,
+      "model_class": "llama31-8b",
+      "owned_by": "Feather",
+      "context_length": 32768,
+      "concurrency_cost": 1,
+      "pricing": {
+        "prompt": "0.0000002",
+        "completion": "0.00000032",
+        "image": "0",
+        "request": "0",
+        "input": 0.2,
+        "output": 0.32
+      },
+      "features": {
+        "tool_use": true
+      }
+    },
+    {
+      "id": "meta-llama/Meta-Llama-3.1-8B-Instruct",
+      "is_gated": true,
+      "created": 1726585673,
+      "model_class": "llama31-8b",
+      "owned_by": "Feather",
+      "context_length": 32768,
+      "concurrency_cost": 1,
+      "pricing": {
+        "prompt": "0.00000005",
+        "completion": "0.00000008",
+        "image": "0",
+        "request": "0",
+        "input": 0.05,
+        "output": 0.08
+      },
+      "features": {
+        "tool_use": true
+      }
+    },
+    {
+      "id": "aifeifei798/Meta-Llama-3.1-8B-Instruct",
+      "is_gated": false,
+      "created": 1727078881,
+      "model_class": "llama31-8b",
+      "owned_by": "Feather",
+      "context_length": 32768,
+      "concurrency_cost": 1,
+      "pricing": {
+        "prompt": "0.0000002",
+        "completion": "0.00000032",
+        "image": "0",
+        "request": "0",
+        "input": 0.2,
+        "output": 0.32
+      },
+      "features": {
+        "tool_use": true
+      }
+    },
+    {
+      "id": "tanliboy/Meta-Llama-3.1-8B-Instruct",
+      "is_gated": false,
+      "created": 1727554503,
+      "model_class": "llama31-8b",
+      "owned_by": "Feather",
+      "context_length": 32768,
+      "concurrency_cost": 1,
+      "pricing": {
+        "prompt": "0.0000002",
+        "completion": "0.00000032",
+        "image": "0",
+        "request": "0",
+        "input": 0.2,
+        "output": 0.32
+      },
+      "features": {
+        "tool_use": true
+      }
+    },
+    {
+      "id": "Qwen/Qwen3-14B",
+      "is_gated": false,
+      "created": 1747094414,
+      "model_class": "qwen3-14b",
+      "owned_by": "Feather",
+      "context_length": 32768,
+      "concurrency_cost": 1,
+      "pricing": {
+        "prompt": "0.00000012",
+        "completion": "0.00000024",
+        "image": "0",
+        "request": "0",
+        "input": 0.12,
+        "output": 0.24
+      },
+      "features": {
+        "tool_use": true
+      }
+    },
+    {
+      "id": "unsloth/Qwen3-14B",
+      "is_gated": false,
+      "created": 1767854980,
+      "model_class": "qwen3-14b",
+      "owned_by": "Feather",
+      "context_length": 32768,
+      "concurrency_cost": 1,
+      "pricing": {
+        "prompt": "0.00000048",
+        "completion": "0.00000096",
+        "image": "0",
+        "request": "0",
+        "input": 0.48,
+        "output": 0.96
+      },
+      "features": {
+        "tool_use": true
+      }
+    },
+    {
+      "id": "willcb/Qwen3-14B",
+      "is_gated": false,
+      "created": 1767858092,
+      "model_class": "qwen3-14b",
+      "owned_by": "Feather",
+      "context_length": 32768,
+      "concurrency_cost": 1,
+      "pricing": {
+        "prompt": "0.00000048",
+        "completion": "0.00000096",
+        "image": "0",
+        "request": "0",
+        "input": 0.48,
+        "output": 0.96
+      },
+      "features": {
+        "tool_use": true
+      }
+    },
+    {
+      "id": "Greytechai/Qwen3-14B",
+      "is_gated": false,
+      "created": 1773790311,
+      "model_class": "qwen3-14b",
+      "owned_by": "Feather",
+      "context_length": 32768,
+      "concurrency_cost": 1,
+      "pricing": {
+        "prompt": "0.00000048",
+        "completion": "0.00000096",
+        "image": "0",
+        "request": "0",
+        "input": 0.48,
+        "output": 0.96
+      },
+      "features": {
+        "tool_use": true
+      }
+    },
+    {
+      "id": "mombip/Meta-Llama-3.1-8B-Instruct",
+      "is_gated": false,
+      "created": 1751687717,
+      "model_class": "llama31-8b",
+      "owned_by": "Feather",
+      "context_length": 32768,
+      "concurrency_cost": 1,
+      "pricing": {
+        "prompt": "0.0000002",
+        "completion": "0.00000032",
+        "image": "0",
+        "request": "0",
+        "input": 0.2,
+        "output": 0.32
+      },
+      "features": {
+        "tool_use": true
+      }
+    },
+    {
+      "id": "zgrgr/Meta-Llama-3.1-8B-Instruct",
+      "is_gated": false,
+      "created": 1726175967,
+      "model_class": "llama3-8b",
+      "owned_by": "Feather",
+      "context_length": 8192,
+      "concurrency_cost": 1,
+      "pricing": {
+        "prompt": "0.00000037",
+        "completion": "0.00000038",
+        "image": "0",
+        "request": "0",
+        "input": 0.37,
+        "output": 0.38
+      },
+      "features": {
+        "tool_use": true
+      }
+    },
+    {
+      "id": "Cirrascale/Meta-Llama-3.1-8B-Instruct",
+      "is_gated": false,
+      "created": 1751692639,
+      "model_class": "llama31-8b",
+      "owned_by": "Feather",
+      "context_length": 32768,
+      "concurrency_cost": 1,
+      "pricing": {
+        "prompt": "0.0000002",
+        "completion": "0.00000032",
+        "image": "0",
+        "request": "0",
+        "input": 0.2,
+        "output": 0.32
+      },
+      "features": {
+        "tool_use": true
+      }
+    },
+    {
+      "id": "camenduru/Meta-Llama-3.1-8B-Instruct",
+      "is_gated": false,
+      "created": 1767880391,
+      "model_class": "llama3-8b",
+      "owned_by": "Feather",
+      "context_length": 8192,
+      "concurrency_cost": 1,
+      "pricing": {
+        "prompt": "0.00000037",
+        "completion": "0.00000038",
+        "image": "0",
+        "request": "0",
+        "input": 0.37,
+        "output": 0.38
+      },
+      "features": {
+        "tool_use": true
+      }
+    },
+    {
+      "id": "indigoskyai/Qwen2.5-72B-Instruct-abliterated",
+      "is_gated": false,
+      "created": 1783098151,
+      "model_class": "qwen2-72b",
+      "owned_by": "Feather",
+      "context_length": 32768,
+      "concurrency_cost": 4,
+      "pricing": {
+        "prompt": "0.000012",
+        "completion": "0.00002",
+        "image": "0",
+        "request": "0",
+        "input": 12,
+        "output": 20
+      },
+      "features": {
+        "tool_use": true
+      }
+    }
+  ]
+}

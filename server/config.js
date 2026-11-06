@@ -357,6 +357,19 @@ function load(env = process.env) {
         providerRetries: Math.max(0, int(env.AI_PROVIDER_RETRIES, 1)),
         retryDelayMs: Math.max(0, int(env.AI_PROVIDER_RETRY_DELAY_MS, 800)),
 
+        // ── The living price book (server/pricebook/) ──
+        // The weekly job that reads every catalogued provider's own price listing and keeps the price the router
+        // charges in step with it (plan E1). A change of more than the threshold waits for the owner on the
+        // operator console; a smaller one is applied at once. Off under a restore drill (AI_DRILL=1) and off in
+        // test mode, where the recorded listings are replayed instead.
+        priceBook: {
+            enabled: bool(env.AI_PRICE_BOOK, !bool(env.AI_DRILL, false) && nodeEnv !== 'test'),
+            intervalMs: Math.max(3600000, int(env.AI_PRICE_BOOK_INTERVAL_MS, 7 * 24 * 60 * 60 * 1000)),
+            timeoutMs: Math.max(1000, int(env.AI_PRICE_BOOK_TIMEOUT_MS, 20000)),
+            maxBytes: Math.max(1024, int(env.AI_PRICE_BOOK_MAX_BYTES, 8 * 1024 * 1024)),
+            thresholdPct: Number(env.AI_PRICE_BOOK_THRESHOLD_PCT || 20) / 100,
+        },
+
         // ── Hourly provider balance probe (server/providers/balance.js) ──
         // Each active provider with a balance API (DeepSeek today) is asked GET <origin>/user/balance and the reading
         // is exposed as ai_provider_balance_usd{provider} on GET /metrics. Off under a restore drill (AI_DRILL=1).

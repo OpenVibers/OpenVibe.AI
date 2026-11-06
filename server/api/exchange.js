@@ -7,6 +7,7 @@
  * OpenVibe.Exchange's read API: the public catalog, one model, and aggregate usage.
  *
  *   GET /api/v1/exchange/catalog                 every model, its offers, prices, speed and uptime
+ *   GET /api/v1/exchange/price-changes           the price changelog: what a price was and what it became
  *   GET /api/v1/exchange/models/:slug            one model ("deepseek/deepseek-chat", or org + model)
  *   GET /api/v1/exchange/usage?days=30           requests, tokens and spend by day, model and product
  *
@@ -37,6 +38,8 @@ function memo(fn, ttlMs, clock) {
 function exchangeRouter({ db, registry, pool, env = process.env, clock = { now: () => Date.now() }, config = null, presets, receipts, auth, log = console }) {
     const catalog = createCatalog({ db, registry, pool, env, clock, config });
     const usage = createUsage({ db, clock });
+    // The price book's log: what a price was, what it became and when it was read.
+    const priceStore = require('../pricebook/store').createPriceStore({ db, clock });
     // One cached read per kind (?kind=chat, screenshot, …); the unfiltered read is the full catalog.
     const hits = new Map();
     const allFor = (kind) => {
@@ -172,6 +175,33 @@ function exchangeRouter({ db, registry, pool, env = process.env, clock = { now: 
             const found = out.models.find((m) => m.slug === slug);
             if (!found) return http.sendProblem(res, 404, 'exchange.model_not_found', { detail: `no model ${slug}`, ctx: req.ov });
             return res.json(found);
+        } catch (err) { return next(err); }
+    });
+
+    // The changelog of the price book (plan E1): what a price was, what it became and the provider's own
+    // listing it was read from. Only the changes that are live are here: a change waiting for the owner is not
+    // a price yet, and a guess never reaches a catalog.
+    r.get('/api/v1/exchange/price-changes', publicCache(60), async (req, res, next) => {
+        try {
+            const limit = Math.max(1, Math.min(200, Number.parseInt(req.query.limit, 10) || 50));
+            const provider = req.query.provider ? String(req.query.provider) : null;
+            const rows = await priceStore.live({ limit, provider });
+            return res.json({
+                generated_at: new Date(clock.now()).toISOString(),
+                count: rows.length,
+                changes: rows.map((c) => ({
+                    id: c.id,
+                    provider: c.provider_key,
+                    model: c.model_key,
+                    field: c.field,
+                    old_price: c.old_price == null ? null : Number(c.old_price),
+                    new_price: Number(c.new_price),
+                    change_pct: c.change_pct == null ? null : Number(c.change_pct),
+                    source: c.source,
+                    checked_at: String(c.checked_at).slice(0, 10),
+                    changed_at: c.created_at,
+                })),
+            });
         } catch (err) { return next(err); }
     });
 
