@@ -141,7 +141,7 @@ route('post', '/memory/items/{id}/settle', {
 });
 route('get', '/memory/profile', {
     operationId: 'getMemoryProfile', summary: 'The cached profile for one scope', tags: ['memory'], security: memorySecurity,
-    description: 'ai.memory.read. Rebuilt by the cheap tier only when items_hash changes, at most once an hour per owner and scope; the result is stored as written.',
+    description: 'ai.memory.read. The person\u2019s own profile, or an agent\u2019s: a service token with on_behalf_of reads only a scope its grant names, and that read is audited in memory_reads with the note ids it was built from, never the text. Rebuilt by the cheap tier only when items_hash changes, at most once an hour per owner and scope; the result is stored as written.',
     parameters: [query('scope', str()), query('on_behalf_of', str())],
     responses: { 200: json('The cached profile', memoryResult), 503: problem, ...errors([401, 403]) },
 });
