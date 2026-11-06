@@ -231,5 +231,26 @@ t.test('a destroy that keeps failing is tried again every pass and the operator 
     } finally { await h.stop(); }
 });
 
+t.test('a row whose rental never came back gives its reservation back', async () => {
+    const api = createGpuFetch();
+    let now = T0;
+    const h = await boot({ clock: { now: () => now }, fetchImpl: api.fetchImpl });
+    try {
+        await settings(h, { cap: '50000000000' });
+        // the crash before the marketplace answered: the row holds a reservation for an instance
+        // that does not exist
+        const id = 'openvibe-def456abc789';
+        await crashedRow(h, id, now);
+        const before = await h.gpus.moneySummary();
+        assert.ok(BigInt(before.committed_nano) > 0n, 'the row holds its reservation');
+        now += 11 * 60_000;      // past the give-up time
+        await h.gpus.tick();
+        const row = await h.db.prepare('SELECT * FROM gpu_instances WHERE id = ?').get(id);
+        assert.strictEqual(row.status, 'refused');
+        const after = await h.gpus.moneySummary();
+        assert.strictEqual(BigInt(after.committed_nano), 0n, 'the reservation is free again');
+    } finally { await h.stop(); }
+});
+
 if (require.main === module) t.run();
 module.exports = { suite: t };

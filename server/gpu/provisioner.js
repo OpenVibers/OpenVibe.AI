@@ -39,6 +39,8 @@ const LABEL_RE = /^openvibe-[0-9a-f]{12}$/;
 // Three failed destroys in a row: the instance is still running and still being paid for, so the
 // operator is alerted (the gauge ai_gpu_destroy_failures and the rule in OpenVibe.Host's prometheus rules).
 const ALERT_AFTER = 3;
+// A row whose rental never came back is given up on after this long: its reservation is free again.
+const STALE_ROW_MS = 10 * 60_000;
 const PRICE_SOURCE = { vast: 'https://vast.ai/pricing', runpod: 'https://www.runpod.io/pricing' };
 
 function clampInt(value, min, max, fallback) {
@@ -448,6 +450,7 @@ function createGpuProvisioner({
      * A destroy that fails is tried again on the next pass; after three tries the operator is alerted.
      */
     async function sweepOrphans(cfg) {
+        const t = now();
         let seen = 0;
         for (const marketplace of ['vast', 'runpod']) {
             const adapter = adapterFor(marketplace, cfg);
@@ -477,6 +480,16 @@ function createGpuProvisioner({
                 }
                 await destroyOrphan({ marketplace, remote_id: String(inst.id), label }, row, cfg);
             }
+        }
+        // The rows whose rental never came back (a crash before the marketplace answered, or an
+        // answer we never got): their reservation is free again, or the month would carry a budget
+        // for an instance that does not exist.
+        const stale = await db.prepare("SELECT * FROM gpu_instances WHERE status = 'starting' AND (remote_id IS NULL OR remote_id = '') AND started_at < ?").all(iso(t - STALE_ROW_MS));
+        for (const row of stale || []) {
+            await db.prepare("UPDATE gpu_instances SET status = 'refused', error = ?, updated_at = ? WHERE id = ?")
+                .run('the rental never came back', iso(t), row.id);
+            await audit('service:ai', 'gpu.instance.abandoned', 'gpu_instance', row.id, { marketplace: row.marketplace });
+            log.warn && log.warn('[gpu] gave up on the row ' + row.id + ': the rental never came back, its reservation is free again');
         }
         return seen;
     }
@@ -578,6 +591,18 @@ function createGpuProvisioner({
                 return { changed: true, action: 'died', reason: 'the instance ' + state };
             }
             const endpoint = info && info.endpoint ? String(info.endpoint) : '';
+            if (endpoint && !(await healthy(endpoint))) {
+                // the endpoint is there but does not answer: the instance is dead, not slow
+                const failures = Number(row.health_failures || 0) + 1;
+                await db.prepare('UPDATE gpu_instances SET health_failures = ?, last_health_at = ?, updated_at = ? WHERE id = ?')
+                    .run(failures, iso(t), iso(t), row.id);
+                if (failures >= HEALTH_FAILURES) {
+                    await destroy({ ...row, charged_at: row.charged_at }, 'the endpoint never answered');
+                    await request(spec.key, 'launch', 'service:ai');
+                    return { changed: true, action: 'died', reason: 'the endpoint never answered' };
+                }
+                return { changed: false, health_failures: failures };
+            }
             if (endpoint && await healthy(endpoint)) {
                 // the cold start: from the launch to the first answered request
                 await db.prepare("UPDATE gpu_instances SET status = 'running', endpoint = ?, ready_at = ?, last_health_at = ?, health_failures = 0, cold_start_ms = ?, updated_at = ? WHERE id = ?")
