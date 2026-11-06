@@ -106,7 +106,7 @@ function routePinRequest(value, principal, wf) {
     return { provider, model };
 }
 
-function createRuns({ db, registry, engine, cache, quotas, config, clock = { now: () => Date.now() }, log = console, userModules = null, credentials = null, preferences: personPreferences = null, tiers = null, projectSecrets = null, pool = null, runBudgets = null, credits = null, community = null, presets = null, receipts = null }) {
+function createRuns({ db, registry, engine, cache, quotas, config, clock = { now: () => Date.now() }, log = console, userModules = null, credentials = null, preferences: personPreferences = null, tiers = null, projectSecrets = null, pool = null, runBudgets = null, credits = null, community = null, presets = null, receipts = null, abuse = null }) {
     const inflight = new Map();     // run id -> { controller, promise, release, caller }
     const queue = [];               // run ids waiting for the worker
     let active = 0;
@@ -187,7 +187,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
      * principal: { sub, subject: {type, id} }
      * Returns { run, created, promise? }.
      */
-    async function create(body, principal, { trace = null, requestId = null, retryOf = null, onDelta = null, onRoute = null } = {}) {
+    async function create(body, principal, { trace = null, requestId = null, retryOf = null, onDelta = null, onRoute = null, abuse: requestAbuse = null } = {}) {
         if (!body || typeof body !== 'object') throw new AiError(400, 'input.invalid', 'JSON body required');
         const wfKey = String(body.workflow || '');
         const wf = body.version ? await registry.getWorkflow(wfKey, Number(body.version)) : await registry.activeWorkflow(wfKey);
@@ -352,6 +352,13 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         const now = iso(clock.now());
         const id = newRunId();
         ctx.runId = id;
+        // Plan E5: the free tier's allowance, device count, network signals and anomaly throttle. Paid runs only
+        // teach the device table; a refusal here is a 402 (allowance spent) or a 429 (throttled) before any
+        // provider or queue slot is touched.
+        if (abuse && requestAbuse) {
+            const admission = await abuse.admit({ principal, ctx, request: requestAbuse, inputHash, free: freeUse, anonymous: freeUse && anonymousTryIt, selfKeys });
+            if (admission) ctx.abuse = admission;
+        }
         const kept = retainedInput(input, wf, Boolean(config.debugRawLog && options.debug));
         const base = {
             id, workflow_key: wf.key, workflow_version: wf.version, template_key: tpl ? tpl.key : null, template_version: tpl ? tpl.version : null,
@@ -796,6 +803,12 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             // recorded (the fallback is named in explain). A run that used the person's own key spends nothing here.
             const usedOwnKey = String(r.provider || '').startsWith('byo:self:');
             if (r.provider && (reserved || (opts.self_subject && !usedOwnKey))) await quotas.account(ctx, reserved, { provider: r.provider, model: r.model, tokensIn: r.usage.input, tokensOut: r.usage.output, tokensCached: r.usage.cached, cost: r.cost, attempts: logged, runId: id, traceId: row.trace_id, hold });
+            // Plan E5: the free tokens this run spent go on its allowance (or its shared device counter) and on the
+            // per-minute velocity buckets. A failure here is logged, never allowed to fail an answer already made.
+            if (abuse && ctx.abuse && !usedOwnKey && !String(r.provider || '').startsWith('byo:')) {
+                try { await abuse.record({ admission: ctx.abuse, tokens: (r.usage.input || 0) + (r.usage.output || 0), inputHash: row.input_hash }); }
+                catch (err) { log.warn(`[runs] ${id}: the abuse counters were not written: ${err && err.message}`); }
+            }
             // The record of the run (L40): the tokens with the cache apart, the money and who paid.
             const published = await publishUsage({ row: await getRow(id), outcome: 'succeeded', usage: r.usage, provider: r.provider, model: r.model, attempts, latencyMs: r.latencyMs, ttftMs: r.ttftMs });
             // The receipt of the answer (server/exchange/receipts.js): the offer, the price, the tokens, the cache,

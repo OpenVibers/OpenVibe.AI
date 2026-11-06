@@ -360,6 +360,17 @@ route('get', '/exchange/usage', {
     } }) },
 });
 
+route('post', '/exchange/tryit/challenge', {
+    operationId: 'exchangeTryitChallenge', summary: 'A proof-of-work challenge for the anonymous Try it', tags: ['exchange'], security: [],
+    description: 'Public. The anonymous Try it (no account, no Balance) must send a solved challenge in x-ov-pow: <challenge>:<nonce>, where sha256("<challenge>:<nonce>") has `bits` leading zero bits. The challenge is single use and expires; AI stores only its hash. The response also sets the signed, HttpOnly `ovai_device` cookie (when it is not already present), which counts accounts per device. A first-party service may forward the client address in x-ov-client-ip.',
+    requestBody: { required: false, content: { 'application/json': { schema: { type: 'object', properties: {} } } } },
+    responses: {
+        200: json('The challenge', { type: 'object', required: ['challenge', 'bits', 'expires_at'], properties: { challenge: str(), bits: integer(), expires_at: str({ format: 'date-time' }) } }),
+        429: problem,
+        503: problem,
+    },
+});
+
 // ── Action Center ────────────────────────────────────────────────────────────────────────────
 route('get', '/actions', {
     operationId: 'listActions', summary: 'The Action Center items for one person', tags: ['actions'], security: SERVICE,

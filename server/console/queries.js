@@ -146,6 +146,7 @@ const AUDIT_KINDS = Object.freeze({
     runs: { label: 'Runs', where: "target_type = 'run'" },
     exchange: { label: 'AI Exchange', where: "target_type IN ('credit_settle', 'routing_incumbent')" },
     console: { label: 'Console sign-ins and refusals', where: "action ILIKE 'console.%'" },
+    abuse: { label: 'Abuse prevention', where: "target_type = 'abuse'" },
     all: { label: 'Everything', where: null },
 });
 

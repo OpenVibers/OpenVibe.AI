@@ -121,7 +121,7 @@ function table(caption, head, rows, empty = 'None.') {
 const NAV = [
     ['/console', 'Overview', 'overview'], ['/console/providers', 'Providers', 'providers'], ['/console/routes', 'Routes', 'routes'],
     ['/console/templates', 'Templates', 'templates'], ['/console/workflows', 'Workflows', 'workflows'], ['/console/runs', 'Runs', 'runs'],
-    ['/console/quotas', 'Quotas', 'quotas'], ['/console/usage', 'Usage', 'usage'], ['/console/cache', 'Cache', 'cache'], ['/console/audit', 'Audit', 'audit'],
+    ['/console/quotas', 'Quotas', 'quotas'], ['/console/usage', 'Usage', 'usage'], ['/console/cache', 'Cache', 'cache'], ['/console/abuse', 'Abuse', 'abuse'], ['/console/audit', 'Audit', 'audit'],
     ['/console/gpus', 'GPUs', 'gpus'],
 ];
 
@@ -652,6 +652,27 @@ function metaText(m) {
     return clip(s, 400);
 }
 
+function abusePage({ staff, csrf, report }) {
+    if (!report) return layout({ title: 'Abuse', section: 'abuse', staff, csrf, body: html`<h1>Abuse prevention</h1><p class="muted">Abuse prevention is not configured on this service.</p>` });
+    const n = (v) => (v == null ? '—' : Number(v).toLocaleString('en-US'));
+    return layout({
+        title: 'Abuse', section: 'abuse', staff, csrf,
+        body: html`<h1>Abuse prevention</h1>
+<p class="muted m0">Plan E5: the free allowance grows with trust, a signed device id counts accounts per device, a hosting ASN gets the new tier, an in-house proof of work guards the anonymous Try it, and free tokens per minute are checked against the last week. Nothing here stores a raw address or device id.</p>
+<div class="cards">
+<section class="card"><h2>Signals</h2><p>IP-to-ASN table: <strong>${n(report.asn_table.v4_ranges)}</strong> IPv4 ranges, <strong>${n(report.asn_table.v6_ranges)}</strong> IPv6 ranges, <strong>${n(report.asn_table.hosting_asns)}</strong> operator hosting ASNs. Network trust signals: <strong>${report.signals ? 'on' : 'off'}</strong>.</p>
+<p>Prefixes seen in the last 24 h: <strong>${n(report.network.prefixes_24h)}</strong> (<strong>${n(report.network.hosting)}</strong> hosting). Open proof-of-work challenges: <strong>${n(report.pow)}</strong>.</p></section>
+<section class="card"><h2>Devices</h2><p>Known device/account pairs: <strong>${n(report.devices)}</strong>. Devices shared by more than three accounts: <strong>${n(report.shared_devices)}</strong>.</p>
+<p class="muted">Accounts on one shared device draw from one allowance: the lowest tier among them.</p></section>
+<section class="card"><h2>Today</h2><p>Free tokens claimed on <strong>${report.day}</strong> (UTC), by counter:</p>
+${table('Daily free allowance', ['Counter', 'Tokens'], report.usage.map((u) => html`<tr><td><code>${u.subject}</code></td><td>${n(u.tokens)}</td></tr>`), 'nothing claimed today.')}
+</section></div>
+${table('Throttles and refusals in the last 24 h', ['When', 'Action', 'Target', 'Metadata'], report.events.map((e) => html`<tr>
+<td>${when(e.at)}</td><td><code>${e.action}</code></td><td><code>${clip(e.target, 80)}</code></td><td class="mono muted">${metaText(e.metadata)}</td></tr>`), 'nothing was throttled or refused.')}
+<p class="muted">The live gauge is <code>ai_abuse_throttles{reason}</code> on <code>/metrics</code>; OpenVibe.Host alerts when the total stays high. The full audit trail is on the <a href="/console/audit?kind=abuse">Audit page</a>.</p>`,
+    });
+}
+
 function audit({ staff, csrf, form, bad, rows, next, names, kinds }) {
     const keep = { kind: form.kind, action: form.action, actor: form.actor, target_type: form.target_type, target_id: form.target_id };
     const actor = (a) => (names.get(a) ? html`@${names.get(a)} <code>${a}</code>` : html`<code>${a}</code>`);
@@ -734,4 +755,4 @@ function allowance(cards) {
 /** The price and latency cells, as plain HTML strings for the public /stats page (server/home.js renderStats). */
 const statsFormat = { ms, rate, price: (cards) => render(price(cards)), allowance: (cards) => render(allowance(cards)) };
 
-module.exports = { CSP, html, esc, safeUrl, statsFormat, pages: { signIn, message, overview, providers, providerNew, definitions, definition, runs, run, runReceipt, quotas, usage, cache, audit, exchange, gpus } };
+module.exports = { CSP, html, esc, safeUrl, statsFormat, pages: { signIn, message, overview, providers, providerNew, definitions, definition, runs, run, runReceipt, quotas, usage, cache, abuse: abusePage, audit, exchange, gpus } };
