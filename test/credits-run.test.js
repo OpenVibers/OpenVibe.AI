@@ -7,8 +7,9 @@
 // provider without a card behaves as before; a sandbox app token never reaches paid supply; with the flag off
 // nothing changes.
 const assert = require('assert');
+const crypto = require('crypto');
 const http = require('http');
-const { boot, request, token, suite, ALL } = require('./helpers');
+const { boot, request, token, suite, ALL, privateKey, ISSUER } = require('./helpers');
 
 const t = suite('credits-run');
 const service = token('live', ALL);
@@ -16,6 +17,13 @@ const ULID = '01JAB2C3D4E5F6G7H8J9K0MNPQ';
 const PRJ = `prj_${ULID}`;
 const APP = `app_${ULID}`;
 const PERSON = 'usr_01JAB2C3D4E5F6G7H8J9K0MNP7';
+const b64 = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
+/** A person's own Network token (audience openvibe.ai): the subject in sub and subject_id, no actor_type. */
+function userToken(audience, subject = PERSON) {
+    const now = Math.floor(Date.now() / 1000);
+    const input = `${b64({ alg: 'RS256', typ: 'JWT' })}.${b64({ iss: ISSUER, sub: subject, subject_id: subject, aud: [audience], iat: now, exp: now + 3600, jti: `tok_${crypto.randomBytes(8).toString('hex')}` })}`;
+    return `${input}.${crypto.sign('RSA-SHA256', Buffer.from(input), privateKey).toString('base64url')}`;
+}
 const appToken = (env) => token('app', ['ai.app.run'], { sub: `app:app_${ULID}`, actorType: 'app', ns: [PRJ, `app.${PRJ}.*`], extra: { project_id: PRJ, env } });
 const producer = appToken('production');
 const sandbox = appToken('sandbox');
@@ -203,7 +211,7 @@ t.test('a paid app request holds its project\'s Balance: the hold names the app 
     } finally { await h.stop(); await up.close(); await billing.close(); }
 });
 
-t.test('a person\'s own run holds their personal Balance: no project_id and no Network call', async () => {
+t.test('a service naming a person cannot hold their Balance: no payer, and 402 ai.allowance_spent when no free capacity', async () => {
     const billing = await fakeBilling();
     const up = await upstream('ok');
     const h = await bootWith(billing);
@@ -212,12 +220,70 @@ t.test('a person\'s own run holds their personal Balance: no project_id and no N
         const r = await request(h.base, 'POST', '/api/v1/runs?wait=5000', { tok: service, body: {
             workflow: 'ai.complete', input: { messages: [{ role: 'user', content: 'hello as me' }] },
             on_behalf_of: { type: 'user', id: PERSON } } });
+        assert.strictEqual(r.status, 201, r.text);
+        assert.strictEqual(r.body.run.status, 'failed');
+        assert.strictEqual(r.body.run.error.code, 'ai.allowance_spent');
+        assert.match(r.body.run.error.detail, /free AI allowance/);
+        assert.strictEqual(billing.calls.filter((c) => c.path === '/internal/credits/holds').length, 0, 'never a hold of their Balance');
+        assert.strictEqual(billing.settlements.size, 0);
+        assert.strictEqual(up.calls, 0, 'the paid offer was not served to a run nobody pays for');
+        // The OpenAI route answers the same code as a 402.
+        const viaChat = await chat(h, { tok: service, body: { x_openvibe: { on_behalf_of: { type: 'user', id: PERSON } } } });
+        assert.strictEqual(viaChat.status, 402, viaChat.text);
+        assert.strictEqual(viaChat.body.error.code, 'ai.allowance_spent');
+    } finally { await h.stop(); await up.close(); await billing.close(); }
+});
+
+t.test('a person\'s own token holds their personal Balance: no project_id and no Network call', async () => {
+    const billing = await fakeBilling();
+    const up = await upstream('ok');
+    const h = await bootWith(billing);
+    try {
+        await seed(h, up);
+        const r = await request(h.base, 'POST', '/api/v1/runs?wait=5000', { tok: userToken('openvibe.ai'), body: {
+            workflow: 'ai.complete', input: { messages: [{ role: 'user', content: 'hello as me' }] } } });
         assert.ok(r.status < 300, r.text);
+        assert.strictEqual(r.body.run.status, 'succeeded', JSON.stringify(r.body.run.error));
+        assert.deepStrictEqual(r.body.run.on_behalf_of, { type: 'user', id: PERSON }, 'the run is theirs');
+        // The OpenAI-compatible route accepts the same person token and holds the same personal Balance.
+        const viaChat = await chat(h, { tok: userToken('openvibe.ai') });
+        assert.strictEqual(viaChat.status, 200, viaChat.text);
         const holds = billing.calls.filter((c) => c.path === '/internal/credits/holds');
-        assert.strictEqual(holds.length, 1);
+        assert.strictEqual(holds.length, 2);
         assert.deepStrictEqual(holds[0].body.subject, { type: 'user', id: PERSON });
         assert.ok(!('project_id' in holds[0].body), 'a personal hold has no project_id');
         assert.strictEqual(billing.calls.filter((c) => c.path.includes('/internal/projects/')).length, 0, 'Network was never called');
+    } finally { await h.stop(); await up.close(); await billing.close(); }
+});
+
+t.test('a person\'s token may run only for themselves, and only the model API', async () => {
+    const billing = await fakeBilling();
+    const up = await upstream('ok');
+    const h = await bootWith(billing);
+    try {
+        await seed(h, up);
+        const someoneElse = await request(h.base, 'POST', '/api/v1/runs', { tok: userToken('openvibe.ai'), body: {
+            workflow: 'ai.complete', input: { messages: [{ role: 'user', content: 'x' }] },
+            on_behalf_of: { type: 'user', id: 'usr_01JAB2C3D4E5F6G7H8J9K0MNP1' } } });
+        assert.strictEqual(someoneElse.status, 403, someoneElse.text);
+        const product = await request(h.base, 'POST', '/api/v1/runs', { tok: userToken('openvibe.ai'), body: { workflow: 'live.viewers.line', input: { role: 'chat', user: 'x' } } });
+        assert.strictEqual(product.status, 403, product.text);
+        assert.strictEqual(product.body.code, 'capability.namespace_denied');
+    } finally { await h.stop(); await up.close(); await billing.close(); }
+});
+
+t.test('a subject assertion is not accepted until H1 lands (openvibe-sdk #122)', async () => {
+    // The header exists in SDK #122. Until it is released and AI pins it, a service naming a person gets no Balance.
+    const billing = await fakeBilling();
+    const up = await upstream('ok');
+    const h = await bootWith(billing);
+    try {
+        await seed(h, up);
+        const r = await request(h.base, 'POST', '/api/v1/runs?wait=5000', { tok: service,
+            headers: { 'x-ov-subject-assertion': 'eyJhbGciOiJFUzI1NiJ9.e30.c2ln' },
+            body: { workflow: 'ai.complete', input: { messages: [{ role: 'user', content: 'hello as me' }] }, on_behalf_of: { type: 'user', id: PERSON } } });
+        assert.strictEqual(r.body.run.error.code, 'ai.allowance_spent');
+        assert.strictEqual(billing.calls.filter((c) => c.path === '/internal/credits/holds').length, 0);
     } finally { await h.stop(); await up.close(); await billing.close(); }
 });
 

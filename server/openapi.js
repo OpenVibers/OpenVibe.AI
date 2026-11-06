@@ -290,12 +290,104 @@ route('get', '/run-budgets/{jti}', {
     responses: { 200: json('The budget and the spend', { type: 'object', required: ['jti'], properties: { jti: str(), budget_usd: nullable('number'), budget_tokens: nullable('integer'), spent_usd: nullable('number'), spent_tokens: nullable('integer'), expires_at: nullable('integer'), reached: { type: 'boolean' } } }), ...errors([401, 403, 422]) },
 });
 
+// ── Exchange read API (OpenVibe.Exchange) ───────────────────────────────────────────────────
+const exchangeOffer = {
+    type: 'object', required: ['provider', 'provider_name', 'model', 'kind', 'trust', 'free', 'free_tier', 'price'],
+    properties: {
+        provider: str({ description: 'The real upstream, never the router\'s internal provider key' }), provider_name: str(), model: str(),
+        kind: str({ enum: ['chat', 'embedding', 'stt', 'image'] }),
+        id: nullable('string', { description: 'The exact artifact id a request may pin, when the registry records one' }),
+        trust: { type: 'string', enum: ['first-party', 'community'] },
+        access: str({ enum: ['OWN_DEPLOYMENT', 'AUTHORIZED_WHOLESALE', 'UNVERIFIED'] }),
+        free: { type: 'boolean', description: 'Prepaid capacity with no per-token price (a free server, a subscription, a local machine).' },
+        free_tier: { type: 'boolean', description: 'The free allowance and the anonymous Try it may use this offer: its provider is one of AI_FREE_PROVIDERS (default deepseek,local,community; local covers local2 and whisper.cpp) and its output price is at or below AI_FREE_MAX_OUTPUT_PRICE_USD_PER_MTOK (default 1.5). Distinct from free: a priced DeepSeek Flash offer is free_tier true while a dearer priced offer is false.' },
+        price: nullable('object', { properties: { in: { type: 'number' }, out: { type: 'number' }, cached: { type: 'number' }, per: str(), currency: str() } }),
+        price_source: nullable('string', { description: 'The price page the card was read from, when recorded' }),
+        price_checked_at: nullable('string', { description: 'The date someone checked the price, when recorded' }),
+        speed: { type: 'object', properties: { p50_ms: nullable('number'), p95_ms: nullable('number') } },
+        uptime: nullable('number', { minimum: 0, maximum: 1 }),
+        requests_7d: integer({ minimum: 0 }), requests_today: integer({ minimum: 0 }),
+        data_policy: nullable('object', { properties: { trains: nullable('boolean'), retention_days: nullable('integer'), region: nullable('string'), anonymized: nullable('boolean', { description: 'The provider says the request is anonymised before the model sees it' }) } }),
+        updated_at: nullable('string'),
+    },
+};
+const exchangeModel = {
+    type: 'object', required: ['slug', 'name', 'family', 'kind', 'uncensored', 'offers'],
+    properties: {
+        slug: str(), canonical: str(), name: str(), family: str(), variant: nullable('string'), uncensored: { type: 'boolean' },
+        kind: str({ enum: ['chat', 'embedding', 'stt', 'image'] }), type: str(), context: nullable('integer'), max_output: nullable('integer'),
+        capabilities: { type: 'object', properties: { tools: { type: 'boolean' }, json: { type: 'boolean' }, vision: { type: 'boolean' }, stream: { type: 'boolean' } } },
+        modalities: arrayOf(str()), description: nullable('string'),
+        requests_7d: integer({ minimum: 0 }), requests_today: integer({ minimum: 0 }), community: { type: 'boolean' },
+        offers: arrayOf(exchangeOffer),
+    },
+};
+route('get', '/exchange/catalog', {
+    operationId: 'exchangeCatalog', summary: 'Every model and every offer that serves it', tags: ['exchange'], security: [],
+    description: 'Public. The live offers: price in, out and cached per million tokens, measured p50/p95, uptime, requests, and the provider data policy. A prepaid offer has no price (free: true); free_tier says whether the free allowance and the anonymous Try it may use an offer at all (a named AI_FREE_PROVIDERS source under the output price ceiling). The window is 7 days. Models carry a kind (chat, embedding, stt, image); chat lists must use kind "chat" and never mix embeddings or speech-to-text.',
+    parameters: [query('kind', str({ enum: ['chat', 'embedding', 'stt', 'image'] }), 'Only models of this kind')],
+    responses: { 200: json('The models, grouped by model, with their offers', { type: 'object', required: ['models'], properties: {
+        generated_at: str({ format: 'date-time' }), window_days: integer(), count: integer(),
+        kind: str({ enum: ['chat', 'embedding', 'stt', 'image'] }),
+        families: arrayOf({ type: 'object', properties: { name: str(), models: integer(), offers: integer() } }),
+        kinds: arrayOf({ type: 'object', properties: { kind: str(), models: integer(), offers: integer() } }),
+        models: arrayOf(exchangeModel),
+    } }) },
+});
+route('get', '/exchange/models/{slug}', {
+    operationId: 'exchangeModel', summary: 'One model and its offers', tags: ['exchange'], security: [],
+    description: 'Public. The slug is "<org>/<model>", lowercased, e.g. deepseek/deepseek-flash.',
+    parameters: [path('slug', str())],
+    responses: { 200: json('The model', exchangeModel), 404: problem },
+});
+route('get', '/exchange/models/{org}/{model}', {
+    operationId: 'exchangeModelByParts', summary: 'One model, by its org and model', tags: ['exchange'], security: [],
+    description: 'Public. The same answer as /exchange/models/{slug}, for a client that has the two parts.',
+    parameters: [path('org', str()), path('model', str())],
+    responses: { 200: json('The model', exchangeModel), 404: problem },
+});
+route('get', '/exchange/usage', {
+    operationId: 'exchangeUsage', summary: 'Requests, tokens and spend by day, model and product', tags: ['exchange'], security: [],
+    description: 'Public and aggregate only: never a prompt, an answer or a person. A product is the service that ran the model (usage_daily.requester).',
+    parameters: [query('days', integer({ minimum: 1, maximum: 366 }), 'Default 30')],
+    responses: { 200: json('The aggregates', { type: 'object', properties: {
+        generated_at: str({ format: 'date-time' }), days: integer(), from: str(), to: str(),
+        today: { type: 'object' }, totals: { type: 'object' },
+        by_day: arrayOf({ type: 'object' }), by_model: arrayOf({ type: 'object' }), by_product: arrayOf({ type: 'object' }),
+    } }) },
+});
+
 // ── Action Center ────────────────────────────────────────────────────────────────────────────
 route('get', '/actions', {
     operationId: 'listActions', summary: 'The Action Center items for one person', tags: ['actions'], security: SERVICE,
     description: 'ai.actions.read: a service token names one usr_ subject and gets only the runs whose on_behalf_of is that person — queued and running, then done and failed from the last 30 days, at most 50.',
     parameters: [query('subject', str({ pattern: '^usr_[0-9A-HJKMNP-TV-Z]{26}$' }), 'Required')],
     responses: { 200: json('common.action-list-result@1', { type: 'object', required: ['items'], properties: { items: arrayOf(ref('ActionItem')) } }), ...errors([400, 401, 403, 429]) },
+});
+
+// ── Routing presets and receipts (the Exchange, 2026-11-06) ───────────────────────────────────
+route('get', '/presets', {
+    operationId: 'listPresets', summary: 'The routing presets this caller may name', tags: ['presets'], security: SERVICE_OR_APP,
+    description: 'ai.run.create (an app token needs ai.app.run). The five built-in profiles — cheapest, fastest, private, uncensored, eu-only — and the caller\'s own: the ones its project or its account stored. A name is used as the model "@preset/<name>" or as the request\'s preset.',
+    responses: { 200: json('The presets', { type: 'object', required: ['presets'], properties: { presets: arrayOf(ref('Preset')) } }), ...errors([401, 403]) },
+});
+route('post', '/presets', {
+    operationId: 'createPreset', summary: 'Store (or replace) one routing preset', tags: ['presets'], security: SERVICE_OR_APP,
+    description: 'ai.run.create (an app token needs ai.app.run). The preset belongs to the caller\'s project (an app token) or to the person the token acts for. A built-in name cannot be overwritten: it is not the caller\'s.',
+    requestBody: body({ type: 'object', required: ['name'], properties: { name: str({ pattern: '^[a-z0-9][a-z0-9_-]{0,63}$' }), policy: ref('PresetPolicy') } }),
+    responses: { 201: json('The stored preset', { type: 'object', required: ['preset'], properties: { preset: ref('Preset') } }), 409: problem, 422: problem, ...errors([401, 403]) },
+});
+route('delete', '/presets/{name}', {
+    operationId: 'deletePreset', summary: 'Delete one routing preset', tags: ['presets'], security: SERVICE_OR_APP,
+    description: 'ai.run.create (an app token needs ai.app.run). The caller\'s own preset only; a built-in one is not theirs to delete.',
+    parameters: [path('name', str({ pattern: '^[a-z0-9][a-z0-9_-]{0,63}$' }))],
+    responses: { 200: json('The removal', { type: 'object', properties: { name: str(), removed: { type: 'boolean' } } }), 409: problem, 422: problem, ...errors([401, 403]) },
+});
+route('get', '/receipts/{id}', {
+    operationId: 'getReceipt', summary: 'The receipt of one answered request', tags: ['receipts'], security: SERVICE_OR_APP,
+    description: 'ai.run.read (or ai.run.create; an app token needs ai.app.run), or ai.usage.read. The receipt says which offer answered, what it charged, the tokens, the cache hits, the latency, why the router chose it and the fallbacks it would have used, who paid and the privacy label. It never carries the prompt or the answer. The same receipt is in the answer\'s x-openvibe-receipt header.',
+    parameters: [path('id', str({ pattern: '^rcpt_[0-9A-HJKMNP-TV-Z]{26}$' }))],
+    responses: { 200: json('The receipt', { type: 'object', required: ['receipt'], properties: { receipt: ref('Receipt') } }), 404: problem, ...errors([401, 403]) },
 });
 
 function openapi() {
@@ -309,7 +401,7 @@ function openapi() {
             contact: { name: 'OpenVibers', url: 'https://github.com/OpenVibers/OpenVibe.AI', email: 'contact@openvibe.network' },
         },
         servers: [{ url: SITE }],
-        tags: ['runs', 'operations', 'actions'].map((name) => ({ name })),
+        tags: ['runs', 'operations', 'actions', 'exchange', 'presets', 'receipts'].map((name) => ({ name })),
         components: {
             securitySchemes: {
                 bearer: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT', description: 'A Network service or user token for audience openvibe.ai carrying the route\'s capability (ai.run.create, ai.run.read, ai.actions.read)' },
@@ -380,6 +472,52 @@ function openapi() {
                     cost_usd: nullable('number'), steps: nullable('integer'), error: nullable('string'),
                     created_at: str({ format: 'date-time' }), updated_at: str({ format: 'date-time' }), href: str(),
                     actions: arrayOf(str()),
+                } },
+                PresetPolicy: { type: 'object', properties: {
+                    objective: str({ enum: ['cheapest', 'fastest', 'balanced', 'private'] }),
+                    floor: str({ enum: ['fast', 'balanced', 'strong', 'frontier'] }),
+                    ceiling: nullable('number', { description: 'US dollars per million tokens: the highest price that may be paid' }),
+                    max_price: nullable('number', { description: 'US dollars per million tokens: the hard cap. No offer fits is a refusal before the call' }),
+                    quantization: arrayOf(str({ maxLength: 32 })),
+                    region: arrayOf(str({ maxLength: 32 })),
+                    data_policy: str({ enum: ['private', 'anonymized', 'community'] }),
+                    community: { type: 'boolean' },
+                    adult: { type: 'boolean' },
+                } },
+                Preset: { type: 'object', required: ['name', 'policy'], properties: {
+                    name: str(), description: nullable('string'), scope: str({ enum: ['builtin', 'owner', 'request'] }), builtin: { type: 'boolean' },
+                    owner: nullable('object'), policy: ref('PresetPolicy'),
+                    created_at: nullable(str({ format: 'date-time' })), updated_at: nullable(str({ format: 'date-time' })),
+                } },
+                Receipt: { type: 'object', required: ['id', 'run_id'], properties: {
+                    id: str(), run_id: str(), created_at: str({ format: 'date-time' }), workflow: nullable('string'),
+                    route: nullable('object'),
+                    preset: nullable({ type: 'object', properties: { name: str(), scope: str(), policy: ref('PresetPolicy') } }),
+                    offer: { type: 'object', properties: {
+                        provider: nullable('string'), model: nullable('string'), deployment: nullable('string'),
+                        provider_access: nullable('string'), resolved_model: nullable('string'),
+                    } },
+                    price: { type: 'object', properties: {
+                        in_per_mtok: nullable('number'), out_per_mtok: nullable('number'), cached_per_mtok: nullable('number'), source: nullable('string'),
+                    } },
+                    usage: { type: 'object', properties: {
+                        tokens_in: integer(), tokens_out: integer(), tokens_cached: integer(), tokens_cache_write: integer(), tokens_reasoning: integer(),
+                    } },
+                    cost_usd: nullable('number'), fee_usd: nullable('number'), fee_rate: nullable('number'),
+                    paid_by: str({ enum: ['openvibe_key', 'own_key', 'own_machine', 'plan'] }), paid_by_detail: nullable('string'), byok: { type: 'boolean' },
+                    latency_ms: nullable('integer'), ttft_ms: nullable('integer'),
+                    why: arrayOf(str()),
+                    fallbacks: arrayOf({ type: 'object', properties: {
+                        offer: str(), provider: nullable('string'), model: nullable('string'),
+                        why: nullable('string'), status: nullable('string'), reason: nullable('string'),
+                    } }),
+                    privacy: nullable({ type: 'object', properties: {
+                        label: str({ enum: ['private', 'anonymized', 'community'] }),
+                        retention: nullable('string'), training: nullable('boolean'), region: nullable('string'),
+                        trust: nullable('string'), known: { type: 'boolean' }, source: nullable('string'),
+                    } }),
+                    attempts: integer(),
+                    requester: nullable('object'), owner: nullable('object'),
                 } },
             },
         },

@@ -26,6 +26,38 @@ const { resolveSecret } = require('../util');
 
 const ROLE_TIMEOUT = { chat: 20000, vision: 30000, director: 25000, summary: 30000, legacy: 30000 };
 const HISTORICAL_ROUTES = ['wiki.generate', 'blog.draft', 'news.summarize', 'reviews.summarize', 'deals.enrich', 'coupons.extract', 'trade.summarize', 'codes.generate_docs', 'games.generate_lore', 'moderation.classify', 'tools.describe', 'food.suggest', 'rent.screen'];
+// DeepSeek's own list (GET https://api.deepseek.com/models, checked 2026-11-06) and its own price page
+// (https://api-docs.deepseek.com/quick_start/pricing, checked 2026-11-06). The card carries the peak rate;
+// the page halves it off-peak (all hours outside 01:00-04:00 and 06:00-10:00 UTC Mon-Fri). Never rounded.
+const DEEPSEEK_MODELS = [
+    {
+        model_key: 'deepseek-flash', display_name: 'DeepSeek V4.1 Flash', type: 'chat',
+        context_window: 1048576, max_output: 393216,
+        supports: { json: true, tools: true, streaming: true, vision: true },
+        cost: { in_per_mtok: 0.30, out_per_mtok: 1.20, cached_per_mtok: 0.006, source: 'https://api-docs.deepseek.com/quick_start/pricing', verified_at: '2026-11-06' },
+        metadata: { org: 'deepseek', model: 'deepseek-flash', family: 'DeepSeek', tier: 'fast', reasoning: true, configured_by: 'DEEPSEEK_API_KEY', pricing_note: 'Peak rates (01:00-04:00 and 06:00-10:00 UTC, Mon-Fri); off-peak is half: $0.15 in, $0.003 cached, $0.60 out per 1M.' },
+    },
+    {
+        model_key: 'deepseek-v4-pro', display_name: 'DeepSeek V4 Pro', type: 'chat',
+        context_window: 1048576, max_output: 393216,
+        supports: { json: true, tools: true, streaming: true, vision: false },
+        cost: { in_per_mtok: 1.32, out_per_mtok: 3.96, cached_per_mtok: 0.044, source: 'https://api-docs.deepseek.com/quick_start/pricing', verified_at: '2026-11-06' },
+        metadata: { org: 'deepseek', model: 'deepseek-v4-pro', family: 'DeepSeek', tier: 'strong', reasoning: true, configured_by: 'DEEPSEEK_API_KEY', pricing_note: 'Peak rates (01:00-04:00 and 06:00-10:00 UTC, Mon-Fri); off-peak is half: $0.66 in, $0.022 cached, $1.98 out per 1M.' },
+    },
+];
+
+function deepseekProviderRecord(config, env) {
+    const key = resolveSecret(config.deepseek.apiKeyRef, env);
+    return {
+        key: 'deepseek', display_name: 'DeepSeek', kind: 'openai',
+        status: config.deepseek.enabled && key ? 'active' : 'disabled',
+        base_url: config.deepseek.baseUrl, auth_mode: 'bearer', secret_ref: config.deepseek.apiKeyRef,
+        default_model: DEEPSEEK_MODELS[0].model_key,
+        capabilities: ['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich', 'json', 'vision'],
+        timeout_ms: config.deepseek.timeoutMs, priority: 20, provider_access: 'OWN_DEPLOYMENT',
+        metadata: { configured_by: 'DEEPSEEK_API_KEY', provider_name: 'deepseek', billing_profile: 'metered' },
+    };
+}
 
 function sharedProviderRecord(config, env) {
     const s = config.shared;
@@ -54,6 +86,7 @@ function providerRecords(config, env) {
     const out = [
         { key: 'stub', display_name: 'Deterministic stub (synthetic output)', kind: 'stub', status: 'active', auth_mode: 'none', default_model: 'stub-1', capabilities: ['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich', 'embed', 'json', 'vision', 'transcribe'], timeout_ms: 10000, priority: 1000, provider_access: 'OWN_DEPLOYMENT', metadata: { synthetic: true, billing_profile: 'free' } },
         sharedProviderRecord(config, env),
+        deepseekProviderRecord(config, env),
         { key: 'whisper', display_name: 'whisper.cpp (local speech-to-text)', kind: 'whisper', status: 'active', auth_mode: 'none', default_model: 'whisper.cpp', capabilities: ['transcribe'], timeout_ms: 600000, priority: 20, provider_access: 'OWN_DEPLOYMENT', metadata: { configured_by: 'WHISPER_*', billing_profile: 'free' } },
     ];
     // A local model server (llama.cpp, Ollama) speaking the OpenAI API: no key, never paid (WS-O task 5).
@@ -111,6 +144,17 @@ async function seed({ registry, quotas, config, env = process.env, db }) {
     // Models
     const models = new Set([shared.default_model]);
     for (const m of models) if (m && !await registry.getModel('shared', m)) await registry.upsertModel({ provider_key: 'shared', model_key: m, type: 'chat', supports: { json: true, vision: true } }, { actor: 'seed' });
+    // DeepSeek's own provider and two chat models when its key is configured. A model a person disabled stays
+    // disabled; the prices and provenance are refreshed from the constants above on every boot.
+    const deepseek = await registry.getProvider('deepseek');
+    if (deepseek && deepseek.status === 'active') {
+        for (const m of DEEPSEEK_MODELS) {
+            const prev = await registry.getModel('deepseek', m.model_key);
+            if (!prev || (prev.metadata && prev.metadata.configured_by === 'DEEPSEEK_API_KEY')) {
+                await registry.upsertModel({ provider_key: 'deepseek', ...m, status: prev ? prev.status : 'active' }, { actor: 'seed' });
+            }
+        }
+    }
     if (!await registry.getModel('stub', 'stub-1')) await registry.upsertModel({ provider_key: 'stub', model_key: 'stub-1', type: 'chat', supports: { json: true, vision: true }, metadata: { synthetic: true } }, { actor: 'seed' });
     if (!await registry.getModel('whisper', 'whisper.cpp')) await registry.upsertModel({ provider_key: 'whisper', model_key: 'whisper.cpp', type: 'stt', supports: { json: false } }, { actor: 'seed' });
     const embeddingModel = env.AI_EMBEDDING_MODEL || 'text-embedding-3-small';

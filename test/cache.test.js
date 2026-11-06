@@ -19,7 +19,7 @@ const summarize = async (tok, extra = {}) => await request(h.base, 'POST', '/api
 
 t.test('boot with a real (non-synthetic) seam provider', async () => {
     seam = await seamServer((b) => ({ text: `summary #${seam.calls}`, usage: { input: 5, output: 2 } }));
-    h = await boot({ env: { AI_STUB_FALLBACK: 'false' } });
+    h = await boot({ env: { AI_STUB_FALLBACK: 'false', AI_OUTPUT_COST_PER_MTOK: '0.5', AI_FREE_PROVIDERS: 'seam' } });
     await request(h.base, 'POST', '/api/v1/providers', { tok: live, body: { key: 'seam', kind: 'http', base_url: seam.url, auth_mode: 'none', capabilities: ['summarize', 'generate', 'chat', 'json'] } });
     await request(h.base, 'POST', '/api/v1/routes/default.chat/versions', { tok: live, body: { primary: { provider: 'seam' }, fallbacks: [] } });
     await request(h.base, 'POST', '/api/v1/routes/live.chat/versions', { tok: live, body: { primary: { provider: 'seam' }, fallbacks: [] } });
