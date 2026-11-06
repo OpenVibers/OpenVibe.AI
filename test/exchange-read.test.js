@@ -161,5 +161,3 @@ t.test('usage: day, model and product aggregates from runs, and never an attribu
     assert.ok(r.body.by_model.some((m) => m.model === 'deepseek-chat' && m.requests === 6));
     assert.doesNotMatch(r.text, /9999|9\.000000/, 'cached and failed runs are not counted');
 });
-
-t.run();
