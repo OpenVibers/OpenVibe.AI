@@ -129,9 +129,11 @@ t.test('usage: day, model and product aggregates from runs, and never an attribu
     for (let i = 0; i < 2; i++) await insertRun({ requester: 'live', provider: 'deepseek', model: 'deepseek-chat', created: at(1), tokensIn: 100, tokensOut: 20, cost: 0.0002 });
     for (let i = 0; i < 3; i++) await insertRun({ requester: 'wiki', provider: 'deepseek', model: 'deepseek-chat', tokensIn: 100, tokensOut: 20, cost: 0.0002 });
     await insertRun({ type: 'app', requester: 'app_ABC', provider: 'deepseek', model: 'deepseek-chat', tokensIn: 100, tokensOut: 20, cost: 0.0002 });
-    // Not usage: a cache hit called no provider, and a failed run answered nothing.
+    // Not usage: a cache hit called no provider, a failed run answered nothing, and a workflow that
+    // finished without an AI call has no model to attribute.
     await insertRun({ status: 'cached', requester: 'live', model: 'gpt-5-nano-2025-08-07', cachedFrom: 'run_source', tokensIn: 9999, tokensOut: 9999, cost: 9 });
     await insertRun({ status: 'failed', requester: 'live', tokensIn: 9999, tokensOut: 9999, cost: 9 });
+    await insertRun({ requester: 'live', tokensIn: 9999, tokensOut: 9999, cost: 9 });
 
     const r = await request(h.base, 'GET', '/api/v1/exchange/usage?days=7');
     assert.strictEqual(r.status, 200, r.text);
@@ -146,6 +148,7 @@ t.test('usage: day, model and product aggregates from runs, and never an attribu
     assert.strictEqual(live.models.length, 2);
     assert.strictEqual(live.models[0].model, 'gpt-5-nano-2025-08-07', 'the model that actually answered');
     assert.strictEqual(live.models[0].requests, 5);
+    assert.ok(live.models.every((m) => m.model), 'a product names only models that actually answered');
     assert.ok(!r.body.by_product.some((p) => p.product.includes('app_')), 'only services are products');
     assert.ok(!r.text.includes('SECRETPERSON') && !r.text.includes('usr_'), 'no person in the aggregate');
     assert.ok(r.body.by_model.some((m) => m.model === 'gpt-5-nano-2025-08-07' && m.requests === 5));
