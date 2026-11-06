@@ -33,7 +33,7 @@ async function insertReceipt({ runId, body }) {
 t.test('boot', async () => {
     // The catalog lists only offers whose key is configured: give the test's providers keys and the shared
     // provider a real OpenAI upstream, as production has.
-    h = await boot({ env: { AI_STUB_FALLBACK: 'false', AI_PROVIDER: 'openai', AI_API_KEY: 'test-openai-key', DEEPSEEK_KEY: 'test-deepseek-key', DEEPINFRA_KEY: 'test-deepinfra-key' } });
+    h = await boot({ env: { AI_STUB_FALLBACK: 'false', AI_PROVIDER: 'openai', AI_API_KEY: 'test-openai-key', DEEPSEEK_KEY: 'test-deepseek-key', DEEPSEEK_API_KEY: 'test-deepseek-key', DEEPINFRA_KEY: 'test-deepinfra-key' } });
 });
 
 t.test('a run id is its registry name plus a revision, never another model', async () => {
@@ -98,8 +98,8 @@ t.test('catalog groups the same model across providers, with prices, speed, upti
     assert.strictEqual(cheap.uptime, null, 'no data is unknown, not 0');
     assert.strictEqual(cheap.requests_7d, 0);
     assert.deepStrictEqual(cheap.speed, { p50_ms: null, p95_ms: null });
-    assert.deepStrictEqual(dear.data_policy, { trains: false, retention_days: 0, region: 'cn' });
-    assert.strictEqual(cheap.data_policy, null, 'unknown stays unknown');
+    assert.deepStrictEqual(dear.data_policy, { trains: false, retention_days: 0, region: 'cn', anonymized: null });
+    assert.strictEqual(cheap.data_policy && cheap.data_policy.trains, false, 'DeepInfra carries its published policy (seeded by AI #307): no training');
     assert.strictEqual(m.requests_7d, 10);
     assert.strictEqual(m.cached_7d, 3);
 });
@@ -123,6 +123,8 @@ t.test('one model by slug, and a miss is a problem document', async () => {
 });
 
 t.test('usage: day, model and product aggregates from runs, and never an attribution', async () => {
+    // The catalog test above recorded runs of its own in this database; usage is counted from a clean table.
+    await h.db.prepare('DELETE FROM runs').run();
     // Live's real traffic is gpt-5-nano even though its route names a DeepSeek model: the run keeps the
     // model that answered, and the product table must show that one.
     for (let i = 0; i < 5; i++) await insertRun({ requester: 'live', provider: 'shared', model: 'gpt-5-nano-2025-08-07', tokensIn: 100, tokensOut: 20, cost: 0.0002 });
@@ -161,3 +163,5 @@ t.test('usage: day, model and product aggregates from runs, and never an attribu
     assert.ok(r.body.by_model.some((m) => m.model === 'deepseek-chat' && m.requests === 6));
     assert.doesNotMatch(r.text, /9999|9\.000000/, 'cached and failed runs are not counted');
 });
+
+t.run();

@@ -105,6 +105,8 @@ function modalitiesOf(row) {
     return [...out];
 }
 
+const usd6 = (n) => (n == null || !Number.isFinite(Number(n)) ? (n ?? null) : Math.round(Number(n) * 1e6) / 1e6);
+
 function createCatalog({ db, registry, pool, env = process.env, clock = { now: () => Date.now() }, config = null }) {
     // The free-tier admission rules are the router's (server/free-tier.js): the catalog marks an offer with what
     // the free allowance and the anonymous Try it may actually use. config.freeUse is fixed at boot, like the
@@ -161,7 +163,8 @@ function createCatalog({ db, registry, pool, env = process.env, clock = { now: (
                 // capacity with no per-token card): both its provider is a named AI_FREE_PROVIDERS source and its
                 // output price is at or below AI_FREE_MAX_OUTPUT_PRICE_USD_PER_MTOK.
                 free_tier: allowsOffer({ providerKey: provider.key, providerRecord: provider, outputPrice: price ? price.out : null }, freeUse),
-                price: price ? { in: price.in, out: price.out, cached: price.cached, per: '1M tokens', currency: 'USD' } : null,
+                // Rounded to the micro-dollar: a derived cached price was printed as 0.020000000000000004.
+                price: price ? { in: usd6(price.in), out: usd6(price.out), cached: usd6(price.cached), per: '1M tokens', currency: 'USD' } : null,
                 // Where the number came from and when someone checked it; null when nobody recorded it.
                 price_source: cards && cards.out.source && !String(cards.out.source).startsWith('urn:openvibe:ai:unverified:') ? cards.out.source : null,
                 price_checked_at: cards && cards.out.verified_at && cards.out.verified_at !== rates.UNKNOWN_DATE ? cards.out.verified_at : null,
