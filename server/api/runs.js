@@ -34,8 +34,8 @@ const { appMayRun, appAttribution, DIRECT_OPS } = require('../apps');
 
 function runsRouter({ runs, registry, auth, config, log = console }) {
     const r = express.Router();
-    const create = auth.requireCap(CAPS.runCreate);
-    const read = auth.requireCap(CAPS.runRead, CAPS.runCreate, CAPS.usageRead);
+    const create = auth.personOrCap(CAPS.runCreate);
+    const read = auth.personOrCap(CAPS.runRead, CAPS.runCreate, CAPS.usageRead);
     // The routes a developer app may use: the six direct operations and GET /runs/:id.
     const createApp = auth.appOrCap(CAPS.appRun, CAPS.runCreate);
     const readApp = auth.appOrCap(CAPS.appRun, CAPS.runRead, CAPS.runCreate, CAPS.usageRead);

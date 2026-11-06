@@ -97,6 +97,25 @@ t.test('an app token works, and its run is its project\'s', async () => {
     assert.match(JSON.stringify(run.body.run.attribution || {}), new RegExp(PRJ));
 });
 
+t.test('a service acting for a person names them: the run is theirs (the claim, or the x_openvibe extension)', async () => {
+    const USR = 'usr_01JAB2C3D4E5F6G7H8J9K0MNPQ';
+    const acting = token('actor', ALL, { extra: { on_behalf_of: USR } });
+    const claimed = await post({ model: 'openvibe', messages: [{ role: 'user', content: 'For a person' }] }, acting);
+    assert.strictEqual(claimed.status, 200, claimed.text);
+    const runFor = async (id) => (await request(h.base, 'GET', `/api/v1/runs/${id}`, { tok: service })).body.run;
+    assert.deepStrictEqual((await runFor(claimed.body.x_openvibe.run_id)).on_behalf_of, { type: 'user', id: USR }, 'the token\'s claim is the run\'s person');
+    const supplied = await post({ model: 'openvibe', messages: [{ role: 'user', content: 'For a person' }], x_openvibe: { on_behalf_of: { type: 'user', id: USR } } });
+    assert.strictEqual(supplied.status, 200, supplied.text);
+    assert.deepStrictEqual((await runFor(supplied.body.x_openvibe.run_id)).on_behalf_of, { type: 'user', id: USR }, 'the extension is the run\'s person');
+    const bad = await post({ model: 'openvibe', messages: [{ role: 'user', content: 'x' }], x_openvibe: { on_behalf_of: { type: 'user', id: 'nobody' } } });
+    assert.strictEqual(bad.status, 400, 'a bad SubjectRef is refused before the run');
+    assert.strictEqual(bad.body.error.type, 'invalid_request_error');
+    const swapped = await post({ model: 'openvibe', messages: [{ role: 'user', content: 'x' }], x_openvibe: { on_behalf_of: { type: 'user', id: 'usr_01JAB2C3D4E5F6G7H8J9K0MNP1' } } }, acting);
+    assert.deepStrictEqual([swapped.status, swapped.body.error.code], [403, 'capability.denied'], 'a run token cannot name someone else');
+    const denied = await post({ model: 'openvibe', messages: [{ role: 'user', content: 'x' }], x_openvibe: { on_behalf_of: { type: 'user', id: USR } } }, app);
+    assert.deepStrictEqual([denied.status, denied.body.error.code], [403, 'capability.denied'], 'an app run never names a person');
+});
+
 t.test('errors come in OpenAI\'s shape: no token, no messages, n > 1', async () => {
     const none = await request(h.base, 'POST', '/v1/chat/completions', { body: { messages: [{ role: 'user', content: 'x' }] } });
     assert.strictEqual(none.status, 401);

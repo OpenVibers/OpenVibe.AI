@@ -192,6 +192,16 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         if (body.version && !['active', 'deprecated'].includes(wf.status)) throw new AiError(409, 'workflow.inactive', `${wfKey} v${wf.version} is ${wf.status}`);
         const pinned = routePinRequest(body.route, principal, wf);
         if (pinned && body.credential != null) throw new AiError(422, 'input.invalid', 'a pinned route cannot be combined with a person\'s credential; the pin is the provider');
+        // A run token names the person it acts for (Codes C3, `on_behalf_of` in the claims). The run records that
+        // person exactly as a body field would, so they pay, the run is theirs and caches never cross persons. The
+        // body may repeat the claim but never change it; an app's run is its project's (server/api/runs.js appBody),
+        // so the claim is left alone there.
+        if (principal.kind !== 'app' && principal.onBehalfOf != null) {
+            const claimed = String(principal.onBehalfOf);
+            const given = body.on_behalf_of && body.on_behalf_of.id != null ? String(body.on_behalf_of.id) : null;
+            if (given != null && given !== claimed) throw new AiError(403, 'capability.denied', 'on_behalf_of does not match the token');
+            if (body.on_behalf_of == null) body = { ...body, on_behalf_of: { type: 'user', id: claimed } };
+        }
         validateRefs(body);
         const input = body.input === undefined ? {} : body.input;
         const inputJson = stableStringify(input);
@@ -260,7 +270,23 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         // the run is uncached and no network budget or tier holds it: their own key is free to them, and a $0 balance
         // must never block it. If it falls back to the network, the usage is still recorded after the fact.
         const personSubject = body.on_behalf_of && body.on_behalf_of.type === 'user' && typeof body.on_behalf_of.id === 'string' ? body.on_behalf_of.id : null;
-        const selfKeys = Boolean(credentials && personSubject && credentialSubject === null && !projectProvider && !pinned && await credentials.hasSelf(personSubject));
+        // A person running with their own token: the run is theirs. They may only name themselves, and their own
+        // allowance or Balance pays. A service naming a person (body, x_openvibe, or a run token claim) draws only
+        // that person's free allowance and cache scope, never their Balance, until the person authorises the charge
+        // with a subject assertion (H1, openvibe-sdk #122; not accepted yet).
+        const personOwnToken = principal.kind === 'user' && requester.type === 'user';
+        if (personOwnToken && personSubject && personSubject !== requester.id) {
+            throw new AiError(403, 'capability.denied', 'a person runs for themselves, never for someone else');
+        }
+        const runPerson = personOwnToken ? requester.id : personSubject;
+        const personPays = Boolean(runPerson) && personOwnToken;
+        // The calling service's own budget (a run token's registered budget): with it, a run for a named person may
+        // use paid capacity, counted against that budget; without it, only free capacity serves the run.
+        const tokenBudget = runBudgets && principal.jti ? await runBudgets.spent(principal.jti) : null;
+        const serviceBudgeted = Boolean(tokenBudget && (tokenBudget.budget_usd != null || tokenBudget.budget_tokens != null));
+        // The injected run record names the person a user runs for, so preferences and cache scope follow them.
+        if (runPerson && !personSubject) body = { ...body, on_behalf_of: { type: 'user', id: runPerson } };
+        const selfKeys = Boolean(credentials && runPerson && credentialSubject === null && !projectProvider && !pinned && await credentials.hasSelf(runPerson));
         // The budget a Codes run token carries (Codes C3): a run that is over its budget is refused before
         // any provider call. The budget lives here, not in the token, so the holder of the token cannot raise it.
         if (runBudgets && principal.jti) {
@@ -278,7 +304,10 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             actorKey: subjectKey(body.on_behalf_of), targetKey: entityKey(body.target), attributionKey: entityKey(body.attribution), workflowKey: wf.key,
             ...(app ? { appRun: true, projectId: app.projectId, sandbox: app.sandbox, appId: principal.appId } : {}),
             // Who pays a Balance hold (D12): the app and its project, else the person a token acts for, else the service.
-            onBehalfOf: personSubject || principal.onBehalfOf || null,
+            onBehalfOf: runPerson || principal.onBehalfOf || null,
+            // Only the person's own token may hold their Balance; a service naming them draws free capacity only
+            // (or its own run-token budget). The run still records the person, so preferences and cache follow them.
+            personSubject: runPerson || null, personPays, serviceBudgeted,
             // A credential or a project's own provider never reaches managed supply: no Balance hold for that run.
             ...(credentialSubject !== null || projectProvider ? { byok: true } : {}),
             ...(maxCostNano != null ? { maxCostNano: String(maxCostNano) } : {}),
@@ -304,7 +333,8 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             input: null, input_hash: inputHash, idempotency_key: idem, trace_id: trace, request_id: requestId, retry_of: retryOf,
             options: JSON.stringify({ cache: options.cache !== false && credentialSubject === null && !projectProvider && !pinned && !selfKeys && !communityOptIn, debug: Boolean(options.debug), input_retained: kept.full,
                 ...(credentialSubject !== null ? { credential_subject: credentialSubject } : {}), ...(credentialProvider !== null ? { credential_provider: credentialProvider } : {}),
-                ...(selfKeys ? { self_subject: personSubject } : {}),
+                ...(selfKeys ? { self_subject: runPerson } : {}),
+                ...(runPerson ? { person_pays: personPays } : {}),
                 ...(projectProvider ? { project_provider: projectProvider } : {}), ...(pinned ? { pinned_offer: pinned } : {}),
                 ...(communityOptIn ? { community: true } : {}), ...(prefer ? { prefer } : {}) }), created_at: now,
         };
@@ -569,10 +599,12 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             // default). A run with no project to bill (a first-party service, a cache hit, BYOK) begins no session
             // and never touches Billing.
             if (credits && credits.enabled) {
-                credit = credits.begin({ requestId: row.request_id || id, ctx, input, attribution: parseJson(row.attribution, null), onBehalfOf: ctx.onBehalfOf || null });
+                credit = credits.begin({ requestId: row.request_id || id, ctx, input, attribution: parseJson(row.attribution, null), onBehalfOf: ctx.onBehalfOf || null, personPayer: ctx.personPays !== false });
                 // No payer (or no project) on a run that is not BYOK: the pool must not serve a paid managed offer
-                // with a versioned card, because nobody could be charged for it.
-                ctx.creditsRequired = !credit && !ctx.byok;
+                // with a versioned card, because nobody could be charged for it. The exception is a calling service's
+                // own run-token budget: it pays for the run, counted against that budget, and the person's Balance is
+                // never touched.
+                ctx.creditsRequired = !credit && !ctx.byok && !ctx.serviceBudgeted;
             }
             billingDelta = typeof ctx.onDelta === 'function'
                 ? (credit ? (d) => { credit.observe(d); ctx.onDelta(d); } : ctx.onDelta)
@@ -659,8 +691,18 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         } catch (err) {
             const interrupted = shuttingDown && controller.signal.aborted;
             const cancelled = !interrupted && (controller.signal.aborted || (err && err.code === 'run.cancelled'));
-            const code = interrupted ? 'run.interrupted' : cancelled ? 'run.cancelled' : (err instanceof AiError ? err.code : 'run.internal');
-            const detail = interrupted ? 'the service shut down while this run was in progress' : cancelled ? 'cancelled' : (err instanceof AiError ? err.detail : 'internal error');
+            let code = interrupted ? 'run.interrupted' : cancelled ? 'run.cancelled' : (err instanceof AiError ? err.code : 'run.internal');
+            let detail = interrupted ? 'the service shut down while this run was in progress' : cancelled ? 'cancelled' : (err instanceof AiError ? err.detail : 'internal error');
+            // A service naming a person may draw only their free allowance. When that is spent and the service has no
+            // budget of its own, say so plainly (402) instead of "no provider could answer": the person's Balance is
+            // never touched for a run they did not start themselves.
+            const tried = err instanceof AiError && err.extra && Array.isArray(err.extra.tried) ? err.extra.tried : [];
+            const payerSkipped = tried.some((t) => t && t.skipped === 'payer_required');
+            if (ctx.personPays === false && ctx.personSubject && !ctx.serviceBudgeted
+                && (code === 'billing.payer_required' || (code === 'provider.unavailable' && payerSkipped))) {
+                code = 'ai.allowance_spent';
+                detail = `The free AI allowance for ${ctx.personSubject} is spent, and the calling service has no budget to cover this run. Add a key for the person, or wait for the allowance to reset.`;
+            }
             if (!(err instanceof AiError) && !cancelled) log.error(`[runs] ${id} crashed: ${err && err.stack || err}`);
             const extra = err instanceof AiError && err.extra ? JSON.stringify(err.extra).slice(0, 2000) : null;
             const explain = err instanceof AiError && err.extra && err.extra.explain ? JSON.stringify(err.extra.explain) : null;
