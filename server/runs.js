@@ -106,7 +106,7 @@ function routePinRequest(value, principal, wf) {
     return { provider, model };
 }
 
-function createRuns({ db, registry, engine, cache, quotas, config, clock = { now: () => Date.now() }, log = console, userModules = null, credentials = null, preferences: personPreferences = null, tiers = null, projectSecrets = null, pool = null, runBudgets = null, credits = null, presets = null, receipts = null }) {
+function createRuns({ db, registry, engine, cache, quotas, config, clock = { now: () => Date.now() }, log = console, userModules = null, credentials = null, preferences: personPreferences = null, tiers = null, projectSecrets = null, pool = null, runBudgets = null, credits = null, community = null, presets = null, receipts = null }) {
     const inflight = new Map();     // run id -> { controller, promise, release, caller }
     const queue = [];               // run ids waiting for the worker
     let active = 0;
@@ -195,6 +195,16 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         if (body.version && !['active', 'deprecated'].includes(wf.status)) throw new AiError(409, 'workflow.inactive', `${wfKey} v${wf.version} is ${wf.status}`);
         const pinned = routePinRequest(body.route, principal, wf);
         if (pinned && body.credential != null) throw new AiError(422, 'input.invalid', 'a pinned route cannot be combined with a person\'s credential; the pin is the provider');
+        // A run token names the person it acts for (Codes C3, `on_behalf_of` in the claims). The run records that
+        // person exactly as a body field would, so they pay, the run is theirs and caches never cross persons. The
+        // body may repeat the claim but never change it; an app's run is its project's (server/api/runs.js appBody),
+        // so the claim is left alone there.
+        if (principal.kind !== 'app' && principal.onBehalfOf != null) {
+            const claimed = String(principal.onBehalfOf);
+            const given = body.on_behalf_of && body.on_behalf_of.id != null ? String(body.on_behalf_of.id) : null;
+            if (given != null && given !== claimed) throw new AiError(403, 'capability.denied', 'on_behalf_of does not match the token');
+            if (body.on_behalf_of == null) body = { ...body, on_behalf_of: { type: 'user', id: claimed } };
+        }
         validateRefs(body);
         // The Exchange remake's content policy. It is a control field, never part of the workflow's input; the pool
         // enforces the 18+ gate and the offer filter (server/providers/index.js), and the answer carries the label.
@@ -242,6 +252,9 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             }
         }
         const options = body.options && typeof body.options === 'object' ? body.options : {};
+        // Community capacity is opt-in per request: a person's machine sees the prompt, so only a caller that says so
+        // may be placed there. The OpenAI and Messages routes set body.community from x-openvibe-community.
+        let communityOptIn = body.community === true || options.community === true;
         // A person's own key (WS-O task 2): only the service that stored it, within its daily budget; never cached.
         // A person's own key: the default one, or the provider the run names (Codes C3: one credential per provider).
         const credentialSubject = body.credential && typeof body.credential === 'object' ? String(body.credential.subject || '') : null;
@@ -266,6 +279,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             if (!name) throw new AiError(422, 'input.invalid', 'a preset must name itself');
             presetPolicy = presets ? presets.normalizePolicy(preset.policy) : (preset.policy && typeof preset.policy === 'object' ? preset.policy : {});
         }
+        if (presetPolicy && typeof presetPolicy.community === 'boolean') communityOptIn = presetPolicy.community;
         if (projectProvider) {
             if (!app) throw new AiError(403, 'capability.denied', 'only a developer app names its project\'s own provider');
             if (wf.key !== 'ai.complete') throw new AiError(422, 'input.invalid', 'a project provider is used for ai.complete only');
@@ -275,7 +289,23 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         // the run is uncached and no network budget or tier holds it: their own key is free to them, and a $0 balance
         // must never block it. If it falls back to the network, the usage is still recorded after the fact.
         const personSubject = body.on_behalf_of && body.on_behalf_of.type === 'user' && typeof body.on_behalf_of.id === 'string' ? body.on_behalf_of.id : null;
-        const selfKeys = Boolean(credentials && personSubject && credentialSubject === null && !projectProvider && !pinned && await credentials.hasSelf(personSubject));
+        // A person running with their own token: the run is theirs. They may only name themselves, and their own
+        // allowance or Balance pays. A service naming a person (body, x_openvibe, or a run token claim) draws only
+        // that person's free allowance and cache scope, never their Balance, until the person authorises the charge
+        // with a subject assertion (H1, openvibe-sdk #122; not accepted yet).
+        const personOwnToken = principal.kind === 'user' && requester.type === 'user';
+        if (personOwnToken && personSubject && personSubject !== requester.id) {
+            throw new AiError(403, 'capability.denied', 'a person runs for themselves, never for someone else');
+        }
+        const runPerson = personOwnToken ? requester.id : personSubject;
+        const personPays = Boolean(runPerson) && personOwnToken;
+        // The calling service's own budget (a run token's registered budget): with it, a run for a named person may
+        // use paid capacity, counted against that budget; without it, only free capacity serves the run.
+        const tokenBudget = runBudgets && principal.jti ? await runBudgets.spent(principal.jti) : null;
+        const serviceBudgeted = Boolean(tokenBudget && (tokenBudget.budget_usd != null || tokenBudget.budget_tokens != null));
+        // The injected run record names the person a user runs for, so preferences and cache scope follow them.
+        if (runPerson && !personSubject) body = { ...body, on_behalf_of: { type: 'user', id: runPerson } };
+        const selfKeys = Boolean(credentials && runPerson && credentialSubject === null && !projectProvider && !pinned && await credentials.hasSelf(runPerson));
         // The budget a Codes run token carries (Codes C3): a run that is over its budget is refused before
         // any provider call. The budget lives here, not in the token, so the holder of the token cannot raise it.
         if (runBudgets && principal.jti) {
@@ -293,11 +323,14 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             actorKey: subjectKey(body.on_behalf_of), targetKey: entityKey(body.target), attributionKey: entityKey(body.attribution), workflowKey: wf.key,
             ...(app ? { appRun: true, projectId: app.projectId, sandbox: app.sandbox, appId: principal.appId } : {}),
             // Who pays a Balance hold (D12): the app and its project, else the person a token acts for, else the service.
-            onBehalfOf: personSubject || principal.onBehalfOf || null,
+            onBehalfOf: runPerson || principal.onBehalfOf || null,
+            // A service naming a person draws free capacity, while the person's own token may use their Balance.
+            personSubject: runPerson || null, personPays, serviceBudgeted,
             ...(contentPolicy !== 'standard' ? { contentPolicy } : {}),
             // A credential or a project's own provider never reaches managed supply: no Balance hold for that run.
             ...(credentialSubject !== null || projectProvider ? { byok: true } : {}),
             ...(maxCostNano != null ? { maxCostNano: String(maxCostNano) } : {}),
+            ...(communityOptIn ? { communityOptIn: true } : {}),
             ...(pinned ? { routePin: pinned } : {}),
             // The preset's policy, and the name it was named by: the router filters the offers with the policy.
             ...(preset ? { presetPolicy, presetName: String(preset.name).trim() } : {}),
@@ -319,11 +352,13 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             source_service: requester.type === 'service' ? requester.id : null,
             target: body.target ? JSON.stringify(body.target) : null, target_key: ctx.targetKey,
             input: null, input_hash: inputHash, idempotency_key: idem, trace_id: trace, request_id: requestId, retry_of: retryOf,
-            options: JSON.stringify({ cache: options.cache !== false && credentialSubject === null && !projectProvider && !pinned && !selfKeys, debug: Boolean(options.debug), input_retained: kept.full,
+            options: JSON.stringify({ cache: options.cache !== false && credentialSubject === null && !projectProvider && !pinned && !selfKeys && !communityOptIn, debug: Boolean(options.debug), input_retained: kept.full,
                 ...(credentialSubject !== null ? { credential_subject: credentialSubject } : {}), ...(credentialProvider !== null ? { credential_provider: credentialProvider } : {}),
-                ...(selfKeys ? { self_subject: personSubject } : {}),
+                ...(selfKeys ? { self_subject: runPerson } : {}),
+                ...(runPerson ? { person_pays: personPays } : {}),
                 ...(projectProvider ? { project_provider: projectProvider } : {}), ...(pinned ? { pinned_offer: pinned } : {}),
-                ...(prefer ? { prefer } : {}), ...(contentPolicy !== 'standard' ? { policy: contentPolicy } : {}),
+                ...(communityOptIn ? { community: true } : {}), ...(prefer ? { prefer } : {}),
+                ...(contentPolicy !== 'standard' ? { policy: contentPolicy } : {}),
                 ...(preset ? { preset: { name: String(preset.name).trim(), scope: preset.scope || 'owner', policy: presetPolicy } } : {}) }), created_at: now,
         };
         base.input = stableStringify(kept.value);
@@ -332,9 +367,8 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         // A pinned run is never served from (or written to) the shared cache: the caller asked for THIS model,
         // and another model's answer under the same prompt would silently break the pin. A run that may use the
         // person's own key is never cached either: their key must be used, and the answer is theirs, not the scope's.
-        // The adult tier is never cached: its answer is labelled, and a standard request must never be served it (or
-        // the other way round) from a shared cache entry keyed only on the workflow and the input.
-        const scope = options.cache === false || credentialSubject !== null || projectProvider || pinned || selfKeys || contentPolicy !== 'standard' ? null : cache.scopeFor(wf.cache_mode, ctx);
+        // A community or adult-tier answer cannot be reused by a request without the same policy.
+        const scope = options.cache === false || credentialSubject !== null || projectProvider || pinned || selfKeys || communityOptIn || contentPolicy !== 'standard' ? null : cache.scopeFor(wf.cache_mode, ctx);
         let cacheKey = null;
         if (scope) {
             // Some workflows key the cache on less than their whole input (hooks.js CACHE_INPUT: a signed URL's signature).
@@ -377,6 +411,8 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
 
         // Queue caps, then quota: both before any provider call (a refused run is not counted).
         const caller = `${requester.type}:${requester.id}`;
+        // Kudos bought with volunteer service start this run earlier in the queue (never cash, never a bypass of limits).
+        const priority = community && typeof community.queuePriority === 'function' ? await community.queuePriority(ctx.onBehalfOf).catch(() => 0) : 0;
         admit(caller);
         // A run with a person's own key spends their money, not the shared quotas (its own budget was checked above).
         // The tier budgets (server/govern.js, AI_GOVERN_TIERS) hold first, so a run they refuse is not counted by reserve().
@@ -413,7 +449,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         const gate = new Promise((r) => { release = r; });
         // Whatever the run's end, a tier hold it did not settle (accounted) goes back.
         const promise = gate.then(async () => { try { await execute(id, { controller, reserved, scope, ctx, input, hold }); } finally { if (hold) await tiers.release(hold); } }).catch((err) => { log.error(`[runs] ${id}: ${err.stack || err}`); });
-        inflight.set(id, { controller, promise, release, caller });
+        inflight.set(id, { controller, promise, release, caller, priority });
         queue.push(id);
         pump();
         return { run: await get(id), created: true, promise };
@@ -431,7 +467,14 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
 
     function pump() {
         while (active < config.runs.maxConcurrent && queue.length) {
-            const id = queue.shift();
+            // The highest kudos priority first; equal priorities keep their arrival order.
+            let at = 0;
+            for (let i = 1; i < queue.length; i++) {
+                const have = inflight.get(queue[at]);
+                const next = inflight.get(queue[i]);
+                if (next && (!have || (next.priority || 0) > (have.priority || 0))) at = i;
+            }
+            const [id] = queue.splice(at, 1);
             const h = inflight.get(id);
             if (!h) continue;
             active++;
@@ -518,7 +561,10 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             } : null;
             const record = (answerProvider ? await registry.getProvider(answerProvider) : null)
                 || (credentialProvider ? await registry.getProvider(credentialProvider) : null);
-            const label = privacy.labelFor({ record, credential: byok ? { provider: credentialProvider } : null });
+            const communityAnswer = Boolean(answerProvider && String(answerProvider).startsWith('community:')) || Boolean(explain && explain.community);
+            const label = communityAnswer
+                ? privacy.labelFor({ record: { metadata: { data_policy: { trust: 'community' } } } })
+                : privacy.labelFor({ record, credential: byok ? { provider: credentialProvider } : null });
             const paidBy = (payer && payer.paid_by) || 'openvibe_key';
             const feeRate = paidBy === 'openvibe_key' ? Number((config.usage && config.usage.feeRate) || 0) : 0;
             const opts = parseJson(row.options, {});
@@ -646,10 +692,12 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             // default). A run with no project to bill (a first-party service, a cache hit, BYOK) begins no session
             // and never touches Billing.
             if (credits && credits.enabled) {
-                credit = credits.begin({ requestId: row.request_id || id, ctx, input, attribution: parseJson(row.attribution, null), onBehalfOf: ctx.onBehalfOf || null });
+                credit = credits.begin({ requestId: row.request_id || id, ctx, input, attribution: parseJson(row.attribution, null), onBehalfOf: ctx.onBehalfOf || null, personPayer: ctx.personPays !== false });
                 // No payer (or no project) on a run that is not BYOK: the pool must not serve a paid managed offer
-                // with a versioned card, because nobody could be charged for it.
-                ctx.creditsRequired = !credit && !ctx.byok;
+                // with a versioned card, because nobody could be charged for it. The exception is a calling service's
+                // own run-token budget: it pays for the run, counted against that budget, and the person's Balance is
+                // never touched.
+                ctx.creditsRequired = !credit && !ctx.byok && !ctx.serviceBudgeted;
             }
             billingDelta = typeof ctx.onDelta === 'function'
                 ? (credit ? (d) => { credit.observe(d); ctx.onDelta(d); } : ctx.onDelta)
@@ -680,6 +728,9 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                 const changed = await credentials.markFailed(failure.owner, failure.subject, failure.provider, failure.error);
                 if (changed) await events.credentialFailed({ subject: failure.subject, provider: failure.provider, error: failure.error, owner: failure.owner });
             } : undefined;
+            // With Credits off there is no Balance payer at all, so every run is the free tier for a new community machine;
+            // with it on only a run that could not hold a paid offer is.
+            const communityFree = !(credits && credits.enabled) || Boolean(ctx.creditsRequired);
             const r = await engine.execute(wf, row, input, { signal: controller.signal, logRequest, debugRaw: Boolean(config.debugRawLog && opts.debug), inputHash: row.input_hash, preferences,
                 // A developer app's run (ADR-014): the provider pool excludes a person's byok key, and the run is
                 // limited to free and local capacity when it is a sandbox run or when no tier budget governs its
@@ -689,6 +740,9 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                 requesterType: ctx.requesterType, requesterId: ctx.requesterId,
                 // AI Exchange F: no payer on this run (and not BYOK): the pool skips paid offers with a card.
                 creditsRequired: Boolean(ctx.creditsRequired),
+                // Opted in to community capacity: the pool may place this run on a person's machine.
+                communityOptIn: Boolean(ctx.communityOptIn),
+                communityFree,
                 ...(ctx.routePin ? { routePin: ctx.routePin } : {}),
                 // L37: the soft preference the caller made (provider, and a model if it named one).
                 prefer: opts.prefer || null,
@@ -749,8 +803,18 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         } catch (err) {
             const interrupted = shuttingDown && controller.signal.aborted;
             const cancelled = !interrupted && (controller.signal.aborted || (err && err.code === 'run.cancelled'));
-            const code = interrupted ? 'run.interrupted' : cancelled ? 'run.cancelled' : (err instanceof AiError ? err.code : 'run.internal');
-            const detail = interrupted ? 'the service shut down while this run was in progress' : cancelled ? 'cancelled' : (err instanceof AiError ? err.detail : 'internal error');
+            let code = interrupted ? 'run.interrupted' : cancelled ? 'run.cancelled' : (err instanceof AiError ? err.code : 'run.internal');
+            let detail = interrupted ? 'the service shut down while this run was in progress' : cancelled ? 'cancelled' : (err instanceof AiError ? err.detail : 'internal error');
+            // A service naming a person may draw only their free allowance. When that is spent and the service has no
+            // budget of its own, say so plainly (402) instead of "no provider could answer": the person's Balance is
+            // never touched for a run they did not start themselves.
+            const tried = err instanceof AiError && err.extra && Array.isArray(err.extra.tried) ? err.extra.tried : [];
+            const payerSkipped = tried.some((t) => t && t.skipped === 'payer_required');
+            if (ctx.personPays === false && ctx.personSubject && !ctx.serviceBudgeted
+                && (code === 'billing.payer_required' || (code === 'provider.unavailable' && payerSkipped))) {
+                code = 'ai.allowance_spent';
+                detail = `The free AI allowance for ${ctx.personSubject} is spent, and the calling service has no budget to cover this run. Add a key for the person, or wait for the allowance to reset.`;
+            }
             if (!(err instanceof AiError) && !cancelled) log.error(`[runs] ${id} crashed: ${err && err.stack || err}`);
             const extra = err instanceof AiError && err.extra ? JSON.stringify(err.extra).slice(0, 2000) : null;
             const explain = err instanceof AiError && err.extra && err.extra.explain ? JSON.stringify(err.extra.explain) : null;

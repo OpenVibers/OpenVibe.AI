@@ -32,7 +32,7 @@ const { AiError } = require('./util');
 const { gracefulStop, telemetry } = require('openvibe-sdk/service');
 const { createPgTelemetrySink, startTelemetryRetention } = require('openvibe-sdk/telemetry');
 
-async function start({ config, db: givenDb = null, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, listen = true, credentialFetch = null, valkey = null, research = null, machineModels = null, variantEvidence = null } = {}) {
+async function start({ config, db: givenDb = null, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, listen = true, credentialFetch = null, valkey = null, research = null, machineModels = null, variantEvidence = null, community: givenCommunity = null } = {}) {
     config = config || load(env);
     schemas.configure(config.schemaCache);
     // PostgreSQL (ADR-035): opened and migrated here unless the caller (a test) hands in a migrated handle.
@@ -56,17 +56,22 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     const vault = require('./vault').createVault({ settings, clock, log });
     await require('./vault').migrate({ db, config, settings, log }).catch((err) => log.warn(`[Vault] migration failed: ${err.message}`));
     await vault.load().catch((err) => log.warn(`[Vault] ${err.message}`));
+    // A person's own machine as their model (server/machines.js), shared with community offers: both reach a machine
+    // only through OpenVibe.Bot's bot.machine.ai.
+    const machines = machineModels || require('./machines').createMachineModels({ config, env, fetchImpl });
+    // Community AI offers (the design's "Offer to the network"; plan E4): read Network's user-owned offers, verify a
+    // machine before traffic, and keep its seller ledger. Empty without a Network service secret or Bot.
+    const community = givenCommunity || require('./community').createCommunity({ db, config, env, machines, clock, fetchImpl, log });
     // BENCH-11: Bench's ratings as routing evidence, and the opted-in tie rule inside placement.
     const bench = createBenchEvidence({ db, registry, config, clock, fetchImpl, log });
-    // The Exchange remake's uncensored tier: Network owns the 18+ account flag, AI asks it (five-minute cache, fail
-    // closed) before an uncensored request is admitted (server/policy/adult-status.js).
+    // Network owns the 18+ account flag; the adult tier checks it before placement.
     const adultStatus = require('./policy/adult-status').createAdultStatus({ config, env, fetchImpl, clock, log });
-    const pool = createProviderPool({ db, registry, config, clock, fetchImpl, env, log, credentialFetch, machineModels, bench, variantEvidence, adultStatus });
+    const pool = createProviderPool({ db, registry, config, clock, fetchImpl, env, log, credentialFetch, machineModels: machines, community, bench, variantEvidence, adultStatus });
     // T6 step 8: the SaaS tier budgets on openvibe-sdk/govern in Valkey (server/govern.js); off unless AI_GOVERN_TIERS=1.
     const tiers = createTiers({ config, valkey, clock, log });
     // §2.1.8: the provider free allowance per subject, priced off the pool's own rate cards (server/free-allowance.js);
     // with the tiers on, its counter is in their Valkey store.
-    const freeAllowance = createFreeAllowance(db, { cardsFor: pool.rateCardsFor, clock, store: tiers.freeStore });
+    const freeAllowance = createFreeAllowance(db, { cardsFor: pool.rateCardsFor, clock, store: tiers.freeStore, bonusFor: (subject) => community.kudosBonus(subject) });
     const quotas = createQuotas(db, { clock, registry, freeAllowance, tiers });
     // The budget a Codes run token carries (Codes C3), and what that run has spent.
     const runBudgets = createRunBudgets(db, { clock });
@@ -109,7 +114,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         startSettlements() { return credits ? credits.startSettlements() : null; },
         stopSettlements() { return credits ? credits.stopSettlements() : undefined; },
     };
-    const runs = createRuns({ db, registry, engine, cache, quotas, config, clock, log, userModules, credentials, preferences, tiers, projectSecrets, pool, runBudgets, credits: creditsRef, presets, receipts });
+    const runs = createRuns({ db, registry, engine, cache, quotas, config, clock, log, userModules, credentials, preferences, tiers, projectSecrets, pool, runBudgets, credits: creditsRef, community, presets, receipts });
     await seed({ registry, quotas, config, env, db });
     // The seed creates or moves providers from the environment: publish their origins (the schema and every key's
     // bind follow), so a key is bound to the host it is for from the first boot.
@@ -125,9 +130,12 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     const auth = createAuth({ config, log });
     // The person's memory (Memory M2a): sealed item text, the profile cache and the agent-read audit.
     const memory = require('./memory').createMemory({ db, config, clock, log, registry, pool });
-    // The store's own maintenance (Memory M2c): owner by owner, with a per-run cap. It is off in test mode and off
-    // while a provider is in a drill (server/memory/jobs.js).
-    const memoryJobs = require('./memory/jobs').createMemoryJobs({ memory, config, clock, log, registry });
+    // The cloud import (Memory M3): parse an export into a sealed, two-hour preview. No note goes to the store
+    // until the person chooses it.
+    const memoryImport = require('./memory/import').createMemoryImport({ memory, db, config, clock, log });
+    // The store's own maintenance (Memory M2c/M3): owner by owner, with a per-run cap, and the expired import
+    // drafts. It is off in test mode and off while a provider is in a drill (server/memory/jobs.js).
+    const memoryJobs = require('./memory/jobs').createMemoryJobs({ memory, memoryImport, config, clock, log, registry });
     // The Events consumer side: a signed bench.rating.changed webhook, subscribed at boot (server/bench/events.js).
     const accountData = accountDataLib.create({ db, log, memory });
     const accountSend = env.OV_OAUTH_CLIENT_SECRET ? createNetworkSender({
@@ -135,7 +143,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         clientSecret: env.OV_OAUTH_CLIENT_SECRET, fetch: fetchImpl,
     }) : null;
     const benchEvents = createBenchEvents({ bench, accountData, accountSend, config, log, fetchImpl, clientSecret: env.OV_OAUTH_CLIENT_SECRET });
-    const app = createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, grants, vault, settings, benchEvents, runBudgets, memory, presets, receipts });
+    const app = createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, grants, vault, settings, benchEvents, runBudgets, memory, memoryImport, community, presets, receipts });
     let jwks = null;
     let keyLoaded = Promise.resolve(null);
     if (!keys.pinned && config.nodeEnv !== 'test') {
@@ -209,7 +217,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         if (!givenDb) await db.close();
     }
 
-    return { config, db, registry, pool, quotas, tiers, cache, fetcher, engine, runs, keys, keyLoaded, auth, app, server, bench, benchEvents, memory, memoryJobs, credits: creditsRef, settings, vault, close };
+    return { config, db, registry, pool, quotas, tiers, cache, fetcher, engine, runs, keys, keyLoaded, auth, app, server, bench, benchEvents, memory, memoryJobs, credits: creditsRef, settings, vault, community, close };
 }
 
 if (require.main === module) {

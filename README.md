@@ -258,7 +258,7 @@ coding agents, Codes' harnesses) points its base URL at `https://ai.openvibe.ser
 
 The Exchange's routing profiles and the receipt of every answer (the plan of 2026-11-06, "Product lines
 and features", item 1). `server/exchange/` holds the four parts: `presets.js`, `privacy.js`,
-`constraints.js` and `receipts.js`; `server/api/exchange.js` serves them and `migrations/0029_exchange_presets_receipts.sql`
+`constraints.js` and `receipts.js`; `server/api/exchange.js` serves them and `migrations/0031_exchange_presets_receipts.sql`
 holds them.
 
 ### Presets
@@ -505,6 +505,7 @@ definition, but never over an admin's version.
 | `http` | The local HTTP seam: `POST {operation, …}` → `{text, json, usage}` | `AI_HTTP_SEAM_URL` or the admin API |
 | `whisper` | whisper.cpp on this host, with Live's VAD, hallucination filter, multilingual model and live/batch lanes; NVIDIA Parakeet TDT 0.6B v3 (`parakeet-cli`) for English and 24 European languages when `PARAKEET_MODEL` is set, falling back to whisper | `WHISPER_*`, `PARAKEET_*`, `ASR_ENGINE` — Live's names |
 | `openai`, key `local` | A model server on this host speaking the OpenAI API (llama.cpp's `llama-server`, Ollama's `/v1`): no key, never paid; route `media.local` | `AI_LOCAL_LLM_URL`, `AI_LOCAL_LLM_MODEL`, `AI_LOCAL_LLM_TIMEOUT_MS` |
+| `openai`, key `local2` | A second local chat server, another llama.cpp process and model family: no key, never paid, no JSON or embeddings. Two local offers let a caller pin a match between them (Games' AI-vs-AI job) | `AI_LOCAL_LLM2_URL`, `AI_LOCAL_LLM2_MODEL`, `AI_LOCAL_LLM2_TIMEOUT_MS` |
 
 Routing: a route either names a `capability` and the router builds its pool from every provider that
 can serve it, ordered by `openvibe-sdk/placement` (objective, price, measured latency, health, with
@@ -752,6 +753,15 @@ the release's sha256) in `/opt/llama.cpp/b11222` with `/opt/llama.cpp/current`, 
 streams always win: 2 threads, at most 1.5 CPUs, nice 19, 3 GB. It uses about 0.9 GB and generates about
 28 tokens/s. Without it, `media.analyze` writes an extractive overview and says so. To swap the model, put the
 file beside it, change `--model`/`--alias` and `AI_LOCAL_LLM_MODEL`, and restart both units.
+
+`deploy/systemd/openvibe-llm2.service` is the optional second chat server: the same llama.cpp build and models
+directory on `127.0.0.1:8092`, a different model family, and the provider `local2`
+(`AI_LOCAL_LLM2_URL=http://127.0.0.1:8092/v1`, `AI_LOCAL_LLM2_MODEL`). It is held to 2 threads, at most 1 CPU,
+nice 19 and 2 GB, and it never advertises `json` or `embed`. Games' AI-vs-AI job pins one local offer per side,
+so the two models must be different families and both aliases must be the `model` in its `GAMES_AI_MATCHES_OFFERS`
+pair. On the production host since 2026-11-06: Llama-3.2-1B-Instruct Q4_K_M (Llama 3.2 Community License,
+Hugging Face sha256 `6f85a640a97cf2bf5b8e764087b1e83da0fdb51d7c9fab7d0fece9385611df83`, 807,694,464 bytes),
+checked against that hash before install; it uses about 0.8 GB.
 
 Local embeddings are off unless `AI_LOCAL_EMBED_MODEL` names an embedding model the server at `AI_LOCAL_LLM_URL`
 answers at `/embeddings`. Then `local` advertises `embed`, the model is registered as an `embedding` model, and

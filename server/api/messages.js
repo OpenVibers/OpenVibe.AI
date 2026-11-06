@@ -116,7 +116,7 @@ function createEventStream(res) {
             return out.done();
         },
         fail(message, code) {
-            const status = code === 'ai.run_budget_reached' ? 402 : /^(input|validation)\./.test(code || '') ? 400 : /quota|allowance|budget/.test(code || '') ? 429 : 529;
+            const status = code === 'ai.run_budget_reached' || code === 'ai.allowance_spent' ? 402 : /^(input|validation)\./.test(code || '') ? 400 : /quota|allowance|budget/.test(code || '') ? 429 : 529;
             emit('error', { type: 'error', error: { type: errorType(status), message: String(message || 'error').slice(0, 1000), code: code || null } });
             return out.done();
         },
@@ -213,11 +213,11 @@ function messagesRouter({ runs, auth, config, registry, presets = null, receipts
             }
         }
         let body = { workflow: 'ai.messages', input };
-        // The preset's rules ride the run into the router (server/exchange/constraints.js).
+        // The preset's rules ride the run into the router.
         if (preset) body = { ...body, preset: { name: preset.name, scope: preset.scope, policy: preset.policy } };
-        // The uncensored preset asks for the adult tier. The gate (18+, the floor, the label) is the pool's own
-        // policy, never the preset's: the preset only names the tier the request asks for.
         if (preset && preset.policy.adult && b.policy == null) body = { ...body, policy: 'uncensored' };
+        // A caller must opt in before a person's machine sees the prompt.
+        if (req.get('x-openvibe-community') === '1' || (b.x_openvibe && b.x_openvibe.community === true)) body.community = true;
         // L37: the soft preference (provider, and a model if the caller wants one). A wish, not a pin.
         if (b.prefer) body = { ...body, prefer: b.prefer };
         // The Exchange remake's content policy (`policy: "uncensored"`), enforced by the router.
@@ -248,7 +248,7 @@ function messagesRouter({ runs, auth, config, registry, presets = null, receipts
         }
         if (run.status === 'failed' || run.status === 'cancelled') {
             const code = (run.error && run.error.code) || 'run.failed';
-            const status = code === 'ai.run_budget_reached' || code === 'billing.insufficient_funds' || code === 'billing.payer_required' ? 402 : /^(input|validation)\./.test(code) ? 400 : /quota|allowance|budget/.test(code) ? 429
+            const status = code === 'ai.run_budget_reached' || code === 'ai.allowance_spent' || code === 'billing.insufficient_funds' || code === 'billing.payer_required' ? 402 : /^(input|validation)\./.test(code) ? 400 : /quota|allowance|budget/.test(code) ? 429
                 : code === 'credential.unsupported' ? 422 : code === 'credential.not_found' ? 404
                 : code === 'policy.adult_required' || code === 'policy.uncensored_refused' || code === 'policy.floor_refused' ? 403
                 : code === 'policy.uncensored_needs_person' ? 400
@@ -272,14 +272,14 @@ function messagesRouter({ runs, auth, config, registry, presets = null, receipts
             },
         };
         const disclosure = await models.disclosureOf({ registry, config, run });
-        if (live) live.route(disclosure);
-        // The receipt of this answer (server/exchange/receipts.js): the offer, the price, the tokens, the cache,
-        // the latency, why the router chose it, the fallbacks it would have used, the payer and the privacy label.
+        const community = (disclosure && disclosure.community) || (run.explain && run.explain.community) || null;
+        if (live) live.route(disclosure || (community ? { community } : null));
+        if (community && !live) res.setHeader('X-OpenVibe-Community', '1');
         const receipt = receipts ? await receipts.forRun(run.id) : null;
         const receiptView = receipt ? compact(receipt) : null;
-        // D8': the route disclosure joins the existing x_openvibe object (run, provider, fallback, cost), never a second object.
         const x = { run_id: run.id, provider: run.provenance && run.provenance.provider, fallback_used: Boolean(run.provenance && run.provenance.fallback_used),
             cost_usd: run.usage.cost_usd, synthetic: Boolean(run.synthetic),
+            ...(community ? { community } : {}),
             ...(run.output.label ? { policy: run.output.policy || 'uncensored', label: run.output.label } : {}),
             privacy: receipt && receipt.privacy ? receipt.privacy.label : null, receipt_id: receipt ? receipt.id : null };
         if (run.output.label) {
@@ -287,7 +287,7 @@ function messagesRouter({ runs, auth, config, registry, presets = null, receipts
             message.policy = run.output.policy || 'uncensored';
             res.setHeader('X-OpenVibe-Content-Policy', message.policy);
         }
-        const xOpenVibe = disclosure ? { ...x, ...disclosure } : (run.output.label || receipt ? x : null);
+        const xOpenVibe = (disclosure || community || run.output.label || receipt) ? { ...x, ...(disclosure || {}) } : null;
         if (live) {
             // The events already went out as they arrived; an answer that came in one piece (an upstream that cannot
             // stream, a replayed run) is sent as the events it is. finish() sends the held message_stop with the whole

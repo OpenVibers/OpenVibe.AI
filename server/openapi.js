@@ -157,6 +157,39 @@ route('get', '/memory/search', {
     parameters: [query('q', str()), query('scopes', str(), 'Comma-separated scopes; default user'), query('purpose', str(), 'The task or run the person sees'), query('on_behalf_of', str())],
     responses: { 200: json('At most 8 active items', memoryResult), 403: problem, 503: problem, ...errors([401]) },
 });
+// ── Memory M3: the guided cloud import (person token only) ─────────────────────────────────
+route('get', '/memory/import/providers', {
+    operationId: 'getMemoryImportProviders', summary: 'The walkthroughs and the extraction prompt for the cloud import', tags: ['memory'], security: memorySecurity,
+    description: 'The person’s own token only. Where to request each export (ChatGPT, Claude, Gemini), what arrives, how long it takes, and the prompt to paste into any assistant. The answer contains no note.',
+    responses: { 200: json('The providers and the prompt', { type: 'object', properties: { providers: arrayOf({ type: 'object' }), prompt: str() } }), 403: problem, 503: problem, ...errors([401]) },
+});
+route('post', '/memory/import/preview', {
+    operationId: 'previewMemoryImport', summary: 'Parse and redact an export into a two-hour draft', tags: ['memory'], security: memorySecurity,
+    description: 'The person’s own token only. Send a .zip export, one multipart form (the Codes page forwards it untouched), a text/plain paste, or JSON { provider, text }. Nothing enters memory_items: the candidates are sealed into memory_imports with AI_MEMORY_KEY and expire after two hours. The answer is the draft id and the redacted candidates.',
+    requestBody: {
+        required: true,
+        content: {
+            'application/zip': { schema: { type: 'string', format: 'binary' } },
+            'multipart/form-data': { schema: { type: 'object', properties: { provider: str({ enum: ['chatgpt', 'claude-ai', 'gemini-apps', 'other'] }), file: { type: 'string', format: 'binary' }, text: str() } } },
+            'text/plain': { schema: { type: 'string' } },
+            'application/json': { schema: { type: 'object', properties: { provider: str(), text: str() } } },
+        },
+    },
+    responses: { 200: json('The sealed draft and its candidates', ref('MemoryResult')), 413: problem, 422: problem, 503: problem, ...errors([401, 403]) },
+});
+route('post', '/memory/import/{id}/commit', {
+    operationId: 'commitMemoryImport', summary: 'Keep the ticked candidates and delete the draft', tags: ['memory'], security: memorySecurity,
+    description: 'The person’s own token only. keep names the preview keys (k1, k2, …) to store. They go through the normal batch import (redaction again, dedupe), and the draft is deleted; the keys not sent are not stored. An expired draft answers 410.',
+    parameters: [path('id', str())],
+    requestBody: body({ type: 'object', properties: { keep: arrayOf(str()) } }),
+    responses: { 200: json('What was kept and left out', ref('MemoryResult')), 404: problem, 410: problem, 422: problem, 503: problem, ...errors([401, 403]) },
+});
+route('delete', '/memory/import/{id}', {
+    operationId: 'discardMemoryImport', summary: 'Throw a preview draft away', tags: ['memory'], security: memorySecurity,
+    description: 'The person’s own token only. The draft and its candidates are deleted; nothing was ever stored in memory_items.',
+    parameters: [path('id', str())],
+    responses: { 200: json('How many candidates were discarded', ref('MemoryResult')), 404: problem, 410: problem, 503: problem, ...errors([401, 403]) },
+});
 
 // ── Runs ──────────────────────────────────────────────────────────────────────────────────────
 route('post', '/runs', {
@@ -257,6 +290,66 @@ route('get', '/run-budgets/{jti}', {
     responses: { 200: json('The budget and the spend', { type: 'object', required: ['jti'], properties: { jti: str(), budget_usd: nullable('number'), budget_tokens: nullable('integer'), spent_usd: nullable('number'), spent_tokens: nullable('integer'), expires_at: nullable('integer'), reached: { type: 'boolean' } } }), ...errors([401, 403, 422]) },
 });
 
+// ── Exchange read API (OpenVibe.Exchange) ───────────────────────────────────────────────────
+const exchangeOffer = {
+    type: 'object', required: ['provider', 'provider_name', 'model', 'trust', 'free', 'price'],
+    properties: {
+        provider: str(), provider_name: str(), model: str(),
+        id: nullable('string', { description: 'The exact artifact id a request may pin, when the registry records one' }),
+        trust: { type: 'string', enum: ['first-party', 'community'] },
+        access: str({ enum: ['OWN_DEPLOYMENT', 'AUTHORIZED_WHOLESALE', 'UNVERIFIED'] }),
+        free: { type: 'boolean', description: 'Prepaid capacity with no per-token price (a free server, a subscription, a local machine).' },
+        price: nullable('object', { properties: { in: { type: 'number' }, out: { type: 'number' }, cached: { type: 'number' }, per: str(), currency: str() } }),
+        speed: { type: 'object', properties: { p50_ms: nullable('number'), p95_ms: nullable('number') } },
+        uptime: nullable('number', { minimum: 0, maximum: 1 }),
+        requests_7d: integer({ minimum: 0 }), requests_today: integer({ minimum: 0 }),
+        data_policy: nullable('object', { properties: { trains: nullable('boolean'), retention_days: nullable('integer'), region: nullable('string'), anonymized: nullable('boolean', { description: 'The provider says the request is anonymised before the model sees it' }) } }),
+        updated_at: nullable('string'),
+    },
+};
+const exchangeModel = {
+    type: 'object', required: ['slug', 'name', 'family', 'uncensored', 'offers'],
+    properties: {
+        slug: str(), canonical: str(), name: str(), family: str(), variant: nullable('string'), uncensored: { type: 'boolean' },
+        type: str(), context: nullable('integer'), max_output: nullable('integer'),
+        capabilities: { type: 'object', properties: { tools: { type: 'boolean' }, json: { type: 'boolean' }, vision: { type: 'boolean' }, stream: { type: 'boolean' } } },
+        modalities: arrayOf(str()), description: nullable('string'),
+        requests_7d: integer({ minimum: 0 }), requests_today: integer({ minimum: 0 }), community: { type: 'boolean' },
+        offers: arrayOf(exchangeOffer),
+    },
+};
+route('get', '/exchange/catalog', {
+    operationId: 'exchangeCatalog', summary: 'Every model and every offer that serves it', tags: ['exchange'], security: [],
+    description: 'Public. The live offers: price in, out and cached per million tokens, measured p50/p95, uptime, requests, and the provider data policy. A prepaid offer has no price (free: true). The window is 7 days.',
+    responses: { 200: json('The models, grouped by model, with their offers', { type: 'object', required: ['models'], properties: {
+        generated_at: str({ format: 'date-time' }), window_days: integer(), count: integer(),
+        families: arrayOf({ type: 'object', properties: { name: str(), models: integer(), offers: integer() } }),
+        models: arrayOf(exchangeModel),
+    } }) },
+});
+route('get', '/exchange/models/{slug}', {
+    operationId: 'exchangeModel', summary: 'One model and its offers', tags: ['exchange'], security: [],
+    description: 'Public. The slug is "<org>/<model>", lowercased, e.g. deepseek/deepseek-chat.',
+    parameters: [path('slug', str())],
+    responses: { 200: json('The model', exchangeModel), 404: problem },
+});
+route('get', '/exchange/models/{org}/{model}', {
+    operationId: 'exchangeModelByParts', summary: 'One model, by its org and model', tags: ['exchange'], security: [],
+    description: 'Public. The same answer as /exchange/models/{slug}, for a client that has the two parts.',
+    parameters: [path('org', str()), path('model', str())],
+    responses: { 200: json('The model', exchangeModel), 404: problem },
+});
+route('get', '/exchange/usage', {
+    operationId: 'exchangeUsage', summary: 'Requests, tokens and spend by day, model and product', tags: ['exchange'], security: [],
+    description: 'Public and aggregate only: never a prompt, an answer or a person. A product is the service that ran the model (usage_daily.requester).',
+    parameters: [query('days', integer({ minimum: 1, maximum: 366 }), 'Default 30')],
+    responses: { 200: json('The aggregates', { type: 'object', properties: {
+        generated_at: str({ format: 'date-time' }), days: integer(), from: str(), to: str(),
+        today: { type: 'object' }, totals: { type: 'object' },
+        by_day: arrayOf({ type: 'object' }), by_model: arrayOf({ type: 'object' }), by_product: arrayOf({ type: 'object' }),
+    } }) },
+});
+
 // ── Action Center ────────────────────────────────────────────────────────────────────────────
 route('get', '/actions', {
     operationId: 'listActions', summary: 'The Action Center items for one person', tags: ['actions'], security: SERVICE,
@@ -301,7 +394,7 @@ function openapi() {
             contact: { name: 'OpenVibers', url: 'https://github.com/OpenVibers/OpenVibe.AI', email: 'contact@openvibe.network' },
         },
         servers: [{ url: SITE }],
-        tags: ['runs', 'operations', 'actions', 'presets', 'receipts'].map((name) => ({ name })),
+        tags: ['runs', 'operations', 'actions', 'exchange', 'presets', 'receipts'].map((name) => ({ name })),
         components: {
             securitySchemes: {
                 bearer: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT', description: 'A Network service or user token for audience openvibe.ai carrying the route\'s capability (ai.run.create, ai.run.read, ai.actions.read)' },
@@ -424,6 +517,19 @@ function openapi() {
         paths: { ...Object.fromEntries(Object.entries(PATHS).sort(([a], [b]) => a.localeCompare(b)).map(([p, item]) => [MOUNT + p, item])) },
     };
 }
+
+// ── Community AI offers (the design's "Offer to the network") ───────────────────────────────
+route('get', '/community/offers', {
+    operationId: 'communityOffers', summary: 'Live community offers for Exchange', tags: ['community'],
+    description: 'No token. Models, price in credits per million, hours, concurrency, audience, health and open_now; never an owner subject or a machine id (offer_id is a stable hash).',
+    responses: { 200: json('The live community offers'), 503: problem },
+});
+route('get', '/community/sell', {
+    operationId: 'communitySell', summary: 'The seller dashboard for Exchange', tags: ['community'], security: SERVICE,
+    description: 'ai.run.read or ai.usage.read, acting for the owner in X-OV-Subject. Tokens served, credits recorded (1 credit = 1,000,000 micro), uptime, verification (canaries, spot re-runs) and reputation; nothing here moves money.',
+    parameters: [{ name: 'X-OV-Subject', in: 'header', required: true, schema: str({ pattern: '^usr_[0-9A-HJKMNP-TV-Z]{26}$' }), description: 'The owner whose offers and ledger these are' }],
+    responses: { 200: json('The owner\'s offers and totals'), 422: problem, 503: problem, ...errors([401, 403]) },
+});
 
 /** The documented routes as "METHOD /api/v1/path": what the app must mount. */
 function routes() {

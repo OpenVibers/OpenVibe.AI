@@ -1,25 +1,48 @@
 'use strict';
 /**
- * The Exchange's routing profiles and receipts.
+ * Public Exchange catalog and usage, saved routing presets, and per-run receipts.
+ * Presets and receipt reads use authenticated routes below.
+ */
+/**
+ * OpenVibe.Exchange's read API: the public catalog, one model, and aggregate usage.
  *
- *   GET    /api/v1/presets          the presets this caller may name: the five built-in ones and their own
- *   POST   /api/v1/presets          store (or replace) one of their own: { name, policy }
- *   DELETE /api/v1/presets/:name    delete one of their own
- *   GET    /v1/receipts/:id         the receipt of one answered request (the same one in the response headers)
- *   GET    /api/v1/receipts/:id     the same receipt, at the documented address
+ *   GET /api/v1/exchange/catalog                 every model, its offers, prices, speed and uptime
+ *   GET /api/v1/exchange/models/:slug            one model ("deepseek/deepseek-chat", or org + model)
+ *   GET /api/v1/exchange/usage?days=30           requests, tokens and spend by day, model and product
  *
- * A preset belongs to an account (the person a token acts for) or to a Network project (an app's project).
- * The built-in ones are code, not rows: they cannot be edited or deleted.
- *
- * A receipt is read by the caller that made the run, by the person the run was for, and by whoever may
- * read the usage (ai.usage.read). It never carries the prompt or the answer.
+ * No token: everything here is public on openvibe.exchange (the site, and anyone comparing prices).
+ * Nothing is per person, and no provider secret, base URL or metadata leaves the catalog shape in
+ * server/exchange/catalog.js. The answers are cached in this process for half a minute, so a busy
+ * Exchange does not scan the stats table per page view.
  */
 const express = require('express');
 const { CAPS } = require('../auth');
 const { AiError, sendError } = require('../util');
+const { http } = require('openvibe-contracts');
+const { createCatalog } = require('../exchange/catalog');
+const { createUsage } = require('../exchange/usage');
 
-function exchangeRouter({ presets, receipts, runs, auth, registry, log = console }) {
+const CATALOG_MS = 30_000;
+
+function memo(fn, ttlMs, clock) {
+    let hit = { at: 0, value: null };
+    return async () => {
+        if (hit.value && clock.now() - hit.at < ttlMs) return hit.value;
+        const value = await fn();
+        hit = { at: clock.now(), value };
+        return value;
+    };
+}
+
+function exchangeRouter({ db, registry, pool, clock = { now: () => Date.now() }, presets, receipts, auth, log = console }) {
+    const catalog = createCatalog({ db, registry, pool, clock });
+    const usage = createUsage({ db, clock });
+    const all = memo(() => catalog.models({ days: 7 }), CATALOG_MS, clock);
+    const usageByWindow = new Map();
     const r = express.Router();
+
+    const publicCache = (seconds) => (req, res, next) => { res.set('Cache-Control', `public, max-age=${seconds}`); next(); };
+
     // A caller that may run may read the presets; the same guard writes them (a preset is the caller's own).
     const read = auth.appOrCap(CAPS.appRun, CAPS.runCreate, CAPS.runRead);
     const write = auth.appOrCap(CAPS.appRun, CAPS.runCreate);
@@ -73,7 +96,44 @@ function exchangeRouter({ presets, receipts, runs, auth, registry, log = console
         r.get('/api/v1/receipts/:id', read, readReceipt);
     }
 
+    r.get('/api/v1/exchange/catalog', publicCache(30), async (req, res, next) => {
+        try { res.json(await all()); } catch (err) { next(err); }
+    });
+
+    r.get('/api/v1/exchange/models/:slug', publicCache(30), async (req, res, next) => {
+        try {
+            const out = await all();
+            const slug = String(req.params.slug || '').toLowerCase();
+            const found = out.models.find((m) => m.slug === slug);
+            if (!found) return http.sendProblem(res, 404, 'exchange.model_not_found', { detail: `no model ${slug}`, ctx: req.ov });
+            return res.json(found);
+        } catch (err) { return next(err); }
+    });
+
+    r.get('/api/v1/exchange/models/:org/:model', publicCache(30), async (req, res, next) => {
+        try {
+            const out = await all();
+            const slug = `${String(req.params.org || '').toLowerCase()}/${String(req.params.model || '').toLowerCase()}`;
+            const found = out.models.find((m) => m.slug === slug);
+            if (!found) return http.sendProblem(res, 404, 'exchange.model_not_found', { detail: `no model ${slug}`, ctx: req.ov });
+            return res.json(found);
+        } catch (err) { return next(err); }
+    });
+
+    r.get('/api/v1/exchange/usage', publicCache(60), async (req, res, next) => {
+        try {
+            const days = Math.max(1, Math.min(366, Number.parseInt(req.query.days, 10) || 30));
+            const key = String(days);
+            const cached = usageByWindow.get(key);
+            if (cached && clock.now() - cached.at < 60_000) return res.json(cached.value);
+            const value = await usage.read({ days });
+            usageByWindow.set(key, { at: clock.now(), value });
+            if (usageByWindow.size > 16) usageByWindow.delete(usageByWindow.keys().next().value);
+            return res.json(value);
+        } catch (err) { return next(err); }
+    });
+
     return r;
 }
 
-module.exports = { exchangeRouter };
+module.exports = { exchangeRouter, CATALOG_MS };
