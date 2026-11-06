@@ -53,6 +53,10 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     // D11 owner settings: ai.exchange and ai.provider_keys on openvibe-shared/config. The provider-key store also
     // refreshes the synchronous vault cache, and its one-time migration runs before any provider is built.
     const settings = await require('./settings').createSettings({ db, config, registry, clock, env, log, onExchange: () => ensureCredits() });
+    // The GPU provisioner (the design's "OpenVibe GPUs"): it is off until the owner has set a marketplace
+    // API key and a monthly cap in the owner settings (ai.gpus). The reconciler rents, health-checks and
+    // scales the instances to zero; it never spends past the cap.
+    const gpus = require('./gpu/provisioner').createGpuProvisioner({ db, registry, settings, clock, fetchImpl, env, log });
     const vault = require('./vault').createVault({ settings, clock, log });
     await require('./vault').migrate({ db, config, settings, log }).catch((err) => log.warn(`[Vault] migration failed: ${err.message}`));
     await vault.load().catch((err) => log.warn(`[Vault] ${err.message}`));
@@ -146,7 +150,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         clientSecret: env.OV_OAUTH_CLIENT_SECRET, fetch: fetchImpl,
     }) : null;
     const benchEvents = createBenchEvents({ bench, accountData, accountSend, config, log, fetchImpl, clientSecret: env.OV_OAUTH_CLIENT_SECRET });
-    const app = createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, grants, vault, settings, benchEvents, runBudgets, memory, memoryImport, community, presets, receipts, balance });
+    const app = createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, grants, vault, settings, benchEvents, runBudgets, memory, memoryImport, community, presets, receipts, balance, gpus });
     let jwks = null;
     let keyLoaded = Promise.resolve(null);
     if (!keys.pinned && config.nodeEnv !== 'test') {
@@ -166,6 +170,16 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         } catch (err) { log.error(`[ai] retention failed: ${err.message}`); }
     }, 60 * 60 * 1000);
     housekeeping.unref?.();
+
+    // The GPU reconciler: once a minute it fulfils the owner's requests, health-checks the running
+    // instances, scales the idle ones to zero and starts the models that are wanted. Never in test mode.
+    let gpuReconciler = null;
+    if (listen && config.nodeEnv !== 'test') {
+        gpuReconciler = setInterval(() => {
+            gpus.tick().catch((err) => log.warn('[gpu] the reconciler failed: ' + err.message));
+        }, 60 * 1000);
+        gpuReconciler.unref?.();
+    }
 
     let server = null;
     let benchSubscription = null;
@@ -202,6 +216,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
 
     async function close() {
         clearInterval(housekeeping);
+        if (gpuReconciler) clearInterval(gpuReconciler);
         balance.stop();
         if (benchSubscription) benchSubscription.stop();
         if (accountSubscription) accountSubscription.stop();
@@ -222,7 +237,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         if (!givenDb) await db.close();
     }
 
-    return { config, db, registry, pool, quotas, tiers, cache, fetcher, engine, runs, keys, keyLoaded, auth, app, server, bench, benchEvents, memory, memoryJobs, credits: creditsRef, settings, vault, community, close };
+    return { config, db, registry, pool, quotas, tiers, cache, fetcher, engine, runs, keys, keyLoaded, auth, app, server, bench, benchEvents, memory, memoryJobs, credits: creditsRef, settings, vault, community, gpus, close };
 }
 
 if (require.main === module) {

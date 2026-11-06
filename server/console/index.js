@@ -115,6 +115,9 @@ function consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, e
     const creditsOn = Boolean(config.credits && config.credits.enabled);
     const routingOn = Boolean(config.routingEvidence && config.routingEvidence.enabled);
     const exchangeOn = creditsOn || routingOn;
+    // The GPU provisioner's state (the same module the service runs): the page shows the instances, the
+    // spend this month and the cap. The actions only write a request; the reconciler fulfils it.
+    const gpus = require('../gpu/provisioner').createGpuProvisioner({ db, registry, settings, clock, fetchImpl, log });
     const r = express.Router();
     const scoped = ['/console', '/auth'];
     const baseOrigin = (() => { try { return new URL(config.baseUrl).origin; } catch { return null; } })();
@@ -538,6 +541,19 @@ function consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, e
             ...common(req), form, bad, report: await q.usageReport(quotas, filters),
             free: quotas.freeAllowance ? await quotas.freeAllowance.current() : [], readings: await usageSamples.deliveryReport(db),
         }));
+    }));
+
+    // ── OpenVibe GPUs: the rented instances, the spend this month and the cap ──
+    // The page is read-only; the two actions ask for a change (a request row) and the reconciler does it.
+    r.get('/console/gpus', read, wrap(async (req, res) => {
+        await send(res, 200, pages.gpus({
+            ...common(req), canManage: req.staff.caps.includes(CAPS.providerManage), notice: notice(req),
+            state: await gpus.state(),
+        }));
+    }));
+    r.post('/console/gpus/:model/:action', needs(CAPS.providerManage), wrap(async (req, res) => {
+        await gpus.request(String(req.params.model || ''), String(req.params.action || ''), req.staff.subject);
+        res.redirect(303, '/console/gpus?done=gpu_requested');
     }));
 
     // ── AI Exchange (P7): Credits settle queue and routing evidence ──

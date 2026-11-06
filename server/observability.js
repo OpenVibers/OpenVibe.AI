@@ -88,7 +88,7 @@ function createAiReadiness({ db, registry, pool, keys, runs, release = null }) {
 }
 
 /** AI gauges on the openvibe-shared/metrics registry. */
-function registerAiGauges(registry, { runs, registry: ai, pool, balance = null }) {
+function registerAiGauges(registry, { runs, registry: ai, pool, balance = null, gpus = null }) {
     registry.gauge({
         name: 'ai_runs', help: 'Runs waiting for a slot (queued) and holding one (running)', labelNames: ['state'],
         collect: () => {
@@ -110,6 +110,17 @@ function registerAiGauges(registry, { runs, registry: ai, pool, balance = null }
     registry.gauge({
         name: 'ai_provider_balance_usd', help: 'Provider account balance in USD, as last read by the hourly probe', labelNames: ['provider'],
         collect: () => (balance ? balance.values() : []).map(r => ({ labels: { provider: r.provider }, value: r.usd })),
+    });
+    // The GPU provisioner (server/gpu/): a marketplace instance that could not be given back is still running
+    // and still being paid for. The operator alert fires at three tries in a row (OpenVibe.Host's prometheus
+    // rules), so the gauge counts the tries that are still open.
+    registry.gauge({
+        name: 'ai_gpu_destroy_failures', help: 'Marketplace GPU instances OpenVibe.AI could not give back, in a row (the operator alert fires at 3)', labelNames: ['marketplace'],
+        collect: async () => (gpus ? await gpus.destroyFailures() : []),
+    });
+    registry.gauge({
+        name: 'ai_gpu_orphan_instances', help: 'Marketplace GPU instances with our label that no live row owns and that are still waiting to be given back', labelNames: ['marketplace'],
+        collect: async () => (gpus ? await gpus.orphanCount() : []),
     });
 }
 

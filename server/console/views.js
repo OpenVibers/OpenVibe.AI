@@ -122,6 +122,7 @@ const NAV = [
     ['/console', 'Overview', 'overview'], ['/console/providers', 'Providers', 'providers'], ['/console/routes', 'Routes', 'routes'],
     ['/console/templates', 'Templates', 'templates'], ['/console/workflows', 'Workflows', 'workflows'], ['/console/runs', 'Runs', 'runs'],
     ['/console/quotas', 'Quotas', 'quotas'], ['/console/usage', 'Usage', 'usage'], ['/console/cache', 'Cache', 'cache'], ['/console/audit', 'Audit', 'audit'],
+    ['/console/gpus', 'GPUs', 'gpus'],
 ];
 
 // The console's pages are noindex; the one public page drawn with this layout (/stats) passes robots, a description and
@@ -558,6 +559,74 @@ ${routing ? routingSection({ routing }) : ''}`,
     });
 }
 
+/** The GPU money as a dollar string: nano-USD in, exact dollars out (never a float). */
+function usdNano(nano) {
+    const n = BigInt(nano == null ? 0 : nano);
+    const abs = n < 0n ? -n : n;
+    const whole = abs / 1000000000n;
+    const frac = (abs % 1000000000n).toString().padStart(9, '0').replace(/0+$/, '');
+    return (n < 0n ? '-' : '') + '$' + whole.toString() + (frac ? '.' + frac : '');
+}
+
+/** A measured cold start: from the launch to the first answered request. */
+function coldStart(ms) {
+    const n = Math.max(0, Math.round(Number(ms) || 0));
+    if (n < 1000) return n + ' ms';
+    return (n / 1000).toFixed(1) + ' s';
+}
+
+/** The price of one second of a GPU, from its hourly nano-USD rate (Vast and RunPod bill per second). */
+function usdPerSecond(hourlyNano) {
+    const n = BigInt(hourlyNano == null ? 0 : hourlyNano);
+    return usdNano(n / 3600n);
+}
+
+function gpuModelRow(m, canManage, csrf) {
+    return html`<tr>
+  <td><code>${m.key}</code><br><span class="muted">${m.display_name}</span><br><span class="muted">${clip(m.weights_url, 90)}</span></td>
+  <td>${m.marketplace}</td><td>${m.runtime}</td>
+  <td>${m.instance ? m.instance.gpu_name + ' · $' + m.instance.price_per_hour + '/h' : '—'}</td>
+  <td>${m.instance ? badge(m.instance.status) : html`<span class="muted">stopped</span>`}</td>
+  <td>${m.cold_start_ms == null ? html`<span class="muted">not measured yet</span>` : coldStart(m.cold_start_ms)}</td>
+  <td>${canManage ? html`<form class="inline" method="post" action="/console/gpus/${enc(m.key)}/${m.instance ? 'stop' : 'launch'}">${csrfField(csrf)}<button type="submit">${m.instance ? 'Stop' : 'Start'}</button></form>` : ''}</td>
+</tr>`;
+}
+
+function gpuInstanceRow(i) {
+    return html`<tr>
+  <td><code>${i.model_key}</code></td><td>${i.marketplace}</td><td>${i.gpu_name}</td><td>$${i.price_per_hour}/h · ${usdPerSecond(i.hourly_nano)}/s</td>
+  <td>${badge(i.status)}</td><td>${i.endpoint ? html`<span class="muted">${clip(i.endpoint, 60)}</span>` : '—'}</td>
+  <td>${when(i.started_at)}</td><td>${i.cold_start_ms == null ? '—' : coldStart(i.cold_start_ms)}</td><td>${usdNano(i.reserved_nano)}</td><td>${usdNano(i.spent_nano)}</td>
+</tr>`;
+}
+
+/**
+ * The GPU page: the instances AI rents, what they cost this month and the cap they may never pass.
+ * The actions only ask (a request row); the reconciler does the work, so a click is never a second
+ * implementation of the provisioner.
+ */
+function gpus({ staff, csrf, state, canManage, notice, error }) {
+    const st = state || {};
+    const models = st.models || [];
+    const instances = st.instances || [];
+    const mk = st.marketplaces || {};
+    return layout({
+        title: 'OpenVibe GPUs', section: 'gpus', staff, csrf, notice, error, body: html`<h1>OpenVibe GPUs</h1>
+<p class="muted">The rented GPUs: what is running, what it cost this month, and the cap it may never pass. The provisioner is ${st.enabled ? 'on' : 'off'}${st.enabled ? '' : ' (' + st.reason + ')'}: it starts nothing until a marketplace API key and a monthly cap are set in the owner settings.</p>
+<div class="grid">
+  <div class="card"><div class="k">Status</div><div class="v">${st.enabled ? 'on' : 'off'}</div><div class="muted">${st.reason || 'a key and a cap are set'}</div></div>
+  <div class="card"><div class="k">Spent this month</div><div class="v">${usdNano(st.spent_nano)}</div><div class="muted">${st.month}</div></div>
+  <div class="card"><div class="k">Committed</div><div class="v">${usdNano(st.committed_nano)}</div><div class="muted">the worst case: what the running instances may still cost</div></div>
+  <div class="card"><div class="k">Monthly cap</div><div class="v">${st.cap_nano ? usdNano(st.cap_nano) : '—'}</div><div class="muted">never passed</div></div>
+</div>
+<p class="muted">Idle ${n(st.idle_minutes)} minute(s) before an instance scales to zero · max runtime ${n(st.max_runtime_minutes)} minute(s) · warm window ${st.warm_window || 'none'} · region ${st.region} · Vast.ai key ${mk.vast ? 'set' : 'not set'} · RunPod key ${mk.runpod ? 'set' : 'not set'}</p>
+<p class="muted">Vast and RunPod bill per second, so the ledger charges the seconds an instance really ran: the price per second is next to the hourly price. The cold start is measured from the launch to the first answered request.</p>
+${table('Models', ['Model', 'Marketplace', 'Runtime', 'GPU', 'Status', 'Cold start', 'Actions'], models.map((m) => gpuModelRow(m, canManage, csrf)), 'no model is known.')}
+${table('Instances', ['Model', 'Marketplace', 'GPU', 'Price / hour', 'Status', 'Endpoint', 'Started', 'Cold start', 'Reserved', 'Spent'], instances.map((i) => gpuInstanceRow(i)), 'no instance has been rented.')}
+`,
+    });
+}
+
 function cache({ staff, csrf, stats, canManage, notice, error }) {
     const entries = stats.reduce((a, s) => a + s.entries, 0);
     const hits = stats.reduce((a, s) => a + (s.hits || 0), 0);
@@ -665,4 +734,4 @@ function allowance(cards) {
 /** The price and latency cells, as plain HTML strings for the public /stats page (server/home.js renderStats). */
 const statsFormat = { ms, rate, price: (cards) => render(price(cards)), allowance: (cards) => render(allowance(cards)) };
 
-module.exports = { CSP, html, esc, safeUrl, statsFormat, pages: { signIn, message, overview, providers, providerNew, definitions, definition, runs, run, runReceipt, quotas, usage, cache, audit, exchange } };
+module.exports = { CSP, html, esc, safeUrl, statsFormat, pages: { signIn, message, overview, providers, providerNew, definitions, definition, runs, run, runReceipt, quotas, usage, cache, audit, exchange, gpus } };

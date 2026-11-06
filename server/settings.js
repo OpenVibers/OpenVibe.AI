@@ -20,10 +20,15 @@ const { AiError } = require('./util');
 
 const EXCHANGE_NAMESPACE = 'ai.exchange';
 const PROVIDER_KEYS_NAMESPACE = 'ai.provider_keys';
+const GPU_NAMESPACE = 'ai.gpus';
 const SERVICE = 'ai';
 const SELF = Object.freeze({ type: 'service', id: SERVICE });
 const GROUP = 'AI Exchange';
 const PROVIDER_GROUP = 'Provider keys';
+const GPU_GROUP = 'OpenVibe GPUs';
+// The marketplaces the GPU provisioner rents from. AI owns these origins and writes them into the
+// namespace, so the owner's key is sealed to the marketplace it was entered for.
+const GPU_ORIGINS = Object.freeze({ vast: 'https://console.vast.ai', runpod: 'https://api.runpod.io' });
 
 /** Bounds from server/config.js (load()), so the schema and the code agree. */
 const EXCHANGE_SCHEMA = Object.freeze({
@@ -107,6 +112,69 @@ function originOf(baseUrl) {
         return u.protocol === 'https:' || u.protocol === 'http:' ? u.origin : '';
     } catch { return ''; }
 }
+
+/**
+ * The ai.gpus namespace: the owner's GPU settings.
+ *
+ *   vast.origin / vast.key      Vast.ai: the origin AI owns and the owner's write-only API key, sealed
+ *                                to that origin (a key can never be sent to another host).
+ *   runpod.origin / runpod.key  the same for RunPod.
+ *   monthly_cap                 the hard monthly cap in nano-USD. The provisioner never passes it: it
+ *                                refuses to start an instance and says why. It is a money key, so it
+ *                                needs a fresh sign-in to change.
+ *   idle_minutes                how long an unused instance stays up before it scales to zero.
+ *   max_runtime_minutes         how long one instance may run at most (its reservation).
+ *   warm_window                 an optional window (UTC, "19:00-23:00") in which idle instances stay up.
+ *   region                      the region the marketplace offers must be in.
+ */
+const GPU_SCHEMA = Object.freeze({
+    $schema: 'https://json-schema.org/draft/2020-12/schema',
+    title: 'OpenVibe GPUs',
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+        'vast.origin': {
+            type: 'string', title: 'Vast.ai origin', 'x-group': GPU_GROUP,
+            description: 'The origin of the Vast.ai API. AI writes it; the key below is sealed to it.',
+        },
+        'vast.key': {
+            type: 'string', title: 'Vast.ai API key', 'x-group': GPU_GROUP, 'x-bind': 'vast.origin',
+            description: "The owner's write-only Vast.ai API key, sealed to the origin above.",
+        },
+        'runpod.origin': {
+            type: 'string', title: 'RunPod origin', 'x-group': GPU_GROUP,
+            description: 'The origin of the RunPod API. AI writes it; the key below is sealed to it.',
+        },
+        'runpod.key': {
+            type: 'string', title: 'RunPod API key', 'x-group': GPU_GROUP, 'x-bind': 'runpod.origin',
+            description: "The owner's write-only RunPod API key, sealed to the origin above.",
+        },
+        monthly_cap: {
+            type: 'integer', title: 'Monthly GPU cap', 'x-group': GPU_GROUP, 'x-unit': 'nano_usd', 'x-danger': true,
+            minimum: 0,
+            description: 'The hard monthly cap for the rented GPUs, in nano-USD. The provisioner never spends past it: it refuses to start an instance and says why. Without a cap the provisioner stays off.',
+        },
+        idle_minutes: {
+            type: 'integer', title: 'Idle minutes', 'x-group': GPU_GROUP,
+            minimum: 1, maximum: 1440,
+            description: 'How long an instance serves nobody before it scales to zero (the default is 10).',
+        },
+        max_runtime_minutes: {
+            type: 'integer', title: 'Max runtime (minutes)', 'x-group': GPU_GROUP,
+            minimum: 1, maximum: 10080,
+            description: 'How long one instance may run at most. When the time is up the instance is given back, so the money never runs past the cap (the default is 720).',
+        },
+        warm_window: {
+            type: 'string', title: 'Warm window (UTC)', 'x-group': GPU_GROUP,
+            pattern: '^([0-2][0-9]):[0-5][0-9]-([0-2][0-9]):[0-5][0-9]$',
+            description: 'An optional window in which idle instances stay up, as "19:00-23:00" (UTC). Empty means no warm window.',
+        },
+        region: {
+            type: 'string', title: 'Region', 'x-group': GPU_GROUP,
+            description: 'The region the marketplace offers must be in (the default is US).',
+        },
+    },
+});
 
 /** The namespace for the providers there are today: <p>.origin (internal) and <p>.key (secret, bound to it). */
 function providerKeysSchema(providers) {
@@ -252,6 +320,45 @@ function createProviderKeys({ db, registry, env = process.env, log = console, on
 }
 
 /**
+ * The ai.gpus store: the owner's GPU settings. The marketplace origins are written once (AI owns them),
+ * the keys and the cap are the owner's.
+ */
+async function createGpuSettings({ db, env = process.env, log = console, onChange }) {
+    const store = await createConfigStore({
+        db, service: SERVICE, namespace: GPU_NAMESPACE, schema: GPU_SCHEMA, classify, env, log, onChange,
+    });
+    const origins = {};
+    for (const [name, origin] of Object.entries(GPU_ORIGINS)) origins[name + '.origin'] = origin;
+    const changes = await store.changes(origins, { merge: true });
+    if (changes.length) await store.apply(origins, { merge: true, actor: SELF, reason: 'the GPU marketplace origins' });
+    if (store.sealed) await store.reseal().catch((err) => log.warn('[config] ' + GPU_NAMESPACE + ': reseal failed: ' + err.message));
+
+    /** The owner's GPU settings. The keys are the secrets; they never leave this process. */
+    function values() {
+        const v = store.get() || {};
+        return {
+            vast_origin: String(v['vast.origin'] || ''),
+            vast_key: String(v['vast.key'] || ''),
+            runpod_origin: String(v['runpod.origin'] || ''),
+            runpod_key: String(v['runpod.key'] || ''),
+            monthly_cap: v.monthly_cap == null ? null : String(v.monthly_cap),
+            idle_minutes: v.idle_minutes == null ? null : Number(v.idle_minutes),
+            max_runtime_minutes: v.max_runtime_minutes == null ? null : Number(v.max_runtime_minutes),
+            warm_window: String(v.warm_window || ''),
+            region: String(v.region || ''),
+        };
+    }
+
+    return {
+        store,
+        proxy: store,
+        namespace: GPU_NAMESPACE,
+        values,
+        get sealed() { return Boolean(store.sealed); },
+    };
+}
+
+/**
  * Create both namespaces (the DDL is migrations/0028_config.sql), apply ai.exchange to the live config object,
  * load the provider-key cache and reseal plaintext/old-KEK rows once when OV_CONFIG_KEKS is set.
  */
@@ -270,12 +377,13 @@ async function createSettings({ db, config, registry, clock = { now: () => Date.
     applyExchange(config, exchange.get());
     const providerKeys = createProviderKeys({ db, registry, env, log, onChange });
     await providerKeys.refresh();
+    const gpus = await createGpuSettings({ db, env, log, onChange });
     if (exchange.sealed) await exchange.reseal().catch((err) => log.warn(`[config] ${EXCHANGE_NAMESPACE}: reseal failed: ${err.message}`));
     if (providerKeys.sealed) await providerKeys.store.reseal().catch((err) => log.warn(`[config] ${PROVIDER_KEYS_NAMESPACE}: reseal failed: ${err.message}`));
-    return { exchange, providerKeys, onChange };
+    return { exchange, providerKeys, gpus, onChange };
 }
 
 module.exports = {
-    EXCHANGE_NAMESPACE, PROVIDER_KEYS_NAMESPACE, SERVICE, SELF, EXCHANGE_SCHEMA,
-    applyExchange, originOf, providerKeysSchema, createSettings,
+    EXCHANGE_NAMESPACE, PROVIDER_KEYS_NAMESPACE, GPU_NAMESPACE, SERVICE, SELF, EXCHANGE_SCHEMA, GPU_SCHEMA, GPU_ORIGINS,
+    applyExchange, originOf, providerKeysSchema, createGpuSettings, createSettings,
 };

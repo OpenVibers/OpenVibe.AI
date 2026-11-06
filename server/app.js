@@ -24,7 +24,7 @@ const pkg = require('../package.json');
 
 const { adminRoutes } = require('openvibe-shared/config');
 
-function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, credentials = null, preferences = null, grants = null, vault = null, settings = null, benchEvents = null, runBudgets = null, memory = null, memoryImport = null, community = null, presets = null, receipts = null, balance = null }) {
+function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, credentials = null, preferences = null, grants = null, vault = null, settings = null, benchEvents = null, runBudgets = null, memory = null, memoryImport = null, community = null, presets = null, receipts = null, balance = null, gpus = null }) {
     const app = express();
     // /.well-known/agent.json (openvibe-shared/agent-layer, SEO-2): what this site serves, for agents.
     require('openvibe-shared/agent-layer').mount(app, { descriptor: require('./agent-descriptor') });
@@ -36,7 +36,7 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
     // GET /metrics answers direct loopback callers only (Track O).
     const metrics = instrument(app, { service: 'ai', release: release.release });
     app.use(require('openvibe-sdk/service').telemetryMiddleware);   // request telemetry: a no-op until server/index.js calls telemetry.init()
-    registerAiGauges(metrics.registry, { runs, registry, pool, balance });
+    registerAiGauges(metrics.registry, { runs, registry, pool, balance, gpus });
     app.use(http.middleware());
     // Browser reads of the two public GETs (/stats, /release.json) only: an exact origin from
     // AI_CORS_ORIGINS is echoed back, never credentials, and OPTIONS answers their preflight.
@@ -125,10 +125,10 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
     if (benchEvents) app.use(benchEvents.router);
 
     // D11 owner settings (openvibe-shared/config): Network's admin proxy, acting for the owner, reads and writes
-    // ai.exchange and ai.provider_keys. Loopback only (the /internal guard above), guarded by ai.config.manage; the
+    // ai.exchange, ai.provider_keys and ai.gpus (the GPU provisioner's marketplace keys and its monthly cap). Loopback only (the /internal guard above), guarded by ai.config.manage; the
     // actor is Network's X-OV-Subject (usr_…), and a secret or x-danger change needs X-OV-Fresh: 1.
     if (settings) {
-        const configRoutes = adminRoutes([settings.exchange, settings.providerKeys.proxy], {
+        const configRoutes = adminRoutes([settings.exchange, settings.providerKeys.proxy, settings.gpus.proxy], {
             basePath: '/internal/config',
             requireAdmin: auth.requireCap(CAPS.configManage),
             actor: (req) => {
