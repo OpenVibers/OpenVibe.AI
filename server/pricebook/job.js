@@ -312,7 +312,7 @@ function createPriceBook({ db, registry, config = {}, clock = { now: () => Date.
             running = false;
         }
         last = report;
-        log.log(`[pricebook] checked ${report.sources.length} listings, ${report.models} models, ${report.applied.length} applied, ${report.pending.length} waiting for the owner`);
+        log.log(`[pricebook] checked ${report.sources.length} listings, ${report.models} models, ${report.applied.length} applied, ${report.pending.length} waiting for the owner${report.unreadable.length ? `; unreadable: ${report.unreadable.map((u) => `${u.source} (${u.error})`).join(', ')}` : ''}`);
         return report;
     }
 

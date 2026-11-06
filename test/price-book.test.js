@@ -263,6 +263,22 @@ t.test('two instances at the same moment: only one reads the listings', async ()
     }
 });
 
+// The service's own instance passes null for the transport and the lookup (only tests bring their own): null must
+// mean the defaults. In production every read failed with "transport is not a function" (2026-11-06).
+t.test('a null transport and lookup are the defaults, not a failure', async () => {
+    const { readListing } = require('../server/pricebook/read');
+    const viaGuard = await readListing('https://price-book-test.example.com/models', {
+        transport: null,
+        lookup: (host, opts, cb) => cb(new Error('looked up through the given lookup')),
+        timeoutMs: 3000,
+    });
+    assert.strictEqual(viaGuard.ok, false);
+    assert.match(viaGuard.error, /looked up through the given lookup/, 'the default transport made the request');
+    const bare = await readListing('https://price-book-test.invalid/models', { transport: null, lookup: null, timeoutMs: 3000 });
+    assert.strictEqual(bare.ok, false);
+    assert.doesNotMatch(String(bare.error), /not a function/, 'a null transport is the default transport');
+});
+
 t.test('stop', async () => {
     await h.stop();
 });
