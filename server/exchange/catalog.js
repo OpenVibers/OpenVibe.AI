@@ -14,6 +14,7 @@
  */
 const rates = require('../providers/rate-cards');
 const upstream = require('../providers/upstream');
+const { allowsOffer } = require('../free-tier');
 
 const DAY_MS = 86400000;
 const FAMILY_BY_PREFIX = [
@@ -101,7 +102,11 @@ function modalitiesOf(row) {
     return [...out];
 }
 
-function createCatalog({ db, registry, pool, env = process.env, clock = { now: () => Date.now() } }) {
+function createCatalog({ db, registry, pool, env = process.env, clock = { now: () => Date.now() }, config = null }) {
+    // The free-tier admission rules are the router's (server/free-tier.js): the catalog marks an offer with what
+    // the free allowance and the anonymous Try it may actually use. config.freeUse is fixed at boot, like the
+    // provider keys and upstreams the rest of this read shows.
+    const freeUse = config && config.freeUse ? config.freeUse : undefined;
     const getStats = db.prepare(`SELECT provider, model,
             SUM(requests)::bigint AS requests, SUM(ok)::bigint AS ok, SUM(errors)::bigint AS errors,
             CASE WHEN SUM(requests) > 0 THEN SUM(COALESCE(latency_p50_ms, 0) * requests) / SUM(requests) END AS p50,
@@ -176,6 +181,10 @@ function createCatalog({ db, registry, pool, env = process.env, clock = { now: (
                 trust: isCommunity(provider) ? 'community' : 'first-party',
                 access: provider.provider_access || 'UNVERIFIED',
                 free: cards == null,
+                // What the free allowance and the anonymous Try it may use, distinct from `free` above (prepaid
+                // capacity with no per-token card): both its provider is a named AI_FREE_PROVIDERS source and its
+                // output price is at or below AI_FREE_MAX_OUTPUT_PRICE_USD_PER_MTOK.
+                free_tier: allowsOffer({ providerKey: provider.key, providerRecord: provider, outputPrice: price ? price.out : null }, freeUse),
                 price: price ? { in: price.in, out: price.out, cached: price.cached, per: '1M tokens', currency: 'USD' } : null,
                 // Where the number came from and when someone checked it; null when nobody recorded it.
                 price_source: cards && cards.out.source && !String(cards.out.source).startsWith('urn:openvibe:ai:unverified:') ? cards.out.source : null,

@@ -13,6 +13,7 @@
  */
 
 const { loadGovern } = require('./govern');
+const { DEFAULT_PROVIDERS: DEFAULT_FREE_PROVIDERS } = require('./free-tier');
 
 const int = (v, d) => {
     const n = parseInt(v, 10);
@@ -140,10 +141,12 @@ function load(env = process.env) {
         },
         // ── Spend safety for runs nobody pays for (the free allowance, the anonymous Try it) ──
         // A run with no person's own token, no app project, no service run-token budget and no own key may
-        // use only offers at or below this output price (USD per 1M tokens). Dearer models need the person's
-        // own Balance or their own key; the router answers 402 billing.payer_required instead.
+        // use only offers from these sources (provider keys; `local` is every local model server and
+        // `community` the community machines) AND at or below this output price (USD per 1M tokens). Anything
+        // else needs the person's own Balance or their own key; the router answers 402 billing.payer_required.
         freeUse: {
-            maxOutputPricePerMtok: Math.max(0, float(env.AI_FREE_MAX_OUTPUT_PRICE_USD_PER_MTOK, 1)),
+            providers: list(env.AI_FREE_PROVIDERS, DEFAULT_FREE_PROVIDERS),
+            maxOutputPricePerMtok: Math.max(0, float(env.AI_FREE_MAX_OUTPUT_PRICE_USD_PER_MTOK, 1.5)),
         },
         // ── Placement (T6 provider router): openvibe-sdk/placement orders a route's capability pool ──
         placement: {

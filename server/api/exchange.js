@@ -28,8 +28,8 @@ function memo(fn, ttlMs, clock) {
     };
 }
 
-function exchangeRouter({ db, registry, pool, env = process.env, clock = { now: () => Date.now() } }) {
-    const catalog = createCatalog({ db, registry, pool, env, clock });
+function exchangeRouter({ db, registry, pool, env = process.env, clock = { now: () => Date.now() }, config = null }) {
+    const catalog = createCatalog({ db, registry, pool, env, clock, config });
     const usage = createUsage({ db, clock });
     // One cached read per kind (?kind=chat, screenshot, …); the unfiltered read is the full catalog.
     const hits = new Map();

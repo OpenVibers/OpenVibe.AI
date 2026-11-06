@@ -41,6 +41,26 @@ t.test('DeepSeek has its own offers, models and checked prices', async () => {
     assert.strictEqual(flash.context, 1048576);
 });
 
+t.test('free_tier marks what the free allowance and Try it may use, distinct from free', async () => {
+    const r = await request(h.base, 'GET', '/api/v1/exchange/catalog');
+    const offerOf = (slug) => {
+        const model = r.body.models.find((m) => m.slug === slug);
+        assert.ok(model, `the catalog lists ${slug}`);
+        return model.offers[0];
+    };
+    const flash = offerOf('deepseek/deepseek-flash');
+    assert.strictEqual(flash.free, false, 'a priced offer, not prepaid capacity');
+    assert.strictEqual(flash.free_tier, true, 'DeepSeek Flash is $1.20 out: a named source under the $1.50 ceiling');
+    assert.strictEqual(offerOf('deepseek/deepseek-v4-pro').free_tier, false, 'the same source at $3.96 out is above the ceiling');
+    assert.strictEqual(offerOf('openai/gpt-5').free_tier, false, 'the shared OpenAI key is not a free-tier source');
+    assert.strictEqual(offerOf('cheapco/cheap-chat').free_tier, false, 'cheap is not enough: the source must be named');
+    const local = offerOf('local/bge-small-en-v1.5');
+    assert.strictEqual(local.free, true);
+    assert.strictEqual(local.free_tier, true, 'local capacity is free and named');
+    assert.strictEqual(offerOf('whisper/whisper.cpp').free_tier, true, 'whisper.cpp is local capacity');
+    assert.ok(r.body.models.every((m) => m.offers.every((o) => typeof o.free_tier === 'boolean')), 'every offer carries the flag');
+});
+
 t.test('a provider whose key is not configured is never an offer', async () => {
     const r = await request(h.base, 'GET', '/api/v1/exchange/catalog');
     assert.ok(!r.body.models.some((m) => m.slug === 'unconfigured/mystery-chat'));

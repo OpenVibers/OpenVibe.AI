@@ -24,6 +24,7 @@ const placement = require('openvibe-sdk/placement');
 const contracts = require('openvibe-contracts');
 const { AiError, resolveSecret, sha256 } = require('../util');
 const { retryable, sleep, ProviderError, schemaInstruction } = require('./common');
+const { sourcesOf, ceilingOf, allowsProvider, allowsCommunity } = require('../free-tier');
 const { createStubProvider } = require('./stub');
 const { createOpenAiProvider } = require('./openai');
 const { createResponsesProvider } = require('./responses');
@@ -827,12 +828,14 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         // request. With only_my_keys it never falls back; otherwise the network is the fallback and the explain says so.
         const prefs = ctx.selfPreferences || {};
         // Spend safety: the free allowance and the anonymous Try it (ctx.freeUse, server/runs.js) may use only
-        // offers at or below this output price. A person's own token (their Balance) or their own key is not capped
-        // this way. A person's own price ceiling still applies to the network fallback as before.
-        const configuredFreeCeiling = Number(config.freeUse && config.freeUse.maxOutputPricePerMtok);
-        const freeCeiling = ctx.freeUse && Number.isFinite(configuredFreeCeiling) ? configuredFreeCeiling : null;
+        // offers from AI_FREE_PROVIDERS (server/free-tier.js) and at or below this output price. A person's own
+        // token (their Balance) or their own key is not capped this way. A person's own price ceiling still
+        // applies to the network fallback as before.
+        const freeCeiling = ctx.freeUse ? ceilingOf(config.freeUse) : null;
+        const freeSources = ctx.freeUse ? sourcesOf(config.freeUse) : null;
         const ceiling = freeCeiling != null ? freeCeiling : prefs.price_ceiling_usd_per_mtok;
         let freeCeilingSkipped = false;   // every capable offer was dearer than the free ceiling
+        let freeProviderSkipped = false;  // every capable offer came from a source the free tier may not use
         const selfAttempts = [];
         const selfList = Array.isArray(ctx.selfCredentials) ? ctx.selfCredentials : [];
         if (selfList.length || (ctx.selfSubject && prefs.only_my_keys)) {
@@ -894,13 +897,20 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         // person's machine, never an exact pin, never a BYOK run. The canaries run before the first answer; a failure
         // stops that machine and the ordinary network answers instead. The answer is labelled in explain.openvibe.
         if (community && ctx.communityOptIn && !ctx.credential && !ctx.byok && !ctx.exact) {
-            try {
-                const out = await community.execute({ route, operation, req, ctx });
-                if (out) return out;
-            } catch (err) {
-                const why = String((err && (err.detail || err.message)) || err).slice(0, 300);
-                tried.push({ provider: 'community', error: why });
-                log.warn(`[ai] community ${operation} failed, falling back to the network: ${why}`);
+            // Community capacity is a free-tier source only when the allowlist names it: without that, the
+            // ordinary network answers and the skip is named in the explain, never silently used.
+            if (freeSources && !allowsCommunity(freeSources)) {
+                tried.push({ provider: 'community', skipped: 'free_provider_not_allowed' });
+                freeProviderSkipped = true;
+            } else {
+                try {
+                    const out = await community.execute({ route, operation, req, ctx });
+                    if (out) return out;
+                } catch (err) {
+                    const why = String((err && (err.detail || err.message)) || err).slice(0, 300);
+                    tried.push({ provider: 'community', error: why });
+                    log.warn(`[ai] community ${operation} failed, falling back to the network: ${why}`);
+                }
             }
         }
         // CHECKPOINT D3: an exact id runs only its own artifact. The candidates are the catalog's deployments of
@@ -922,8 +932,12 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                 const card = row ? modelCatalog.retailRate(row) : null;
                 if (!p) why.push('unknown_provider');
                 else if (ctx.creditsRequired && !isFreeProvider(p) && card && card.version) { why.push('payer_required'); payerSkipped = true; }
-                else {
-                    // The free allowance / anonymous Try it cannot pin a model above the output price ceiling.
+                else if (freeSources && !allowsProvider(p.key, p, freeSources)) {
+                    // The free allowance / anonymous Try it may pin only a model from one of its sources...
+                    why.push('free_provider_not_allowed');
+                    freeProviderSkipped = true;
+                } else {
+                    // ...and never one above the output price ceiling.
                     const price = freeCeiling != null && !isFreeProvider(p) ? await priceFor(offer.provider, offer.model) : null;
                     if (price && Number(price.out) > freeCeiling) { why.push('over_price_ceiling'); freeCeilingSkipped = true; }
                     else {
@@ -938,9 +952,11 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                 if (!reason) usable.push({ provider: offer.provider, model: offer.model });
             }
             explain = { objective: 'exact', policy: 'exact', reasons: [`exact model ${exact.id}: only its own deployment may answer`], selected: null, candidates: candidatesView,
-                ...(freeCeiling != null ? { free_ceiling_usd_per_mtok: freeCeiling } : {}) };
+                ...(freeCeiling != null ? { free_ceiling_usd_per_mtok: freeCeiling } : {}),
+                ...(freeSources ? { free_providers: [...freeSources] } : {}) };
             if (!usable.length) {
                 if (payerSkipped) throw new AiError(402, 'billing.payer_required', `the exact model ${exact.id} needs a Balance payer (a person, or an app with its project); it was not run`, { explain });
+                if (freeProviderSkipped) throw new AiError(402, 'billing.payer_required', `the exact model ${exact.id} comes from a provider the free allowance may not use (${[...freeSources].join(', ')}); use your own key, or run with your own token so your Balance pays`, { explain });
                 if (freeCeilingSkipped) throw new AiError(402, 'billing.payer_required', `the exact model ${exact.id} is above the free-use ceiling of $${freeCeiling} per 1M output tokens; use your own key, or run with your own token so your Balance pays`, { explain });
                 throw new AiError(400, 'ai.model_unavailable', `the artifact ${exact.id} cannot run this request`, { explain });
             }
@@ -1047,6 +1063,19 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             const chosen = ranked.reasons.get(c.provider + ':' + (model || '')) || null;
             const fallback = i > 0;
             const base = { operation, provider_key: c.provider, model_key: model, route_key: ctx.routeKey || null, route_version: ctx.routeVersion || null, fallback: fallback ? 1 : 0, prompt_hash: ctx.promptHash || null, input_hash: ctx.inputHash || null };
+            // Spend safety: the free allowance / anonymous Try it runs only from its named sources
+            // (server/free-tier.js). A provider outside them is skipped even when it is cheaper: who pays
+            // matters, not only the price. The person's own keys (above) are always tried first and are never
+            // gated here.
+            if (freeSources && !allowsProvider(c.provider, p, freeSources)) {
+                if (preferState && preferMatches(c.provider, model, prefer)) { preferState.honoured = false; preferState.why = 'it is not a provider the free tier may use'; }
+                statFor(c.provider).skipped++;
+                tried.push({ provider: c.provider, skipped: 'free_provider_not_allowed' });
+                attempts.push({ key: 'openvibe', provider: c.provider, model, why: chosen || 'the router chose it', status: 'skipped', error: 'free_provider_not_allowed' });
+                if (ctx.logRequest) ctx.logRequest({ ...base, status: 'skipped', skip_reason: 'free_provider_not_allowed' });
+                freeProviderSkipped = true;
+                continue;
+            }
             // L36 Y3 / spend safety: a price ceiling caps the network's fallback; the person's own keys are never
             // capped (above). The free allowance's ceiling is the network's, so an over-ceiling offer is skipped.
             if (ceiling != null) {
@@ -1195,12 +1224,21 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             explain.reasons = [...(explain.reasons || []), 'the media could not be read'];
             throw new AiError(422, 'media.unreadable', String(unreadable.message || 'the media could not be read').slice(0, 300), { tried, explain });
         }
-        // The free allowance / anonymous Try it had capable offers, but every one was above its ceiling. That is
-        // not an outage: the caller needs their own key, or their own token so their Balance can pay.
-        if (freeCeilingSkipped && attemptsMade === 0) {
-            explain.free_ceiling_usd_per_mtok = freeCeiling;
-            explain.reasons = [...(explain.reasons || []), `every capable offer costs more than the free-use ceiling of $${freeCeiling} per 1M output tokens`];
-            throw new AiError(402, 'billing.payer_required', `this run has no payer, so its free allowance may use models up to $${freeCeiling} per 1M output tokens; the model it needs is dearer. Use your own key, or run with your own token so your Balance pays.`, { tried, explain });
+        // The free allowance / anonymous Try it had capable offers, but every one was outside its sources or
+        // above its ceiling. That is not an outage: the caller needs their own key, or their own token so
+        // their Balance can pay.
+        if (attemptsMade === 0 && (freeCeilingSkipped || freeProviderSkipped)) {
+            const allowed = [...freeSources].join(', ');
+            const cap = freeCeiling == null ? '' : ` at up to $${freeCeiling} per 1M output tokens`;
+            explain.free_providers = [...freeSources];
+            if (freeCeiling != null) explain.free_ceiling_usd_per_mtok = freeCeiling;
+            explain.reasons = [...(explain.reasons || []),
+                ...(freeProviderSkipped ? [`every capable offer comes from a provider outside the free tier (${allowed})`] : []),
+                ...(freeCeilingSkipped ? [`every capable offer costs more than the free-use ceiling of $${freeCeiling} per 1M output tokens`] : [])];
+            const detail = freeProviderSkipped
+                ? `this run has no payer, so its free allowance may use only ${allowed}${cap}; the model it needs is outside that. Use your own key, or run with your own token so your Balance pays.`
+                : `this run has no payer, so its free allowance may use models up to $${freeCeiling} per 1M output tokens; the model it needs is dearer. Use your own key, or run with your own token so your Balance pays.`;
+            throw new AiError(402, 'billing.payer_required', detail, { tried, explain });
         }
         explain.reasons = [...(explain.reasons || []), 'no provider on this route could answer'];
         throw new AiError(503, 'provider.unavailable', 'no provider on this route could answer', { tried, explain });

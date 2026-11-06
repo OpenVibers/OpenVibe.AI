@@ -39,6 +39,18 @@
       "metadata": { "local": true, "paid": false, "billing_profile": "free" }
     },
     {
+      "key": "cheapco",
+      "display_name": "CheapCo",
+      "kind": "openai",
+      "status": "active",
+      "base_url": "https://api.cheapco.test/v1",
+      "auth_mode": "none",
+      "default_model": "cheap-chat",
+      "capabilities": ["chat", "generate"],
+      "provider_access": "AUTHORIZED_WHOLESALE",
+      "metadata": { "provider_name": "cheapco" }
+    },
+    {
       "key": "unconfigured",
       "display_name": "Unconfigured upstream",
       "kind": "openai",
@@ -102,6 +114,15 @@
       "display_name": "bge-small-en-v1.5",
       "type": "embedding",
       "supports": { "json": false }
+    },
+    {
+      "provider_key": "cheapco",
+      "model_key": "cheap-chat",
+      "display_name": "Cheap chat",
+      "type": "chat",
+      "supports": { "json": true, "streaming": true },
+      "cost": { "in_per_mtok": 0.1, "out_per_mtok": 0.3 },
+      "metadata": { "org": "cheapco", "model": "cheap-chat", "family": "CheapCo", "tier": "fast" }
     },
     {
       "provider_key": "unconfigured",
