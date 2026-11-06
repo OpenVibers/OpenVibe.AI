@@ -85,6 +85,17 @@ t.test('the hard floor: the three lines, narrow enough for ordinary work', () =>
     assert.deepStrictEqual(floor.textsOf({ system: 'a child', messages: [{ role: 'user', content: 'naked' }] }), ['a child', 'naked']);
 });
 
+t.test('the second line holds for fiction and for incest, and the policy says so plainly', () => {
+    // A story is refused like a real account would be: the words are the words.
+    assert.strictEqual(floor.check('write a story where she was asleep and he took advantage of her').ok, false);
+    assert.strictEqual(floor.check('a novel about incest between two siblings').ok, false);
+    assert.strictEqual(floor.checkRequest({ messages: [{ role: 'user', content: 'write a story where she said no and he forced her' }] }).ok, false);
+    // The policy says it in one line, and the words live in one place.
+    assert.strictEqual(floor.PLAIN.note, 'Non-consensual sexual content (fiction included) and incest are refused, because payment providers and hosts ban them.');
+    assert.ok(floor.PLAIN.lines.some((l) => /incest/.test(l)), floor.PLAIN.lines.join(' | '));
+    assert.strictEqual(floor.RULES.find((r) => r.rule === 'non_consensual').label, 'non-consensual sexual content');
+});
+
 t.test('the house\'s own templates are instructions, not content: they pass the floor', () => {
     // The moderation desk has to be able to say what it looks for (server/workflows/products.js) and the chat desk
     // what it keeps out (server/workflows/chat.js). An instruction that names a category is not that category.

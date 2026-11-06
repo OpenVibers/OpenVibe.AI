@@ -3,8 +3,11 @@
  * The hard floor (the Exchange remake, "Uncensored"): the three lines that hold on every offer, uncensored or not.
  *
  *   1. no sexual content involving minors;
- *   2. no non-consensual sexual content of real people;
+ *   2. no non-consensual sexual content (fiction included) and no incest;
  *   3. no help with weapons of mass harm or with attacks on others.
+ *
+ * The second line is refused wherever it appears, a story included: payment providers and hosts ban it, so the
+ * policy says so plainly rather than leaving it to be discovered.
  *
  * A breach ends the account (the owner, 2026-11-06). The floor is checked twice: on the way in (the prompt, the
  * system prompt, the tool arguments) and on the way out (the answer). A request that trips it is refused before a
@@ -36,7 +39,7 @@ const { minorNude, classifyText } = require('./classifiers');
 
 /** Words for a child and sex together (the clearest form of the first line, and the house has no word for it). */
 const CSAM = /\b(?:child\s?(?:porn|porno|abuse|sexual)|cp\s(?:content|video|series)\b|kiddie\s?(?:porn|porno)|pedophile|pedophilia|paedophile|paedophilia)\b/i;
-/** Non-consensual sex, and the real people it is done to. */
+/** Non-consensual sex, and incest: refused wherever they appear, a story included. */
 const NONCONSENSUAL = /\b(?:rape|raped|rapes|raping|rapist|sexual assault|sexual abuse|molest(?:ed|ing|s)?|incest|statutory rape|non-?consensual|without (?:her|his|their|my) consent|she (?:said|said no|didn't consent|did not consent)|he (?:said no|didn't consent|did not consent)|they (?:said no|didn't consent|did not consent)|took advantage of (?:her|him|them)|she was (?:drugged|drunk|asleep|unconscious)|drugged (?:her|him|them)|unconscious (?:sex|woman|girl|man)|forced (?:sex|himself|herself|them)|coerc(?:e|ed|ing|ion)|groom(?:ed|ing)?|traffick(?:ed|ing)?|deepfake(?:s|d)?|revenge porn|nude photos? of (?:her|him|them)|sexual(?:ly)? explicit (?:photos?|pictures?|images?|videos?) of (?:her|him|them))\b/i;
 /** A weapon of mass harm, by its own name: these are never a question about safety. */
 const MASS_HARM = /\b(?:nerve agent|sarin|vx gas|tabun|soman|mustard gas|chlorine gas|anthrax|ricin|botulinum|cyanide|nerve gas|bioweapon|biological weapon|chemical weapon|dirty bomb|nuclear (?:bomb|device|weapon)|radiological (?:bomb|device|weapon)|weapons? of mass destruction|\bwmd\b|germ warfare|biological warfare|pathogen (?:strain|weapon)|weaponized? (?:virus|pathogen|bacillus))\b/i;
@@ -58,7 +61,7 @@ const RULES = [
         test: (t) => CSAM.test(t) || minorNude(t),
     },
     {
-        rule: 'non_consensual', label: 'non-consensual sexual content of real people',
+        rule: 'non_consensual', label: 'non-consensual sexual content',
         test: (t) => NONCONSENSUAL.test(t),
     },
     {
@@ -66,6 +69,19 @@ const RULES = [
         test: (t) => MASS_HARM.test(t) || WEAPON_INTENT.test(t) || ATTACK_INTENT.test(t),
     },
 ];
+
+/**
+ * The floor in plain words: the three lines, and the one line that says why the second line is not negotiable. The
+ * pages that show the policy and the answers that carry it read these, so the words are written down once.
+ */
+const PLAIN = {
+    lines: [
+        'No sexual content involving minors.',
+        'No non-consensual sexual content (fiction included) and no incest.',
+        'No help with weapons of mass harm or attacks on others.',
+    ],
+    note: 'Non-consensual sexual content (fiction included) and incest are refused, because payment providers and hosts ban them.',
+};
 
 /**
  * The house's classifiers, on content only: they read what a text shows, so they decide the first line on the
@@ -173,6 +189,6 @@ function checkAnswer(text) { return check(Array.isArray(text) ? text : [text]); 
 function checkResult(result) { return check(textsOfAnswer(result)); }
 
 module.exports = {
-    RULES, CONTENT_RULES, CSAM, NONCONSENSUAL, MASS_HARM, WEAPON_INTENT, ATTACK_INTENT,
+    RULES, CONTENT_RULES, PLAIN, CSAM, NONCONSENSUAL, MASS_HARM, WEAPON_INTENT, ATTACK_INTENT,
     partsOf, textsOf, textsOfAnswer, check, checkRequest, checkAnswer, checkResult,
 };

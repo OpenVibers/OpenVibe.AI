@@ -27,8 +27,12 @@ Three lines, on every offer, uncensored or not:
 | rule | what it refuses |
 |---|---|
 | `minors` | sexual content involving minors |
-| `non_consensual` | non-consensual sexual content of real people |
+| `non_consensual` | non-consensual sexual content (fiction included), and incest |
 | `mass_harm` | help with weapons of mass harm, or with attacks on others |
+
+**Non-consensual sexual content (fiction included) and incest are refused, because payment providers and hosts ban
+them.** The words are in one place (`server/policy/floor.js`, `PLAIN`), so the page that shows the policy and the
+answer that carries it say the same thing.
 
 The lines are decided by the **house's own text classifiers** (`server/policy/classifiers.js`), not by a third set of
 words written for this service:
