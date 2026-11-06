@@ -13,6 +13,7 @@
  */
 
 const { loadGovern } = require('./govern');
+const { DEFAULT_PROVIDERS: DEFAULT_FREE_PROVIDERS } = require('./free-tier');
 
 const int = (v, d) => {
     const n = parseInt(v, 10);
@@ -130,6 +131,23 @@ function load(env = process.env) {
             model: String(env.AI_MODEL || '').trim(),
             timeoutMs: int(env.AI_PROVIDER_TIMEOUT_MS, 30000),
         },
+        // ── DeepSeek, its own provider when its key is configured ──
+        // DEEPSEEK_API_KEY is also the research fallback's key; this makes its chat models managed offers.
+        deepseek: {
+            enabled: bool(env.AI_DEEPSEEK_ENABLED, true),
+            baseUrl: trimUrl(env.AI_DEEPSEEK_BASE_URL || 'https://api.deepseek.com'),
+            apiKeyRef: String(env.AI_DEEPSEEK_KEY_REF || 'env:DEEPSEEK_API_KEY').trim(),
+            timeoutMs: int(env.AI_DEEPSEEK_TIMEOUT_MS, 90000),
+        },
+        // ── Spend safety for runs nobody pays for (the free allowance, the anonymous Try it) ──
+        // A run with no person's own token, no app project, no service run-token budget and no own key may
+        // use only offers from these sources (provider keys; `local` is every local model server and
+        // `community` the community machines) AND at or below this output price (USD per 1M tokens). Anything
+        // else needs the person's own Balance or their own key; the router answers 402 billing.payer_required.
+        freeUse: {
+            providers: list(env.AI_FREE_PROVIDERS, DEFAULT_FREE_PROVIDERS),
+            maxOutputPricePerMtok: Math.max(0, float(env.AI_FREE_MAX_OUTPUT_PRICE_USD_PER_MTOK, 1.5)),
+        },
         // ── Placement (T6 provider router): openvibe-sdk/placement orders a route's capability pool ──
         placement: {
             // A candidate replaces the route's current placement only when it scores this much better,
@@ -175,6 +193,18 @@ function load(env = process.env) {
             model: String(env.AI_LOCAL_LLM_MODEL || '').trim(),
             embedModel: String(env.AI_LOCAL_EMBED_MODEL || '').trim(),
             timeoutMs: int(env.AI_LOCAL_LLM_TIMEOUT_MS, 180000),
+            // Never let the local model starve the host: one generation at a time across every local provider,
+            // and a short answer unless a route already asked for less (server/providers/index.js).
+            maxTokens: Math.max(1, int(env.AI_LOCAL_LLM_MAX_TOKENS, 512)),
+            concurrency: Math.max(1, int(env.AI_LOCAL_LLM_CONCURRENCY, 1)),
+        },
+        // A second local chat server (its own llama.cpp process, another model family): the provider `local2`.
+        // Same rules as `local`: no key, never paid, no JSON. Two local offers let a caller pin a match
+        // between models without sending either side to a paid provider.
+        localLlm2: {
+            url: trimUrl(env.AI_LOCAL_LLM2_URL),
+            model: String(env.AI_LOCAL_LLM2_MODEL || '').trim(),
+            timeoutMs: int(env.AI_LOCAL_LLM2_TIMEOUT_MS, 180000),
         },
         // Image generation (POST /api/v1/image, workflow ai.image): off until AI_IMAGE_MODEL names the shared
         // provider's image model (dall-e-3, gpt-image-1); then boot seeds that model and route default.image.
@@ -277,11 +307,23 @@ function load(env = process.env) {
         breaker: {
             failureThreshold: Math.max(1, int(env.AI_BREAKER_FAILURES, 3)),
             cooldownMs: int(env.AI_BREAKER_COOLDOWN_MS, 60000),
+            // A provider that answered "insufficient balance" is out of money, not flaky: its circuit stays open this
+            // long (10 minutes), shared by every request, before one probe is allowed to spend again.
+            exhaustedCooldownMs: Math.max(60000, int(env.AI_BREAKER_EXHAUSTED_COOLDOWN_MS, 10 * 60000)),
         },
         // One retry on a transient failure (timeout, 429, 5xx, connection reset) before the
         // router moves on to the fallback — Live's rule.
         providerRetries: Math.max(0, int(env.AI_PROVIDER_RETRIES, 1)),
         retryDelayMs: Math.max(0, int(env.AI_PROVIDER_RETRY_DELAY_MS, 800)),
+
+        // ── Hourly provider balance probe (server/providers/balance.js) ──
+        // Each active provider with a balance API (DeepSeek today) is asked GET <origin>/user/balance and the reading
+        // is exposed as ai_provider_balance_usd{provider} on GET /metrics. Off under a restore drill (AI_DRILL=1).
+        balance: {
+            enabled: bool(env.AI_BALANCE_PROBE, !bool(env.AI_DRILL, false)),
+            intervalMs: Math.max(60000, int(env.AI_BALANCE_PROBE_INTERVAL_MS, 60 * 60 * 1000)),
+            timeoutMs: Math.max(1000, int(env.AI_BALANCE_PROBE_TIMEOUT_MS, 10000)),
+        },
 
         // ── Media inputs: only these hosts are ever fetched (SSRF guard) ──
         media: {
@@ -329,6 +371,24 @@ function load(env = process.env) {
         // credential of provider node go through OpenVibe.Bot (bot.machine.ai), on this host by default (as Actor reaches
         // it); OV_BOT_INTERNAL_URL= (empty) turns it off.
         bot: { url: trimUrl(env.OV_BOT_INTERNAL_URL != null ? env.OV_BOT_INTERNAL_URL : 'http://127.0.0.1:4630') },
+
+        // ── Community AI offers (the design's "Offer to the network"; plan E4): requests that opt in to community
+        // capacity may run on a person's Node, only after its canaries and model fingerprint pass. AI reads the offers
+        // from Network's resource registry (network.registry.read), dispatches through Bot (bot.machine.ai), and keeps
+        // the verification and earnings ledger. On by default: without a Network service secret the list is empty.
+        community: {
+            enabled: bool(env.AI_COMMUNITY, true),
+            refreshMs: Math.max(1000, int(env.AI_COMMUNITY_REFRESH_MS, 30000)),
+            canaryMaxAgeMs: Math.max(60000, int(env.AI_COMMUNITY_CANARY_MAX_AGE_MS, 6 * 60 * 60 * 1000)),
+            canaryTimeoutMs: Math.max(2000, Math.min(120000, int(env.AI_COMMUNITY_CANARY_TIMEOUT_MS, 30000))),
+            // About 1% of community answers are re-run on a trusted machine with the same model; a mismatch stops traffic.
+            spotRate: Math.max(0, Math.min(1, float(env.AI_COMMUNITY_SPOT_RATE, 0.01))),
+            // Until a machine has this many days of verified service, a seller earns at most the daily cap. Credits are
+            // pending (not spendable) until the requester's own Balance charge exists; kudos are the volunteer reward.
+            trustDays: Math.max(1, Math.min(365, int(env.AI_COMMUNITY_TRUST_DAYS, 7))),
+            dailyEarningCapMicro: Math.max(0, Math.min(1e15, int(env.AI_COMMUNITY_DAILY_CAP_CREDITS, 100) * 1e6)),
+            kudosPerThousandTokens: Math.max(1, Math.min(1000, int(env.AI_COMMUNITY_KUDOS_PER_1K, 1))),
+        },
 
         // ── Tier budgets (T6 step 8, server/govern.js): openvibe-sdk/govern in Valkey, off unless AI_GOVERN_TIERS=1.
         govern: loadGovern(env, { bool, int, num: float }),

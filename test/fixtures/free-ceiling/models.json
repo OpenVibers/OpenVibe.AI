@@ -1,0 +1,18 @@
+{
+  "cheap": {
+    "model_key": "cheap-m",
+    "display_name": "Cheap chat",
+    "type": "chat",
+    "supports": { "json": true, "tools": true, "streaming": true },
+    "cost": { "in_per_mtok": 0.1, "out_per_mtok": 0.4 },
+    "metadata": { "tier": "fast", "listed": true, "synced_at": "2026-11-01T00:00:00.000Z" }
+  },
+  "dear": {
+    "model_key": "dear-m",
+    "display_name": "Dear frontier chat",
+    "type": "chat",
+    "supports": { "json": true, "tools": true, "streaming": true },
+    "cost": { "in_per_mtok": 10, "out_per_mtok": 10 },
+    "metadata": { "tier": "frontier", "reasoning": true, "listed": true, "synced_at": "2026-11-01T00:00:00.000Z" }
+  }
+}

@@ -11,7 +11,9 @@
  *   providers     optional  provider configuration: every active non-stub provider has the
  *                           credentials it needs and a circuit that is not open. A missing key or an
  *                           open circuit sends runs to fallbacks (or to a 503 provider.unavailable),
- *                           so it degrades the service rather than taking it out
+ *                           so it degrades the service rather than taking it out. A catalogue offer
+ *                           nobody bought (server/providers/pool-seed.js seeds the row so the owner
+ *                           sees the key slot) is off by design and does not degrade anything
  *
  * Gauges: runs waiting for a slot and running (ai_runs), and each provider's circuit state
  * (ai_provider_circuit{provider,state} = 1 for the current state, 0 for the others).
@@ -24,7 +26,12 @@ const CIRCUIT_STATES = ['closed', 'half_open', 'open'];
 async function providerView(registry, pool) {
     return (await Promise.all((await registry.listProviders()).filter(p => p.status === 'active').map(async (p) => {
         const pub = registry.publicProvider(p);
-        return { key: p.key, kind: p.kind, credentials: pub.credentials, circuit: (await pool.health(p.key)).state };
+        return {
+            key: p.key, kind: p.kind, credentials: pub.credentials, circuit: (await pool.health(p.key)).state,
+            // A catalogue offer (server/providers/pool-seed.js): the registry row exists so the owner sees the key
+            // slot, and the offer answers once the owner puts its key in. It is off until then, by design.
+            catalogue: Boolean(p.metadata && p.metadata.catalog === 'pool-providers'),
+        };
     })));
 }
 
@@ -67,7 +74,7 @@ function createAiReadiness({ db, registry, pool, keys, runs, release = null }) {
                     const real = list.filter(p => p.kind !== 'stub');
                     const detail = { active: list.length, usable: real.filter(p => p.credentials !== 'missing' && p.circuit !== 'open').length };
                     if (!real.length) return { ok: false, error: 'no real provider is active: only synthetic stub output is available', detail };
-                    const problems = real.filter(p => p.credentials === 'missing' || p.circuit === 'open')
+                    const problems = real.filter(p => p.circuit === 'open' || (p.credentials === 'missing' && !p.catalogue))
                         .map(p => `${p.key}: ${p.credentials === 'missing' ? 'credentials missing' : 'circuit open'}`);
                     return problems.length ? { ok: false, error: problems.join('; '), detail } : { ok: true, detail };
                 },
@@ -81,7 +88,7 @@ function createAiReadiness({ db, registry, pool, keys, runs, release = null }) {
 }
 
 /** AI gauges on the openvibe-shared/metrics registry. */
-function registerAiGauges(registry, { runs, registry: ai, pool }) {
+function registerAiGauges(registry, { runs, registry: ai, pool, balance = null }) {
     registry.gauge({
         name: 'ai_runs', help: 'Runs waiting for a slot (queued) and holding one (running)', labelNames: ['state'],
         collect: () => {
@@ -98,6 +105,11 @@ function registerAiGauges(registry, { runs, registry: ai, pool }) {
     registry.gauge({
         name: 'ai_provider_credentials_missing', help: 'Active providers whose secret reference does not resolve (1 = missing)', labelNames: ['provider'],
         collect: async () => (await providerView(ai, pool)).filter(p => p.credentials !== 'not_required').map(p => ({ labels: { provider: p.key }, value: p.credentials === 'missing' ? 1 : 0 })),
+    });
+    // The hourly balance probe's last reading (server/providers/balance.js), never a live call on scrape.
+    registry.gauge({
+        name: 'ai_provider_balance_usd', help: 'Provider account balance in USD, as last read by the hourly probe', labelNames: ['provider'],
+        collect: () => (balance ? balance.values() : []).map(r => ({ labels: { provider: r.provider }, value: r.usd })),
     });
 }
 

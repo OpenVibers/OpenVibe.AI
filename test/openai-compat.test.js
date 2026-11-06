@@ -17,7 +17,9 @@ const WEATHER = { type: 'function', function: { name: 'get_weather', description
 let h;
 const post = (body, tok = service) => request(h.base, 'POST', '/v1/chat/completions', { tok, body });
 
-t.test('boot', async () => { h = await boot(); });
+// The free allowance (a service acting for a person) would be gated by AI_FREE_PROVIDERS; in tests the
+// deterministic stub is the network's stand-in, so it is the named free-tier source.
+t.test('boot', async () => { h = await boot({ env: { AI_FREE_PROVIDERS: 'stub' } }); });
 
 t.test('a plain chat answers the Chat Completions shape, with usage and the run it was', async () => {
     const r = await post({ model: 'openvibe', messages: [{ role: 'system', content: 'Be brief.' }, { role: 'user', content: 'Say hello' }] });
@@ -95,6 +97,25 @@ t.test('an app token works, and its run is its project\'s', async () => {
     assert.strictEqual(r.status, 200, r.text);
     const run = await request(h.base, 'GET', `/api/v1/runs/${r.body.x_openvibe.run_id}`, { tok: service });
     assert.match(JSON.stringify(run.body.run.attribution || {}), new RegExp(PRJ));
+});
+
+t.test('a service acting for a person names them: the run is theirs (the claim, or the x_openvibe extension)', async () => {
+    const USR = 'usr_01JAB2C3D4E5F6G7H8J9K0MNPQ';
+    const acting = token('actor', ALL, { extra: { on_behalf_of: USR } });
+    const claimed = await post({ model: 'openvibe', messages: [{ role: 'user', content: 'For a person' }] }, acting);
+    assert.strictEqual(claimed.status, 200, claimed.text);
+    const runFor = async (id) => (await request(h.base, 'GET', `/api/v1/runs/${id}`, { tok: service })).body.run;
+    assert.deepStrictEqual((await runFor(claimed.body.x_openvibe.run_id)).on_behalf_of, { type: 'user', id: USR }, 'the token\'s claim is the run\'s person');
+    const supplied = await post({ model: 'openvibe', messages: [{ role: 'user', content: 'For a person' }], x_openvibe: { on_behalf_of: { type: 'user', id: USR } } });
+    assert.strictEqual(supplied.status, 200, supplied.text);
+    assert.deepStrictEqual((await runFor(supplied.body.x_openvibe.run_id)).on_behalf_of, { type: 'user', id: USR }, 'the extension is the run\'s person');
+    const bad = await post({ model: 'openvibe', messages: [{ role: 'user', content: 'x' }], x_openvibe: { on_behalf_of: { type: 'user', id: 'nobody' } } });
+    assert.strictEqual(bad.status, 400, 'a bad SubjectRef is refused before the run');
+    assert.strictEqual(bad.body.error.type, 'invalid_request_error');
+    const swapped = await post({ model: 'openvibe', messages: [{ role: 'user', content: 'x' }], x_openvibe: { on_behalf_of: { type: 'user', id: 'usr_01JAB2C3D4E5F6G7H8J9K0MNP1' } } }, acting);
+    assert.deepStrictEqual([swapped.status, swapped.body.error.code], [403, 'capability.denied'], 'a run token cannot name someone else');
+    const denied = await post({ model: 'openvibe', messages: [{ role: 'user', content: 'x' }], x_openvibe: { on_behalf_of: { type: 'user', id: USR } } }, app);
+    assert.deepStrictEqual([denied.status, denied.body.error.code], [403, 'capability.denied'], 'an app run never names a person');
 });
 
 t.test('errors come in OpenAI\'s shape: no token, no messages, n > 1', async () => {

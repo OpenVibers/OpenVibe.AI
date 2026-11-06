@@ -42,11 +42,18 @@ const ALIASES = [
     ...a,
     object: 'model',
     type: 'chat',
+    kind: 'chat',
     dynamic: true,
     capabilities: ['chat', 'json', 'stream'],
     modalities: ['text'],
     availability: 'available',
 }));
+
+/** The kind a registry row is offered as: vision is chat with image input, and stt/embedding/image stand apart. */
+const kindOf = (row) => {
+    const type = (row && row.type) || 'chat';
+    return type === 'vision' ? 'chat' : type;
+};
 
 const accessOf = (provider) => (provider && ACCESS.includes(provider.provider_access) ? provider.provider_access : 'UNVERIFIED');
 const managedAccessAllowed = (provider) => MANAGED_ACCESS.includes(accessOf(provider));
@@ -117,6 +124,7 @@ function entryOf(row, provider) {
         model_key: row.model_key,
         display_name: row.display_name || row.model_key,
         type: row.type,
+        kind: kindOf(row),
         status: row.status,
         context_window: row.context_window == null ? null : Number(row.context_window),
         max_output: row.max_output == null ? null : Number(row.max_output),
@@ -238,5 +246,5 @@ async function disclosureOf({ registry, run }) {
 
 module.exports = {
     ACCESS, MANAGED_ACCESS, ALIASES, EXACT_ID,
-    accessOf, managedAccessAllowed, artifactOf, entryOf, entries, exactOffers, select, facts, disclosureOf, retailRate,
+    accessOf, managedAccessAllowed, artifactOf, entryOf, entries, exactOffers, select, facts, disclosureOf, retailRate, kindOf,
 };

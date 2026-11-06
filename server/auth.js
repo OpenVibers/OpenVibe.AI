@@ -22,7 +22,7 @@
  * routes that do not take one refuse env=sandbox with token.sandbox_refused, as before.
  */
 const { serviceAuth, capabilities, http } = require('openvibe-contracts');
-const { jwksClient, jwksStatus } = require('openvibe-sdk/auth');
+const { jwksClient, jwksStatus, verifyUserToken } = require('openvibe-sdk/auth');
 const apps = require('./apps');
 
 const CAPS = Object.freeze({
@@ -39,6 +39,14 @@ const CAPS = Object.freeze({
     // D11: Network's admin proxy, acting for the owner, manages ai.exchange and ai.provider_keys (Contracts 0.288.0).
     configManage: 'ai.config.manage',
 });
+
+// A person's own Network token (audience openvibe.ai): the same checks server/me.js applies, so a person may run
+// and pay for themselves on the model routes. A service, app, module or node token is never a person.
+const SUBJECT_RE = /^usr_[0-9A-HJKMNP-TV-Z]{26}$/;
+const NON_PERSON = /^(svc|app|mod|node|agent):/;
+const PRINCIPAL_TYPES = ['service', 'app', 'mod', 'node', 'agent'];
+// A person runs the model API only: their token may not reach a product's own workflow namespace.
+const PERSON_NS = ['ai.*'];
 
 /**
  * The Network signing keys, through the SDK's process-wide JWKS client (one per URL). A pinned
@@ -145,7 +153,10 @@ function createAuth({ config, log = console }) {
                 }
                 if (!decision.allowed) return http.sendProblem(res, 403, decision.code, { detail: anyOf.length > 1 ? `one of ${anyOf.join(', ')} is required` : decision.reason, ctx });
                 const subject = principalSubject(r.claims.sub);
-                req.principal = { sub: r.claims.sub, subject, cap: r.claims.cap, ns: r.claims.ns || [], jti: r.claims.jti, claims: r.claims };
+                // A run token names the person the service acts for (Codes C3). Runs read it as the payer and the
+                // free allowance's owner; without it a service run would have no account of its own.
+                const onBehalfOf = typeof r.claims.on_behalf_of === 'string' ? r.claims.on_behalf_of : null;
+                req.principal = { sub: r.claims.sub, subject, onBehalfOf, cap: r.claims.cap, ns: r.claims.ns || [], jti: r.claims.jti, claims: r.claims };
                 return next();
             } catch (err) {
                 log.error(`[auth] ${req.method} ${req.path}: ${(err && err.stack) || err}`);
@@ -155,12 +166,33 @@ function createAuth({ config, log = console }) {
     }
 
     /**
+     * The person behind a user token, or null. A person runs the model API for themselves and pays with their own
+     * allowance or Balance; their token must name audience openvibe.ai and must not act for anyone else. Service,
+     * app, module, node and delegation tokens are never a person.
+     */
+    async function personFor(token) {
+        let claims;
+        try {
+            claims = await verifyUserToken(token, {
+                ...(config.networkPublicKey ? { publicKey: config.networkPublicKey } : { jwks: config.networkJwksUrl }),
+                issuer: config.issuer, audience: config.audience, now: Date.now(), log,
+            });
+        } catch { return null; }
+        if (!claims || NON_PERSON.test(String(claims.sub || '')) || PRINCIPAL_TYPES.includes(claims.actor_type)) return null;
+        if (claims.on_behalf_of != null) return null;
+        const id = SUBJECT_RE.test(String(claims.subject_id || '')) ? claims.subject_id : (SUBJECT_RE.test(String(claims.sub || '')) ? claims.sub : null);
+        if (!id) return null;
+        return { kind: 'user', sub: claims.sub, subject: { type: 'user', id }, ns: [...PERSON_NS], cap: claims.cap, claims };
+    }
+
+    /**
      * A guard for the routes a developer app may use (ADR-014; ai.app.run). A first-party service
      * token is judged on anyOf exactly as requireCap; an app token (actor_type app) is judged only on
      * appCap, and becomes req.principal whose SUBJECT IS ITS PROJECT, so every run, quota, attribution
      * and free allowance of the app is the project's. A sandbox app token is accepted here and
      * nowhere else. Sets req.principal.kind = 'app' with appId, projectId, projectKey, env and the
-     * app's namespaces.
+     * app's namespaces. A person's own token is accepted too (kind 'user', namespace ai.*): they run
+     * for themselves, and only their own allowance or Balance can pay.
      */
     function appOrCap(appCap, ...anyOf) {
         const appCaps = Array.isArray(appCap) ? appCap : [appCap];
@@ -171,7 +203,12 @@ function createAuth({ config, log = console }) {
             if (!token) return serviceGuard(req, res, next);   // token.missing, with requireCap's wording
             try {
                 const r = await verify(token, { acceptSandbox: true });
-                if (!r.ok || !isAppClaims(r.claims)) return await serviceGuard(req, res, next);
+                if (!r.ok) {
+                    const person = await personFor(token);
+                    if (person) { req.principal = person; return next(); }
+                    return await serviceGuard(req, res, next);
+                }
+                if (!isAppClaims(r.claims)) return await serviceGuard(req, res, next);
                 const app = apps.appPrincipal(r.claims);
                 if (app.error) return http.sendProblem(res, 401, 'token.invalid_claims', { detail: app.error, ctx });
                 let decision = null;
@@ -193,10 +230,30 @@ function createAuth({ config, log = console }) {
         };
     }
 
+    /** A service token on anyOf as requireCap, or a person's own token (who runs for themselves only). */
+    function personOrCap(...anyOf) {
+        const serviceGuard = requireCap(...anyOf);
+        return async function personOrCapGuard(req, res, next) {
+            const ctx = req.ov;
+            const token = bearer(req);
+            if (!token) return serviceGuard(req, res, next);
+            try {
+                const r = await verify(token);
+                if (r.ok) return await serviceGuard(req, res, next);
+                const person = await personFor(token);
+                if (person) { req.principal = person; return next(); }
+                return await serviceGuard(req, res, next);
+            } catch (err) {
+                log.error(`[auth] ${req.method} ${req.path}: ${(err && err.stack) || err}`);
+                if (!res.headersSent) http.sendProblem(res, 500, 'internal.error', { detail: 'internal error', ctx });
+            }
+        };
+    }
+
     /** Does the authenticated principal also hold `id`? (for owner-or-admin checks) */
     function principalHas(req, id) { return Boolean(req.principal && allows(req.principal.claims, id).allowed); }
 
-    return { verify, requireCap, appOrCap, principalHas };
+    return { verify, requireCap, appOrCap, personOrCap, principalHas };
 }
 
 module.exports = { CAPS, createNetworkKeys, createAuth, hasCap, allows, isAppClaims, namespaceAllowed, effectiveNamespaces, principalSubject, bearer };

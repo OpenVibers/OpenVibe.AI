@@ -1,0 +1,135 @@
+{
+  "providers": [
+    {
+      "key": "shared",
+      "display_name": "Shared provider (Live's shared key)",
+      "kind": "openai",
+      "status": "active",
+      "base_url": "https://api.openai.com/v1",
+      "auth_mode": "bearer",
+      "secret_ref": "env:AI_API_KEY",
+      "default_model": "gpt-5",
+      "capabilities": ["chat", "generate", "json", "vision", "embed"],
+      "provider_access": "OWN_DEPLOYMENT",
+      "metadata": { "provider_name": "openai", "configured_by": "AI_PROVIDER/AI_BASE_URL/AI_API_KEY/AI_MODEL" }
+    },
+    {
+      "key": "deepseek",
+      "display_name": "DeepSeek",
+      "kind": "openai",
+      "status": "active",
+      "base_url": "https://api.deepseek.com",
+      "auth_mode": "bearer",
+      "secret_ref": "env:DEEPSEEK_API_KEY",
+      "default_model": "deepseek-flash",
+      "capabilities": ["chat", "generate", "json", "vision"],
+      "provider_access": "OWN_DEPLOYMENT",
+      "metadata": { "provider_name": "deepseek", "configured_by": "DEEPSEEK_API_KEY" }
+    },
+    {
+      "key": "local",
+      "display_name": "Local model (OpenAI-compatible server on this host)",
+      "kind": "openai",
+      "status": "active",
+      "base_url": "http://127.0.0.1:8090/v1",
+      "auth_mode": "none",
+      "default_model": "qwen2.5-1.5b-instruct",
+      "capabilities": ["chat", "generate", "embed"],
+      "provider_access": "OWN_DEPLOYMENT",
+      "metadata": { "local": true, "paid": false, "billing_profile": "free" }
+    },
+    {
+      "key": "cheapco",
+      "display_name": "CheapCo",
+      "kind": "openai",
+      "status": "active",
+      "base_url": "https://api.cheapco.test/v1",
+      "auth_mode": "none",
+      "default_model": "cheap-chat",
+      "capabilities": ["chat", "generate"],
+      "provider_access": "AUTHORIZED_WHOLESALE",
+      "metadata": { "provider_name": "cheapco" }
+    },
+    {
+      "key": "unconfigured",
+      "display_name": "Unconfigured upstream",
+      "kind": "openai",
+      "status": "active",
+      "base_url": "https://unconfigured.example/v1",
+      "auth_mode": "bearer",
+      "secret_ref": "env:UNCONFIGURED_API_KEY",
+      "default_model": "mystery-chat",
+      "capabilities": ["chat", "generate", "json"],
+      "metadata": { "provider_name": "unconfigured" }
+    }
+  ],
+  "models": [
+    {
+      "provider_key": "shared",
+      "model_key": "gpt-5",
+      "display_name": "gpt-5",
+      "type": "chat",
+      "supports": { "json": true, "tools": true, "streaming": true, "vision": true },
+      "cost": { "in_per_mtok": 1.25, "out_per_mtok": 10, "cached_per_mtok": 0.125, "source": "https://openai.com/api/pricing/", "verified_at": "2026-09-30" }
+    },
+    {
+      "provider_key": "shared",
+      "model_key": "claude-haiku",
+      "display_name": "claude-haiku",
+      "type": "chat",
+      "cost": { "in_per_mtok": 0.8, "out_per_mtok": 4, "cached_per_mtok": 0.08 }
+    },
+    {
+      "provider_key": "shared",
+      "model_key": "text-embedding-3-small",
+      "display_name": "text-embedding-3-small",
+      "type": "embedding",
+      "cost": { "in_per_mtok": 0.05, "out_per_mtok": 0.4, "cached_per_mtok": 0.005 }
+    },
+    {
+      "provider_key": "deepseek",
+      "model_key": "deepseek-flash",
+      "display_name": "DeepSeek V4.1 Flash",
+      "type": "chat",
+      "context_window": 1048576,
+      "max_output": 393216,
+      "supports": { "json": true, "tools": true, "streaming": true, "vision": true },
+      "cost": { "in_per_mtok": 0.3, "out_per_mtok": 1.2, "cached_per_mtok": 0.006, "source": "https://api-docs.deepseek.com/quick_start/pricing", "verified_at": "2026-11-06" },
+      "metadata": { "org": "deepseek", "model": "deepseek-flash", "family": "DeepSeek", "tier": "fast" }
+    },
+    {
+      "provider_key": "deepseek",
+      "model_key": "deepseek-v4-pro",
+      "display_name": "DeepSeek V4 Pro",
+      "type": "chat",
+      "context_window": 1048576,
+      "max_output": 393216,
+      "supports": { "json": true, "tools": true, "streaming": true, "vision": false },
+      "cost": { "in_per_mtok": 1.32, "out_per_mtok": 3.96, "cached_per_mtok": 0.044, "source": "https://api-docs.deepseek.com/quick_start/pricing", "verified_at": "2026-11-06" },
+      "metadata": { "org": "deepseek", "model": "deepseek-v4-pro", "family": "DeepSeek", "tier": "strong" }
+    },
+    {
+      "provider_key": "local",
+      "model_key": "bge-small-en-v1.5",
+      "display_name": "bge-small-en-v1.5",
+      "type": "embedding",
+      "supports": { "json": false }
+    },
+    {
+      "provider_key": "cheapco",
+      "model_key": "cheap-chat",
+      "display_name": "Cheap chat",
+      "type": "chat",
+      "supports": { "json": true, "streaming": true },
+      "cost": { "in_per_mtok": 0.1, "out_per_mtok": 0.3 },
+      "metadata": { "org": "cheapco", "model": "cheap-chat", "family": "CheapCo", "tier": "fast" }
+    },
+    {
+      "provider_key": "unconfigured",
+      "model_key": "mystery-chat",
+      "display_name": "mystery-chat",
+      "type": "chat",
+      "cost": { "in_per_mtok": 1, "out_per_mtok": 1 }
+    }
+  ]
+}

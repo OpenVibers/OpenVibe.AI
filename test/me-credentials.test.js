@@ -50,7 +50,7 @@ const credentialFetch = async (url, init = {}) => {
 };
 
 t.test('boot', async () => {
-    h = await boot({ env: { AI_CREDENTIALS_KEY: KEY, AI_CREDENTIAL_TEST_TIMEOUT_MS: '80' }, credentialFetch, log: capture });
+    h = await boot({ env: { AI_CREDENTIALS_KEY: KEY, AI_CREDENTIAL_TEST_TIMEOUT_MS: '80', AI_FREE_PROVIDERS: 'stub' }, credentialFetch, log: capture });
 });
 
 t.test('the person routes refuse a service token, an on_behalf_of token, and another site\'s session', async () => {

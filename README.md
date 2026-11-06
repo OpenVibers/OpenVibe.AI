@@ -161,9 +161,15 @@ schema errors), `workflow.not_found`, `idempotency.conflict`, `quota.exceeded` (
 `Retry-After`), `govern.exceeded` (429 + `Retry-After`: a tier budget) and `govern.unavailable` (503: Valkey
 unreachable for a paid or staff run), `queue.full` (429 + `Retry-After`: the run would wait behind `AI_MAX_QUEUED_RUNS`
 runs, or `AI_MAX_QUEUED_RUNS_PER_CALLER` of this caller's), `capability.denied`, `capability.namespace_denied`, `token.*`. A run that cannot
-produce a real answer ends `failed` with an explicit code — `provider.unavailable`,
-`route.unavailable`, `fetch.refused`, `source.unavailable`, `input.insufficient`, `output.empty`,
-`output.invalid`, `run.interrupted` — and never with filler content.
+produce a real answer ends `failed` with an explicit code — `ai.resting` (503: every offer is out of balance,
+paused or busy; the detail is the sentence products show, "AI is resting for a moment", with `Retry-After`),
+`provider.unavailable`, `route.unavailable`, `fetch.refused`, `source.unavailable`, `input.insufficient`,
+`output.empty`, `output.invalid`, `run.interrupted` — and never with filler content.
+
+Each active provider with a balance API (DeepSeek's `GET /user/balance`) is asked hourly; the last reading is
+`ai_provider_balance_usd{provider}` on `/metrics` and OpenVibe.Host's `OpenVibeAiProviderBalanceLow` alert turns a
+reading below $2 into an operator ticket. The key is only sent in the request's `Authorization` header: it is never
+logged, returned or stored by the probe. `AI_BALANCE_PROBE=0` (or a restore drill, `AI_DRILL=1`) turns it off.
 
 The capability ids and the `ai` service manifest are released in openvibe-contracts v0.76.0 (the
 drafts stay in `docs/capabilities-proposal/`); `server/auth.js` checks them with the contracts grant
@@ -224,7 +230,8 @@ coding agents, Codes' harnesses) points its base URL at `https://ai.openvibe.ser
   upstream for `default.chat` by price and health, and a request with `tools` goes only to a provider that declares
   `tools`. The answer's `model` names the model that ran.
 - **Answer:** `chat.completion` with the upstream's `choices` and `usage`, plus `x_openvibe` (`run_id`, `provider`,
-  `fallback_used`, `cost_usd`) and the `X-OpenVibe-Run-Id` header.
+  `fallback_used`, `cost_usd`, the privacy label and the receipt id) and the `X-OpenVibe-Run-Id` header. The
+  answer's receipt is in `x-openvibe-receipt` (compact JSON) and `x-openvibe-receipt-id`.
 - **Streaming:** `stream: true` answers server-sent events in the chunk format **as the upstream streams them**.
   - An OpenAI-format upstream (the router's, or the project's own) is asked with `stream: true` and
     `stream_options.include_usage`, and each delta goes out when it arrives: text, and a tool call's id, name and
@@ -252,6 +259,64 @@ coding agents, Codes' harnesses) points its base URL at `https://ai.openvibe.ser
     not https answers 400, and a first-party service token naming a provider answers 403.
   - Production app runs that use the router are limited to free and local capacity (see Developer apps). Today that is
     a small local model without tools, so a coding agent's loop needs its project's own provider.
+
+## Presets, receipts, BYOK and the privacy label
+
+The Exchange's routing profiles and the receipt of every answer (the plan of 2026-11-06, "Product lines
+and features", item 1). `server/exchange/` holds the four parts: `presets.js`, `privacy.js`,
+`constraints.js` and `receipts.js`; `server/api/exchange.js` serves them and `migrations/0031_exchange_presets_receipts.sql`
+holds them.
+
+### Presets
+
+A preset is a named set of routing constraints. Five are built in — `cheapest`, `fastest`, `private`,
+`uncensored`, `eu-only` — and they are code, not rows: nobody can overwrite or delete one (409
+`ai.preset_builtin`). The others belong to an account (the person a token acts for) or to a Network
+project (an app's project).
+
+- `GET /api/v1/presets` lists the presets the caller may name: the built-in ones and their own.
+- `POST /api/v1/presets` stores (or replaces) one of their own: `{ "name": "…", "policy": { … } }`.
+- `DELETE /api/v1/presets/{name}` removes one of their own.
+
+The policy's knobs: `objective` (`cheapest`, `fastest`, `balanced`, `private`), `floor` (`fast`,
+`balanced`, `strong`, `frontier`), `ceiling` and `max_price` (US dollars per million tokens),
+`quantization`, `region`, `data_policy` (`private`, `anonymized`, `community`), `community` (may a
+community machine answer) and `adult` (the uncensored tier: the 18+ gate is the pool's own, never the
+preset's — the preset only names the tier the request asks for). A knob nobody knows is dropped, never
+stored, so a typo cannot come back as a rule nobody reads.
+
+A request names a preset as the model `"@preset/cheapest"` or beside it as `"preset": "cheapest"`; it
+may also write its profile inline (`"preset": { "policy": { … } }`) and cap the price on its own
+(`"max_price": 0.42`). A name nobody has is a 404 (`ai.preset_not_found`), never a silent default.
+
+The rules filter the pool **before** the call: an offer that breaks one is out, and the receipt says
+which rule removed it. A hard `max_price` that no offer fits is refused before anything is called, with
+a problem document (`ai.max_price_exceeded`) that carries the cap, the lowest price on offer and the
+offers that were excluded.
+
+### Receipts
+
+Every answered request carries a receipt: the offer that answered, the price it charged, the tokens in
+and out, the cache reads and writes, the latency, why the router chose it, the fallbacks it would have
+used, who paid and the privacy label. It never carries the prompt or the answer.
+
+- **In the answer:** the header `x-openvibe-receipt-id` and `x-openvibe-receipt` (the same facts, compact
+  JSON). A streamed answer names its receipt in the headers and carries the whole one in the last chunk.
+- **On its own:** `GET /v1/receipts/{id}` (and the documented `GET /api/v1/receipts/{id}`), readable by the
+  caller that made the run, by the person it was for, and by whoever may read the usage
+  (`ai.usage.read`). Anyone else gets a 404, not a refusal that says there is something there.
+- **Kept with the usage:** the receipt goes with its run (`runs.receipt_id` points at it) and is pruned
+  with the runs' retention window.
+
+### BYOK and the privacy label
+
+A run on the person's own key (BYOK) is metered at 0 %: the receipt says `paid_by: own_key` (or
+`own_machine`), `byok: true` and `fee_usd: 0`. The OpenVibe key pays the list price plus the fee.
+
+Every answer carries a privacy label — `private`, `anonymized` or `community` — read from the offer's
+declared data policy: the person's own machine is private, an offer that keeps nothing and trains on
+nothing is private, a community offer is community, and anything else is anonymized. The label is on the
+receipt and in the answer's `x_openvibe`.
 
 ## Memory
 
@@ -281,7 +346,8 @@ their own export; a deletion removes the rows. Unset `AI_MEMORY_KEY` turns every
   upstream that speaks Anthropic's format (Anthropic, DeepSeek's and MiniMax's Anthropic-compatible endpoints); an
   OpenAI-format provider is never converted.
 - **Answer:** a `message` (`id`, `role`, `model`, `content`, `stop_reason`, `usage`), and the run id in
-  `X-OpenVibe-Run-Id`.
+  `X-OpenVibe-Run-Id`. The answer's receipt is in `x-openvibe-receipt` (compact JSON) and
+  `x-openvibe-receipt-id`.
 - **Streaming:** `stream: true` answers Anthropic's own server-sent events as they arrive (`message_start`,
   `content_block_start`, `content_block_delta`, `content_block_stop`, `message_delta`, `message_stop`, `ping`); the run
   still ends with the whole message.
@@ -440,18 +506,23 @@ definition, but never over an admin's version.
 |---|---|---|
 | `stub` | Deterministic, no key, realistically shaped output (schema-shaped JSON, sentences, unit-vector embeddings, timed transcript segments), clearly marked synthetic (`(synthetic)` text, `synthetic: true` on the run). Never cached. | always present |
 | `openai` | Any OpenAI-compatible API (OpenAI, OpenRouter, Groq, Together, Ollama, LM Studio, llama.cpp): chat with structured-output step-down, embeddings, Whisper-style transcription, image generation (`POST {base}/images/generations`). Ported from Live's `llm.js` / `ai-provider.js`. | `AI_PROVIDER`, `AI_BASE_URL`, `AI_API_KEY`, `AI_MODEL` — Live's setting names |
+| `openai`, key `deepseek` | DeepSeek's own API, registered when its key is configured: `deepseek-flash` and `deepseek-v4-pro`, priced from DeepSeek's price page (peak rates; off-peak is half). A missing key leaves the provider disabled, so none of its models is an offer. | `DEEPSEEK_API_KEY` (or `AI_DEEPSEEK_KEY_REF`), `AI_DEEPSEEK_BASE_URL` |
 | `responses` | The OpenAI Responses API (`POST {base}/responses`) for GPT-family models that only speak it, at any OpenAI-compatible `base_url` (default `https://api.openai.com/v1`): chat and every text operation, structured output through `text.format` with the same step-down, vision; no embeddings or transcription. | the admin API (`kind: "responses"`, `base_url`, `secret_ref`) |
 | `anthropic` | Messages API with cached system blocks and forced-tool JSON. Ported from Live's `llm.js`. | same, with `AI_PROVIDER=anthropic` |
 | `http` | The local HTTP seam: `POST {operation, …}` → `{text, json, usage}` | `AI_HTTP_SEAM_URL` or the admin API |
 | `whisper` | whisper.cpp on this host, with Live's VAD, hallucination filter, multilingual model and live/batch lanes; NVIDIA Parakeet TDT 0.6B v3 (`parakeet-cli`) for English and 24 European languages when `PARAKEET_MODEL` is set, falling back to whisper | `WHISPER_*`, `PARAKEET_*`, `ASR_ENGINE` — Live's names |
-| `openai`, key `local` | A model server on this host speaking the OpenAI API (llama.cpp's `llama-server`, Ollama's `/v1`): no key, never paid; route `media.local` | `AI_LOCAL_LLM_URL`, `AI_LOCAL_LLM_MODEL`, `AI_LOCAL_LLM_TIMEOUT_MS` |
+| `openai`, key `local` | A model server on this host speaking the OpenAI API (llama.cpp's `llama-server`, Ollama's `/v1`): no key, never paid; route `media.local`; last offer for short text, one request at a time | `AI_LOCAL_LLM_URL`, `AI_LOCAL_LLM_MODEL`, `AI_LOCAL_LLM_TIMEOUT_MS`, `AI_LOCAL_LLM_MAX_TOKENS` (512), `AI_LOCAL_LLM_CONCURRENCY` (1) |
+| `openai`, key `local2` | A second local chat server, another llama.cpp process and model family: no key, never paid, no JSON or embeddings. Two local offers let a caller pin a match between them (Games' AI-vs-AI job) | `AI_LOCAL_LLM2_URL`, `AI_LOCAL_LLM2_MODEL`, `AI_LOCAL_LLM2_TIMEOUT_MS` |
 
 Routing: a route either names a `capability` and the router builds its pool from every provider that
 can serve it, ordered by `openvibe-sdk/placement` (objective, price, measured latency, health, with
 hysteresis through the route's current placement), or pins a `[primary, ...fallbacks]` list. A
 provider that is disabled, missing credentials, circuit-open or unable to do the operation is
 **skipped and logged**; every call has a strict timeout, cancellation and one retry on a transient
-failure; a fallback that answers is recorded on the run (`fallback_used`), in the request log
+failure. A provider's own "insufficient balance" answer (HTTP 402, or 429/403 `insufficient_quota`) is never
+retried: its circuit opens at once for `AI_BREAKER_EXHAUSTED_COOLDOWN_MS` (10 minutes, shared by every request)
+and the router fails over. When nothing can serve, the run answers `ai.resting`; a fallback that answers is
+recorded on the run (`fallback_used`), in the request log
 (`fallback = 1`) and in the audit log. Every run response and `GET /api/v1/runs/:id` carry `explain`
 (objective, reasons, selected, and every candidate with its estimated cost, latency and excluded
 reason).
@@ -528,6 +599,19 @@ are the reading's `free_allowance_used` on its `platform.usage-sample@1`, and it
 their price out. It is pricing, never admission: quotas, request counting and the run's own cost are
 unchanged, and no call is ever refused because the allowance is used up. Every card defaults to 0, so
 nothing is free and the field is absent until an operator configures an allowance.
+
+Free-use sources and price ceiling (`AI_FREE_PROVIDERS`, default `deepseek,local,community`;
+`AI_FREE_MAX_OUTPUT_PRICE_USD_PER_MTOK`, default 1.5): a run that nobody pays for — the free allowance
+(a first-party service naming a person, without that person's own token) or the Exchange's anonymous Try
+it — may use only offers from those sources and at or below this output price per million tokens. A
+source is a provider key; `local` covers every local model server (`local`, `local2`, whisper.cpp) and
+`community` the community machines. The design funds free use from the owner's DeepSeek key, local models
+and volunteers, never from Live's shared OpenAI key. The router skips the rest and answers
+`402 billing.payer_required` when every capable offer is outside those rules. A person's own token (and so
+their Balance, AI #311), their own provider key, an app's project and a service's own run-token budget are
+not capped this way. The check is admission, not pricing: it never changes a price or a Balance reading.
+The Exchange catalog marks each offer `free_tier` by the same two rules (distinct from `free`, which means
+prepaid capacity with no per-token price).
 
 Tier budgets (T6 step 8, decision D5; `server/govern.js`, off unless `AI_GOVERN_TIERS=1`): the SaaS tiers
 `free`, `paid` and `staff` on `openvibe-sdk/govern`, counted in Valkey. Before a run touches a provider
@@ -693,6 +777,21 @@ streams always win: 2 threads, at most 1.5 CPUs, nice 19, 3 GB. It uses about 0.
 28 tokens/s. Without it, `media.analyze` writes an extractive overview and says so. To swap the model, put the
 file beside it, change `--model`/`--alias` and `AI_LOCAL_LLM_MODEL`, and restart both units.
 
+`deploy/systemd/openvibe-llm2.service` is the optional second chat server: the same llama.cpp build and models
+directory on `127.0.0.1:8092`, a different model family, and the provider `local2`
+(`AI_LOCAL_LLM2_URL=http://127.0.0.1:8092/v1`, `AI_LOCAL_LLM2_MODEL`). It is held to 2 threads, at most 1 CPU,
+nice 19 and 2 GB, and it never advertises `json` or `embed`. Games' AI-vs-AI job pins one local offer per side,
+so the two models must be different families and both aliases must be the `model` in its `GAMES_AI_MATCHES_OFFERS`
+pair. On the production host since 2026-11-06: Llama-3.2-1B-Instruct Q4_K_M (Llama 3.2 Community License,
+Hugging Face sha256 `6f85a640a97cf2bf5b8e764087b1e83da0fdb51d7c9fab7d0fece9385611df83`, 807,694,464 bytes),
+checked against that hash before install; it uses about 0.8 GB.
+
+The local model is a **last offer for short text** (summaries, titles, moderation hints, a chat line), never
+for code or long reasoning: routes with `max_output_tokens` over 800 or `outlast_provider_timeout` (an app or a
+wiki page) never offer it. It answers with `AI_LOCAL_LLM_MAX_TOKENS` (512) at most, and one request at a time
+(`AI_LOCAL_LLM_CONCURRENCY`, 1) across `local` and `local2`, so a paid outage cannot starve the streams sharing
+the host. A run that it answered names `local`/`local2` as its provider and marks the receipt local.
+
 Local embeddings are off unless `AI_LOCAL_EMBED_MODEL` names an embedding model the server at `AI_LOCAL_LLM_URL`
 answers at `/embeddings`. Then `local` advertises `embed`, the model is registered as an `embedding` model, and
 `default.embedding` (a capability pool) offers it beside the shared provider's `AI_EMBEDDING_MODEL`; `local` is
@@ -713,6 +812,8 @@ mix vectors from different providers (re-embed when the provider changes).
 | Every workflow has versioned, compiling input/output schemas, runs on the stub and validates | `test/workflows.test.js` |
 | Edits are new versions; runs pin versions; lifecycle; admin versions survive reseeding | `test/versioning.test.js` |
 | A degraded primary falls back and records it; breaker; skips; timeouts; explicit `provider.unavailable` | `test/fallback.test.js` |
+| 402/insufficient-quota opens the long exhausted circuit, never retries, fails over, then `ai.resting` | `test/provider-exhausted.test.js` |
+| Hourly DeepSeek balance gauge, no key in logs, off under a drill | `test/provider-balance.test.js` |
 | Quotas refuse with 429 + Retry-After **before** any provider call; per-service, attribution, cost caps | `test/quota.test.js` |
 | Free allowance: free up to the card's allowance then fully priced, reset per day/month (never for `none`), per subject, never past the cap under concurrent claims, absent at 0 | `test/free-allowance.test.js` |
 | Tier budgets: enforced per subject and per project and reset per window, two concurrent runs never both take the last unit, the free allowance's numbers unchanged on the Valkey store, one reading per accounted run from govern's `onUsage`, Valkey unreachable (paid 503, free admitted), off by default | `test/govern-tiers.test.js` |
@@ -732,6 +833,7 @@ mix vectors from different providers (re-embed when the provider changes).
 | Word timing (`live.media.transcribe` with `words: true`): whisper's `-ojf` tokens and Parakeet's token lines become each segment's words with their times; punctuation joins a word without moving its end; one unit per token in Japanese; fillers and control tokens are not words | `test/word-timing.test.js` |
 | `media.analyze` on a real 28 s fixture: signals, scenes and loud moments measured, highlights with evidence, the local model's overview from the facts only; the local model down → extractive and said; paid only with `allow_paid` and a `media.paid` budget, never past it; too little disk refused before downloading | `test/media-analysis.test.js` |
 | Import from a Live snapshot: dry run, holds, idempotent re-run | `test/import.test.js` |
+| Routing presets: the five built-in ones, a caller's own stored per account and per project, each knob applied (floor, ceiling, max_price, quantization, region, data policy, community), a hard max_price refused before the call with a problem document, every answer's receipt (offer, price, tokens, cache hits, latency, why, fallbacks, privacy label, BYOK at 0 %) in the headers and at `GET /v1/receipts/{id}`, and the Anthropic endpoint and the stream carrying the same receipt | `test/exchange-presets-receipts.test.js` |
 | Capability proposals are valid contracts documents matching what is enforced | `test/proposals.test.js` |
 
 ## Security
@@ -829,6 +931,6 @@ Part of the [OpenVibe network](https://openvibe.network). Built in the open by [
 
 <!-- versions:start -->
 - openvibe-contracts: v0.289.1
-- openvibe-sdk: v0.83.0
-- openvibe-shared: v4.114.0
+- openvibe-sdk: v0.91.0
+- openvibe-shared: v4.115.1
 <!-- versions:end -->
