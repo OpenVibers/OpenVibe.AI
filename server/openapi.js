@@ -305,8 +305,10 @@ const exchangeOffer = {
         price_source: nullable('string', { description: 'The price page the card was read from, when recorded' }),
         price_checked_at: nullable('string', { description: 'The date someone checked the price, when recorded' }),
         speed: { type: 'object', properties: { p50_ms: nullable('number'), p95_ms: nullable('number') } },
-        uptime: nullable('number', { minimum: 0, maximum: 1 }),
+        uptime: nullable('number', { minimum: 0, maximum: 1, description: 'succeeded / (succeeded + failed) real runs; null when no run reached this offer' }),
         requests_7d: integer({ minimum: 0 }), requests_today: integer({ minimum: 0 }),
+        cached_7d: integer({ minimum: 0, description: 'Cached answers (no provider call) in the window, counted apart from requests_7d' }),
+        cached_today: integer({ minimum: 0 }),
         data_policy: nullable('object', { properties: { trains: nullable('boolean'), retention_days: nullable('integer'), region: nullable('string'), anonymized: nullable('boolean', { description: 'The provider says the request is anonymised before the model sees it' }) } }),
         updated_at: nullable('string'),
     },
@@ -318,13 +320,14 @@ const exchangeModel = {
         kind: str({ enum: ['chat', 'embedding', 'stt', 'image'] }), type: str(), context: nullable('integer'), max_output: nullable('integer'),
         capabilities: { type: 'object', properties: { tools: { type: 'boolean' }, json: { type: 'boolean' }, vision: { type: 'boolean' }, stream: { type: 'boolean' } } },
         modalities: arrayOf(str()), description: nullable('string'),
-        requests_7d: integer({ minimum: 0 }), requests_today: integer({ minimum: 0 }), community: { type: 'boolean' },
+        requests_7d: integer({ minimum: 0 }), requests_today: integer({ minimum: 0 }),
+        cached_7d: integer({ minimum: 0 }), cached_today: integer({ minimum: 0 }), community: { type: 'boolean' },
         offers: arrayOf(exchangeOffer),
     },
 };
 route('get', '/exchange/catalog', {
     operationId: 'exchangeCatalog', summary: 'Every model and every offer that serves it', tags: ['exchange'], security: [],
-    description: 'Public. The live offers: price in, out and cached per million tokens, measured p50/p95, uptime, requests, and the provider data policy. A prepaid offer has no price (free: true); free_tier says whether the free allowance and the anonymous Try it may use an offer at all (a named AI_FREE_PROVIDERS source under the output price ceiling). The window is 7 days. Models carry a kind (chat, embedding, stt, image); chat lists must use kind "chat" and never mix embeddings or speech-to-text.',
+    description: 'Public. The live offers: price in, out and cached per million tokens, measured p50/p95, uptime, requests, and the provider data policy. Speed and uptime are read from the last seven days of real runs (time to the first token where a receipt recorded one, else the answering attempt\'s total); cached answers are counted apart and excluded from speed, uptime and requests. Uptime is succeeded / (succeeded + failed); null when no data, never 0. A prepaid offer has no price (free: true); free_tier says whether the free allowance and the anonymous Try it may use an offer at all (a named AI_FREE_PROVIDERS source under the output price ceiling). Models carry a kind (chat, embedding, stt, image); chat lists must use kind "chat" and never mix embeddings or speech-to-text.',
     parameters: [query('kind', str({ enum: ['chat', 'embedding', 'stt', 'image'] }), 'Only models of this kind')],
     responses: { 200: json('The models, grouped by model, with their offers', { type: 'object', required: ['models'], properties: {
         generated_at: str({ format: 'date-time' }), window_days: integer(), count: integer(),
@@ -348,7 +351,7 @@ route('get', '/exchange/models/{org}/{model}', {
 });
 route('get', '/exchange/usage', {
     operationId: 'exchangeUsage', summary: 'Requests, tokens and spend by day, model and product', tags: ['exchange'], security: [],
-    description: 'Public and aggregate only: never a prompt, an answer or a person. A product is the service that ran the model (usage_daily.requester).',
+    description: 'Public and aggregate only: never a prompt, an answer or a person. Read from the finished runs: a product is the service whose run answered (runs.requester_id), and each product\'s models are the provider and model that actually answered, not the route it asked for. Cached answers called no provider and are not counted; only aggregate rows are returned.',
     parameters: [query('days', integer({ minimum: 1, maximum: 366 }), 'Default 30')],
     responses: { 200: json('The aggregates', { type: 'object', properties: {
         generated_at: str({ format: 'date-time' }), days: integer(), from: str(), to: str(),
