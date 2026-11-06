@@ -12,7 +12,9 @@ let h;
 const day = (n) => new Date(Date.now() - n * 86400000).toISOString().slice(0, 10);
 
 t.test('boot', async () => {
-    h = await boot({ env: { AI_STUB_FALLBACK: 'false' } });
+    // The catalog lists only offers whose key is configured: give the test's providers keys and the shared
+    // provider a real OpenAI upstream, as production has.
+    h = await boot({ env: { AI_STUB_FALLBACK: 'false', AI_PROVIDER: 'openai', AI_API_KEY: 'test-openai-key', DEEPSEEK_KEY: 'test-deepseek-key', DEEPINFRA_KEY: 'test-deepinfra-key' } });
 });
 
 t.test('catalog groups the same model across providers, with prices, speed, uptime and data policy', async () => {

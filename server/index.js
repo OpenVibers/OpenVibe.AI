@@ -64,7 +64,9 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     const community = givenCommunity || require('./community').createCommunity({ db, config, env, machines, clock, fetchImpl, log });
     // BENCH-11: Bench's ratings as routing evidence, and the opted-in tie rule inside placement.
     const bench = createBenchEvidence({ db, registry, config, clock, fetchImpl, log });
-    const pool = createProviderPool({ db, registry, config, clock, fetchImpl, env, log, credentialFetch, machineModels: machines, community, bench, variantEvidence });
+    // Network owns the 18+ account flag; the adult tier checks it before placement.
+    const adultStatus = require('./policy/adult-status').createAdultStatus({ config, env, fetchImpl, clock, log });
+    const pool = createProviderPool({ db, registry, config, clock, fetchImpl, env, log, credentialFetch, machineModels: machines, community, bench, variantEvidence, adultStatus });
     // The hourly provider balance probe (server/providers/balance.js): a gauge for the operator alert, started
     // only when the service listens (never in tests) and off under a restore drill.
     const balance = require('./providers/balance').createBalanceProbe({ registry, config, env, fetchImpl, clock, log });
@@ -95,6 +97,9 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     const credentials = require('./credentials').createCredentials({ db, config, clock, fetchImpl: credentialFetch, grants });
     // A person's ai.preferences (L36 Y3): only_my_keys, free_first, a price ceiling and a default model per kind.
     const preferences = require('./person-preferences').createPreferences({ db, clock });
+    // The Exchange's routing presets and the receipts of the answered requests (server/exchange/).
+    const presets = require('./exchange/presets').createPresets({ db, clock, log });
+    const receipts = require('./exchange/receipts').createReceipts({ db, clock, log });
     const projectSecrets = require('./project-secrets').createProjectSecrets({ config, env, fetchImpl });
     ensureCredits();
     // A stable facade: the store may create the Credits manager after boot (AI_CREDITS turned on live), and the runs
@@ -112,7 +117,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         startSettlements() { return credits ? credits.startSettlements() : null; },
         stopSettlements() { return credits ? credits.stopSettlements() : undefined; },
     };
-    const runs = createRuns({ db, registry, engine, cache, quotas, config, clock, log, userModules, credentials, preferences, tiers, projectSecrets, pool, runBudgets, credits: creditsRef, community });
+    const runs = createRuns({ db, registry, engine, cache, quotas, config, clock, log, userModules, credentials, preferences, tiers, projectSecrets, pool, runBudgets, credits: creditsRef, community, presets, receipts });
     await seed({ registry, quotas, config, env, db });
     // The seed creates or moves providers from the environment: publish their origins (the schema and every key's
     // bind follow), so a key is bound to the host it is for from the first boot.
@@ -141,7 +146,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         clientSecret: env.OV_OAUTH_CLIENT_SECRET, fetch: fetchImpl,
     }) : null;
     const benchEvents = createBenchEvents({ bench, accountData, accountSend, config, log, fetchImpl, clientSecret: env.OV_OAUTH_CLIENT_SECRET });
-    const app = createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, grants, vault, settings, benchEvents, runBudgets, memory, memoryImport, community, balance });
+    const app = createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, grants, vault, settings, benchEvents, runBudgets, memory, memoryImport, community, presets, receipts, balance });
     let jwks = null;
     let keyLoaded = Promise.resolve(null);
     if (!keys.pinned && config.nodeEnv !== 'test') {
@@ -152,6 +157,8 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     const housekeeping = setInterval(async () => {
         try {
             const pruned = await runs.prune();
+            // The receipts go with the runs they belong to (the same retention window).
+            await receipts.prune(config.runs.retentionDays, clock.now());
             const expired = await cache.prune();
             // Billing readings never sent go with their runs (server/usage-samples.js expireUnsent).
             const lapsed = await require('./usage-samples').expireUnsent(db, { days: config.runs.retentionDays, now: clock.now() });

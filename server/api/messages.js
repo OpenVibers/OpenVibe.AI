@@ -34,6 +34,8 @@ const { credentialFor } = require('./credential');
 const models = require('./models');
 const modelCatalog = require('../providers/model-catalog');
 const { EXACT_ID } = modelCatalog;
+const { resolveRequest } = require('../exchange/presets');
+const { compact, receiptId } = require('../exchange/receipts');
 
 const FIELDS = ['system', 'tools', 'tool_choice', 'stop_sequences', 'temperature', 'top_p', 'top_k', 'metadata'];
 const MAX_TOKENS = 64000;
@@ -97,17 +99,20 @@ function createEventStream(res) {
             res.setHeader('Cache-Control', 'no-store');
             res.setHeader('X-Accel-Buffering', 'no');
             res.setHeader('X-OpenVibe-Run-Id', r.id);
+            // A stream's headers go out before the answer is known: the receipt's id is known from the run id
+            // (it is the same receipt), and the receipt itself travels in the last event.
+            res.setHeader('x-openvibe-receipt-id', receiptId(r.id));
             if (typeof res.flushHeaders === 'function') res.flushHeaders();
             opened = true;
             for (const e of waiting.splice(0)) emit(e.event, e.data);
         },
         emit,
         sentAny: () => any,
-        /** The held message_stop with the final x_openvibe object, then end the stream. */
-        finish(xOpenVibe) {
+        /** The held message_stop with the final x_openvibe object (and the receipt), then end the stream. */
+        finish(xOpenVibe, receipt) {
             const data = finalEvent || { type: 'message_stop' };
             finalEvent = null;
-            write('message_stop', xOpenVibe ? { ...data, x_openvibe: xOpenVibe } : data);
+            write('message_stop', xOpenVibe ? { ...data, x_openvibe: xOpenVibe, ...(receipt ? { receipt } : {}) } : data);
             return out.done();
         },
         fail(message, code) {
@@ -137,7 +142,7 @@ function replay(res, message, run) {
     res.emit('message_stop', { type: 'message_stop' });
 }
 
-function messagesRouter({ runs, auth, config, registry, log = console }) {
+function messagesRouter({ runs, auth, config, registry, presets = null, receipts = null, log = console }) {
     const r = express.Router();
     // Developer apps call with ai.app.run, the public capability they already hold (ADR-014; AI Exchange D8').
     const allow = auth.appOrCap(CAPS.appRun, CAPS.runCreate);
@@ -171,16 +176,28 @@ function messagesRouter({ runs, auth, config, registry, log = console }) {
         for (const k of FIELDS) if (b[k] !== undefined && b[k] !== null) input[k] = b[k];
         // AI Exchange F: the caller's liability cap for the Balance hold (an OpenVibe extension).
         if (b.max_cost_usd != null) input.max_cost_usd = b.max_cost_usd;
+        // The routing preset (server/exchange/presets.js): `model: "@preset/cheapest"` or `preset: "cheapest"`,
+        // and a request's own `max_price` (USD per million tokens). A preset nobody has is a refusal.
+        let preset = null;
+        try {
+            preset = await resolveRequest({ presets, principal: req.principal, body: b });
+        } catch (err) {
+            if (err && err.status) return anthropicError(res, err.status, err.detail || err.message, null, err.code);
+            throw err;
+        }
         // AI Exchange D3 (AI_MODEL_CATALOG): an exact id or a dynamic alias. With the flag off the field is ignored
         // exactly as before, and the router picks, except an exact id: a pin is never silently run on another model (a
         // rollback of the flag included), so it is refused.
         const catalogOn = Boolean(config.modelCatalog && config.modelCatalog.enabled);
+        const rawModel = b.model == null ? '' : String(b.model).trim();
+        // A preset named as the model is the router's own choice with the preset's rules: the model is the alias.
+        const presetModel = rawModel.toLowerCase().startsWith('@preset/');
         if (!catalogOn && typeof b.model === 'string' && EXACT_ID.test(b.model.trim())) {
             return anthropicError(res, 400, 'model: an exact model id needs the model catalog, which is off: name a dynamic model (openvibe) instead (ai.model_unavailable)');
         }
         if (catalogOn) {
             if (b.model !== undefined && b.model !== null && typeof b.model !== 'string') return anthropicError(res, 400, 'model: must be a string');
-            const requested = b.model == null ? 'openvibe/auto' : String(b.model).trim();
+            const requested = (b.model == null || presetModel) ? 'openvibe/auto' : rawModel;
             if (!requested || requested.length > 256) return anthropicError(res, 400, 'model: must name an exact id or a dynamic alias');
             input.model = requested;
             // An exact id is a pin: an unknown or inactive artifact is refused here, before the run (and its stream)
@@ -196,10 +213,16 @@ function messagesRouter({ runs, auth, config, registry, log = console }) {
             }
         }
         let body = { workflow: 'ai.messages', input };
-        // Opt in to community capacity: the caller accepts that a person's machine sees the prompt.
+        // The preset's rules ride the run into the router.
+        if (preset) body = { ...body, preset: { name: preset.name, scope: preset.scope, policy: preset.policy } };
+        if (preset && preset.policy.adult && b.policy == null) body = { ...body, policy: 'uncensored' };
+        // A caller must opt in before a person's machine sees the prompt.
         if (req.get('x-openvibe-community') === '1' || (b.x_openvibe && b.x_openvibe.community === true)) body.community = true;
         // L37: the soft preference (provider, and a model if the caller wants one). A wish, not a pin.
         if (b.prefer) body = { ...body, prefer: b.prefer };
+        // The Exchange remake's content policy (`policy: "uncensored"`), enforced by the router.
+        if (b.policy != null) body = { ...body, policy: b.policy };
+        if (b.on_behalf_of != null) body = { ...body, on_behalf_of: b.on_behalf_of };
         if (req.principal.kind === 'app') body = { ...body, attribution: appAttribution(req.principal) };
         const own = credentialFor(req);
         if (own.error) return anthropicError(res, own.status, own.error);
@@ -227,7 +250,10 @@ function messagesRouter({ runs, auth, config, registry, log = console }) {
             const code = (run.error && run.error.code) || 'run.failed';
             const status = code === 'ai.run_budget_reached' || code === 'ai.allowance_spent' || code === 'billing.insufficient_funds' || code === 'billing.payer_required' ? 402 : /^(input|validation)\./.test(code) ? 400 : /quota|allowance|budget/.test(code) ? 429
                 : code === 'credential.unsupported' ? 422 : code === 'credential.not_found' ? 404
-                : code === 'ai.model_unavailable' ? 400 : code === 'ai.model_not_found' ? 404 : 529;
+                : code === 'policy.adult_required' || code === 'policy.uncensored_refused' || code === 'policy.floor_refused' ? 403
+                : code === 'policy.uncensored_needs_person' ? 400
+                : code === 'ai.model_unavailable' ? 400 : code === 'ai.model_not_found' ? 404
+                : code === 'ai.max_price_exceeded' ? 400 : 529;
             return anthropicError(res, status, (run.error && run.error.detail) || code, null, code);
         }
         if (!['succeeded', 'cached'].includes(run.status) || !run.output || !Array.isArray(run.output.content)) {
@@ -246,22 +272,34 @@ function messagesRouter({ runs, auth, config, registry, log = console }) {
             },
         };
         const disclosure = await models.disclosureOf({ registry, config, run });
-        // A community answer is labelled even with the model catalog flag off: the prompt ran on a person's machine.
         const community = (disclosure && disclosure.community) || (run.explain && run.explain.community) || null;
         if (live) live.route(disclosure || (community ? { community } : null));
         if (community && !live) res.setHeader('X-OpenVibe-Community', '1');
-        // D8': the route disclosure joins the existing x_openvibe object (run, provider, fallback, cost), never a second object.
+        const receipt = receipts ? await receipts.forRun(run.id) : null;
+        const receiptView = receipt ? compact(receipt) : null;
         const x = { run_id: run.id, provider: run.provenance && run.provenance.provider, fallback_used: Boolean(run.provenance && run.provenance.fallback_used),
-            cost_usd: run.usage.cost_usd, synthetic: Boolean(run.synthetic), ...(community ? { community } : {}) };
-        const xOpenVibe = (disclosure || community) ? { ...x, ...(disclosure || {}) } : null;
+            cost_usd: run.usage.cost_usd, synthetic: Boolean(run.synthetic),
+            ...(community ? { community } : {}),
+            ...(run.output.label ? { policy: run.output.policy || 'uncensored', label: run.output.label } : {}),
+            privacy: receipt && receipt.privacy ? receipt.privacy.label : null, receipt_id: receipt ? receipt.id : null };
+        if (run.output.label) {
+            message.label = run.output.label;
+            message.policy = run.output.policy || 'uncensored';
+            res.setHeader('X-OpenVibe-Content-Policy', message.policy);
+        }
+        const xOpenVibe = (disclosure || community || run.output.label || receipt) ? { ...x, ...(disclosure || {}) } : null;
         if (live) {
             // The events already went out as they arrived; an answer that came in one piece (an upstream that cannot
             // stream, a replayed run) is sent as the events it is. finish() sends the held message_stop with the whole
             // x_openvibe object, then ends the stream.
             if (!live.sentAny()) replay(live, message, run);
-            return live.finish(xOpenVibe);
+            return live.finish(xOpenVibe, receiptView);
         }
         res.setHeader('X-OpenVibe-Run-Id', run.id);
+        if (receipt) {
+            res.setHeader('x-openvibe-receipt-id', receipt.id);
+            res.setHeader('x-openvibe-receipt', JSON.stringify(receiptView));
+        }
         return res.status(200).json(xOpenVibe ? { ...message, x_openvibe: xOpenVibe } : message);
     });
 
