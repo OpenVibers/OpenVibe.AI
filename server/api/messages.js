@@ -196,6 +196,8 @@ function messagesRouter({ runs, auth, config, registry, log = console }) {
             }
         }
         let body = { workflow: 'ai.messages', input };
+        // Opt in to community capacity: the caller accepts that a person's machine sees the prompt.
+        if (req.get('x-openvibe-community') === '1' || (b.x_openvibe && b.x_openvibe.community === true)) body.community = true;
         // L37: the soft preference (provider, and a model if the caller wants one). A wish, not a pin.
         if (b.prefer) body = { ...body, prefer: b.prefer };
         if (req.principal.kind === 'app') body = { ...body, attribution: appAttribution(req.principal) };
@@ -244,11 +246,14 @@ function messagesRouter({ runs, auth, config, registry, log = console }) {
             },
         };
         const disclosure = await models.disclosureOf({ registry, config, run });
-        if (live) live.route(disclosure);
+        // A community answer is labelled even with the model catalog flag off: the prompt ran on a person's machine.
+        const community = (disclosure && disclosure.community) || (run.explain && run.explain.community) || null;
+        if (live) live.route(disclosure || (community ? { community } : null));
+        if (community && !live) res.setHeader('X-OpenVibe-Community', '1');
         // D8': the route disclosure joins the existing x_openvibe object (run, provider, fallback, cost), never a second object.
         const x = { run_id: run.id, provider: run.provenance && run.provenance.provider, fallback_used: Boolean(run.provenance && run.provenance.fallback_used),
-            cost_usd: run.usage.cost_usd, synthetic: Boolean(run.synthetic) };
-        const xOpenVibe = disclosure ? { ...x, ...disclosure } : null;
+            cost_usd: run.usage.cost_usd, synthetic: Boolean(run.synthetic), ...(community ? { community } : {}) };
+        const xOpenVibe = (disclosure || community) ? { ...x, ...(disclosure || {}) } : null;
         if (live) {
             // The events already went out as they arrived; an answer that came in one piece (an upstream that cannot
             // stream, a replayed run) is sent as the events it is. finish() sends the held message_stop with the whole

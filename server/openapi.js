@@ -157,6 +157,39 @@ route('get', '/memory/search', {
     parameters: [query('q', str()), query('scopes', str(), 'Comma-separated scopes; default user'), query('purpose', str(), 'The task or run the person sees'), query('on_behalf_of', str())],
     responses: { 200: json('At most 8 active items', memoryResult), 403: problem, 503: problem, ...errors([401]) },
 });
+// ── Memory M3: the guided cloud import (person token only) ─────────────────────────────────
+route('get', '/memory/import/providers', {
+    operationId: 'getMemoryImportProviders', summary: 'The walkthroughs and the extraction prompt for the cloud import', tags: ['memory'], security: memorySecurity,
+    description: 'The person’s own token only. Where to request each export (ChatGPT, Claude, Gemini), what arrives, how long it takes, and the prompt to paste into any assistant. The answer contains no note.',
+    responses: { 200: json('The providers and the prompt', { type: 'object', properties: { providers: arrayOf({ type: 'object' }), prompt: str() } }), 403: problem, 503: problem, ...errors([401]) },
+});
+route('post', '/memory/import/preview', {
+    operationId: 'previewMemoryImport', summary: 'Parse and redact an export into a two-hour draft', tags: ['memory'], security: memorySecurity,
+    description: 'The person’s own token only. Send a .zip export, one multipart form (the Codes page forwards it untouched), a text/plain paste, or JSON { provider, text }. Nothing enters memory_items: the candidates are sealed into memory_imports with AI_MEMORY_KEY and expire after two hours. The answer is the draft id and the redacted candidates.',
+    requestBody: {
+        required: true,
+        content: {
+            'application/zip': { schema: { type: 'string', format: 'binary' } },
+            'multipart/form-data': { schema: { type: 'object', properties: { provider: str({ enum: ['chatgpt', 'claude-ai', 'gemini-apps', 'other'] }), file: { type: 'string', format: 'binary' }, text: str() } } },
+            'text/plain': { schema: { type: 'string' } },
+            'application/json': { schema: { type: 'object', properties: { provider: str(), text: str() } } },
+        },
+    },
+    responses: { 200: json('The sealed draft and its candidates', ref('MemoryResult')), 413: problem, 422: problem, 503: problem, ...errors([401, 403]) },
+});
+route('post', '/memory/import/{id}/commit', {
+    operationId: 'commitMemoryImport', summary: 'Keep the ticked candidates and delete the draft', tags: ['memory'], security: memorySecurity,
+    description: 'The person’s own token only. keep names the preview keys (k1, k2, …) to store. They go through the normal batch import (redaction again, dedupe), and the draft is deleted; the keys not sent are not stored. An expired draft answers 410.',
+    parameters: [path('id', str())],
+    requestBody: body({ type: 'object', properties: { keep: arrayOf(str()) } }),
+    responses: { 200: json('What was kept and left out', ref('MemoryResult')), 404: problem, 410: problem, 422: problem, 503: problem, ...errors([401, 403]) },
+});
+route('delete', '/memory/import/{id}', {
+    operationId: 'discardMemoryImport', summary: 'Throw a preview draft away', tags: ['memory'], security: memorySecurity,
+    description: 'The person’s own token only. The draft and its candidates are deleted; nothing was ever stored in memory_items.',
+    parameters: [path('id', str())],
+    responses: { 200: json('How many candidates were discarded', ref('MemoryResult')), 404: problem, 410: problem, 503: problem, ...errors([401, 403]) },
+});
 
 // ── Runs ──────────────────────────────────────────────────────────────────────────────────────
 route('post', '/runs', {
@@ -413,6 +446,19 @@ function openapi() {
         paths: { ...Object.fromEntries(Object.entries(PATHS).sort(([a], [b]) => a.localeCompare(b)).map(([p, item]) => [MOUNT + p, item])) },
     };
 }
+
+// ── Community AI offers (the design's "Offer to the network") ───────────────────────────────
+route('get', '/community/offers', {
+    operationId: 'communityOffers', summary: 'Live community offers for Exchange', tags: ['community'],
+    description: 'No token. Models, price in credits per million, hours, concurrency, audience, health and open_now; never an owner subject or a machine id (offer_id is a stable hash).',
+    responses: { 200: json('The live community offers'), 503: problem },
+});
+route('get', '/community/sell', {
+    operationId: 'communitySell', summary: 'The seller dashboard for Exchange', tags: ['community'], security: SERVICE,
+    description: 'ai.run.read or ai.usage.read, acting for the owner in X-OV-Subject. Tokens served, credits recorded (1 credit = 1,000,000 micro), uptime, verification (canaries, spot re-runs) and reputation; nothing here moves money.',
+    parameters: [{ name: 'X-OV-Subject', in: 'header', required: true, schema: str({ pattern: '^usr_[0-9A-HJKMNP-TV-Z]{26}$' }), description: 'The owner whose offers and ledger these are' }],
+    responses: { 200: json('The owner\'s offers and totals'), 422: problem, 503: problem, ...errors([401, 403]) },
+});
 
 /** The documented routes as "METHOD /api/v1/path": what the app must mount. */
 function routes() {

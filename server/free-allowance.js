@@ -46,7 +46,7 @@ function periodFor(card, now) {
     return { start: Number.isFinite(from) ? from : 0, end: Number.isFinite(until) ? until : NEVER };
 }
 
-function createFreeAllowance(db, { cardsFor, clock = { now: () => Date.now() }, store = null }) {
+function createFreeAllowance(db, { cardsFor, clock = { now: () => Date.now() }, store = null, bonusFor = null }) {
     const open = db.prepare(`INSERT INTO free_allowance_usage (subject, provider, metric, period_start, period_end, free_used, updated_at)
         VALUES (?, ?, ?, ?, ?, 0, ?) ON CONFLICT (subject, provider, metric, period_start) DO NOTHING`);
     const lock = db.prepare('SELECT free_used FROM free_allowance_usage WHERE subject = ? AND provider = ? AND metric = ? AND period_start = ? FOR UPDATE');
@@ -83,7 +83,9 @@ function createFreeAllowance(db, { cardsFor, clock = { now: () => Date.now() }, 
         await db.tx(async () => {
             for (const kind of KINDS) {   // one fixed order, so two claims lock rows in the same order
                 const c = cards[kind];
-                const cap = Math.floor(Number(c && c.free_allowance) || 0);
+                // A volunteer's kudos buy a bigger output allowance; the bonus is one per claim, never a cash value.
+                const bonus = kind === 'out' && bonusFor ? Math.max(0, Math.floor(Number(await bonusFor(subject)) || 0)) : 0;
+                const cap = Math.floor(Number(c && c.free_allowance) || 0) + bonus;
                 const q = Math.max(0, Math.floor(Number(usage[kind]) || 0));
                 const k = byKind[kind];
                 if (c) k.cost = (q / c.unit_size) * c.unit_price_usd;   // the whole quantity's list price, free or not

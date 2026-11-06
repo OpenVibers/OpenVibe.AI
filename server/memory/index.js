@@ -22,6 +22,10 @@
  *                                         at most once an hour per owner and scope
  *   GET    /api/v1/memory/search?q=&scopes=  for agents (ai.memory.read + on_behalf_of): active items only, in the
  *                                         granted scopes, at most 8, audited in memory_reads with ids and never text
+ *   GET    /api/v1/memory/import/providers  the cloud walkthroughs and the extraction prompt (M3, person token only)
+ *   POST   /api/v1/memory/import/preview   parse and redact an export into a sealed two-hour draft (M3)
+ *   POST   /api/v1/memory/import/:id/commit  keep the ticked candidates and delete the draft (M3)
+ *   DELETE /api/v1/memory/import/:id       throw the draft away (M3)
  *
  * Every SQL query that reads or changes a memory table is scoped by `owner = $…` (test/memory.test.js greps for it).
  * The account export decrypts the person's own items for their own export; deletion removes the rows.
@@ -888,8 +892,14 @@ function createMemory({ db, config, clock = { now: () => Date.now() }, log = con
  * names the person with `on_behalf_of`, but it may only search (audited) and import suggestions. Every other route is
  * person-only: a service gets 403 `capability.denied`.
  */
-function memoryRouter({ memory, auth, config, clock = { now: () => Date.now() }, log = console, sendError }) {
+function memoryRouter({ memory, memoryImport = null, auth, config, clock = { now: () => Date.now() }, log = console, sendError }) {
     const r = express.Router();
+    // Memory M3: an export zip is raw bytes (or one multipart form) and can be a few MB. The same route also takes
+    // pasted text as JSON, which the app-level JSON parser has already read.
+    const importBody = express.raw({
+        type: ['multipart/form-data', 'application/zip', 'application/x-zip-compressed', 'application/octet-stream', 'text/plain'],
+        limit: '25mb',
+    });
     function guard(check) {
         return async function memoryGuard(req, res, next) {
             const ctx = req.ov;
@@ -947,6 +957,14 @@ function memoryRouter({ memory, auth, config, clock = { now: () => Date.now() },
     // browsing routes: a service has no business in the person's audit.
     r.get('/api/v1/memory/reads', guard(READ_CAP), personOnly, run(async (req) => await memory.reads(req, ownerOf(req))));
     r.get('/api/v1/memory/search', guard(READ_CAP), run(async (req) => await memory.search(req, ownerOf(req))));
+    // M3: the guided cloud import. Person-only: a service token cannot see a person's export, hold a draft or keep
+    // what it finds. The preview stores only the sealed draft; the commit goes through the same batch as M2a.
+    if (memoryImport) {
+        r.get('/api/v1/memory/import/providers', guard(READ_CAP), personOnly, run(async () => memoryImport.providers()));
+        r.post('/api/v1/memory/import/preview', guard(WRITE_CAP), personOnly, importBody, run(async (req) => await memoryImport.preview(req, ownerOf(req))));
+        r.post('/api/v1/memory/import/:id/commit', guard(WRITE_CAP), personOnly, run(async (req) => await memoryImport.commit(req, ownerOf(req), req.params.id)));
+        r.delete('/api/v1/memory/import/:id', guard(WRITE_CAP), personOnly, run(async (req) => await memoryImport.discard(ownerOf(req), req.params.id)));
+    }
     // M2c: undo a merge, and settle a conflict. Both are the person's own: a service may only search and suggest.
     r.post('/api/v1/memory/items/:id/split', guard(WRITE_CAP), personOnly, run(async (req) => await memory.split(req, ownerOf(req), req.params.id)));
     r.post('/api/v1/memory/items/:id/settle', guard(WRITE_CAP), personOnly, run(async (req) => await memory.settle(req, ownerOf(req), req.params.id)));
