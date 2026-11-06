@@ -24,7 +24,7 @@ const pkg = require('../package.json');
 
 const { adminRoutes } = require('openvibe-shared/config');
 
-function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, credentials = null, preferences = null, grants = null, vault = null, settings = null, benchEvents = null, runBudgets = null, memory = null, memoryImport = null, community = null, presets = null, receipts = null, balance = null, gpus = null }) {
+function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, credentials = null, preferences = null, grants = null, vault = null, settings = null, benchEvents = null, runBudgets = null, memory = null, memoryImport = null, community = null, endpoints = null, presets = null, receipts = null, balance = null, gpus = null }) {
     const app = express();
     // /.well-known/agent.json (openvibe-shared/agent-layer, SEO-2): what this site serves, for agents.
     require('openvibe-shared/agent-layer').mount(app, { descriptor: require('./agent-descriptor') });
@@ -111,6 +111,9 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
     // OpenVibe.Exchange's read API (server/api/exchange.js): the public catalog and aggregate usage. Public on
     // purpose — the site and anyone comparing prices reads the same numbers the router ranks on.
     app.use(require('./api/exchange').exchangeRouter({ config, db, registry, pool, env, clock, presets, receipts, auth, log }));
+    // The public seller API: a standalone OpenAI-compatible server registered by its own https address with the
+    // seller's developer key (the design's SDK gap). Its offers join the community router's trust and ledger.
+    if (endpoints) app.use(require('./api/seller').sellerRouter({ endpoints, community, auth, log }));
     // GET /release.json (ADR-016) and POST /release-metrics (open tabs' update reports into /metrics).
     release.mount(app, { registry: metrics.registry });
 

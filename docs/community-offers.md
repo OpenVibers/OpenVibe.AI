@@ -21,6 +21,9 @@ capacity per request — because the machine sees the prompt.
    hours, a credit price and an audience.
 4. **AI** (`server/community/`) reads `GET /internal/ai/offers`, verifies the machine, and places only opted-in requests.
 
+A second source needs no Node at all: a standalone OpenAI-compatible server is registered by its own address on the
+public seller API (see **Community endpoints** below) and joins the same list, verification and ledger.
+
 ## Opting in
 
 `POST /v1/chat/completions` / `POST /v1/messages` (and the direct runs API) take either header
@@ -30,6 +33,49 @@ An exact model id (`org/model@revision`) and a BYOK run never go to a community 
 The answer carries `x_openvibe.community` (machine, owner, model, price, verification, reputation, credits) and the
 response header `X-OpenVibe-Community: 1`. A failure on the community machine falls back to the ordinary network, and
 that answer carries no community label.
+
+## Community endpoints
+
+The design's SDK gap: any server that speaks the OpenAI Chat Completions API can sell, not only a Node machine. The
+seller registers it with their own Network developer key on the Exchange's public API host, documented in
+`/openapi.json`:
+
+```
+POST   /api/v1/exchange/seller/offers        ai.app.run (a developer key), or a person's own token → 201 { offer }
+GET    /api/v1/exchange/seller/offers        the caller's own offers, with their verification
+DELETE /api/v1/exchange/seller/offers/:id    remove one (its verification and earnings stay as history)
+```
+
+The body: `base_url` (https), `models` (1–40), `price` (`in_per_million`/`out_per_million` in credits, 0 volunteers),
+`hours` (`start`, `end`, `tz`), `concurrency` (1–8), `audience` (`everyone` | `followers` | `group`), `group`, `name`.
+The owner is never in the body: it is the person the key acts for. A developer app's owner is its **project owner**,
+read from Network (`GET /internal/projects/:project_id`, `network.project.read`, five-minute cache); a first-party
+service token is refused.
+
+**Reaching it.** AI calls `POST <base_url>/chat/completions` only through `server/community/endpoints.js`:
+
+- https only, no credentials in the URL, port 443 or 8443;
+- never an IP literal (`127.0.0.1`, `10.0.0.0/8`, `169.254.169.254`, `[::1]`, and the IPv6 forms that wrap one) and never
+  a name that can only be local (`.local`, `.internal`, `localhost`);
+- the DNS answer is judged inside the connection's own lookup (`openvibe-shared/egress`), so the socket connects to the
+  checked address and a second answer cannot swap it; a name answering a private address is refused;
+- redirects are followed by hand, at most two, 307/308 only, and every hop is judged again — a redirect to a private
+  address is refused;
+- a timeout (`AI_COMMUNITY_ENDPOINT_TIMEOUT_MS`) and a response byte cap (`AI_COMMUNITY_ENDPOINT_MAX_BYTES`) on every
+  call; a non-200, non-JSON or non-completion answer is a failure, and the router falls back;
+- the request is built fresh: `model`, `messages`, `max_tokens`, `temperature`, `tools`, `stream: false`. Never the
+  buyer's subject, `on_behalf_of`, run id, key, cookies or forwarding headers (`X-OV-*`, `X-Forwarded-*`). The buyer's
+  own `user` field is not passed through either. No bearer token is sent: the endpoint must accept the POST from
+  OpenVibe as it is (put it behind an unguessable base path if you want it hard to find);
+- the seller's declared `concurrency` is enforced in-process: over it the call is busy and the router falls back.
+
+**Same trust as a Node machine.** The endpoint joins `server/community/index.js`'s offer list, so it gets the same three
+canaries, the same model fingerprint (the `model` its answer reports must be the declared one), the same ~1% spot
+re-runs against a verified peer, the free tier only until verified, and the self-dealing rule (the owner, a merged
+account, or the project that registered it earns 0). Its answers carry `provider: community-endpoint:<id>`,
+`provider_access: COMMUNITY_ENDPOINT`, `community.kind: "endpoint"` and the privacy label `community`, so a receipt says
+plainly a community endpoint answered. It sees the prompt: only requests that opt in to community capacity reach it.
+An endpoint's uptime is observed from its own calls, not from a reporter.
 
 ## Trust before traffic
 
@@ -71,7 +117,11 @@ list (models, price, hours, health; never an owner subject or machine id).
 - `AI_COMMUNITY` (default on): with no `OV_OAUTH_CLIENT_SECRET` or `OV_BOT_INTERNAL_URL` the list is empty.
 - `AI_COMMUNITY_REFRESH_MS` (30000), `AI_COMMUNITY_CANARY_MAX_AGE_MS` (6h), `AI_COMMUNITY_CANARY_TIMEOUT_MS` (30000),
   `AI_COMMUNITY_SPOT_RATE` (0.01).
-- Network grants AI `network.registry.read` and `network.follows.read` (the `followers` audience).
+- `AI_COMMUNITY_ENDPOINTS` (default on), `AI_COMMUNITY_ENDPOINT_TIMEOUT_MS` (60000),
+  `AI_COMMUNITY_ENDPOINT_MAX_BYTES` (2 MiB), `AI_COMMUNITY_ENDPOINT_MAX_REDIRECTS` (2),
+  `AI_COMMUNITY_ENDPOINT_MAX_PER_OWNER` (20).
+- Network grants AI `network.registry.read`, `network.follows.read` (the `followers` audience) and
+  `network.project.read` (a developer app's owner for the seller API).
 
 ## Tests
 
@@ -79,5 +129,9 @@ list (models, price, hours, health; never an owner subject or machine id).
 - `node test/community-run.test.js` — the run path: no opt-in reaches nothing; with it the answer is labelled; a failed
   machine falls back to the network.
 - `node test/community-api.test.js` — the dashboard route and the public offers route.
+- `node test/community-endpoints.test.js` — the egress guard (IP literals, a private DNS answer, a redirect to one, no
+  buyer identity, the timeout/concurrency), canaries, fingerprint, free tier and self-dealing for an endpoint.
+- `node test/community-endpoint-api.test.js` — the seller API: the owner from the developer key, refusals, list and
+  remove.
 - Network: `node test/run.js ai-offers`; Bot: `node test/community-ai.test.js`; Node: `python3 -m unittest discover -s
   plugins/ai/tests`.

@@ -360,6 +360,57 @@ route('get', '/exchange/usage', {
     } }) },
 });
 
+// ── The seller API: a standalone OpenAI-compatible endpoint (the design's SDK gap) ───────────
+const sellerEndpointOffer = {
+    type: 'object', required: ['id', 'offer_id', 'base_url', 'models', 'hours', 'concurrency', 'price', 'audience'],
+    properties: {
+        id: str({ pattern: '^ep_[0-9A-HJKMNP-TV-Z]{26}$' }),
+        offer_id: str({ description: 'The offer id the router and the receipt use: endpoint:<id>' }),
+        name: nullable('string'),
+        base_url: str({ description: 'The https base URL the router calls; /chat/completions is appended. Port 443 or 8443, a host name (never an IP address).' }),
+        models: arrayOf(str()), hours: { type: 'object', properties: { start: str(), end: str(), tz: str() } },
+        concurrency: integer({ minimum: 1, maximum: 8 }),
+        price: { type: 'object', properties: { in_per_million: { type: 'number' }, out_per_million: { type: 'number' } } },
+        audience: str({ enum: ['everyone', 'followers', 'group'] }), group: nullable('string'),
+        created_at: str({ format: 'date-time' }), updated_at: str({ format: 'date-time' }),
+        verification: nullable('object', { description: 'Canaries, spot re-runs, reputation and free-only, as the /sell dashboard shows them' }),
+        reputation: integer({ minimum: 0, maximum: 100 }), free_only: { type: 'boolean' }, verified: { type: 'boolean' },
+    },
+};
+const sellerEndpointInput = {
+    type: 'object', required: ['base_url', 'models', 'price', 'hours', 'concurrency'],
+    properties: {
+        base_url: str({ description: 'https, a public host name (no IP literal), port 443 or 8443, an optional base path such as /v1' }),
+        models: { type: 'array', items: str(), minItems: 1, maxItems: 40 },
+        price: { description: 'Credits per million tokens: a number for both sides, or {in_per_million, out_per_million}; 0 volunteers the model', oneOf: [
+            { type: 'number', minimum: 0, maximum: 1000000 },
+            { type: 'object', required: ['in_per_million', 'out_per_million'], properties: { in_per_million: { type: 'number', minimum: 0, maximum: 1000000 }, out_per_million: { type: 'number', minimum: 0, maximum: 1000000 } } },
+        ] },
+        hours: { type: 'object', required: ['start', 'end'], properties: { start: str({ pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$' }), end: str({ pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$' }), tz: str() } },
+        concurrency: integer({ minimum: 1, maximum: 8 }),
+        audience: str({ enum: ['everyone', 'followers', 'group'] }),
+        group: str({ description: 'Required when audience is group' }),
+        name: str({ maxLength: 100 }),
+    },
+};
+route('post', '/exchange/seller/offers', {
+    operationId: 'createSellerEndpointOffer', summary: 'Register a standalone OpenAI-compatible server to sell', tags: ['exchange'], security: SERVICE_OR_APP,
+    description: 'ai.app.run (a Network developer key), or a person\'s own token; a first-party service token is refused. The owner is the person the key acts for: an app\'s project owner, or the person themselves. The router reaches base_url only through the egress guard: https, a public DNS answer, never an IP literal, a timeout, a response byte cap, and never the buyer\'s identity in a header. A new endpoint serves the free tier only until its canaries, model fingerprint and spot re-runs verify it, exactly as a Node machine does; a request on the seller\'s own account is self-served and earns 0. An answer from it is labelled a community endpoint on the receipt (provider community-endpoint:<id>, provider_access COMMUNITY_ENDPOINT) and only requests that opt in to community capacity reach it.',
+    requestBody: body(sellerEndpointInput),
+    responses: { 201: json('The registered offer', { type: 'object', required: ['offer'], properties: { offer: sellerEndpointOffer } }), 409: problem, 422: problem, ...errors([401, 403, 503]) },
+});
+route('get', '/exchange/seller/offers', {
+    operationId: 'listSellerEndpointOffers', summary: 'The caller\'s own endpoint offers, with their verification', tags: ['exchange'], security: SERVICE_OR_APP,
+    description: 'ai.app.run, or a person\'s own token. Only the caller\'s offers: an app sees the offers of its project owner. The verification is the same the /sell dashboard shows.',
+    responses: { 200: json('The offers', { type: 'object', required: ['owner', 'offers'], properties: { owner: str({ pattern: '^usr_[0-9A-HJKMNP-TV-Z]{26}$' }), offers: arrayOf(sellerEndpointOffer) } }), ...errors([401, 403, 503]) },
+});
+route('delete', '/exchange/seller/offers/{id}', {
+    operationId: 'deleteSellerEndpointOffer', summary: 'Remove one of the caller\'s endpoint offers', tags: ['exchange'], security: SERVICE_OR_APP,
+    description: 'ai.app.run, or a person\'s own token. The offer stops receiving traffic at once; its verification and earnings stay as history.',
+    parameters: [path('id', str({ pattern: '^ep_[0-9A-HJKMNP-TV-Z]{26}$' }))],
+    responses: { 200: json('The removal', { type: 'object', properties: { id: str(), removed: { type: 'boolean' } } }), 404: problem, ...errors([401, 403]) },
+});
+
 // ── Action Center ────────────────────────────────────────────────────────────────────────────
 route('get', '/actions', {
     operationId: 'listActions', summary: 'The Action Center items for one person', tags: ['actions'], security: SERVICE,

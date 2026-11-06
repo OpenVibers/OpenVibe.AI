@@ -571,7 +571,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             } : null;
             const record = (answerProvider ? await registry.getProvider(answerProvider) : null)
                 || (credentialProvider ? await registry.getProvider(credentialProvider) : null);
-            const communityAnswer = Boolean(answerProvider && String(answerProvider).startsWith('community:')) || Boolean(explain && explain.community);
+            const communityAnswer = Boolean(answerProvider && /^community[:-]/.test(String(answerProvider))) || Boolean(explain && explain.community);
             const label = communityAnswer
                 ? privacy.labelFor({ record: { metadata: { data_policy: { trust: 'community' } } } })
                 : privacy.labelFor({ record, credential: byok ? { provider: credentialProvider } : null });
