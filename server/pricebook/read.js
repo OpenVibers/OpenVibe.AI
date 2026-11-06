@@ -66,7 +66,12 @@ function defaultTransport({ method, url, headers, lookup, timeoutMs, maxBytes })
  * Read a listing, following the redirects by hand so each hop is judged on its own.
  * → { ok, status, body, final_url, error }
  */
-async function readListing(url, { transport = defaultTransport, lookup = egress.createSafeLookup(), timeoutMs = 20000, maxBytes = 8 * 1024 * 1024 } = {}) {
+async function readListing(url, { transport = null, lookup = null, timeoutMs = 20000, maxBytes = 8 * 1024 * 1024 } = {}) {
+    // A caller that has no transport or lookup of its own passes null (the job does, outside tests): null means the
+    // default here. A default parameter only replaces undefined, so a null transport failed every read in production
+    // ("checked 0 listings", 2026-11-06) and a null lookup would have skipped the egress guard.
+    transport = transport || defaultTransport;
+    lookup = lookup || egress.createSafeLookup();
     let current = String(url);
     for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
         let parsed;

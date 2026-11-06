@@ -303,8 +303,9 @@ function createPriceBook({ db, registry, config = {}, clock = { now: () => Date.
                 // The claim goes back whatever happened, so the next worker may run.
                 await state.release({ who });
             }
-            // The run is over: the next one is due when the interval has passed (whether or not a price moved).
-            await state.markRun();
+            // The run is over: the next one is due when the interval has passed (whether or not a price moved). A run
+            // that read no listing at all did not check anything, so the book stays due and the next tick tries again.
+            if (report.sources.length || !sources.length) await state.markRun();
         } catch (err) {
             report.error = err && err.code ? err.code : 'error';
             log.warn('[pricebook] the run stopped early: ' + report.error);
@@ -312,7 +313,7 @@ function createPriceBook({ db, registry, config = {}, clock = { now: () => Date.
             running = false;
         }
         last = report;
-        log.log(`[pricebook] checked ${report.sources.length} listings, ${report.models} models, ${report.applied.length} applied, ${report.pending.length} waiting for the owner`);
+        log.log(`[pricebook] checked ${report.sources.length} listings, ${report.models} models, ${report.applied.length} applied, ${report.pending.length} waiting for the owner${report.unreadable.length ? `; unreadable: ${report.unreadable.map((u) => `${u.source} (${u.error})`).join(', ')}` : ''}`);
         return report;
     }
 
