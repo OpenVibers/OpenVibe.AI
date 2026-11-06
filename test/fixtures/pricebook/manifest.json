@@ -1,0 +1,82 @@
+{
+  "recorded_at": "2026-11-06",
+  "sources": [
+    {
+      "key": "deepseek",
+      "url": "https://api-docs.deepseek.com/quick_start/pricing.md",
+      "file": "deepseek.md",
+      "bytes": 13624,
+      "listed": 2
+    },
+    {
+      "key": "qwen",
+      "url": "https://www.alibabacloud.com/help/en/model-studio/model-pricing",
+      "file": "qwen.html",
+      "bytes": 15056,
+      "listed": 5
+    },
+    {
+      "key": "kimi",
+      "url": "https://platform.kimi.ai/docs/pricing/chat",
+      "file": "kimi.html",
+      "bytes": 1091,
+      "listed": 3
+    },
+    {
+      "key": "glm",
+      "url": "https://docs.z.ai/guides/overview/pricing.md",
+      "file": "glm.md",
+      "bytes": 3016,
+      "listed": 22
+    },
+    {
+      "key": "minimax",
+      "url": "https://platform.minimax.io/docs/pricing.md",
+      "file": "minimax.md",
+      "bytes": 21388,
+      "listed": 4
+    },
+    {
+      "key": "deepinfra",
+      "url": "https://api.deepinfra.com/v1/models",
+      "file": "deepinfra.json",
+      "bytes": 5748,
+      "listed": 6
+    },
+    {
+      "key": "novita",
+      "url": "https://api.novita.ai/v3/openai/models",
+      "file": "novita.json",
+      "bytes": 9504,
+      "listed": 5
+    },
+    {
+      "key": "featherless",
+      "url": "https://api.featherless.ai/v1/models",
+      "file": "featherless.json",
+      "bytes": 9593,
+      "listed": 20
+    },
+    {
+      "key": "refuseless",
+      "url": "https://docs.refuseless.com/api/models.md",
+      "file": "refuseless.md",
+      "bytes": 3988,
+      "listed": 9
+    },
+    {
+      "key": "abliteration",
+      "url": "https://docs.abliteration.ai/pricing.md",
+      "file": "abliteration.md",
+      "bytes": 2465,
+      "listed": 4
+    },
+    {
+      "key": "openrouter",
+      "url": "https://openrouter.ai/api/v1/models",
+      "file": "openrouter.json",
+      "bytes": 52870,
+      "listed": 14
+    }
+  ]
+}

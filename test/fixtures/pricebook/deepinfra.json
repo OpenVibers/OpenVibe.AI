@@ -1,0 +1,167 @@
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "deepseek-ai/DeepSeek-V4-Flash",
+      "object": "model",
+      "created": 0,
+      "owned_by": "deepinfra",
+      "root": "deepseek-ai/DeepSeek-V4-Flash",
+      "parent": null,
+      "metadata": {
+        "description": "DeepSeek V4 Flash is an efficiency-focused MoE model with 284B total parameters (13B active) and a 1M-token context window. It's tuned for fast inference and high-throughput use cases while still holding up on reasoning and coding tasks.",
+        "context_length": 1048576,
+        "max_tokens": 1048576,
+        "pricing": {
+          "input_tokens": 0.09,
+          "output_tokens": 0.18,
+          "cache_read_tokens": 0.018
+        },
+        "discount": null,
+        "tags": [
+          "chat",
+          "prompt_cache",
+          "reasoning"
+        ],
+        "default_width": null,
+        "default_height": null,
+        "default_iterations": null
+      }
+    },
+    {
+      "id": "zai-org/GLM-5.3",
+      "object": "model",
+      "created": 0,
+      "owned_by": "deepinfra",
+      "root": "zai-org/GLM-5.3",
+      "parent": null,
+      "metadata": {
+        "description": "GLM-5.3 is a large-scale reasoning model from Z.ai, built for complex software engineering and long-horizon agent tasks. It supports text input and output with a 1M-token context window, and improves on GLM-5.2 in coding and in the balance between performance and token efficiency.",
+        "context_length": 1048576,
+        "max_tokens": 1048576,
+        "pricing": {
+          "input_tokens": 0.9,
+          "output_tokens": 4,
+          "cache_read_tokens": 0.199999998
+        },
+        "discount": 0.375,
+        "tags": [
+          "chat",
+          "prompt_cache",
+          "reasoning"
+        ],
+        "default_width": null,
+        "default_height": null,
+        "default_iterations": null
+      }
+    },
+    {
+      "id": "Qwen/Qwen3-14B",
+      "object": "model",
+      "created": 0,
+      "owned_by": "deepinfra",
+      "root": "Qwen/Qwen3-14B",
+      "parent": null,
+      "metadata": {
+        "description": "Qwen3 is the latest generation of large language models in Qwen series, offering a comprehensive suite of dense and mixture-of-experts (MoE) models. Built upon extensive training, Qwen3 delivers groundbreaking advancements in reasoning, instruction-following, agent capabilities, and multilingual support.",
+        "context_length": 40960,
+        "max_tokens": 40960,
+        "pricing": {
+          "input_tokens": 0.12000000000000001,
+          "output_tokens": 0.24000000000000002
+        },
+        "discount": null,
+        "tags": [
+          "chat",
+          "reasoning_effort",
+          "reasoning"
+        ],
+        "default_width": null,
+        "default_height": null,
+        "default_iterations": null
+      }
+    },
+    {
+      "id": "openai/gpt-oss-120b",
+      "object": "model",
+      "created": 0,
+      "owned_by": "deepinfra",
+      "root": "openai/gpt-oss-120b",
+      "parent": null,
+      "metadata": {
+        "description": "gpt-oss-120b is an open-weight, 117B-parameter Mixture-of-Experts (MoE) language model from OpenAI designed for high-reasoning, agentic, and general-purpose production use cases. The model supports configurable reasoning depth, full chain-of-thought access, and native tool use, including function calling, browsing, and structured output generation.",
+        "context_length": 131072,
+        "max_tokens": 131072,
+        "pricing": {
+          "input_tokens": 0.037,
+          "output_tokens": 0.16999999999999998
+        },
+        "discount": null,
+        "tags": [
+          "chat",
+          "reasoning_effort",
+          "reasoning"
+        ],
+        "default_width": null,
+        "default_height": null,
+        "default_iterations": null
+      }
+    },
+    {
+      "id": "Qwen/Qwen3.8-Max",
+      "object": "model",
+      "created": 0,
+      "owned_by": "deepinfra",
+      "root": "Qwen/Qwen3.8-Max",
+      "parent": null,
+      "metadata": {
+        "description": "Qwen's latest 2.4-trillion-parameter MoE flagship model delivering a comprehensive leap in coding and professional work.",
+        "context_length": 256000,
+        "max_tokens": 256000,
+        "pricing": {
+          "input_tokens": 1.6500000000000001,
+          "output_tokens": 4.9510000000000005,
+          "cache_read_tokens": 0.20599999200000002
+        },
+        "discount": null,
+        "tags": [
+          "chat",
+          "prompt_cache",
+          "reasoning_effort"
+        ],
+        "default_width": null,
+        "default_height": null,
+        "default_iterations": null
+      }
+    },
+    {
+      "id": "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+      "object": "model",
+      "created": 0,
+      "owned_by": "deepinfra",
+      "root": "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+      "parent": null,
+      "metadata": {
+        "description": "DeepSeek-V4.1-Flash-1017 is a minor update to DeepSeek-V4.1-Flash, delivering substantial improvements across reasoning, coding, agentic tasks, and visual benchmarks. Alongside these gains, the model reduces task execution time and output length, enabling users to complete tasks faster and at lower cost and advancing the performance–cost Pareto frontier across multiple agent harnesses.",
+        "context_length": 1048576,
+        "max_tokens": 1048576,
+        "pricing": {
+          "input_tokens": 0.2,
+          "output_tokens": 0.6,
+          "cache_read_tokens": 0.006
+        },
+        "discount": 0.51,
+        "tags": [
+          "chat",
+          "vlm",
+          "vision",
+          "prompt_cache",
+          "reasoning"
+        ],
+        "default_width": null,
+        "default_height": null,
+        "default_iterations": null
+      }
+    }
+  ]
+}

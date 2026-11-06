@@ -150,7 +150,9 @@ async function seed({ registry, quotas, config, env = process.env, db }) {
     if (deepseek && deepseek.status === 'active') {
         for (const m of DEEPSEEK_MODELS) {
             const prev = await registry.getModel('deepseek', m.model_key);
-            if (!prev || (prev.metadata && prev.metadata.configured_by === 'DEEPSEEK_API_KEY')) {
+            // Once the price book has checked a price it owns it: the seed does not write over it.
+            const owned = prev && prev.metadata && prev.metadata.price_book;
+            if (!prev || (!owned && prev.metadata && prev.metadata.configured_by === 'DEEPSEEK_API_KEY')) {
                 await registry.upsertModel({ provider_key: 'deepseek', ...m, status: prev ? prev.status : 'active' }, { actor: 'seed' });
             }
         }

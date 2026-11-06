@@ -107,12 +107,35 @@ function modalitiesOf(row) {
 
 const usd6 = (n) => (n == null || !Number.isFinite(Number(n)) ? (n ?? null) : Math.round(Number(n) * 1e6) / 1e6);
 
+/** The later of two days ("YYYY-MM-DD"), or the one there is. */
+const laterOf = (a, b) => {
+    const x = a ? String(a).slice(0, 10) : null;
+    const y = b ? String(b).slice(0, 10) : null;
+    if (!x) return y;
+    if (!y) return x;
+    return x > y ? x : y;
+};
+
 function createCatalog({ db, registry, pool, env = process.env, clock = { now: () => Date.now() }, config = null }) {
     // The free-tier admission rules are the router's (server/free-tier.js): the catalog marks an offer with what
     // the free allowance and the anonymous Try it may actually use. config.freeUse is fixed at boot, like the
     // provider keys and upstreams the rest of this read shows.
     const freeUse = config && config.freeUse ? config.freeUse : undefined;
     const seen = observed.createObserved({ db, clock });
+
+    /**
+     * The price book's log: the day each model's price was last read and changed. The catalog reads it, so the
+     * date it shows is the date the book recorded, not a number written into the code. One read for the whole
+     * catalog; a service whose database has no log yet simply has nothing to add.
+     */
+    async function loggedChecks() {
+        const rows = await db.prepare(`SELECT DISTINCT ON (provider_key, model_key) provider_key, model_key, checked_at
+            FROM price_changes WHERE status IN ('applied', 'approved') ORDER BY provider_key, model_key, created_at DESC`)
+            .all().catch(() => []);
+        const map = new Map();
+        for (const row of rows || []) map.set(`${row.provider_key}/${row.model_key}`, String(row.checked_at || '').slice(0, 10));
+        return map;
+    }
 
     /**
      * Every live offer, grouped by the model it serves.
@@ -137,6 +160,8 @@ function createCatalog({ db, registry, pool, env = process.env, clock = { now: (
         };
         const upstreamByKey = new Map();
         for (const p of providers) upstreamByKey.set(p.key, upstream.upstreamOf(p));
+        // What the price book recorded: the day a price was read and changed (server/pricebook/).
+        const logged = await loggedChecks();
 
         const groups = new Map();
         const drafts = [];
@@ -161,6 +186,8 @@ function createCatalog({ db, registry, pool, env = process.env, clock = { now: (
             if (!slug) continue;
             const cards = await pool.rateCardsFor(provider.key, row.model_key);
             const price = cards ? rates.pricesOf(cards) : null;
+            // The day this price was checked: what the price book logged, or the day the rate card carries.
+            const checkedAt = laterOf(logged.get(`${row.provider_key}/${row.model_key}`), cards ? cards.out.verified_at : null);
             const offer = {
                 provider: up.key,
                 provider_name: up.name,
@@ -181,7 +208,10 @@ function createCatalog({ db, registry, pool, env = process.env, clock = { now: (
                 price: price ? { in: usd6(price.in), out: usd6(price.out), cached: usd6(price.cached), per: '1M tokens', currency: 'USD' } : null,
                 // Where the number came from and when someone checked it; null when nobody recorded it.
                 price_source: cards && cards.out.source && !String(cards.out.source).startsWith('urn:openvibe:ai:unverified:') ? cards.out.source : null,
-                price_checked_at: cards && cards.out.verified_at && cards.out.verified_at !== rates.UNKNOWN_DATE ? cards.out.verified_at : null,
+                // When the price was checked: the day the price book recorded, or the day the card carries.
+                price_checked_at: checkedAt && checkedAt !== rates.UNKNOWN_DATE ? checkedAt : null,
+                // The same day in words: what the catalog shows under the price is when somebody read it.
+                price_checked: checkedAt && checkedAt !== rates.UNKNOWN_DATE ? `price checked ${checkedAt}` : null,
                 data_policy: policyOf(provider),
                 // The privacy label of this offer, from the same facts the router uses (server/exchange/privacy.js):
                 // Private (zero retention, no training, or the host's own deployment), Anonymized, Community.

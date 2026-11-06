@@ -360,6 +360,20 @@ route('get', '/exchange/usage', {
     } }) },
 });
 
+route('get', '/exchange/price-changes', {
+    operationId: 'exchangePriceChanges', summary: 'What a price was and what it became', tags: ['exchange'], security: [],
+    description: "Public. The price changelog: every change the weekly price book made, with the old price, the new price, the provider's own listing the price was read from and the day it was read. A change that waits for the owner's approval is not a price yet and is not here.",
+    parameters: [query('limit', integer({ minimum: 1, maximum: 200 }), 'Default 50'), query('provider', str(), 'Only this provider')],
+    responses: { 200: json('The changes', { type: 'object', properties: {
+        generated_at: str({ format: 'date-time' }), count: integer(),
+        changes: arrayOf({ type: 'object', properties: {
+            id: str(), provider: str(), model: str(), field: str(),
+            old_price: nullable('number'), new_price: { type: 'number' }, change_pct: nullable('number'),
+            source: str(), checked_at: str({ format: 'date' }), changed_at: str({ format: 'date-time' }),
+        } }),
+    } }) },
+});
+
 // ── The seller API: a standalone OpenAI-compatible endpoint (the design's SDK gap) ───────────
 const sellerEndpointOffer = {
     type: 'object', required: ['id', 'offer_id', 'base_url', 'models', 'hours', 'concurrency', 'price', 'audience'],

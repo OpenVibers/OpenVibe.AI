@@ -19,6 +19,9 @@
  *                                                  Billing readings by delivery state, usage-samples deliveryReport)
  *   GET  /console/cache; POST /console/cache/purge   (writes: ai.provider.manage; ops.purgeCache)
  *   GET  /console/audit[?kind&action&actor&target_type&target_id&before]
+ *   GET  /console/pricebook                    the living price book: the prices that wait for the owner
+ *   POST /console/pricebook/changes/:id         approve or reject a waiting price change (ai.provider.manage)
+ *   POST /console/pricebook/run                 read the providers' listings now (ai.provider.manage)
  *   GET  /console/exchange                      AI Exchange state (AI_CREDITS or AI_ROUTING_EVIDENCE)
  *   POST /console/exchange/credits/:id/resolve  mark a review settle row resolved, never retried
  *
@@ -102,6 +105,9 @@ const NOTICES = {
     cache_purged: 'Cache purged.',
     run_cancelled: 'Run cancelled.',
     settle_resolved: 'Settle queue row marked resolved. Nothing was retried.',
+    price_approved: 'The price change was approved: the price the router charges is the new one.',
+    price_rejected: 'The price change was rejected: the price stands.',
+    pricebook_ran: 'The provider listings were read.',
 };
 const DEF_KINDS = {
     routes: { one: 'route', list: 'listRoutes', get: 'getRoute' },
@@ -110,7 +116,7 @@ const DEF_KINDS = {
 };
 const DAY_MS = 86400000;
 
-function consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, vault = null, settings = null, personSessions = null, abuse = null }) {
+function consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, vault = null, settings = null, personSessions = null, abuse = null, priceBook = null }) {
     const cc = config.console;
     const creditsOn = Boolean(config.credits && config.credits.enabled);
     const routingOn = Boolean(config.routingEvidence && config.routingEvidence.enabled);
@@ -554,6 +560,37 @@ function consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, e
     r.post('/console/gpus/:model/:action', needs(CAPS.providerManage), wrap(async (req, res) => {
         await gpus.request(String(req.params.model || ''), String(req.params.action || ''), req.staff.subject);
         res.redirect(303, '/console/gpus?done=gpu_requested');
+    }));
+
+    // ── The living price book: the prices the router charges, checked against each provider's own listing ──
+    // The owner decides the changes the weekly job may not make on its own (a change of more than 20%).
+    r.get('/console/pricebook', read, wrap(async (req, res) => {
+        await send(res, 200, pages.pricebook({
+            ...common(req), canManage: req.staff.caps.includes(CAPS.providerManage), notice: notice(req),
+            report: priceBook ? priceBook.last : null,
+            state: priceBook ? await priceBook.state.read() : null,
+            pending: priceBook ? await priceBook.pending(50) : [],
+            recent: priceBook ? await priceBook.changes({ status: 'applied', limit: 50 }) : [],
+        }));
+    }));
+    r.post('/console/pricebook/changes/:id', needs(CAPS.providerManage), wrap(async (req, res) => {
+        if (!priceBook) throw new AiError(409, 'ai.conflict', 'the price book is off on this host');
+        const id = String(req.params.id || '').slice(0, 60);
+        const decision = String((req.body || {}).decision || '') === 'approve' ? 'approve' : 'reject';
+        const out = await priceBook.decide(id, { decision, actor: req.staff.subject });
+        if (!out.ok) throw new AiError(409, 'ai.conflict', out.error);
+        await audit(req.staff.subject, decision === 'approve' ? 'price_change.approved' : 'price_change.rejected', 'price_change', id, { decision }, req);
+        return res.redirect(303, '/console/pricebook?done=' + (decision === 'approve' ? 'price_approved' : 'price_rejected'));
+    }));
+    r.post('/console/pricebook/run', needs(CAPS.providerManage), wrap(async (req, res) => {
+        if (!priceBook) throw new AiError(409, 'ai.conflict', 'the price book is off on this host');
+        const report = await priceBook.runOnce({ force: true });
+        await audit(req.staff.subject, 'pricebook.run', 'pricebook', 'run', {
+            sources: report.sources ? report.sources.length : 0,
+            applied: (report.applied || []).length,
+            pending: (report.pending || []).length,
+        }, req);
+        return res.redirect(303, '/console/pricebook?done=pricebook_ran');
     }));
 
     // ── AI Exchange (P7): Credits settle queue and routing evidence ──
