@@ -64,7 +64,7 @@ function runsRouter({ runs, registry, auth, config, log = console }) {
         if (req.principal.kind === 'app') body = appBody(req.principal, body, req.body);
         checkNamespace(req, String(body.workflow || ''));
         const idem = body.idempotency_key || req.ov.idempotencyKey || undefined;
-        const created = await runs.create({ ...body, idempotency_key: idem }, req.principal, { trace: req.ov.traceId, requestId: req.ov.requestId });
+        const created = await runs.create({ ...body, idempotency_key: idem }, req.principal, { trace: req.ov.traceId, requestId: req.ov.requestId, abuse: req.abuse });
         const run = await runs.explained(await runs.wait(created, waitMs));
         const status = !created.created ? 200 : (runs.TERMINAL.has(run.status) ? 201 : 202);
         if (status === 202) res.setHeader('Location', `/api/v1/runs/${run.id}`);
@@ -88,7 +88,7 @@ function runsRouter({ runs, registry, auth, config, log = console }) {
             if (!text) return;
             if (opened) send('delta', { text }); else early.push(text);
         };
-        const created = await runs.create({ ...body, idempotency_key: idem }, req.principal, { trace: req.ov.traceId, requestId: req.ov.requestId, onDelta });
+        const created = await runs.create({ ...body, idempotency_key: idem }, req.principal, { trace: req.ov.traceId, requestId: req.ov.requestId, onDelta, abuse: req.abuse });
         res.status(200);
         res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
         res.setHeader('Cache-Control', 'no-store');

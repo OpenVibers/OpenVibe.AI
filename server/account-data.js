@@ -49,6 +49,11 @@ const TABLES = [
     { table: 'routes', subject: 'created_by', file: null, erase: { keep: 'the route catalogue is the service\'s; created_by is the staff audit trail' } },
     { table: 'templates', subject: 'created_by', file: null, erase: { keep: 'the template catalogue is the service\'s; created_by is the staff audit trail' } },
     { table: 'workflows', subject: 'created_by', file: null, erase: { keep: 'the workflow catalogue is the service\'s; created_by is the staff audit trail' } },
+    // Plan E5: the free allowance's daily counter (keyed `user:<subject>` or `device:<hash>`) and the accounts seen
+    // on a device. Both are erased by extraErase below, which must see the device rows first to find the shared
+    // counter; listing them here is what makes the guard (and the export count) know they exist.
+    { table: 'abuse_daily_usage', subject: 'subject', value: (usr) => `user:${usr}`, file: null, erase: { keep: 'erased by extraErase after the device rows are read' } },
+    { table: 'abuse_devices', subject: 'subject', file: null, erase: { keep: 'erased by extraErase after the shared counter is found' } },
     // The person's own quota (server/quota.js): a limit that only means something while the account lives.
     { table: 'quotas', subject: 'scope_id', value: (usr) => `user:${usr}`, file: null },
     // What the person used, counted against their allowance: the spend ledger, kept.
@@ -67,6 +72,17 @@ async function extraExport(db, subject) {
 
 /** The person's runs go, with the rows that hang under them (the requests, the citations, the cached answers). */
 async function extraErase(t, subjects, counts) {
+    // Plan E5: the free-tier counters. A shared device counter is kept while another account still uses the device;
+    // when this person was the last one, the device counter and its velocity bucket go too.
+    const hashes = (await t.many('SELECT DISTINCT device_hash FROM abuse_devices WHERE subject = ANY($1::text[])', [subjects])).map((r) => r.device_hash);
+    counts.add(counts.erased, 'abuse_devices', await t.exec('DELETE FROM abuse_devices WHERE subject = ANY($1::text[])', [subjects]));
+    counts.add(counts.erased, 'abuse_daily_usage', await t.exec('DELETE FROM abuse_daily_usage WHERE subject = ANY($1::text[])', [subjects.map((s) => `user:${s}`)]));
+    for (const hash of hashes) {
+        const left = Number(await t.value('SELECT COUNT(*)::int FROM abuse_devices WHERE device_hash = $1', [hash])) || 0;
+        if (left) continue;
+        counts.add(counts.erased, 'abuse_daily_usage', await t.exec('DELETE FROM abuse_daily_usage WHERE subject = $1', [`device:${hash}`]));
+        counts.add(counts.erased, 'abuse_velocity', await t.exec("DELETE FROM abuse_velocity WHERE kind = 'device' AND key_hash = $1", [hash]));
+    }
     const ids = (await t.many(`SELECT id FROM runs WHERE on_behalf_of IS NOT NULL AND on_behalf_of::jsonb ->> 'type' = 'user' AND on_behalf_of::jsonb ->> 'id' = ANY($1::text[])`, [subjects])).map((r) => r.id);
     if (!ids.length) return;
     counts.add(counts.erased, 'requests', await t.exec('DELETE FROM requests WHERE run_id = ANY($1::text[])', [ids]));

@@ -12,6 +12,7 @@
  * NAME through secretRef(); nothing here logs or returns a value.
  */
 
+const path = require('path');
 const { loadGovern } = require('./govern');
 const { DEFAULT_PROVIDERS: DEFAULT_FREE_PROVIDERS } = require('./free-tier');
 
@@ -148,6 +149,46 @@ function load(env = process.env) {
             providers: list(env.AI_FREE_PROVIDERS, DEFAULT_FREE_PROVIDERS),
             maxOutputPricePerMtok: Math.max(0, float(env.AI_FREE_MAX_OUTPUT_PRICE_USD_PER_MTOK, 1.5)),
         },
+        // ── Plan E5: abuse prevention for the free tier (server/abuse/) ──
+        // A signed HttpOnly device id (set by the AI Exchange API host for openvibe.exchange), the local
+        // iptoasn.com table (scripts/update-ip2asn.js; never a paid API), the daily allowance the trust tiers
+        // scale, and the anomaly limits. Network signals are read from Network's identity route and cached.
+        abuse: {
+            enabled: bool(env.AI_ABUSE, true),
+            // The full (verified) daily allowance in free tokens: input + output. Zero switches the free allowance off.
+            dailyTokens: Math.max(0, int(env.AI_FREE_DAILY_TOKENS, 20000)),
+            // Network's trust signals (server/abuse/network.js). Off in tests unless a test opts in.
+            network: bool(env.AI_ABUSE_NETWORK, nodeEnv !== 'test'),
+            signalsTtlMs: Math.max(1000, int(env.AI_ABUSE_SIGNALS_TTL_MS, 300000)),
+            signalsMissTtlMs: Math.max(1000, int(env.AI_ABUSE_SIGNALS_MISS_TTL_MS, 60000)),
+            signalsTimeoutMs: Math.max(100, int(env.AI_ABUSE_SIGNALS_TIMEOUT_MS, 2000)),
+            // The HMAC key for the device cookie and every salted hash. Unset: a per-boot key (device cookies do not
+            // survive a restart, and the hashes cannot be linked across boots). Set it in production.
+            salt: String(env.AI_ABUSE_SALT || '').trim(),
+            // Only a service token naming one of these ids may forward the client address (x-ov-client-ip) or a
+            // signed device id (x-ov-device-id). The Exchange is the first-party caller that does.
+            firstPartyServices: list(env.AI_FIRST_PARTY_SERVICES, ['exchange']),
+            deviceCookieName: String(env.AI_DEVICE_COOKIE_NAME || 'ovai_device').trim(),
+            // openvibe.exchange: the API host sets the cookie for the parent domain, so the site and the API share it.
+            deviceCookieDomain: String(env.AI_DEVICE_COOKIE_DOMAIN || '').trim(),
+            deviceCookieSecure: bool(env.AI_DEVICE_COOKIE_SECURE, baseUrl.startsWith('https://')),
+            deviceCookieSameSite: String(env.AI_DEVICE_COOKIE_SAMESITE || 'Lax').trim(),
+            ip2asnV4: String(env.AI_IP2ASN_V4 || path.join(__dirname, '..', 'data', 'ip2asn', 'ip2asn-v4.tsv')).trim(),
+            ip2asnV6: String(env.AI_IP2ASN_V6 || path.join(__dirname, '..', 'data', 'ip2asn', 'ip2asn-v6.tsv')).trim(),
+            // ASNs an operator knows are hosting ones, on top of the organisation-name match (server/abuse/asn.js).
+            hostingAsns: list(env.AI_HOSTING_ASNS, []),
+            ratePerMin: Math.max(1, int(env.AI_ABUSE_RATE_PER_MIN, 60)),
+            hostingRatePerMin: Math.max(1, int(env.AI_ABUSE_HOSTING_RATE_PER_MIN, 20)),
+            // Anomaly: free tokens in a minute against the last week's per-minute baseline, per ASN, device and input.
+            velocityFactor: Math.max(1, float(env.AI_ABUSE_VELOCITY_FACTOR, 10)),
+            velocityMinTokensPerMin: Math.max(1, int(env.AI_ABUSE_VELOCITY_MIN_TOKENS_PER_MIN, 10000)),
+            // Proof of work for the anonymous Try it (no account). Required in production; a test opts in.
+            powRequired: bool(env.AI_POW_REQUIRED, nodeEnv !== 'test'),
+            powBits: Math.max(8, Math.min(28, int(env.AI_POW_BITS, 18))),
+            powTtlMs: Math.max(30000, int(env.AI_POW_TTL_MS, 300000)),
+            powChallengesPerMinute: Math.max(1, int(env.AI_POW_CHALLENGES_PER_MIN, 10)),
+        },
+
         // ── Placement (T6 provider router): openvibe-sdk/placement orders a route's capability pool ──
         placement: {
             // A candidate replaces the route's current placement only when it scores this much better,

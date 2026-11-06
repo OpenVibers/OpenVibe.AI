@@ -55,6 +55,10 @@ t.test('an export carries the person\'s sessions and credential hints, and a del
             await h.db.exec("INSERT INTO person_sessions (id_hash, subject, username, created_at, expires_at) VALUES ($1, $2, $3, '2026-10-01', '2027-10-01')", [`p_${name}`, subject, name]);
             await h.db.exec("INSERT INTO subject_credentials (owner, subject, provider, key_enc, key_hint, models, created_at, updated_at) VALUES ('proj_1', $1, 'openai', 'v1:secret', $2, '{}', '2026-10-01', '2026-10-02')", [subject, `hint-${name}`]);
             await h.db.exec("INSERT INTO free_allowance_usage (subject, provider, metric, period_start, period_end, free_used, updated_at) VALUES ($1, 'openai', 'input-tokens', 1, 2, 10, '2026-10-01')", [subject]);
+            // Plan E5: the free-tier counters are erased with the account (the shared device counter only when its
+            // last account goes).
+            await h.db.exec("INSERT INTO abuse_daily_usage (subject, day, tokens, updated_at) VALUES ($1, '2026-10-01', 5, '2026-10-01')", [`user:${subject}`]);
+            await h.db.exec("INSERT INTO abuse_devices (device_hash, subject, tier_tokens, first_seen, last_seen) VALUES ($1, $2, 1000, '2026-10-01', '2026-10-01')", [`dev_${name}`, subject]);
             await h.db.exec("INSERT INTO routes (key, version, primary_provider, created_by, created_at) VALUES ($1, 1, 'openai', $2, '2026-10-01')", [`route-${name}`, subject]);
         }
         const deliver = async (event) => {
@@ -78,6 +82,9 @@ t.test('an export carries the person\'s sessions and credential hints, and a del
         const d = await deliver(ev('evt_01JZ0000000000000000000D01', 'network.account.deleted', { deletion_id: DEL, subject: A, aliases: [] }));
         assert.deepStrictEqual([d.status, d.json.outcome], [200, 'erased']);
         assert.strictEqual(Number(await h.db.value('SELECT count(*)::int FROM console_sessions WHERE subject = $1', [A])), 0);
+        assert.strictEqual(Number(await h.db.value('SELECT count(*)::int FROM abuse_devices WHERE subject = $1', [A])), 0, 'the device row goes');
+        assert.strictEqual(Number(await h.db.value('SELECT count(*)::int FROM abuse_daily_usage WHERE subject = $1', [`user:${A}`])), 0, 'the daily counter goes');
+        assert.strictEqual(Number(await h.db.value('SELECT count(*)::int FROM abuse_devices WHERE subject = $1', [B])), 1, "nobody else's device row");
         assert.strictEqual(Number(await h.db.value('SELECT count(*)::int FROM person_sessions WHERE subject = $1', [A])), 0);
         assert.strictEqual(Number(await h.db.value('SELECT count(*)::int FROM subject_credentials WHERE subject = $1', [A])), 0);
         assert.strictEqual(Number(await h.db.value('SELECT count(*)::int FROM free_allowance_usage WHERE subject = $1', [A])), 1, 'the allowance ledger stays');

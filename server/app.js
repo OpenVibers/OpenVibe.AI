@@ -24,7 +24,7 @@ const pkg = require('../package.json');
 
 const { adminRoutes } = require('openvibe-shared/config');
 
-function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, credentials = null, preferences = null, grants = null, vault = null, settings = null, benchEvents = null, runBudgets = null, memory = null, memoryImport = null, community = null, presets = null, receipts = null, balance = null, gpus = null }) {
+function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, credentials = null, preferences = null, grants = null, vault = null, settings = null, benchEvents = null, runBudgets = null, memory = null, memoryImport = null, community = null, presets = null, receipts = null, balance = null, gpus = null, abuse = null }) {
     const app = express();
     // /.well-known/agent.json (openvibe-shared/agent-layer, SEO-2): what this site serves, for agents.
     require('openvibe-shared/agent-layer').mount(app, { descriptor: require('./agent-descriptor') });
@@ -36,8 +36,14 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
     // GET /metrics answers direct loopback callers only (Track O).
     const metrics = instrument(app, { service: 'ai', release: release.release });
     app.use(require('openvibe-sdk/service').telemetryMiddleware);   // request telemetry: a no-op until server/index.js calls telemetry.init()
-    registerAiGauges(metrics.registry, { runs, registry, pool, balance, gpus });
+    registerAiGauges(metrics.registry, { runs, registry, pool, balance, gpus, abuse });
     app.use(http.middleware());
+    // Plan E5: the signed HttpOnly device id and the request's trust metadata on the model and Exchange APIs.
+    // The address/device stay in the request: only keyed hashes reach the database (server/abuse/).
+    if (abuse) {
+        app.use(['/v1', '/api/v1'], abuse.middleware());
+        app.use(abuse.router());
+    }
     // Browser reads of the two public GETs (/stats, /release.json) only: an exact origin from
     // AI_CORS_ORIGINS is echoed back, never credentials, and OPTIONS answers their preflight.
     // Token (/api/v1/*) and console (/console, /auth/*) routes never reach this branch.
@@ -168,7 +174,7 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
         // The same settings as a page for people (GET /you, plain forms on AI's own person session).
         app.use(require('./you-page').youPageRouter({ credentials, preferences, grants, personSessions, config, log, machines: pool && pool.machines }));
     }
-    app.use(consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, env, clock, fetchImpl, log, vault, settings, personSessions }));
+    app.use(consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, env, clock, fetchImpl, log, vault, settings, personSessions, abuse }));
     app.use(runPageRouter({ runs, personSessions, log }));
 
     // Public price and latency (no sign-in, no scripts): provider_stats_daily totals and the rate cards,

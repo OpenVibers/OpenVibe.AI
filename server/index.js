@@ -32,7 +32,7 @@ const { AiError } = require('./util');
 const { gracefulStop, telemetry } = require('openvibe-sdk/service');
 const { createPgTelemetrySink, startTelemetryRetention } = require('openvibe-sdk/telemetry');
 
-async function start({ config, db: givenDb = null, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, listen = true, credentialFetch = null, valkey = null, research = null, machineModels = null, variantEvidence = null, community: givenCommunity = null } = {}) {
+async function start({ config, db: givenDb = null, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, listen = true, credentialFetch = null, valkey = null, research = null, machineModels = null, variantEvidence = null, community: givenCommunity = null, abuse: givenAbuse = null } = {}) {
     config = config || load(env);
     schemas.configure(config.schemaCache);
     // PostgreSQL (ADR-035): opened and migrated here unless the caller (a test) hands in a migrated handle.
@@ -66,6 +66,8 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     // Community AI offers (the design's "Offer to the network"; plan E4): read Network's user-owned offers, verify a
     // machine before traffic, and keep its seller ledger. Empty without a Network service secret or Bot.
     const community = givenCommunity || require('./community').createCommunity({ db, config, env, machines, clock, fetchImpl, log });
+    // Plan E5: the free tier's allowance by trust, device and network signals, proof of work and anomaly throttling.
+    const abuse = givenAbuse || require('./abuse').createAbuse({ db, config, env, clock, fetchImpl, log, registry, community });
     // BENCH-11: Bench's ratings as routing evidence, and the opted-in tie rule inside placement.
     const bench = createBenchEvidence({ db, registry, config, clock, fetchImpl, log });
     // Network owns the 18+ account flag; the adult tier checks it before placement.
@@ -121,7 +123,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         startSettlements() { return credits ? credits.startSettlements() : null; },
         stopSettlements() { return credits ? credits.stopSettlements() : undefined; },
     };
-    const runs = createRuns({ db, registry, engine, cache, quotas, config, clock, log, userModules, credentials, preferences, tiers, projectSecrets, pool, runBudgets, credits: creditsRef, community, presets, receipts });
+    const runs = createRuns({ db, registry, engine, cache, quotas, config, clock, log, userModules, credentials, preferences, tiers, projectSecrets, pool, runBudgets, credits: creditsRef, community, presets, receipts, abuse });
     await seed({ registry, quotas, config, env, db });
     // The seed creates or moves providers from the environment: publish their origins (the schema and every key's
     // bind follow), so a key is bound to the host it is for from the first boot.
@@ -150,7 +152,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         clientSecret: env.OV_OAUTH_CLIENT_SECRET, fetch: fetchImpl,
     }) : null;
     const benchEvents = createBenchEvents({ bench, accountData, accountSend, config, log, fetchImpl, clientSecret: env.OV_OAUTH_CLIENT_SECRET });
-    const app = createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, grants, vault, settings, benchEvents, runBudgets, memory, memoryImport, community, presets, receipts, balance, gpus });
+    const app = createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, grants, vault, settings, benchEvents, runBudgets, memory, memoryImport, community, presets, receipts, balance, gpus, abuse });
     let jwks = null;
     let keyLoaded = Promise.resolve(null);
     if (!keys.pinned && config.nodeEnv !== 'test') {
@@ -166,7 +168,9 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
             const expired = await cache.prune();
             // Billing readings never sent go with their runs (server/usage-samples.js expireUnsent).
             const lapsed = await require('./usage-samples').expireUnsent(db, { days: config.runs.retentionDays, now: clock.now() });
+            const abusePruned = await abuse.prune();
             if (pruned || expired || lapsed) log.log(`[ai] retention: ${pruned} old run(s), ${expired} expired cache entr${expired === 1 ? 'y' : 'ies'}, ${lapsed} unsent usage reading(s)`);
+            if (Object.values(abusePruned).some((n) => n)) log.log(`[ai] abuse retention: ${Object.entries(abusePruned).filter(([, n]) => n).map(([k, n]) => `${n} ${k}`).join(', ')}`);
         } catch (err) { log.error(`[ai] retention failed: ${err.message}`); }
     }, 60 * 60 * 1000);
     housekeeping.unref?.();
@@ -237,7 +241,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         if (!givenDb) await db.close();
     }
 
-    return { config, db, registry, pool, quotas, tiers, cache, fetcher, engine, runs, keys, keyLoaded, auth, app, server, bench, benchEvents, memory, memoryJobs, credits: creditsRef, settings, vault, community, gpus, close };
+    return { config, db, registry, pool, quotas, tiers, cache, fetcher, engine, runs, keys, keyLoaded, auth, app, server, bench, benchEvents, memory, memoryJobs, credits: creditsRef, settings, vault, community, gpus, abuse, close };
 }
 
 if (require.main === module) {
