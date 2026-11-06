@@ -49,6 +49,7 @@ const { createSessions, sameString } = require('./session');
 const sso = require('./sso');
 const q = require('./queries');
 const catalog = require('../providers/catalog');
+const poolSeed = require('../providers/pool-seed');
 const { CSP, esc, pages } = require('./views');
 
 /** Network staff capability -> AI capability held by a console session (documented in README "Operator console"). */
@@ -364,6 +365,8 @@ function consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, e
         // Its model list, read right away (best effort: a provider whose list cannot be read is still added).
         const added = await registry.getProvider(key);
         await catalog.sync({ registry, provider: added, apiKey: resolveSecret(added.secret_ref, env), fetchImpl, actor: who(req).actor }).catch(() => null);
+        // The provider's own model ids get the price the catalogue recorded for them, matched by name (pool-seed).
+        await poolSeed.applyCatalogPrices({ registry, provider: added, actor: who(req).actor }).catch(() => null);
         res.redirect(303, '/console/providers?done=provider_added');
     }));
     r.post('/console/providers/:key/key', needs(CAPS.providerManage), wrap(async (req, res) => {
@@ -383,7 +386,8 @@ function consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, e
         const apiKey = resolveSecret(p.secret_ref, env);
         if (!apiKey && p.auth_mode !== 'none') throw new AiError(422, 'ai.invalid', `${p.key} has no key to read its model list with`);
         const out = await catalog.sync({ registry, provider: p, apiKey, fetchImpl, actor: who(req).actor });
-        await registry.audit(who(req).actor, 'provider.models_synced', 'provider', p.key, { trace: who(req).trace, metadata: { added: out.added.length, updated: out.updated.length, missing: out.missing.length } });
+        const priced = await poolSeed.applyCatalogPrices({ registry, provider: p, actor: who(req).actor }).catch(() => ({ priced: [], retired: [] }));
+        await registry.audit(who(req).actor, 'provider.models_synced', 'provider', p.key, { trace: who(req).trace, metadata: { added: out.added.length, updated: out.updated.length, missing: out.missing.length, priced: priced.priced.length, retired: priced.retired.length } });
         res.redirect(303, '/console/providers?done=models_synced');
     }));
     // Turn one model on or off (a model routes may use, or not).

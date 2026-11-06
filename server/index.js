@@ -58,7 +58,10 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     await vault.load().catch((err) => log.warn(`[Vault] ${err.message}`));
     // BENCH-11: Bench's ratings as routing evidence, and the opted-in tie rule inside placement.
     const bench = createBenchEvidence({ db, registry, config, clock, fetchImpl, log });
-    const pool = createProviderPool({ db, registry, config, clock, fetchImpl, env, log, credentialFetch, machineModels, bench, variantEvidence });
+    // The Exchange remake's uncensored tier: Network owns the 18+ account flag, AI asks it (five-minute cache, fail
+    // closed) before an uncensored request is admitted (server/policy/adult-status.js).
+    const adultStatus = require('./policy/adult-status').createAdultStatus({ config, env, fetchImpl, clock, log });
+    const pool = createProviderPool({ db, registry, config, clock, fetchImpl, env, log, credentialFetch, machineModels, bench, variantEvidence, adultStatus });
     // T6 step 8: the SaaS tier budgets on openvibe-sdk/govern in Valkey (server/govern.js); off unless AI_GOVERN_TIERS=1.
     const tiers = createTiers({ config, valkey, clock, log });
     // §2.1.8: the provider free allowance per subject, priced off the pool's own rate cards (server/free-allowance.js);

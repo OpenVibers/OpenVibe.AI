@@ -22,6 +22,7 @@ const { parseCostUsd } = require('./credits');
 const { CACHE_INPUT } = require('./workflows/hooks');
 const { preferenceLines } = require('./user-modules');
 const { preferredTarget } = require('./providers/task');
+const tier = require('./policy/tier');
 const schemas = require('./schemas');
 const events = require('./events');
 const usageRecord = require('./usage-record');
@@ -193,6 +194,11 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         const pinned = routePinRequest(body.route, principal, wf);
         if (pinned && body.credential != null) throw new AiError(422, 'input.invalid', 'a pinned route cannot be combined with a person\'s credential; the pin is the provider');
         validateRefs(body);
+        // The Exchange remake's content policy. It is a control field, never part of the workflow's input; the pool
+        // enforces the 18+ gate and the offer filter (server/providers/index.js), and the answer carries the label.
+        const askedPolicy = tier.parsePolicy(body.policy != null ? body.policy : body.options && body.options.policy);
+        if (askedPolicy.error) throw new AiError(422, askedPolicy.error, askedPolicy.detail);
+        const contentPolicy = askedPolicy.policy;
         const input = body.input === undefined ? {} : body.input;
         const inputJson = stableStringify(input);
         if (Buffer.byteLength(inputJson) > config.runs.maxInputBytes) throw new AiError(413, 'input.too_large', `input is larger than ${config.runs.maxInputBytes} bytes`);
@@ -276,6 +282,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             ...(app ? { appRun: true, projectId: app.projectId, sandbox: app.sandbox, appId: principal.appId } : {}),
             // Who pays a Balance hold (D12): the app and its project, else the person a token acts for, else the service.
             onBehalfOf: personSubject || principal.onBehalfOf || null,
+            ...(contentPolicy !== 'standard' ? { contentPolicy } : {}),
             // A credential or a project's own provider never reaches managed supply: no Balance hold for that run.
             ...(credentialSubject !== null || projectProvider ? { byok: true } : {}),
             ...(maxCostNano != null ? { maxCostNano: String(maxCostNano) } : {}),
@@ -302,7 +309,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                 ...(credentialSubject !== null ? { credential_subject: credentialSubject } : {}), ...(credentialProvider !== null ? { credential_provider: credentialProvider } : {}),
                 ...(selfKeys ? { self_subject: personSubject } : {}),
                 ...(projectProvider ? { project_provider: projectProvider } : {}), ...(pinned ? { pinned_offer: pinned } : {}),
-                ...(prefer ? { prefer } : {}) }), created_at: now,
+                ...(prefer ? { prefer } : {}), ...(contentPolicy !== 'standard' ? { policy: contentPolicy } : {}) }), created_at: now,
         };
         base.input = stableStringify(kept.value);
 
@@ -310,7 +317,9 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         // A pinned run is never served from (or written to) the shared cache: the caller asked for THIS model,
         // and another model's answer under the same prompt would silently break the pin. A run that may use the
         // person's own key is never cached either: their key must be used, and the answer is theirs, not the scope's.
-        const scope = options.cache === false || credentialSubject !== null || projectProvider || pinned || selfKeys ? null : cache.scopeFor(wf.cache_mode, ctx);
+        // The adult tier is never cached: its answer is labelled, and a standard request must never be served it (or
+        // the other way round) from a shared cache entry keyed only on the workflow and the input.
+        const scope = options.cache === false || credentialSubject !== null || projectProvider || pinned || selfKeys || contentPolicy !== 'standard' ? null : cache.scopeFor(wf.cache_mode, ctx);
         let cacheKey = null;
         if (scope) {
             // Some workflows key the cache on less than their whole input (hooks.js CACHE_INPUT: a signed URL's signature).
@@ -602,11 +611,20 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                 ...(ctx.routePin ? { routePin: ctx.routePin } : {}),
                 // L37: the soft preference the caller made (provider, and a model if it named one).
                 prefer: opts.prefer || null,
+                // The Exchange remake's content policy (standard, or uncensored for an 18+ account), and the person
+                // the run is for: the pool asks Network whether that account confirmed it is 18+.
+                ...(ctx.contentPolicy ? { contentPolicy: ctx.contentPolicy } : {}),
+                ...(ctx.onBehalfOf ? { onBehalfOf: ctx.onBehalfOf } : {}),
                 ...(onCredentialFailed ? { onCredentialFailed } : {}),
                 ...(selfSubject ? { selfSubject, selfCredentials: selfCredentials || [], selfPreferences } : {}),
                 ...(credential ? { credential, role: input && typeof input.role === 'string' ? input.role : null } : {}),
                 ...(billingDelta ? { onDelta: billingDelta } : {}),
                 ...(onRoute ? { onRoute } : {}) });
+            // The Exchange remake: an uncensored answer is labelled in the run's own output, whatever its shape, so
+            // every surface that reads it (the API routes, the console, a product) shows what produced it.
+            if (r.output && r.label) {
+                r.output = { ...r.output, policy: r.contentPolicy || 'uncensored', label: r.label };
+            }
             if (controller.signal.aborted) throw new AiError(409, 'run.cancelled', 'cancelled');
             // The status, its citations and the ai.run.succeeded event commit together.
             const done = await db.tx(async () => {
