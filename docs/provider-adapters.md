@@ -100,4 +100,4 @@ catalogued and its key stored, but the router does not resell it.
 
 Refuseless, Abliteration.ai and the abliterated models Featherless lists are marked `uncensored: true` in the
 catalogue. The tier that lets an 18+ account ask for such an offer — the gate, the hard floor and the label on every
-answer — is a separate change (its own PR); this one only records which offers are marked.
+answer — is `docs/uncensored-policy.md`; the catalogue only records which offers are marked.

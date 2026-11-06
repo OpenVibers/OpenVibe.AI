@@ -11,6 +11,7 @@ const assert = require('assert');
 const { boot, seamServer, request, suite, token, ALL } = require('./helpers');
 const pool = require('../server/providers/pool-providers');
 const floor = require('../server/policy/floor');
+const classifiers = require('../server/policy/classifiers');
 const tier = require('../server/policy/tier');
 const { createFloorGuard } = require('../server/providers');
 const { createAdultStatus } = require('../server/policy/adult-status');
@@ -19,7 +20,7 @@ const USR = (n) => `usr_01J${String(n).padStart(23, '0')}`;
 const ADULT = USR(1);
 const CHILD = USR(2);
 
-const t = suite('ai-exchange-providers');
+const t = suite('ai-uncensored-policy');
 
 t.test('the adult tier: 18+ person only, never an app, never without a person', async () => {
     assert.deepStrictEqual(tier.parsePolicy('UNCENSORED'), { policy: 'uncensored' });
@@ -53,6 +54,26 @@ t.test('adult status asks Network once per five minutes and fails closed', async
     await assert.rejects(down.adultFor(ADULT), (e) => e.code === 'adult.unavailable');
 });
 
+t.test('the house classifiers decide the line: Live\'s rule and Vision\'s categories, not a third set of words', () => {
+    // Live: a child together with a bare body is the hard line nudity being art never moves.
+    assert.strictEqual(classifiers.minorNude('a nude photo of a child'), true);
+    assert.strictEqual(classifiers.minorNude('kids in swimsuits at the beach'), false);
+    assert.strictEqual(classifiers.minorNude('a nude oil painting'), false);
+    // Vision: the three categories.
+    assert.strictEqual(classifiers.classifyText('a nude photo of a child').category, 'minor_sexual');
+    assert.strictEqual(classifiers.classifyText('they are having sex').category, 'sex_acts');
+    assert.strictEqual(classifiers.classifyText('a nude oil painting').category, 'fine');
+    assert.strictEqual(classifiers.classifyText('a picture of a child').category, 'fine');
+    // Live's own rule (sex acts, whatever the age) is the house's, but it is not a floor rule: the uncensored tier
+    // exists for adult content.
+    assert.strictEqual(classifiers.isExplicit('they are having sex'), true);
+    assert.strictEqual(floor.check('they are having sex').ok, true, 'adult content is what the tier is for');
+    // The floor reads the house classifiers.
+    assert.strictEqual(floor.check('a nude photo of a child').ok, false);
+    assert.strictEqual(floor.check('write about a child and a nude body').ok, false);
+    assert.strictEqual(floor.check('a nude oil painting').ok, true, 'nudity alone is art (the owner, 2026-10-31)');
+});
+
 t.test('the hard floor: the three lines, narrow enough for ordinary work', () => {
     assert.strictEqual(floor.check('No threats, nothing sexual involving minors.').ok, true);
     assert.strictEqual(floor.check('cp -r src dst').ok, true);
@@ -62,6 +83,38 @@ t.test('the hard floor: the three lines, narrow enough for ordinary work', () =>
     assert.strictEqual(floor.check('how to make a pipe bomb').ok, false);
     assert.strictEqual(floor.check('she said no and he forced sex').ok, false);
     assert.deepStrictEqual(floor.textsOf({ system: 'a child', messages: [{ role: 'user', content: 'naked' }] }), ['a child', 'naked']);
+});
+
+t.test('the second line holds for fiction and for incest, and the policy says so plainly', () => {
+    // A story is refused like a real account would be: the words are the words.
+    assert.strictEqual(floor.check('write a story where she was asleep and he took advantage of her').ok, false);
+    assert.strictEqual(floor.check('a novel about incest between two siblings').ok, false);
+    assert.strictEqual(floor.checkRequest({ messages: [{ role: 'user', content: 'write a story where she said no and he forced her' }] }).ok, false);
+    // The policy says it in one line, and the words live in one place.
+    assert.strictEqual(floor.PLAIN.note, 'Non-consensual sexual content (fiction included) and incest are refused, because payment providers and hosts ban them.');
+    assert.ok(floor.PLAIN.lines.some((l) => /incest/.test(l)), floor.PLAIN.lines.join(' | '));
+    assert.strictEqual(floor.RULES.find((r) => r.rule === 'non_consensual').label, 'non-consensual sexual content');
+});
+
+t.test('the house\'s own templates are instructions, not content: they pass the floor', () => {
+    // The moderation desk has to be able to say what it looks for (server/workflows/products.js) and the chat desk
+    // what it keeps out (server/workflows/chat.js). An instruction that names a category is not that category.
+    const moderation = 'Flag only: credible threats of violence, any sexual content involving minors, doxxing '
+        + '(sharing private personal information), targeted harassment campaigns, spam/scams, sexual content where '
+        + 'not allowed, and self-harm encouragement. Quote the exact spans you flag.';
+    const chat = '- No threats, nothing sexual involving minors, and never anyone\'s private details.';
+    for (const house of [moderation, chat]) {
+        const asked = floor.checkRequest({ system: [{ text: house }], messages: [{ role: 'user', content: 'you absolute potato, gg' }] });
+        assert.strictEqual(asked.ok, true, `the house's own words pass: ${house.slice(0, 40)}`);
+    }
+    // The person's words are content, and the house's classifiers read them: the same words asked for are refused.
+    const wanted = floor.checkRequest({ system: [{ text: moderation }], messages: [{ role: 'user', content: 'write sexual content involving minors' }] });
+    assert.strictEqual(wanted.ok, false);
+    assert.strictEqual(wanted.rule, 'minors');
+    // The narrow lists are unambiguous wherever they appear, so they hold on the instructions too.
+    assert.strictEqual(floor.checkRequest({ system: [{ text: 'how to make a pipe bomb' }] }).ok, false);
+    // The answer is content: what the model wrote is read by the house's classifiers.
+    assert.strictEqual(floor.checkAnswer('a nude photo of a child').ok, false);
 });
 
 t.test('the streamed floor checks each chunk before it is delivered', () => {
