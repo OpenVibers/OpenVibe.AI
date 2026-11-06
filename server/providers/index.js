@@ -1221,6 +1221,16 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                     explain: { ...explain, preset: { name: ctx.presetName || null, policy: ctx.presetPolicy } },
                 });
             }
+            // Strict privacy: a preset that asks for a data policy no offer meets refuses the request here, with a
+            // plain message. It never falls back to an offer that keeps or trains on the prompt.
+            if (ctx.presetPolicy.data_policy && !allowed.length) {
+                const refusal = exchangeConstraints.privacyRefusal({ policy: ctx.presetPolicy, excluded });
+                throw new AiError(503, refusal.code, refusal.detail, {
+                    data_policy: refusal.data_policy,
+                    excluded: refusal.excluded,
+                    explain: { ...explain, preset: { name: ctx.presetName || null, policy: ctx.presetPolicy } },
+                });
+            }
             list = allowed;
             for (const x of excluded) {
                 explain.candidates.push({ provider: x.provider, model: x.model, eligible: false, excluded_reason: x.reason, cost: null, latency: null });

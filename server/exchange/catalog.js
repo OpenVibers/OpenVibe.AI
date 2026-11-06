@@ -15,6 +15,7 @@
 const rates = require('../providers/rate-cards');
 const upstream = require('../providers/upstream');
 const observed = require('./observed');
+const privacy = require('./privacy');
 const { allowsOffer } = require('../free-tier');
 
 const FAMILY_BY_PREFIX = [
@@ -87,7 +88,9 @@ function policyOf(provider) {
     return { trains, retention_days: retention, region, anonymized };
 }
 
-const isCommunity = (provider) => Boolean(provider && provider.metadata && (provider.metadata.local === true || provider.metadata.community === true));
+// A community machine is a person's machine offering capacity (Node's "Offer to the network"). The host's own
+// local deployments (metadata.local) are OpenVibe's own hardware, not a stranger's: they are labelled private.
+const isCommunity = (provider) => Boolean(provider && provider.metadata && provider.metadata.community === true);
 
 function capabilitiesOf(row) {
     const s = (row && row.supports) || {};
@@ -163,6 +166,9 @@ function createCatalog({ db, registry, pool, env = process.env, clock = { now: (
                 price_source: cards && cards.out.source && !String(cards.out.source).startsWith('urn:openvibe:ai:unverified:') ? cards.out.source : null,
                 price_checked_at: cards && cards.out.verified_at && cards.out.verified_at !== rates.UNKNOWN_DATE ? cards.out.verified_at : null,
                 data_policy: policyOf(provider),
+                // The privacy label of this offer, from the same facts the router uses (server/exchange/privacy.js):
+                // Private (zero retention, no training, or the host's own deployment), Anonymized, Community.
+                privacy: privacy.view(privacy.labelFor({ record: provider })),
                 updated_at: row.updated_at || provider.updated_at || null,
             };
             if (!groups.has(slug)) {
