@@ -42,6 +42,8 @@ const { credentialFor } = require('./credential');
 const models = require('./models');
 const modelCatalog = require('../providers/model-catalog');
 const { EXACT_ID } = modelCatalog;
+const { resolveRequest } = require('../exchange/presets');
+const { compact, receiptId } = require('../exchange/receipts');
 
 const FIELDS = ['messages', 'tools', 'tool_choice', 'parallel_tool_calls', 'response_format', 'stop', 'seed', 'top_p', 'presence_penalty', 'frequency_penalty', 'temperature'];
 
@@ -92,6 +94,9 @@ function createLiveStream(res) {
             res.setHeader('Cache-Control', 'no-store');
             res.setHeader('X-Accel-Buffering', 'no');
             res.setHeader('X-OpenVibe-Run-Id', r.id);
+            // A stream's headers go out before the answer is known: the receipt's id is known from the run id
+            // (it is the same receipt), and the receipt itself travels in the last chunk.
+            res.setHeader('x-openvibe-receipt-id', receiptId(r.id));
             if (typeof res.flushHeaders === 'function') res.flushHeaders();
             opened = true;
             for (const d of waiting.splice(0)) write(chunk(d));
@@ -113,7 +118,7 @@ function openaiError(res, status, message, code, type) {
     res.status(status).json({ error: { message: String(message || 'error').slice(0, 1000), type: type || (status === 401 || status === 403 ? 'authentication_error' : status === 429 ? 'rate_limit_error' : status === 402 ? 'insufficient_quota' : status >= 500 ? 'api_error' : 'invalid_request_error'), code: code || null, param: null } });
 }
 
-function openaiRouter({ runs, auth, config, registry, log = console }) {
+function openaiRouter({ runs, auth, config, registry, presets = null, receipts = null, log = console }) {
     const r = express.Router();
     // Developer apps call with ai.app.run, the public capability they already hold (ADR-014; AI Exchange D8').
     const allow = auth.appOrCap(CAPS.appRun, CAPS.runCreate);
@@ -149,16 +154,29 @@ function openaiRouter({ runs, auth, config, registry, log = console }) {
         if (b.n != null && Number(b.n) !== 1) return openaiError(res, 400, 'n must be 1', 'input.invalid');
         const input = {};
         for (const k of FIELDS) if (b[k] !== undefined && b[k] !== null) input[k] = b[k];
+        // The routing preset (server/exchange/presets.js): `model: "@preset/cheapest"` or `preset: "cheapest"`,
+        // and a request's own `max_price` (USD per million tokens). A preset nobody has is a refusal, never a
+        // silent default.
+        let preset = null;
+        try {
+            preset = await resolveRequest({ presets, principal: req.principal, body: b });
+        } catch (err) {
+            if (err && err.status) return openaiError(res, err.status, err.detail || err.message, err.code);
+            throw err;
+        }
         // AI Exchange D3 (AI_MODEL_CATALOG): the `model` the caller names is exact, or one of the dynamic aliases.
         // With the flag off it is ignored exactly as before (the router picks), except an exact id: that is a pin, and a
         // pin is never silently run on another model (a rollback of the flag included), so it is refused.
         const catalogOn = Boolean(config.modelCatalog && config.modelCatalog.enabled);
+        const rawModel = b.model == null ? '' : String(b.model).trim();
+        // A preset named as the model is the router's own choice with the preset's rules: the model is the alias.
+        const presetModel = rawModel.toLowerCase().startsWith('@preset/');
         if (!catalogOn && typeof b.model === 'string' && EXACT_ID.test(b.model.trim())) {
             return openaiError(res, 400, 'an exact model id needs the model catalog, which is off: name a dynamic model (openvibe) instead', 'ai.model_unavailable');
         }
         if (catalogOn) {
             if (b.model !== undefined && b.model !== null && typeof b.model !== 'string') return openaiError(res, 400, 'model must be a string', 'input.invalid');
-            const requested = b.model == null ? 'openvibe/auto' : String(b.model).trim();
+            const requested = (b.model == null || presetModel) ? 'openvibe/auto' : rawModel;
             if (!requested || requested.length > 256) return openaiError(res, 400, 'model must name an exact id or a dynamic alias', 'input.invalid');
             input.model = requested;
             // An exact id is a pin: an unknown or inactive artifact is refused here, before the run (and its stream)
@@ -178,6 +196,11 @@ function openaiRouter({ runs, auth, config, registry, log = console }) {
         // AI Exchange F: the caller's liability cap for the Balance hold (an OpenVibe extension, like x_openvibe).
         if (b.max_cost_usd != null) input.max_cost_usd = b.max_cost_usd;
         let body = { workflow: 'ai.complete', input };
+        // The preset's rules ride the run into the router (server/exchange/constraints.js).
+        if (preset) body = { ...body, preset: { name: preset.name, scope: preset.scope, policy: preset.policy } };
+        // The uncensored preset asks for the adult tier. The gate (18+, the floor, the label) is the pool's own
+        // policy, never the preset's: the preset only names the tier the request asks for.
+        if (preset && preset.policy.adult && b.policy == null) body = { ...body, policy: 'uncensored' };
         // L37: the soft preference (provider, and a model if the caller wants one). A wish, not a pin.
         if (b.prefer) body = { ...body, prefer: b.prefer };
         if (req.principal.kind === 'app') body = { ...body, attribution: appAttribution(req.principal) };
@@ -212,7 +235,8 @@ function openaiRouter({ runs, auth, config, registry, log = console }) {
             const code = (run.error && run.error.code) || 'run.failed';
             const status = code === 'ai.run_budget_reached' || code === 'billing.insufficient_funds' || code === 'billing.payer_required' ? 402 : /^(input|validation)\./.test(code) ? 400 : /quota|allowance|budget/.test(code) ? 429
                 : code === 'project_secret.refused' ? 403 : code === 'credential.endpoint_refused' ? 422
-                : code === 'ai.model_unavailable' ? 400 : code === 'ai.model_not_found' ? 404 : 503;
+                : code === 'ai.model_unavailable' ? 400 : code === 'ai.model_not_found' ? 404
+                : code === 'ai.max_price_exceeded' ? 400 : 503;
             return openaiError(res, status, (run.error && run.error.detail) || code, code);
         }
         if (!['succeeded', 'cached'].includes(run.status) || !run.output || !Array.isArray(run.output.choices)) {
@@ -220,12 +244,28 @@ function openaiRouter({ runs, auth, config, registry, log = console }) {
         }
         const disclosure = await models.disclosureOf({ registry, config, run });
         if (live) live.route(disclosure);
+        // The receipt of this answer (server/exchange/receipts.js): the offer, the price, the tokens, the cache,
+        // the latency, why the router chose it, the fallbacks it would have used, the payer and the privacy label.
+        const receipt = receipts ? await receipts.forRun(run.id) : null;
+        const receiptView = receipt ? compact(receipt) : null;
         const created = Math.floor(Date.parse(run.created_at || new Date().toISOString()) / 1000) || Math.floor(Date.now() / 1000);
         const id = `chatcmpl-${run.id}`;
         const model = run.output.model || (run.provenance && run.provenance.model) || 'openvibe';
         const usage = { prompt_tokens: run.usage.tokens_in || 0, completion_tokens: run.usage.tokens_out || 0, total_tokens: (run.usage.tokens_in || 0) + (run.usage.tokens_out || 0) };
-        const x = { run_id: run.id, provider: run.provenance && run.provenance.provider, fallback_used: Boolean(run.provenance && run.provenance.fallback_used), cost_usd: run.usage.cost_usd, synthetic: Boolean(run.synthetic) };
+        const x = {
+            run_id: run.id, provider: run.provenance && run.provenance.provider,
+            fallback_used: Boolean(run.provenance && run.provenance.fallback_used), cost_usd: run.usage.cost_usd,
+            synthetic: Boolean(run.synthetic),
+            // The privacy label of this answer, and the receipt that explains it.
+            privacy: receipt && receipt.privacy ? receipt.privacy.label : null,
+            receipt_id: receipt ? receipt.id : null,
+        };
         if (!live) res.setHeader('X-OpenVibe-Run-Id', run.id);   // a stream sent it with its headers
+        if (receipt && !live) {
+            // The receipt travels in the headers: the compact JSON, and its id.
+            res.setHeader('x-openvibe-receipt-id', receipt.id);
+            res.setHeader('x-openvibe-receipt', JSON.stringify(receiptView));
+        }
         if (live) {
             const send = (o) => live.write(o);
             const base = { id, object: 'chat.completion.chunk', created, model, system_fingerprint: run.output.system_fingerprint || null };
@@ -240,7 +280,9 @@ function openaiRouter({ runs, auth, config, registry, log = console }) {
                 send({ ...base, choices: [{ index: c.index || 0, delta: {}, finish_reason: c.finish_reason || 'stop' }] });
             }
             if (b.stream_options && b.stream_options.include_usage) send({ ...base, choices: [], usage });
-            send({ ...base, choices: [], x_openvibe: disclosure ? { ...x, ...disclosure } : x });
+            // A stream's headers went out before the answer was known, so the receipt travels in the last chunk
+            // (its id was in the headers, and the full receipt is one GET away).
+            send({ ...base, choices: [], x_openvibe: disclosure ? { ...x, ...disclosure } : x, receipt: receiptView });
             return live.done();
         }
         return res.status(200).json({ id, object: 'chat.completion', created, model, choices: run.output.choices, usage, system_fingerprint: run.output.system_fingerprint || null, x_openvibe: disclosure ? { ...x, ...disclosure } : x });

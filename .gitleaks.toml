@@ -45,3 +45,9 @@ description = "Made-up provider key in test/account-data.test.js (L36: the accou
 condition = "AND"
 paths = ['''^test/account-data\.test\.js$''']
 regexes = ['''sk-self-ada-0123456789LEAK''']
+
+[[allowlists]]
+description = "Made-up provider key in test/exchange-presets-receipts.test.js (the person's own key on a BYOK run, whose receipt says 0 % fee; a placeholder, not a secret)"
+condition = "AND"
+paths = ['''^test/exchange-presets-receipts\.test\.js$''']
+regexes = ['''^sk-test-receipt-0123456789PQRS$''']

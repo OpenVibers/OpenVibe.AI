@@ -38,6 +38,8 @@ const { createWarmCache } = require('./warm-cache');
 const { createProviderMetrics } = require('./metrics');
 const { createVariantEvidence } = require('./bench-variant');
 const { createRoutingEvidence } = require('./evidence');
+const exchangeConstraints = require('../exchange/constraints');
+const exchangePrivacy = require('../exchange/privacy');
 
 /** 4xx that the request itself caused (bad image, schema, max_tokens...), as opposed to auth, rate or availability. */
 function callerFault(err) {
@@ -545,6 +547,27 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
     }
 
     /**
+     * What a routing preset's rules need to know about one offer (server/exchange/constraints.js): its price, the
+     * catalogue's tier, its quantization, the region it runs in and its privacy class. Everything is read from the
+     * catalogue, the rate cards and the provider's own record: nothing is guessed.
+     */
+    async function constraintFacts(c) {
+        const d = await describeCandidate(c);
+        const meta = (d.row && d.row.metadata) || {};
+        const artifact = d.row ? modelCatalog.artifactOf(d.row, d.record) : null;
+        const declared = exchangePrivacy.dataPolicyOf(d.record);
+        const region = (declared && declared.region)
+            || (d.record && d.record.metadata && d.record.metadata.region) || null;
+        return {
+            priceIn: d.priceIn, priceOut: d.priceOut,
+            tier: d.caps.tier || 'balanced',
+            quant: (artifact && artifact.quant) || meta.quant || null,
+            region,
+            privacy: exchangePrivacy.labelFor({ record: d.record }),
+        };
+    }
+
+    /**
      * What the catalogue knows about the model a caller asked for (L37): the provider, and what the model can do.
      * A model the catalogue never described is not refused: the provider decides.
      */
@@ -886,7 +909,10 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         // CHECKPOINT D3: an exact id runs only its own artifact. The candidates are the catalog's deployments of
         // that id, filtered first by commercial access and what the request needs; no other model is ever added.
         const exact = ctx.exact || null;
-        const policy = ctx.policy || (exact ? 'exact' : null);
+        // A routing preset's objective is the more specific request: it decides what the router optimises
+        // (cheapest, fastest, balanced, private). An exact id stays exact: a pin is never re-ranked.
+        const presetObjective = ctx.presetPolicy && ctx.presetPolicy.objective ? ctx.presetPolicy.objective : null;
+        const policy = (exact || ctx.policy === 'exact') ? 'exact' : (presetObjective || ctx.policy || null);
         let list;
         let explain;
         if (exact) {
@@ -976,6 +1002,29 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                 }
             }
             explain.prefer = preferState;
+        }
+        // The routing preset's rules (server/exchange/constraints.js): the floor, the ceiling, the hard max_price,
+        // the quantization, the region, the data policy and the community switch. An offer a rule removes leaves
+        // the order with its reason; a hard max_price that no offer fits refuses the request here, before any
+        // provider is called, with the prices that were refused.
+        if (ctx.presetPolicy && Object.keys(ctx.presetPolicy).length) {
+            const { order: allowed, excluded } = await exchangeConstraints.applyConstraints({
+                list, policy: ctx.presetPolicy, facts: constraintFacts,
+            });
+            if (ctx.presetPolicy.max_price != null && !allowed.length) {
+                const refusal = exchangeConstraints.refusal({ policy: ctx.presetPolicy, excluded });
+                throw new AiError(400, refusal.code, refusal.detail, {
+                    max_price: refusal.max_price,
+                    lowest_price: refusal.lowest_price,
+                    excluded: refusal.excluded,
+                    explain: { ...explain, preset: { name: ctx.presetName || null, policy: ctx.presetPolicy } },
+                });
+            }
+            list = allowed;
+            for (const x of excluded) {
+                explain.candidates.push({ provider: x.provider, model: x.model, eligible: false, excluded_reason: x.reason, cost: null, latency: null });
+            }
+            explain.preset = { name: ctx.presetName || null, policy: ctx.presetPolicy };
         }
         // AI Exchange P7: an alias route (economy/fast/balanced/auto) is ranked by measured evidence when
         // AI_ROUTING_EVIDENCE is on. planAi (openvibe-sdk/placement) is the planner: this only prepares its
