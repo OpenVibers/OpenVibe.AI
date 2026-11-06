@@ -101,3 +101,5 @@ t.test('an unknown shared upstream is no offer at all', async () => {
     assert.strictEqual(upstream.serves({ families: ['openai'] }, { key: 'shared' }, { model_key: 'claude-haiku' }), false);
     assert.strictEqual(upstream.configured({ status: 'active', auth_mode: 'bearer', secret_ref: 'env:NOT_SET_ANYWHERE' }, {}), false);
 });
+
+t.run();
