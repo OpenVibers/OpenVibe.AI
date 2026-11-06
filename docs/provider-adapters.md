@@ -78,10 +78,10 @@ on nothing, so their answers are `private`; the rest are `anonymized`.
 
 Errors are the adapter's typed `ProviderError`s (`provider.auth`, `provider.rate_limited`, `provider.timeout`,
 `provider.output`, …), and the pool's circuit breaker and fallback chain handle them unchanged. One state has its own
-name: a provider that says the account has run out of money answers `provider.exhausted` (Refuseless answers 402
-`insufficient_credits`; the others say it in their own words). The code travels with the failure, so the
-empty-failover job can read it; what happens to the offer afterwards (the circuit that takes it out of the pool) is
-that job's business.
+name: a provider that says the account has run out of money is **exhausted** (Refuseless answers 402
+`insufficient_credits`; the others say it in their own words). Reading that answer is the empty-failover work's,
+which is on main now (#315): it opens the long circuit, fails over and answers 503 `ai.resting`. This catalogue
+records the prices, the models and the labels; it does not repeat that circuit.
 
 ## Commercial access
 
