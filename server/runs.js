@@ -192,6 +192,16 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         if (body.version && !['active', 'deprecated'].includes(wf.status)) throw new AiError(409, 'workflow.inactive', `${wfKey} v${wf.version} is ${wf.status}`);
         const pinned = routePinRequest(body.route, principal, wf);
         if (pinned && body.credential != null) throw new AiError(422, 'input.invalid', 'a pinned route cannot be combined with a person\'s credential; the pin is the provider');
+        // A run token names the person it acts for (Codes C3, `on_behalf_of` in the claims). The run records that
+        // person exactly as a body field would, so they pay, the run is theirs and caches never cross persons. The
+        // body may repeat the claim but never change it; an app's run is its project's (server/api/runs.js appBody),
+        // so the claim is left alone there.
+        if (principal.kind !== 'app' && principal.onBehalfOf != null) {
+            const claimed = String(principal.onBehalfOf);
+            const given = body.on_behalf_of && body.on_behalf_of.id != null ? String(body.on_behalf_of.id) : null;
+            if (given != null && given !== claimed) throw new AiError(403, 'capability.denied', 'on_behalf_of does not match the token');
+            if (body.on_behalf_of == null) body = { ...body, on_behalf_of: { type: 'user', id: claimed } };
+        }
         validateRefs(body);
         const input = body.input === undefined ? {} : body.input;
         const inputJson = stableStringify(input);

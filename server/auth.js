@@ -145,7 +145,10 @@ function createAuth({ config, log = console }) {
                 }
                 if (!decision.allowed) return http.sendProblem(res, 403, decision.code, { detail: anyOf.length > 1 ? `one of ${anyOf.join(', ')} is required` : decision.reason, ctx });
                 const subject = principalSubject(r.claims.sub);
-                req.principal = { sub: r.claims.sub, subject, cap: r.claims.cap, ns: r.claims.ns || [], jti: r.claims.jti, claims: r.claims };
+                // A run token names the person the service acts for (Codes C3). Runs read it as the payer and the
+                // free allowance's owner; without it a service run would have no account of its own.
+                const onBehalfOf = typeof r.claims.on_behalf_of === 'string' ? r.claims.on_behalf_of : null;
+                req.principal = { sub: r.claims.sub, subject, onBehalfOf, cap: r.claims.cap, ns: r.claims.ns || [], jti: r.claims.jti, claims: r.claims };
                 return next();
             } catch (err) {
                 log.error(`[auth] ${req.method} ${req.path}: ${(err && err.stack) || err}`);

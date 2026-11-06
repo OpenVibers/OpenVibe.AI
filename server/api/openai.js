@@ -22,6 +22,9 @@
  *                                              OpenAI-format API), model, secret (the name of a project secret granted
  *                                              to ai for reveal to that origin, ADR-056) }; the key is revealed for
  *                                              that one run, and the project pays its provider directly
+ *   x_openvibe.on_behalf_of                    a first-party service naming the person it acts for (a SubjectRef
+ *                                              { type: 'user', id: 'usr_…' }, or the run token's own claim): their
+ *                                              allowance and Balance pay. An app token may not name a person.
  *
  * GET /v1/models lists the registry's real models in ai.model@1 shape plus the dynamic aliases (behind
  * AI_MODEL_CATALOG; off, the legacy single `openvibe` model); GET /v1/models/{id} answers one. Both protocols share
@@ -181,6 +184,14 @@ function openaiRouter({ runs, auth, config, registry, log = console }) {
         // L37: the soft preference (provider, and a model if the caller wants one). A wish, not a pin.
         if (b.prefer) body = { ...body, prefer: b.prefer };
         if (req.principal.kind === 'app') body = { ...body, attribution: appAttribution(req.principal) };
+        // A first-party service naming the person it acts for (the runs API's on_behalf_of). Their free allowance
+        // and their Balance pay, and the run is theirs; an app run is its project's and never names a person, as on
+        // the runs API. A run token already carries the claim, which the auth layer reads into the principal.
+        const obo = b.x_openvibe && typeof b.x_openvibe === 'object' ? b.x_openvibe.on_behalf_of : undefined;
+        if (obo !== undefined) {
+            if (req.principal.kind === 'app') return openaiError(res, 403, 'an app run is attributed to its project, never to a person', 'capability.denied');
+            body = { ...body, on_behalf_of: obo };
+        }
         // The person's own key (Codes C3): x-openvibe-credential names the provider whose key this request uses.
         const personKey = credentialFor(req);
         if (personKey.error) return openaiError(res, personKey.status, personKey.error, 'invalid_request_error');
