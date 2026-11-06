@@ -13,10 +13,10 @@
  * the log carries counts and error codes only, never text.
  */
 
-const DEFAULT_CAPS = { owners: 10, scopes: 4, embeddings: 100, modelCalls: 20, profiles: 10 };
+const DEFAULT_CAPS = { owners: 10, scopes: 4, embeddings: 100, modelCalls: 20, profiles: 10, drafts: 100 };
 const DEFAULT_INTERVAL_MS = 15 * 60 * 1000;
 
-function createMemoryJobs({ memory, config = {}, clock = { now: () => Date.now() }, log = console, registry = null }) {
+function createMemoryJobs({ memory, memoryImport = null, config = {}, clock = { now: () => Date.now() }, log = console, registry = null }) {
     const settings = config.memoryJobs || {};
     const caps = {
         owners: Math.max(1, Number(settings.maxOwners) || DEFAULT_CAPS.owners),
@@ -24,6 +24,7 @@ function createMemoryJobs({ memory, config = {}, clock = { now: () => Date.now()
         embeddings: Math.max(0, Number(settings.maxEmbeddings) || DEFAULT_CAPS.embeddings),
         modelCalls: Math.max(0, Number(settings.maxModelCalls) || DEFAULT_CAPS.modelCalls),
         profiles: Math.max(0, Number(settings.maxProfiles) || DEFAULT_CAPS.profiles),
+        drafts: Math.max(0, Number(settings.maxDrafts) || DEFAULT_CAPS.drafts),
     };
     let timer = null;
     let running = false;
@@ -42,9 +43,11 @@ function createMemoryJobs({ memory, config = {}, clock = { now: () => Date.now()
         if (running) return { skipped: 'running' };
         if (settings.enabled === false) return { skipped: 'disabled' };
         running = true;
-        const out = { owners: 0, scopes: 0, embeddings: 0, merged: 0, conflicts: 0, calls: 0, profiles: 0, error: null };
+        const out = { owners: 0, scopes: 0, embeddings: 0, merged: 0, conflicts: 0, calls: 0, profiles: 0, drafts: 0, error: null };
         try {
             if (await drillActive()) return { skipped: 'drill' };
+            // M3: a preview that expired is deleted whether or not its person comes back.
+            if (memoryImport && caps.drafts) out.drafts = await memoryImport.expireDrafts(caps.drafts);
             const owners = await memory.ownersForJobs(caps.owners);
             for (const owner of owners) {
                 const who = owner.owner;

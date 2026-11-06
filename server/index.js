@@ -125,9 +125,12 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     const auth = createAuth({ config, log });
     // The person's memory (Memory M2a): sealed item text, the profile cache and the agent-read audit.
     const memory = require('./memory').createMemory({ db, config, clock, log, registry, pool });
-    // The store's own maintenance (Memory M2c): owner by owner, with a per-run cap. It is off in test mode and off
-    // while a provider is in a drill (server/memory/jobs.js).
-    const memoryJobs = require('./memory/jobs').createMemoryJobs({ memory, config, clock, log, registry });
+    // The cloud import (Memory M3): parse an export into a sealed, two-hour preview. No note goes to the store
+    // until the person chooses it.
+    const memoryImport = require('./memory/import').createMemoryImport({ memory, db, config, clock, log });
+    // The store's own maintenance (Memory M2c/M3): owner by owner, with a per-run cap, and the expired import
+    // drafts. It is off in test mode and off while a provider is in a drill (server/memory/jobs.js).
+    const memoryJobs = require('./memory/jobs').createMemoryJobs({ memory, memoryImport, config, clock, log, registry });
     // The Events consumer side: a signed bench.rating.changed webhook, subscribed at boot (server/bench/events.js).
     const accountData = accountDataLib.create({ db, log, memory });
     const accountSend = env.OV_OAUTH_CLIENT_SECRET ? createNetworkSender({
@@ -135,7 +138,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         clientSecret: env.OV_OAUTH_CLIENT_SECRET, fetch: fetchImpl,
     }) : null;
     const benchEvents = createBenchEvents({ bench, accountData, accountSend, config, log, fetchImpl, clientSecret: env.OV_OAUTH_CLIENT_SECRET });
-    const app = createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, grants, vault, settings, benchEvents, runBudgets, memory, community });
+    const app = createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, grants, vault, settings, benchEvents, runBudgets, memory, memoryImport, community });
     let jwks = null;
     let keyLoaded = Promise.resolve(null);
     if (!keys.pinned && config.nodeEnv !== 'test') {
