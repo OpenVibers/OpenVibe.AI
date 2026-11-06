@@ -213,7 +213,7 @@ t.test('a provider that says the account has no money left is exhausted', async 
 });
 
 t.test('a booted service seeds the ten offers, each with its own key slot', async () => {
-    const h = await boot({ env: { AI_STUB_FALLBACK: 'true' } });
+    const h = await boot({ env: { AI_STUB_FALLBACK: 'false' } });
     try {
         const rows = await h.registry.listProviders();
         for (const p of pool.PROVIDERS) {
@@ -224,8 +224,11 @@ t.test('a booted service seeds the ten offers, each with its own key slot', asyn
             assert.strictEqual(row.metadata.privacy.label, p.privacy.label, `${p.key} privacy label`);
         }
         // The key is not there yet, so the offer cannot answer: the pool skips it.
-        const chat = await h.pool.candidates({ key: 'test.seeded', capability: 'chat', constraints: { objective: 'cheapest' }, pinned: [], fallbacks: [] }, ['chat'], 'chat');
-        assert.ok(!chat.order.some((c) => c.provider === 'refuseless'), 'an offer with no key is not a candidate');
+        await assert.rejects(
+            h.pool.execute({ key: 'test.seeded', primary: { provider: 'refuseless', model: null }, fallbacks: [], timeout_ms: 3000 },
+                'chat', { messages: [{ role: 'user', content: 'x' }], timeoutMs: 3000 }, { routeKey: 'test.seeded' }),
+            (err) => err.code === 'provider.unavailable' && JSON.stringify(err.extra.tried).includes('no_credentials'),
+            'the catalogue offer is off until its key exists');
     } finally { await h.stop(); }
 });
 
