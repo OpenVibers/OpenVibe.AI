@@ -70,8 +70,9 @@ function policyOf(provider) {
     const trains = typeof p.trains === 'boolean' ? p.trains : (typeof p.training === 'boolean' ? p.training : null);
     const retention = Number.isFinite(Number(p.retention_days)) ? Number(p.retention_days) : null;
     const region = typeof p.region === 'string' && p.region ? p.region : null;
-    if (trains == null && retention == null && region == null) return null;
-    return { trains, retention_days: retention, region };
+    const anonymized = typeof p.anonymized === 'boolean' ? p.anonymized : null;
+    if (trains == null && retention == null && region == null && anonymized == null) return null;
+    return { trains, retention_days: retention, region, anonymized };
 }
 
 const isCommunity = (provider) => Boolean(provider && provider.metadata && (provider.metadata.local === true || provider.metadata.community === true));

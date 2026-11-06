@@ -270,7 +270,7 @@ const exchangeOffer = {
         speed: { type: 'object', properties: { p50_ms: nullable('number'), p95_ms: nullable('number') } },
         uptime: nullable('number', { minimum: 0, maximum: 1 }),
         requests_7d: integer({ minimum: 0 }), requests_today: integer({ minimum: 0 }),
-        data_policy: nullable('object', { properties: { trains: nullable('boolean'), retention_days: nullable('integer'), region: nullable('string') } }),
+        data_policy: nullable('object', { properties: { trains: nullable('boolean'), retention_days: nullable('integer'), region: nullable('string'), anonymized: nullable('boolean', { description: 'The provider says the request is anonymised before the model sees it' }) } }),
         updated_at: nullable('string'),
     },
 };
