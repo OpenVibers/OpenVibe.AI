@@ -45,11 +45,26 @@ that answer carries no community label.
 
 ## Earnings and /sell
 
-`community_usage` records tokens in/out, the price used and `credits_micro` (1 credit = 1,000,000 micro), only for
-verified tokens. Nothing moves money. `GET /api/v1/community/sell` (a service with `ai.run.read` or `ai.usage.read`,
-acting for the owner in `X-OV-Subject`) returns the owner's offers with tokens served, requests, credits, uptime,
-verification and reputation; that is the `/sell` dashboard data for Exchange. `GET /api/v1/community/offers` is the
-public list (models, price, hours, health; never an owner subject or machine id).
+`community_usage` records tokens in/out, latency, the price used and `credits_micro` (1 credit = 1,000,000 micro), only
+for verified tokens.
+
+- **Self-dealing is zero.** A run whose requester is the offer's owner, or an account merged into it (Network
+  `identity.subject.resolve`), is `self_served`: 0 credits, labelled in the receipt and in `/sell`.
+- **Pending, not spendable.** Credits are earned only against a charge to the requester's Balance in the same request.
+  Until requester charging exists, every verified row is `pending`; `spendable` is reserved for a future Balance charge
+  id. `/sell` shows both and says plainly that pending credits cannot be spent.
+- **Daily cap until trusted.** Until a machine has 7 days of verified service (`AI_COMMUNITY_TRUST_DAYS`), its seller
+  earns at most `AI_COMMUNITY_DAILY_CAP_CREDITS` (100) a day; the row is `capped` when the cap binds.
+- **Reputation resets on failures.** A canary/spot failure rate over 10% sets reputation to 0; a failed offer is 0.
+- **Kudos for volunteers.** A price-0 offer earns kudos per 1,000 verified tokens (`AI_COMMUNITY_KUDOS_PER_1K`), in an
+  append-only `community_kudos_ledger` with the same who/why/request audit shape as the credits. Kudos never expire and
+  are never cash: they buy queue priority (`sqrt(balance)`, capped at 10) and a larger free output allowance
+  (10 tokens per kudo, capped at 1M), both read by the router.
+
+`GET /api/v1/community/sell` (a service with `ai.run.read` or `ai.usage.read`, acting for the owner in `X-OV-Subject`)
+returns the owner's offers with tokens served, tokens/s per model, uptime, verification, reputation, pending/spendable
+credits, self-served requests, the daily cap, kudos and the seller card. `GET /api/v1/community/offers` is the public
+list (models, price, hours, health; never an owner subject or machine id).
 
 ## Configuration
 

@@ -69,7 +69,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     const tiers = createTiers({ config, valkey, clock, log });
     // §2.1.8: the provider free allowance per subject, priced off the pool's own rate cards (server/free-allowance.js);
     // with the tiers on, its counter is in their Valkey store.
-    const freeAllowance = createFreeAllowance(db, { cardsFor: pool.rateCardsFor, clock, store: tiers.freeStore });
+    const freeAllowance = createFreeAllowance(db, { cardsFor: pool.rateCardsFor, clock, store: tiers.freeStore, bonusFor: (subject) => community.kudosBonus(subject) });
     const quotas = createQuotas(db, { clock, registry, freeAllowance, tiers });
     // The budget a Codes run token carries (Codes C3), and what that run has spent.
     const runBudgets = createRunBudgets(db, { clock });
@@ -109,7 +109,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         startSettlements() { return credits ? credits.startSettlements() : null; },
         stopSettlements() { return credits ? credits.stopSettlements() : undefined; },
     };
-    const runs = createRuns({ db, registry, engine, cache, quotas, config, clock, log, userModules, credentials, preferences, tiers, projectSecrets, pool, runBudgets, credits: creditsRef });
+    const runs = createRuns({ db, registry, engine, cache, quotas, config, clock, log, userModules, credentials, preferences, tiers, projectSecrets, pool, runBudgets, credits: creditsRef, community });
     await seed({ registry, quotas, config, env, db });
     // The seed creates or moves providers from the environment: publish their origins (the schema and every key's
     // bind follow), so a key is bound to the host it is for from the first boot.

@@ -341,6 +341,11 @@ function load(env = process.env) {
             canaryTimeoutMs: Math.max(2000, Math.min(120000, int(env.AI_COMMUNITY_CANARY_TIMEOUT_MS, 30000))),
             // About 1% of community answers are re-run on a trusted machine with the same model; a mismatch stops traffic.
             spotRate: Math.max(0, Math.min(1, float(env.AI_COMMUNITY_SPOT_RATE, 0.01))),
+            // Until a machine has this many days of verified service, a seller earns at most the daily cap. Credits are
+            // pending (not spendable) until the requester's own Balance charge exists; kudos are the volunteer reward.
+            trustDays: Math.max(1, Math.min(365, int(env.AI_COMMUNITY_TRUST_DAYS, 7))),
+            dailyEarningCapMicro: Math.max(0, Math.min(1e15, int(env.AI_COMMUNITY_DAILY_CAP_CREDITS, 100) * 1e6)),
+            kudosPerThousandTokens: Math.max(1, Math.min(1000, int(env.AI_COMMUNITY_KUDOS_PER_1K, 1))),
         },
 
         // ── Tier budgets (T6 step 8, server/govern.js): openvibe-sdk/govern in Valkey, off unless AI_GOVERN_TIERS=1.

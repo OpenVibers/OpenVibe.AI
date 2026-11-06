@@ -103,7 +103,7 @@ function routePinRequest(value, principal, wf) {
     return { provider, model };
 }
 
-function createRuns({ db, registry, engine, cache, quotas, config, clock = { now: () => Date.now() }, log = console, userModules = null, credentials = null, preferences: personPreferences = null, tiers = null, projectSecrets = null, pool = null, runBudgets = null, credits = null }) {
+function createRuns({ db, registry, engine, cache, quotas, config, clock = { now: () => Date.now() }, log = console, userModules = null, credentials = null, preferences: personPreferences = null, tiers = null, projectSecrets = null, pool = null, runBudgets = null, credits = null, community = null }) {
     const inflight = new Map();     // run id -> { controller, promise, release, caller }
     const queue = [];               // run ids waiting for the worker
     let active = 0;
@@ -347,6 +347,8 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
 
         // Queue caps, then quota: both before any provider call (a refused run is not counted).
         const caller = `${requester.type}:${requester.id}`;
+        // Kudos bought with volunteer service start this run earlier in the queue (never cash, never a bypass of limits).
+        const priority = community && typeof community.queuePriority === 'function' ? await community.queuePriority(ctx.onBehalfOf).catch(() => 0) : 0;
         admit(caller);
         // A run with a person's own key spends their money, not the shared quotas (its own budget was checked above).
         // The tier budgets (server/govern.js, AI_GOVERN_TIERS) hold first, so a run they refuse is not counted by reserve().
@@ -383,7 +385,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         const gate = new Promise((r) => { release = r; });
         // Whatever the run's end, a tier hold it did not settle (accounted) goes back.
         const promise = gate.then(async () => { try { await execute(id, { controller, reserved, scope, ctx, input, hold }); } finally { if (hold) await tiers.release(hold); } }).catch((err) => { log.error(`[runs] ${id}: ${err.stack || err}`); });
-        inflight.set(id, { controller, promise, release, caller });
+        inflight.set(id, { controller, promise, release, caller, priority });
         queue.push(id);
         pump();
         return { run: await get(id), created: true, promise };
@@ -401,7 +403,14 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
 
     function pump() {
         while (active < config.runs.maxConcurrent && queue.length) {
-            const id = queue.shift();
+            // The highest kudos priority first; equal priorities keep their arrival order.
+            let at = 0;
+            for (let i = 1; i < queue.length; i++) {
+                const have = inflight.get(queue[at]);
+                const next = inflight.get(queue[i]);
+                if (next && (!have || (next.priority || 0) > (have.priority || 0))) at = i;
+            }
+            const [id] = queue.splice(at, 1);
             const h = inflight.get(id);
             if (!h) continue;
             active++;

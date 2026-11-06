@@ -17,8 +17,8 @@ t.test('the seller dashboard is guarded and reads the recorded tokens and credit
             canary_passes, last_canary_at, checks, up_checks, reputation, created_at, updated_at)
             VALUES (?, ?, ?, ?, 'llama3.1:8b', '["llama3.1:8b"]', 10, 30, 'verified', 3, now(), 4, 4, 90, now(), now())`)
             .run(key, 'ai:dev_01J8Z3Q4R5S6T7V8W9X0Y1Z2D1', 'dev_01J8Z3Q4R5S6T7V8W9X0Y1Z2D1', OWNER);
-        await h.db.prepare(`INSERT INTO community_usage (id, offer_key, offer_id, machine_id, owner_subject, model, request_id, tokens_in, tokens_out, credits_micro, verified, created_at)
-            VALUES ('cu_test', ?, 'ai:dev_01J8Z3Q4R5S6T7V8W9X0Y1Z2D1', 'dev_01J8Z3Q4R5S6T7V8W9X0Y1Z2D1', ?, 'llama3.1:8b', 'run-1', 1000, 500, 25000, true, now())`)
+        await h.db.prepare(`INSERT INTO community_usage (id, offer_key, offer_id, machine_id, owner_subject, model, request_id, tokens_in, tokens_out, credits_micro, verified, earning_status, created_at)
+            VALUES ('cu_test', ?, 'ai:dev_01J8Z3Q4R5S6T7V8W9X0Y1Z2D1', 'dev_01J8Z3Q4R5S6T7V8W9X0Y1Z2D1', ?, 'llama3.1:8b', 'run-1', 1000, 500, 25000, true, 'pending', now())`)
             .run(key, OWNER);
         const anon = await request(h.base, 'GET', '/api/v1/community/sell', { headers: { 'X-OV-Subject': OWNER } });
         assert.strictEqual(anon.status, 401);
@@ -26,8 +26,9 @@ t.test('the seller dashboard is guarded and reads the recorded tokens and credit
         const out = await request(h.base, 'GET', '/api/v1/community/sell', { tok, headers: { 'X-OV-Subject': OWNER } });
         assert.strictEqual(out.status, 200, out.text);
         assert.strictEqual(out.body.owner, OWNER);
-        assert.deepStrictEqual([out.body.totals.tokens_in, out.body.totals.tokens_out, out.body.totals.credits_micro], [1000, 500, 25000]);
-        assert.strictEqual(out.body.totals.credits, 0.025);
+        assert.deepStrictEqual([out.body.totals.tokens_in, out.body.totals.tokens_out, out.body.totals.pending_credits_micro], [1000, 500, 25000]);
+        assert.strictEqual(out.body.totals.pending_credits, 0.025);
+        assert.strictEqual(out.body.totals.spendable_credits_micro, 0, 'not spendable until the requester was charged');
         assert.strictEqual(out.body.offers[0].verification.status, 'verified');
         assert.strictEqual(out.body.offers[0].uptime_pct, 100);
         assert.strictEqual(out.body.offers[0].reputation, 90);

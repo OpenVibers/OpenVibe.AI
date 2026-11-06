@@ -11,9 +11,15 @@
  *   - a model fingerprint: the model id the machine's own server reports must be the one the owner declared;
  *   - spot re-runs: about 1% of answers are re-run on a trusted machine serving the same model and compared;
  *   - reputation: canaries, spot runs and observed uptime, 0-100.
- * A new machine serves only the free tier (a run with no Balance payer, ctx.creditsRequired) until verified; only
- * verified tokens earn credits. The answer always carries `openvibe.community`, so a caller can see it came from a
- * person's machine. The prompt is visible to that machine, which is why only opted-in requests ever go there.
+ * A new machine serves only the free tier (a run with no Balance payer, ctx.creditsRequired) until verified. The answer
+ * always carries `openvibe.community`, so a caller can see it came from a person's machine. The prompt is visible to
+ * that machine, which is why only opted-in requests ever go there.
+ *
+ * Money: a self-served run (the requester is the owner, or merged into it) earns 0. Verified credits are `pending`
+ * until the requester's own Balance charge exists in the same request (`spendable`), so none are spendable yet. A
+ * seller is capped daily until 7 days of verified service, and a canary/spot failure rate over 10% resets reputation.
+ * A volunteer (price 0) earns kudos in an append-only ledger; they never expire, buy queue priority and a bigger free
+ * output allowance, and are never cash.
  *
  *   createCommunity({ db, config, env, machines, clock, fetchImpl, log, tokens, random })
  *     .enabled
@@ -125,10 +131,15 @@ function createCommunity({ db, config, env = process.env, machines = null, clock
     if (!followTokens && secret && network) {
         followTokens = createServiceTokenClient({ tokenUrl: `${network}/oauth/token`, clientId, clientSecret: secret, scope: { 'openvibe.network': 'network.follows.read' }, fetch: fetchImpl });
     }
+    let identityTokens = tokens;
+    if (!identityTokens && secret && network) {
+        identityTokens = createServiceTokenClient({ tokenUrl: `${network}/oauth/token`, clientId, clientSecret: secret, scope: { 'openvibe.network': 'identity.subject.resolve' }, fetch: fetchImpl });
+    }
     const enabled = Boolean(cfg.enabled && db && machines && network && registryTokens);
     let cache = { at: 0, offers: [] };
     let refreshing = null;
     const followersCache = new Map();
+    const aliasCache = new Map();       // subject -> survivor subject (account merges, 5 minutes)
 
     const keyOf = (offer, model) => `${offer.offer_id}|${model}`;
 
@@ -204,12 +215,18 @@ function createCommunity({ db, config, env = process.env, machines = null, clock
         return await db.prepare('SELECT * FROM community_offers WHERE offer_key = ?').get(key);
     }
 
-    /** The reputation: canaries 40, spot re-runs 40, observed uptime 20; a failed offer is 0. */
+    /**
+     * The reputation: canaries 40, spot re-runs 40, observed uptime 20. A failed offer is 0, and a canary/spot failure
+     * rate over 10% resets it to 0 even if the offer is still up: a machine that fails often is not trusted.
+     */
     async function refreshReputation(key) {
         const s = await stateOf(key);
         if (!s) return;
+        const failures = (Number(s.canary_failures) || 0) + (Number(s.spot_failures) || 0);
+        const attempts = (Number(s.canary_passes) || 0) + failures + (Number(s.spot_runs) || 0);
+        const failureRate = attempts ? failures / attempts : 0;
         let score = 0;
-        if (s.status !== 'failed') {
+        if (s.status !== 'failed' && failureRate <= 0.10) {
             score += s.status === 'verified' ? 40 : 10;
             const spots = Number(s.spot_runs) || 0;
             score += spots ? Math.round(40 * (1 - (Number(s.spot_failures) || 0) / spots)) : 20;
@@ -224,8 +241,8 @@ function createCommunity({ db, config, env = process.env, machines = null, clock
     async function markCanary(key, { ok, reason = null }) {
         const at = nowIso(clock);
         if (ok) {
-            await db.prepare(`UPDATE community_offers SET canary_passes = canary_passes + 1, last_canary_at = ?, status = CASE WHEN status = 'failed' THEN status ELSE 'verified' END,
-                failure_reason = NULL, updated_at = ? WHERE offer_key = ?`).run(at, at, key);
+            await db.prepare(`UPDATE community_offers SET canary_passes = canary_passes + 1, last_canary_at = ?, first_verified_at = COALESCE(first_verified_at, ?),
+                status = CASE WHEN status = 'failed' THEN status ELSE 'verified' END, failure_reason = NULL, updated_at = ? WHERE offer_key = ?`).run(at, at, at, key);
         } else {
             await db.prepare(`UPDATE community_offers SET canary_failures = canary_failures + 1, last_canary_at = ?, status = 'failed', reputation = 0, failure_reason = ?, updated_at = ?
                 WHERE offer_key = ?`).run(at, String(reason || 'canary_failed').slice(0, 300), at, key);
@@ -310,6 +327,36 @@ function createCommunity({ db, config, env = process.env, machines = null, clock
         return subjects;
     }
 
+    /** The survivor a subject was merged into (ADR-029), or the subject itself; Network is the authority. */
+    async function survivor(subject) {
+        if (!subject || !USR.test(String(subject))) return subject || null;
+        const hit = aliasCache.get(subject);
+        if (hit && clock.now() - hit.at < 300000) return hit.subject;
+        let resolved = subject;
+        if (identityTokens) {
+            try {
+                const token = await identityTokens.getToken({ audience: 'openvibe.network' });
+                const res = await fetchImpl(`${network}/internal/identity/resolve?subject_id=${encodeURIComponent(subject)}`, {
+                    headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' }, signal: AbortSignal.timeout(5000),
+                });
+                if (res.ok) {
+                    const body = await res.json().catch(() => null);
+                    const id = body && body.subject && body.subject.id;
+                    if (id && USR.test(String(id))) resolved = String(id);
+                }
+            } catch { /* Network down: the subject itself is the safe answer; a merge made it conservative */ }
+        }
+        aliasCache.set(subject, { at: clock.now(), subject: resolved });
+        return resolved;
+    }
+
+    /** The person a run is for: the on-behalf-of subject, else a user requester. A service/app has none. */
+    function requesterOf(ctx = {}) {
+        if (ctx.onBehalfOf && USR.test(String(ctx.onBehalfOf))) return String(ctx.onBehalfOf);
+        if (ctx.requesterType === 'user' && ctx.requesterId && USR.test(String(ctx.requesterId))) return String(ctx.requesterId);
+        return null;
+    }
+
     /** Who may use this offer: everyone, the owner's followers, or the caller's group. */
     async function audienceAllows(offer, ctx = {}) {
         if (offer.audience === 'everyone') return true;
@@ -378,24 +425,68 @@ function createCommunity({ db, config, env = process.env, machines = null, clock
         if (!similar(answer.text, again.text)) {
             await db.prepare(`UPDATE community_offers SET spot_runs = spot_runs + 1, spot_failures = spot_failures + 1, last_spot_at = ?, status = 'failed', reputation = 0,
                 failure_reason = ?, updated_at = ? WHERE offer_key = ?`).run(at, `spot_mismatch against ${peer.machine_id}`, at, chosen.key);
+            await refreshReputation(chosen.key);
             throw new AiError(502, 'community.verification_failed', `community machine ${chosen.offer.machine_id} disagreed with a trusted machine on the spot re-run`);
         }
         await db.prepare(`UPDATE community_offers SET spot_runs = spot_runs + 1, last_spot_at = ?, updated_at = ? WHERE offer_key = ?`).run(at, at, chosen.key);
         await refreshReputation(chosen.key);
     }
 
-    /** Record what a machine served. Verified tokens earn credits; a new (free-tier) machine's tokens do not. */
-    async function recordUsage(chosen, { requestId, usage, verified }) {
+    /**
+     * The seller ledger for one served request. Credits are recorded in integer micro-credits (1 credit = 1,000,000).
+     *   - a run whose requester is the offer's owner, or an account merged into it, is self-served: 0 credits, labelled;
+     *   - a new/free-tier machine's tokens are `free`;
+     *   - verified tokens are `pending` until the requester's own Balance was charged in the same request (then
+     *     `spendable`, with the charge id); until requester charging exists they never become spendable;
+     *   - until the machine has `trustDays` of verified service a seller earns at most the daily cap;
+     *   - a volunteer (price 0) earns kudos instead, never cash.
+     */
+    async function recordUsage(chosen, { requestId, usage, verified, requester = null, latencyMs = null, chargeId = null }) {
         const tin = Math.max(0, Math.trunc(Number(usage && usage.input) || 0));
         const tout = Math.max(0, Math.trunc(Number(usage && usage.output) || 0));
-        const micro = verified ? Math.round(tin * chosen.offer.price.in_per_million + tout * chosen.offer.price.out_per_million) : 0;
-        const id = `cu_${sha256(`${chosen.key}|${requestId}`).slice(0, 26)}`;
+        const owner = await survivor(chosen.offer.owner);
+        const person = requester ? await survivor(requester) : null;
+        const selfServed = Boolean(person && owner && person === owner);
+        let credits = verified && !selfServed ? Math.round(tin * chosen.offer.price.in_per_million + tout * chosen.offer.price.out_per_million) : 0;
+        let earning = !verified ? 'free' : selfServed ? 'self' : (chargeId ? 'spendable' : 'pending');
+        let capped = false;
+        const state = await stateOf(chosen.key);
+        if (credits > 0 && state && state.first_verified_at) {
+            const first = Date.parse(state.first_verified_at);
+            const trustEnds = first + (cfg.trustDays || 7) * 86400000;
+            if (Number.isFinite(first) && clock.now() < trustEnds) {
+                const dayStart = new Date(clock.now());
+                dayStart.setUTCHours(0, 0, 0, 0);
+                const row = await db.prepare(`SELECT COALESCE(SUM(credits_micro), 0)::bigint AS earned FROM community_usage
+                    WHERE owner_subject = ? AND created_at >= ? AND earning_status IN ('pending', 'spendable', 'capped')`)
+                    .get(owner, dayStart.toISOString());
+                const remaining = Math.max(0, Number(cfg.dailyEarningCapMicro == null ? 100000000 : cfg.dailyEarningCapMicro) - Number(row.earned));
+                if (credits > remaining) { credits = remaining; capped = true; earning = 'capped'; }
+            }
+        }
+        const request = String(requestId || `usage-${clock.now()}`);
+        const id = `cu_${sha256(`${chosen.key}|${request}`).slice(0, 26)}`;
+        let kudos = 0;
         try {
-            await db.prepare(`INSERT INTO community_usage (id, offer_key, offer_id, machine_id, owner_subject, model, request_id, tokens_in, tokens_out, credits_micro, verified, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (offer_key, request_id) DO NOTHING`)
-                .run(id, chosen.key, chosen.offer.offer_id, chosen.offer.machine_id, chosen.offer.owner, chosen.model, String(requestId || id), tin, tout, micro, Boolean(verified), nowIso(clock));
+            await db.tx(async () => {
+                await db.prepare(`INSERT INTO community_usage (id, offer_key, offer_id, machine_id, owner_subject, model, request_id, requester_subject,
+                    tokens_in, tokens_out, latency_ms, credits_micro, verified, self_served, earning_status, charge_id, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (offer_key, request_id) DO NOTHING`)
+                    .run(id, chosen.key, chosen.offer.offer_id, chosen.offer.machine_id, owner, chosen.model, request, person,
+                        tin, tout, latencyMs == null ? null : Math.max(0, Math.round(latencyMs)), credits, Boolean(verified), selfServed, earning,
+                        chargeId || null, nowIso(clock));
+                if (verified && !selfServed && chosen.offer.price.in_per_million === 0 && chosen.offer.price.out_per_million === 0 && tin + tout > 0) {
+                    kudos = Math.max(1, Math.floor((tin + tout) / 1000)) * (cfg.kudosPerThousandTokens || 1);
+                    const balance = await db.prepare(`SELECT COALESCE(SUM(delta), 0) AS balance FROM community_kudos_ledger WHERE owner_subject = ?`).get(owner);
+                    const after = Number(balance.balance) + kudos;
+                    const kid = `ku_${sha256(`${chosen.key}|${request}|kudos`).slice(0, 26)}`;
+                    await db.prepare(`INSERT INTO community_kudos_ledger (id, owner_subject, delta, reason, offer_key, offer_id, request_id, balance_after, created_at)
+                        VALUES (?, ?, ?, 'served', ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`)
+                        .run(kid, owner, kudos, chosen.key, chosen.offer.offer_id, request, after, nowIso(clock));
+                }
+            });
         } catch (err) { log.warn(`[community] usage ${chosen.key}: ${err.message}`); }
-        return { tokens_in: tin, tokens_out: tout, credits_micro: micro };
+        return { tokens_in: tin, tokens_out: tout, credits_micro: credits, earning_status: earning, self_served: selfServed, capped, kudos };
     }
 
     /**
@@ -414,11 +505,13 @@ function createCommunity({ db, config, env = process.env, machines = null, clock
         const tools = operation === 'complete' ? toolsOf(req) : null;
         const timeoutMs = Math.max(5000, Math.min(Number(req.timeoutMs) || 60000, 300000));
         const requestId = String(ctx.runId || `community-${clock.now()}`);
+        const requester = requesterOf(ctx);
+        const selfServed = Boolean(requester && (await survivor(requester)) === (await survivor(chosen.offer.owner)));
         const facts = {
             resolved_model: `community/${chosen.model}`, revision: null, deployment: `community:${chosen.offer.machine_id}`,
             provider_access: 'COMMUNITY', rate_version: 'community', policy: 'community',
             community: { machine_id: chosen.offer.machine_id, owner: chosen.offer.owner, model: chosen.model, price: chosen.offer.price,
-                verification: chosen.status, reputation: chosen.reputation, free_tier: freeTier(ctx) },
+                verification: chosen.status, reputation: chosen.reputation, free_tier: freeTier(ctx), self_served: selfServed },
         };
         if (typeof ctx.onRoute === 'function') {
             const routed = await ctx.onRoute(facts, { model: chosen.model, maxTokens: req.maxTokens, paid: false, retail: null });
@@ -438,8 +531,9 @@ function createCommunity({ db, config, env = process.env, machines = null, clock
         }
         const usage = answer.usage || { input: 0, output: 0, cached: 0 };
         await spotCheck(chosen, messages, answer);
-        const recorded = await recordUsage(chosen, { requestId, usage, verified: chosen.status !== 'new' });
         const latencyMs = clock.now() - t0;
+        const recorded = await recordUsage(chosen, { requestId, usage, verified: chosen.status !== 'new', requester, latencyMs,
+            chargeId: ctx.requesterChargeId || null });
         const text = answer.text || '';
         const message = answer.message || { role: 'assistant', content: text };
         const result = operation === 'complete'
@@ -447,9 +541,12 @@ function createCommunity({ db, config, env = process.env, machines = null, clock
             : operation === 'messages'
                 ? { message: { role: 'assistant', content: [{ type: 'text', text }], model: answer.model || chosen.model, usage }, model: answer.model || chosen.model, usage }
                 : { text, json: null, model: answer.model || chosen.model, usage };
-        const community = { ...facts.community, verification: chosen.status, reputation: chosen.reputation, credits_micro: recorded.credits_micro };
+        const community = { ...facts.community, verification: chosen.status, reputation: chosen.reputation,
+            credits_micro: recorded.credits_micro, earning_status: recorded.earning_status, self_served: recorded.self_served, kudos: recorded.kudos };
         const explain = {
-            objective: 'community', reasons: [`a community machine offered ${chosen.model}${chosen.offer.price.in_per_million || chosen.offer.price.out_per_million ? ` at ${chosen.offer.price.in_per_million}/${chosen.offer.price.out_per_million} credits per million` : ' for free'}`],
+            objective: 'community', reasons: [recorded.self_served
+                ? 'self-served: the requester owns this machine, so the answer earns no credits'
+                : `a community machine offered ${chosen.model}${chosen.offer.price.in_per_million || chosen.offer.price.out_per_million ? ` at ${chosen.offer.price.in_per_million}/${chosen.offer.price.out_per_million} credits per million` : ' for free'}`],
             selected: `community:${chosen.offer.machine_id}/${chosen.model}`, paid_by: 'community', candidates: [],
             attempts: [{ key: 'community', provider: `community:${chosen.offer.machine_id}`, model: chosen.model, why: 'an opted-in request placed on a verified community machine', status: 'ok', error: null }],
             community, openvibe: facts,
@@ -460,12 +557,31 @@ function createCommunity({ db, config, env = process.env, machines = null, clock
         };
     }
 
+    /** A volunteer's kudos and what they buy: queue priority now, a bigger free limit, never cash or expiry. */
+    async function kudosBenefits(subject) {
+        const id = String(subject || '').replace(/^user:/, '');
+        if (!USR.test(id)) return { balance: 0, queue_priority: 0, free_allowance_bonus_tokens: 0 };
+        const row = await db.prepare('SELECT COALESCE(SUM(delta), 0) AS balance FROM community_kudos_ledger WHERE owner_subject = ?').get(id);
+        const balance = Math.max(0, Number(row.balance) || 0);
+        return { balance, queue_priority: Math.min(10, Math.floor(Math.sqrt(balance))), free_allowance_bonus_tokens: Math.min(1000000, balance * 10) };
+    }
+
+    /** The free-limit bonus for a subject (the free allowance asks for this when it claims a card's free share). */
+    async function kudosBonus(subject) {
+        return (await kudosBenefits(subject)).free_allowance_bonus_tokens;
+    }
+
+    /** Queue priority a run's person bought with kudos; 0 for a service/app or someone with none. */
+    async function queuePriority(subject) {
+        return (await kudosBenefits(subject)).queue_priority;
+    }
+
     /** The /sell dashboard: this owner's offers, what they served, what they earned (credits, never cash). */
     async function sell(owner) {
         if (!USR.test(String(owner))) throw new AiError(422, 'input.invalid', 'owner must be a usr_ subject');
         const list = (await offers({ force: true })).filter((o) => o.owner === owner);
         const rows = await db.prepare(`SELECT offer_key, offer_id, machine_id, models, price_in, price_out, status, canary_passes, canary_failures, spot_runs, spot_failures,
-            reputation, last_canary_at, last_spot_at, failure_reason, checks, up_checks
+            reputation, first_verified_at, last_canary_at, last_spot_at, failure_reason, checks, up_checks
             FROM community_offers WHERE owner_subject = ? ORDER BY updated_at DESC`).all(owner);
         const byKey = new Map(rows.map((r) => [r.offer_key, r]));
         // The dashboard keeps answering from the ledger when Network is unreachable: an offer with state but no live
@@ -478,20 +594,33 @@ function createCommunity({ db, config, env = process.env, machines = null, clock
             list.push({ offer_id: r.offer_id, machine_id: r.machine_id, models, hours: null, concurrency: null,
                 price: { in_per_million: Number(r.price_in), out_per_million: Number(r.price_out) }, audience: null, group: null, health: 'unknown', ready: false });
         }
-        const usage = await db.prepare(`SELECT offer_key, model, COUNT(*)::int AS requests, COALESCE(SUM(tokens_in),0)::bigint AS tokens_in,
-            COALESCE(SUM(tokens_out),0)::bigint AS tokens_out, COALESCE(SUM(credits_micro),0)::bigint AS credits_micro
+        const usage = await db.prepare(`SELECT offer_key, model, COUNT(*)::int AS requests,
+            COALESCE(SUM(tokens_in),0)::bigint AS tokens_in, COALESCE(SUM(tokens_out),0)::bigint AS tokens_out,
+            COALESCE(SUM(latency_ms),0)::bigint AS latency_ms,
+            COALESCE(SUM(credits_micro) FILTER (WHERE earning_status IN ('pending','capped')),0)::bigint AS pending_micro,
+            COALESCE(SUM(credits_micro) FILTER (WHERE earning_status = 'spendable'),0)::bigint AS spendable_micro,
+            COUNT(*) FILTER (WHERE self_served)::int AS self_requests
             FROM community_usage WHERE owner_subject = ? GROUP BY offer_key, model ORDER BY offer_key`).all(owner);
-        const totals = { requests: 0, tokens_in: 0, tokens_out: 0, credits_micro: 0 };
+        const totals = { requests: 0, tokens_in: 0, tokens_out: 0, pending_credits_micro: 0, spendable_credits_micro: 0, self_served_requests: 0 };
         const served = usage.map((u) => {
-            const tokensIn = Number(u.tokens_in), tokensOut = Number(u.tokens_out), credits = Number(u.credits_micro);
-            totals.requests += Number(u.requests); totals.tokens_in += tokensIn; totals.tokens_out += tokensOut; totals.credits_micro += credits;
-            return { offer_key: u.offer_key, model: u.model, requests: Number(u.requests), tokens_in: tokensIn, tokens_out: tokensOut, credits_micro: credits };
+            const tokensIn = Number(u.tokens_in), tokensOut = Number(u.tokens_out);
+            const pending = Number(u.pending_micro), spendable = Number(u.spendable_micro);
+            const latency = Number(u.latency_ms);
+            totals.requests += Number(u.requests); totals.tokens_in += tokensIn; totals.tokens_out += tokensOut;
+            totals.pending_credits_micro += pending; totals.spendable_credits_micro += spendable; totals.self_served_requests += Number(u.self_requests);
+            return { offer_key: u.offer_key, model: u.model, requests: Number(u.requests), tokens_in: tokensIn, tokens_out: tokensOut,
+                tokens_per_s: latency > 0 ? Math.round((tokensOut / (latency / 1000)) * 10) / 10 : null,
+                pending_credits_micro: pending, spendable_credits_micro: spendable, self_served_requests: Number(u.self_requests) };
         });
-        const offerViews = list.map((o) => {
+        const dayStart = new Date(clock.now()); dayStart.setUTCHours(0, 0, 0, 0);
+        const kudosRow = await db.prepare('SELECT COALESCE(SUM(delta),0) AS balance FROM community_kudos_ledger WHERE owner_subject = ?').get(owner);
+        const kudos = Math.max(0, Number(kudosRow.balance) || 0);
+        const offerViews = await Promise.all(list.map(async (o) => {
             const openNow = o.hours ? withinHours(o, clock.now()) : null;
             const out = { offer_id: o.offer_id, machine_id: o.machine_id, models: o.models, hours: o.hours, concurrency: o.concurrency,
                 price: o.price, audience: o.audience, group: o.group, health: o.health, open_now: openNow, ready: o.ready && openNow !== false,
-                verification: null, reputation: 0, free_only: true };
+                verification: null, reputation: 0, free_only: true, verified: false,
+                tokens_per_s: Math.max(0, ...served.filter((x) => x.offer_key.startsWith(`${o.offer_id}|`)).map((x) => x.tokens_per_s || 0)) || null };
             const verified = o.models.map((m) => byKey.get(`${o.offer_id}|${m}`)).filter(Boolean);
             if (verified.length) {
                 const s = verified.find((x) => x.status === 'verified') || verified[0];
@@ -501,20 +630,39 @@ function createCommunity({ db, config, env = process.env, machines = null, clock
                 const spotFails = verified.reduce((n, x) => n + Number(x.spot_failures), 0);
                 const checks = verified.reduce((n, x) => n + Number(x.checks), 0);
                 const up = verified.reduce((n, x) => n + Number(x.up_checks), 0);
+                const attempts = canaries + failures + spots + spotFails;
                 out.verification = { status: s.status, canary_passes: canaries, canary_failures: failures, spot_runs: spots, spot_failures: spotFails,
-                    last_canary_at: s.last_canary_at, last_spot_at: s.last_spot_at, failure_reason: s.failure_reason };
+                    failure_rate: attempts ? Math.round((failures + spotFails) / attempts * 1000) / 10 : 0,
+                    last_canary_at: s.last_canary_at, last_spot_at: s.last_spot_at, first_verified_at: s.first_verified_at, failure_reason: s.failure_reason };
                 out.reputation = Number(s.reputation) || 0;
                 out.free_only = s.status !== 'verified';
+                out.verified = s.status === 'verified';
                 out.uptime_pct = checks ? Math.round((up / checks) * 1000) / 10 : null;
+                // The daily cap holds until the machine has trustDays of verified service.
+                const first = s.first_verified_at ? Date.parse(s.first_verified_at) : NaN;
+                if (Number.isFinite(first) && clock.now() < first + (cfg.trustDays || 7) * 86400000) {
+                    const today = await db.prepare(`SELECT COALESCE(SUM(credits_micro),0)::bigint AS earned FROM community_usage
+                        WHERE owner_subject = ? AND created_at >= ? AND earning_status IN ('pending','spendable','capped')`).get(owner, dayStart.toISOString());
+                    out.daily_cap = { credits_micro: cfg.dailyEarningCapMicro == null ? 100000000 : cfg.dailyEarningCapMicro,
+                        earned_today_micro: Number(today.earned), trust_ends_at: new Date(first + (cfg.trustDays || 7) * 86400000).toISOString() };
+                }
             }
             return out;
-        });
+        }));
+        const paid = (x) => (x.price.in_per_million || x.price.out_per_million) > 0;
         return {
-            owner, generated_at: nowIso(clock), offers: offerViews,
-            totals: { ...totals, credits: totals.credits_micro / 1e6 },
-            note: 'Earnings are recorded in credits (1 credit = 1,000,000 micro). Cash payouts come when the owner turns money on; nothing here moves money.',
+            owner, generated_at: nowIso(clock), offers: offerViews, served,
+            totals: { ...totals, pending_credits: totals.pending_credits_micro / 1e6, spendable_credits: totals.spendable_credits_micro / 1e6 },
+            kudos: { balance: kudos, never_expires: true, never_cash: true,
+                benefits: { queue_priority: Math.min(10, Math.floor(Math.sqrt(kudos))), free_allowance_bonus_tokens: Math.min(1000000, kudos * 10) } },
+            seller_card: { tokens_per_s: Math.max(0, ...served.map((x) => x.tokens_per_s || 0)) || null,
+                uptime_pct: offerViews.find((o) => o.uptime_pct != null)?.uptime_pct ?? null,
+                verified: offerViews.some((o) => o.verified),
+                volunteer: offerViews.some((o) => !paid(o)) },
+            note: 'Credits are pending, not spendable, until the requester was charged in the same request; credits earned by the offer owner are self-served and 0. Cash payouts come when the owner turns money on; nothing here moves money. Kudos for volunteers never expire and are never cash: they buy queue priority and a bigger free limit.',
         };
     }
+
 
     /** What Exchange may show about community capacity: no owner subject, no machine id, no prompt. */
     async function publicOffers() {
@@ -529,7 +677,7 @@ function createCommunity({ db, config, env = process.env, machines = null, clock
         });
     }
 
-    return { enabled, offers, choose, execute, verify, sell, publicOffers, _test: { normalize, withinHours, fingerprintMatches, similar, messagesOf, freeTier } };
+    return { enabled, offers, choose, execute, verify, sell, publicOffers, kudosBenefits, kudosBonus, queuePriority, _test: { normalize, withinHours, refreshReputation, fingerprintMatches, similar, messagesOf, freeTier } };
 }
 
 module.exports = { createCommunity, CANARY_PROMPTS, withinHours, fingerprintMatches, similar, messagesOf };

@@ -38,16 +38,21 @@ function fakeMachines({ canary = true, spotAnswer = null } = {}) {
     };
 }
 
-async function communityFor(db, machines, { docs = [offerDoc()], followers = [], canary = true } = {}) {
+async function communityFor(db, machines, { docs = [offerDoc()], followers = [], merges = {}, dailyCapMicro = 100000000 } = {}) {
     const fetchImpl = async (url) => {
         if (url.includes('/internal/ai/offers')) return { ok: true, json: async () => ({ offers: docs }) };
         if (url.includes('/followers')) return { ok: true, json: async () => ({ follows: followers.map((f) => ({ follower: f })), next_cursor: null }) };
+        if (url.includes('/internal/identity/resolve')) {
+            const id = decodeURIComponent(String(url).split('subject_id=')[1] || '');
+            const survivor = merges[id] || id;
+            return { ok: true, json: async () => ({ subject: { id: survivor } }) };
+        }
         return { ok: false, status: 404, json: async () => null };
     };
     let ms = Date.parse('2026-11-06T12:00:00Z');
     return createCommunity({
         db, machines, fetchImpl, clock: { now: () => ms }, random: () => 0,
-        config: { networkInternalUrl: 'http://network.test', console: { clientId: 'ai' }, community: { enabled: true, refreshMs: 1000, canaryMaxAgeMs: 21600000, spotRate: 0, canaryTimeoutMs: 5000 } },
+        config: { networkInternalUrl: 'http://network.test', console: { clientId: 'ai' }, community: { enabled: true, refreshMs: 1000, canaryMaxAgeMs: 21600000, spotRate: 0, canaryTimeoutMs: 5000, trustDays: 7, dailyEarningCapMicro: dailyCapMicro, kudosPerThousandTokens: 1 } },
         env: {}, tokens: { getToken: async () => 'test-token' }, log: { warn() {}, error() {} },
     });
 }
@@ -80,7 +85,9 @@ t.test('a new machine serves the free tier only until verified', async () => {
         const sell = await c.sell(OWNER);
         assert.strictEqual(sell.totals.requests, 1, 'the served request is on the seller dashboard');
         assert.deepStrictEqual([sell.totals.tokens_in, sell.totals.tokens_out], [10, 5]);
-        assert.ok(sell.totals.credits_micro > 0, 'verified tokens earn credits');
+        assert.ok(sell.totals.pending_credits_micro > 0, 'verified tokens are recorded as pending credits');
+        assert.strictEqual(sell.totals.spendable_credits_micro, 0, 'nothing is spendable until the requester was charged');
+        assert.match(sell.note, /pending, not spendable/);
         assert.strictEqual(sell.offers[0].verification.status, 'verified');
         assert.strictEqual(sell.offers[0].free_only, false);
     } finally { await h.stop(); }
@@ -110,7 +117,7 @@ t.test('a wrong canary fails verification and stops that machine', async () => {
         const sell = await c.sell(OWNER);
         assert.strictEqual(sell.offers[0].verification.status, 'failed');
         assert.strictEqual(sell.offers[0].reputation, 0);
-        assert.strictEqual(sell.totals.credits_micro, 0, 'a failed canary earns nothing');
+        assert.strictEqual(sell.totals.pending_credits_micro, 0, 'a failed canary earns nothing');
     } finally { await h.stop(); }
 });
 
@@ -136,6 +143,80 @@ t.test('the offer hours are checked by the router too, in the owner time zone', 
     assert.ok(withinHours({ hours: { start: '22:00', end: '06:00', tz: 'UTC' } }, at('2026-11-06T23:00:00Z')), 'overnight wraps');
     assert.ok(!withinHours({ hours: { start: '22:00', end: '06:00', tz: 'UTC' } }, at('2026-11-06T12:00:00Z')));
     assert.ok(withinHours({ hours: { start: '00:00', end: '00:00', tz: 'UTC' } }, at('2026-11-06T12:00:00Z')), 'start == end is all day');
+});
+
+t.test('a run by the offer owner is self-served: zero credits, labelled', async () => {
+    const h = await boot({ env: { AI_COMMUNITY: 'false' } });
+    try {
+        const c = await communityFor(h.db, fakeMachines());
+        const out = await c.execute({ operation: 'chat', req: { messages: [{ role: 'user', content: 'hi' }] },
+            ctx: { communityOptIn: true, creditsRequired: true, onBehalfOf: OWNER, runId: 'self1' } });
+        assert.strictEqual(out.explain.community.self_served, true);
+        assert.strictEqual(out.explain.community.credits_micro, 0);
+        assert.match(out.explain.reasons[0], /self-served/);
+        const sell = await c.sell(OWNER);
+        assert.strictEqual(sell.totals.self_served_requests, 1);
+        assert.strictEqual(sell.totals.pending_credits_micro, 0);
+    } finally { await h.stop(); }
+});
+
+t.test('a requester merged into the owner is self-served too', async () => {
+    const h = await boot({ env: { AI_COMMUNITY: 'false' } });
+    try {
+        const c = await communityFor(h.db, fakeMachines(), { merges: { [OTHER]: OWNER } });
+        const out = await c.execute({ operation: 'chat', req: { messages: [{ role: 'user', content: 'hi' }] },
+            ctx: { communityOptIn: true, creditsRequired: true, onBehalfOf: OTHER, runId: 'merged1' } });
+        assert.strictEqual(out.explain.community.self_served, true);
+        assert.strictEqual(out.explain.community.credits_micro, 0);
+    } finally { await h.stop(); }
+});
+
+t.test('a new machine\'s seller earnings are capped by the day', async () => {
+    const h = await boot({ env: { AI_COMMUNITY: 'false' } });
+    try {
+        const c = await communityFor(h.db, fakeMachines(), { dailyCapMicro: 1 });
+        const out = await c.execute({ operation: 'chat', req: { messages: [{ role: 'user', content: 'hi' }] },
+            ctx: { communityOptIn: true, creditsRequired: true, onBehalfOf: OTHER, runId: 'cap1' } });
+        assert.strictEqual(out.explain.community.earning_status, 'capped');
+        assert.strictEqual(out.explain.community.credits_micro, 1, 'the daily cap is one micro-credit');
+        const sell = await c.sell(OWNER);
+        assert.strictEqual(sell.offers[0].daily_cap.earned_today_micro, 1);
+        assert.ok(sell.offers[0].daily_cap.trust_ends_at);
+    } finally { await h.stop(); }
+});
+
+t.test('a volunteer earns kudos, never cash', async () => {
+    const h = await boot({ env: { AI_COMMUNITY: 'false' } });
+    try {
+        const c = await communityFor(h.db, fakeMachines(), { docs: [offerDoc({ price: { in_per_million: 0, out_per_million: 0 } })] });
+        const out = await c.execute({ operation: 'chat', req: { messages: [{ role: 'user', content: 'hi' }] },
+            ctx: { communityOptIn: true, creditsRequired: true, onBehalfOf: OTHER, runId: 'kudos1' } });
+        assert.ok(out.explain.community.kudos > 0);
+        const sell = await c.sell(OWNER);
+        assert.ok(sell.kudos.balance > 0);
+        assert.strictEqual(sell.kudos.never_cash, true);
+        assert.strictEqual(sell.kudos.never_expires, true);
+        assert.ok(sell.kudos.benefits.queue_priority >= 0);
+        assert.ok(sell.kudos.benefits.free_allowance_bonus_tokens > 0);
+        assert.strictEqual(await c.queuePriority(OWNER), sell.kudos.benefits.queue_priority);
+        assert.strictEqual(await c.kudosBonus(`user:${OWNER}`), sell.kudos.benefits.free_allowance_bonus_tokens);
+        assert.strictEqual(sell.totals.pending_credits_micro, 0, 'a volunteer earns no credits');
+    } finally { await h.stop(); }
+});
+
+t.test('a canary/spot failure rate resets reputation', async () => {
+    const h = await boot({ env: { AI_COMMUNITY: 'false' } });
+    try {
+        const c = await communityFor(h.db, fakeMachines());
+        const key = `${offerDoc().offer_id}|llama3.1:8b`;
+        await h.db.prepare(`INSERT INTO community_offers (offer_key, offer_id, machine_id, owner_subject, model, models, price_in, price_out, status,
+            canary_passes, canary_failures, checks, up_checks, reputation, created_at, updated_at)
+            VALUES (?, ?, ?, ?, 'llama3.1:8b', '["llama3.1:8b"]', 10, 30, 'verified', 9, 2, 4, 4, 90, now(), now())`)
+            .run(key, offerDoc().offer_id, MACHINE, OWNER);
+        await c._test.refreshReputation(key);
+        const row = await h.db.prepare('SELECT reputation FROM community_offers WHERE offer_key = ?').get(key);
+        assert.strictEqual(Number(row.reputation), 0, '2 failures out of 11 attempts resets it');
+    } finally { await h.stop(); }
 });
 
 t.test('followers and groups are enforced, everyone is open', async () => {
