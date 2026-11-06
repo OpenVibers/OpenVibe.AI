@@ -21,7 +21,7 @@ const pool = require('../server/providers/pool-providers');
 const seed = require('../server/providers/pool-seed');
 const { createProviderPool } = require('../server/providers');
 const { createOpenAiProvider } = require('../server/providers/openai');
-const { exhaustedCode, retryable } = require('../server/providers/common');
+const { ProviderError, insufficientBalance, retryable } = require('../server/providers/common');
 
 const t = suite('ai-provider-adapters');
 
@@ -147,10 +147,12 @@ t.test('the recorded shape of every provider is parsed by the OpenAI adapter, to
     }
 });
 
-t.test('a catalogue offer with no key is skipped no_credentials: the offer is off until its key exists', async () => {
-    const row = { ...seed.recordOf(pool.byKey.get('refuseless')), origin: 'catalog' };
+t.test('a catalogue offer with no key is off: the pool skips it no_credentials', async () => {
+    // The commercial gate (an UNVERIFIED offer) keeps most of the catalogue out of the managed pool; the
+    // credential gate is what this test is about, so the row carries the access mode the owner would grant.
+    const row = { ...seed.recordOf(pool.byKey.get('qwen')), provider_access: 'OWN_DEPLOYMENT', origin: 'catalog' };
     const registry = {
-        getProvider: async (k) => (k === 'refuseless' ? row : null),
+        getProvider: async (k) => (k === 'qwen' ? row : null),
         listProviders: async () => [row],
         listModels: async () => [],
         getModel: async () => null,
@@ -161,55 +163,26 @@ t.test('a catalogue offer with no key is skipped no_credentials: the offer is of
         placement: { minGain: 0, costWeight: 1, latencyWeight: 1 }, pricing: { table: {}, inputPerMtok: 0.5, outputPerMtok: 1.5 },
     };
     const p = createProviderPool({ db: { prepare: () => noop }, registry, config, env: {} });
-    const route = { key: 'test.no-key', primary: { provider: 'refuseless', model: null }, fallbacks: [], timeout_ms: 3000 };
-    const logs = [];
+    const route = { key: 'test.no-key', primary: { provider: 'qwen', model: null }, fallbacks: [], timeout_ms: 3000 };
+    const { explain } = await p.candidates(route, ['chat'], 'chat', {});
+    assert.strictEqual(explain.candidates[0].eligible, false, 'an offer with no key is not eligible');
+    assert.strictEqual(explain.candidates[0].excluded_reason, 'no_credentials');
     await assert.rejects(
-        p.execute(route, 'chat', CHAT, { routeKey: route.key, logRequest: (e) => logs.push(e) }),
-        (err) => err.status === 503 && err.code === 'provider.unavailable' && JSON.stringify(err.extra.tried).includes('no_credentials'),
+        p.execute(route, 'chat', CHAT, { routeKey: route.key }),
+        (err) => err.status === 503 && err.code === 'provider.unavailable',
         'an offer with no key cannot answer');
-    assert.ok(logs.some((e) => e.status === 'skipped' && e.skip_reason === 'no_credentials'), 'the attempt is logged as a credential skip');
 });
 
-t.test('a provider that says the account has no money left is exhausted', async () => {
+t.test('a provider that says the account has no money left is exhaustion, and it is never retried into', async () => {
+    // The empty-failover work owns what happens then (the long circuit, the failover, 503 ai.resting):
+    // server/providers/index.js and common.js. What matters here is that a provider's own answer is read as
+    // exhaustion and not as a transient fault.
     const recorded = fixtures.exhausted.refuseless;
-    assert.strictEqual(exhaustedCode(recorded.status, recorded.body), 'provider.exhausted');
-    assert.strictEqual(exhaustedCode(402, null), 'provider.exhausted');
-    assert.strictEqual(exhaustedCode(429, { error: { code: 'model_busy', message: 'Model is busy. Retry shortly.' } }), null, 'a busy model is not an empty account');
-    assert.strictEqual(exhaustedCode(429, { error: { message: 'Insufficient quota' } }), 'provider.exhausted');
-    assert.strictEqual(exhaustedCode(500, { error: { message: 'the backend fell over' } }), null);
-    // An empty account is not a transient failure: trying again costs the same nothing.
-    assert.strictEqual(retryable({ code: 'provider.exhausted', status: 402 }), false);
-
-    // The adapter names the state the provider answered in.
-    const srv = await seamServer(() => ({ status: recorded.status, body: recorded.body }));
-    try {
-        const a = createOpenAiProvider({ key: 'refuseless', base_url: srv.url, capabilities: [] }, { apiKey: 'k' });
-        await assert.rejects(
-            a.chat({ messages: [{ role: 'user', content: 'hi' }], maxTokens: 10, timeoutMs: 3000, model: 'deepseek-v4.1-flash-abliterated' }),
-            (err) => err.code === 'provider.exhausted' && err.status === 402,
-            'Refuseless\'s own 402 is exhausted');
-
-        // And the pool carries the code with the failure, so the empty-failover job can read it.
-        const providers = { empty: { key: 'empty', kind: 'openai', status: 'active', auth_mode: 'none', secret_ref: null, default_model: 'm', capabilities: ['chat'], timeout_ms: 30000, priority: 10, updated_at: iso(0), billing_profile: 'metered', metadata: {}, base_url: srv.url } };
-        const registry = {
-            getProvider: async (k) => providers[k] || null,
-            listProviders: async () => Object.values(providers),
-            listModels: async () => [],
-            getModel: async () => null,
-            audit: async () => {},
-        };
-        const config = {
-            breaker: { failureThreshold: 3, cooldownMs: 1000 }, providerRetries: 0, retryDelayMs: 1, stubFallback: false,
-            placement: { minGain: 0, costWeight: 1, latencyWeight: 1 }, pricing: { table: {}, inputPerMtok: 0.5, outputPerMtok: 1.5 },
-        };
-        const p = createProviderPool({ db: { prepare: () => noop }, registry, config, env: {} });
-        const route = { key: 'test.exhausted', primary: { provider: 'empty', model: null }, fallbacks: [], timeout_ms: 3000 };
-        await assert.rejects(
-            p.execute(route, 'chat', CHAT, { routeKey: route.key }),
-            (err) => err.status === 503 && err.code === 'provider.unavailable'
-                && err.extra.tried.some((x) => x.code === 'provider.exhausted'),
-            'the pool reports the exhausted state');
-    } finally { await srv.close(); }
+    const err = new ProviderError('Out of credits', { status: recorded.status, code: 'provider.http', body: recorded.body });
+    assert.strictEqual(insufficientBalance(err), true, 'Refuseless\'s own 402 is exhaustion');
+    assert.strictEqual(retryable(err), false, 'an empty account is not retried into');
+    assert.strictEqual(insufficientBalance(new ProviderError('Model is busy. Retry shortly.', { status: 429, code: 'provider.http', body: { error: { code: 'model_busy' } } })), false, 'a busy model is not an empty account');
+    assert.strictEqual(insufficientBalance(new ProviderError('the backend fell over', { status: 500, code: 'provider.http', body: {} })), false);
 });
 
 t.test('a booted service seeds the ten offers, each with its own key slot', async () => {
@@ -224,10 +197,13 @@ t.test('a booted service seeds the ten offers, each with its own key slot', asyn
             assert.strictEqual(row.metadata.privacy.label, p.privacy.label, `${p.key} privacy label`);
         }
         // The key is not there yet, so the offer cannot answer: the pool skips it.
+        const route = { key: 'test.seeded', primary: { provider: 'qwen', model: null }, fallbacks: [], timeout_ms: 3000 };
+        const { explain } = await h.pool.candidates(route, ['chat'], 'chat', {});
+        assert.strictEqual(explain.candidates[0].eligible, false, 'an offer with no key is not eligible');
+        assert.ok(String(explain.candidates[0].excluded_reason).includes('no_credentials'), explain.candidates[0].excluded_reason);
         await assert.rejects(
-            h.pool.execute({ key: 'test.seeded', primary: { provider: 'refuseless', model: null }, fallbacks: [], timeout_ms: 3000 },
-                'chat', { messages: [{ role: 'user', content: 'x' }], timeoutMs: 3000 }, { routeKey: 'test.seeded' }),
-            (err) => err.code === 'provider.unavailable' && JSON.stringify(err.extra.tried).includes('no_credentials'),
+            h.pool.execute(route, 'chat', { messages: [{ role: 'user', content: 'x' }], timeoutMs: 3000 }, { routeKey: route.key }),
+            (err) => err.code === 'provider.unavailable',
             'the catalogue offer is off until its key exists');
     } finally { await h.stop(); }
 });
