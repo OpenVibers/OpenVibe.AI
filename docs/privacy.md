@@ -6,7 +6,7 @@ This is the engineering note for what OpenVibe.AI keeps. The public legal text i
 ## A run
 
 A run keeps the prompt (unless the workflow is passthrough or `history: false`), the answer, the model and why it
-was chosen, tokens, cost, payer and the receipt. Retention follows `AI_RUNS_RETENTION_DAYS`; the receipt goes with
+was chosen, tokens, cost, payer and the receipt. Retention follows `AI_RUN_RETENTION_DAYS`; the receipt goes with
 the run. A person's own provider key is encrypted and never logged. See `README.md` ("Runs", "Presets, receipts,
 BYOK and the privacy label").
 
