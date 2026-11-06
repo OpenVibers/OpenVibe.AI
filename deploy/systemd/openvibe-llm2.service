@@ -1,0 +1,34 @@
+[Unit]
+Description=OpenVibe local model 2 — llama.cpp llama-server, Llama 3.2 1B on 127.0.0.1:8092, for AI-vs-AI matches
+# OpenVibe.AI reaches it as the provider `local2` (AI_LOCAL_LLM2_URL=http://127.0.0.1:8092/v1). Loopback only,
+# no key. It is the second side of an AI-vs-AI match (Games' GAMES_AI_MATCHES_OFFERS): a different model family
+# from the Qwen unit on 8090, so the match is not a model playing itself. It shares the host with live streams,
+# so it is held back: 2 threads, at most 1 CPU, nice 19 and 2 GB of memory.
+# Install (README "Local model"): llama.cpp's CPU build under /opt/llama.cpp/<build> with /opt/llama.cpp/current,
+# the model in /var/lib/openvibe-llm/models, both checked against their published sha256.
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+ExecStart=/opt/llama.cpp/current/llama-server \
+    --model /var/lib/openvibe-llm/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf \
+    --alias llama-3.2-1b-instruct \
+    --host 127.0.0.1 --port 8092 \
+    --threads 2 --ctx-size 8192 --parallel 1 \
+    --no-webui
+Nice=19
+CPUQuota=100%
+MemoryMax=2G
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=15
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/var/lib/openvibe-llm /opt/llama.cpp
+
+[Install]
+WantedBy=multi-user.target

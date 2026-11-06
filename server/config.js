@@ -176,6 +176,14 @@ function load(env = process.env) {
             embedModel: String(env.AI_LOCAL_EMBED_MODEL || '').trim(),
             timeoutMs: int(env.AI_LOCAL_LLM_TIMEOUT_MS, 180000),
         },
+        // A second local chat server (its own llama.cpp process, another model family): the provider `local2`.
+        // Same rules as `local`: no key, never paid, no JSON. Two local offers let a caller pin a match
+        // between models without sending either side to a paid provider.
+        localLlm2: {
+            url: trimUrl(env.AI_LOCAL_LLM2_URL),
+            model: String(env.AI_LOCAL_LLM2_MODEL || '').trim(),
+            timeoutMs: int(env.AI_LOCAL_LLM2_TIMEOUT_MS, 180000),
+        },
         // Image generation (POST /api/v1/image, workflow ai.image): off until AI_IMAGE_MODEL names the shared
         // provider's image model (dall-e-3, gpt-image-1); then boot seeds that model and route default.image.
         image: { model: String(env.AI_IMAGE_MODEL || '').trim(), size: String(env.AI_IMAGE_SIZE || '').trim() || '1024x1024' },
