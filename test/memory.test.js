@@ -1,8 +1,8 @@
 'use strict';
 /**
- * Memory M2a: the person's store in OpenVibe.AI. Sealing and AAD binding, dedupe, server-side redaction, owner scope,
- * the agent search (active only, at most 8, audited), the profile cache, delete, the 503 without a key, account data
- * and the no-plaintext-in-logs rule.
+ * Memory M2a/M4: the person's store in OpenVibe.AI. Sealing and AAD binding, dedupe, server-side redaction, owner
+ * scope, the agent search (active only, at most 8, audited) and the scoped agent profile (audited), the profile cache,
+ * delete, the 503 without a key, account data and the no-plaintext-in-logs rule.
  */
 const assert = require('assert');
 const crypto = require('crypto');
@@ -187,7 +187,7 @@ t.test('an agent sees active items only, at most 8, in its granted scopes, and t
     } finally { await h.stop(); }
 });
 
-t.test('a service may only search and suggest: every other memory route is person-only', async () => {
+t.test('a service may only search, read a granted profile and suggest: every other memory route is person-only', async () => {
     const h = await boot({ env: { AI_MEMORY_KEY: KEY } });
     try {
         const who = userToken(A);
@@ -200,7 +200,6 @@ t.test('a service may only search and suggest: every other memory route is perso
         };
         denied(await request(h.base, 'GET', `/api/v1/memory/items?on_behalf_of=${A}`, { tok: read }));
         denied(await request(h.base, 'GET', `/api/v1/memory/items/${id}?on_behalf_of=${A}`, { tok: read }));
-        denied(await request(h.base, 'GET', `/api/v1/memory/profile?scope=user&on_behalf_of=${A}`, { tok: read }));
         denied(await request(h.base, 'PATCH', `/api/v1/memory/items/${id}`, { tok: serviceWrite(), body: { text: 'hijacked', on_behalf_of: A } }));
         denied(await request(h.base, 'DELETE', `/api/v1/memory/items/${id}?on_behalf_of=${A}`, { tok: serviceWrite() }));
         denied(await request(h.base, 'DELETE', `/api/v1/memory/items?source=person&on_behalf_of=${A}`, { tok: serviceWrite() }));
@@ -218,11 +217,23 @@ t.test('a service may only search and suggest: every other memory route is perso
         assert.deepStrictEqual([row.status, row.source, Number(row.confidence)], ['suggested', 'codes', 0.5]);
 
         // Search still works for a service, and it is audited.
-        const search = await request(h.base, 'GET', `/api/v1/memory/search?q=active&scopes=user&on_behalf_of=${A}`, { tok: read });
+        const search = await request(h.base, 'GET', `/api/v1/memory/search?q=active&scopes=user&purpose=task-active&on_behalf_of=${A}`, { tok: read });
         assert.deepStrictEqual([search.status, search.body.items.length], [200, 1]);
-        const audit = await h.db.prepare('SELECT actor, item_ids FROM memory_reads WHERE owner = ?').get(`user:${A}`);
+        const audit = await h.db.prepare("SELECT actor, item_ids FROM memory_reads WHERE owner = ? AND purpose = 'task-active'").get(`user:${A}`);
         assert.equal(audit.actor, 'svc:codes');
         assert.ok(!audit.item_ids.includes('active note'));
+
+        // M4: the profile is the second audited agent read. A service reads only a scope its grant names, and the
+        // empty project scope keeps this test off the profile builder.
+        const projectRead = serviceRead({ memory_scopes: ['user', 'project:empty'] });
+        const prof = await request(h.base, 'GET', `/api/v1/memory/profile?scope=project:empty&purpose=profile-task&on_behalf_of=${A}`, { tok: projectRead });
+        assert.deepStrictEqual([prof.status, prof.body.profile.scope, prof.body.profile.text], [200, 'project:empty', '']);
+        const profileAudit = await h.db.prepare("SELECT actor, purpose, scopes, item_ids FROM memory_reads WHERE owner = ? AND purpose = 'profile-task'").get(`user:${A}`);
+        assert.equal(profileAudit.actor, 'svc:codes');
+        assert.deepStrictEqual(JSON.parse(profileAudit.scopes), ['project:empty']);
+        assert.deepStrictEqual(JSON.parse(profileAudit.item_ids), []);
+        const wrongScope = await request(h.base, 'GET', `/api/v1/memory/profile?scope=project:empty&on_behalf_of=${A}`, { tok: read });
+        assert.deepStrictEqual([wrongScope.status, wrongScope.body.code], [403, 'memory.scope_denied']);
     } finally { await h.stop(); }
 });
 
@@ -325,6 +336,41 @@ t.test('a scope change re-seals the text, and deleting one source leaves the oth
         assert.deepStrictEqual([removed.status, removed.body.deleted], [200, 1]);
         const left = await request(h.base, 'GET', '/api/v1/memory/items', { tok: who });
         assert.deepStrictEqual(left.body.items.map((i) => i.source), ['claude-code']);
+    } finally { await h.stop(); }
+});
+
+t.test('an agent profile is scoped to its grant and audited with the ids it was built from', async () => {
+    const h = await boot({ env: { AI_MEMORY_KEY: KEY } });
+    try {
+        const who = userToken(A);
+        const made = await request(h.base, 'POST', '/api/v1/memory/items:batch', { tok: who, body: { items: [
+            item('the agent profile note', { source: 'claude-code' }),
+        ] } });
+        const id = made.body.items[0].id;
+        const m = createMemory({ db: h.db, config: h.config, clock: { now: () => Date.now() }, log: h.log || console,
+            buildProfile: async ({ items }) => `A person with ${items.length} notes.` });
+        const owner = `user:${A}`;
+        const req = { principal: { kind: 'service', sub: 'svc:codes', claims: { memory_scopes: ['user'] } },
+            query: { scope: 'user', purpose: 'task-profile' }, body: {}, ov: {} };
+        const out = await m.profile(req, owner);
+        assert.equal(out.profile.text, 'A person with 1 notes.');
+        const audit = await h.db.prepare('SELECT actor, purpose, scopes, item_ids FROM memory_reads WHERE owner = ?').get(owner);
+        assert.deepStrictEqual([audit.actor, audit.purpose], ['svc:codes', 'task-profile']);
+        assert.deepStrictEqual(JSON.parse(audit.scopes), ['user']);
+        assert.deepStrictEqual(JSON.parse(audit.item_ids), [id]);
+        assert.ok(!audit.item_ids.includes('agent profile note'), 'the audit holds ids, never text');
+
+        // A scope the grant does not name is refused before a profile is built.
+        await assert.rejects(
+            () => m.profile({ ...req, query: { scope: 'project:demo' } }, owner),
+            (err) => err.status === 403 && err.code === 'memory.scope_denied',
+        );
+
+        // The person's own profile is not an audited agent read.
+        const before = Number(await h.db.value('SELECT count(*)::int FROM memory_reads WHERE owner = $1', [owner]));
+        await m.profile({ principal: { kind: 'user', subject: { type: 'user', id: A }, claims: {} }, query: { scope: 'user' }, body: {}, ov: {} }, owner);
+        const after = Number(await h.db.value('SELECT count(*)::int FROM memory_reads WHERE owner = $1', [owner]));
+        assert.equal(after, before);
     } finally { await h.stop(); }
 });
 

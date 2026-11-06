@@ -19,7 +19,8 @@
  *   POST   /api/v1/memory/items/:id/settle  the person settles a conflict: { keep: <id> } keeps one and archives the other
  *   GET    /api/v1/memory/reads         the person's own read log: who read, for what, how many notes (never ids, never text)
  *   GET    /api/v1/memory/profile?scope=  the cached profile, rebuilt by the cheap tier only when its items_hash moved,
- *                                         at most once an hour per owner and scope
+ *                                         at most once an hour per owner and scope; the person sees their own, an agent
+ *                                         with ai.memory.read sees a scope its grant names, audited in memory_reads
  *   GET    /api/v1/memory/search?q=&scopes=  for agents (ai.memory.read + on_behalf_of): active items only, in the
  *                                         granted scopes, at most 8, audited in memory_reads with ids and never text
  *   GET    /api/v1/memory/import/providers  the cloud walkthroughs and the extraction prompt (M3, person token only)
@@ -732,7 +733,21 @@ function createMemory({ db, config, clock = { now: () => Date.now() }, log = con
         assertConfigured();
         const scope = validateScope(req.query.scope, 'user');
         requireScope(req, scope);
-        return { profile: (await profileFor(owner, scope)).profile };
+        const out = await profileFor(owner, scope);
+        // An agent's profile is a read of the notes it was built from: audit it the way search is audited, with the
+        // ids only. The person reading their own profile is not an audited agent read.
+        if (req.principal.kind !== 'user') {
+            const rows = await activeRows(owner, scope);
+            await q('INSERT INTO memory_reads (id, owner, actor, purpose, scopes, item_ids, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)')
+                .run(`mrd_${ids.ulid()}`, owner, req.principal.sub, readPurpose(req), JSON.stringify([scope]), JSON.stringify(rows.map((r) => r.id)), iso(clock.now()));
+        }
+        return { profile: out.profile };
+    }
+
+    /** The purpose an agent names for a read, the same for search and for the profile. */
+    function readPurpose(req) {
+        const purpose = req.query.purpose == null ? (req.query.task == null ? null : String(req.query.task)) : String(req.query.purpose);
+        return purpose ? purpose.slice(0, 200) : null;
     }
 
     /** An agent's search: active items only, the granted scopes, at most 8, and one memory_reads row with ids only. */
@@ -754,9 +769,8 @@ function createMemory({ db, config, clock = { now: () => Date.now() }, log = con
             if (items.length >= MAX_SEARCH) break;
         }
         if (req.principal.kind !== 'user') {
-            const purpose = req.query.purpose == null ? (req.query.task == null ? null : String(req.query.task)) : String(req.query.purpose);
             await q('INSERT INTO memory_reads (id, owner, actor, purpose, scopes, item_ids, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)')
-                .run(`mrd_${ids.ulid()}`, owner, req.principal.sub, purpose ? purpose.slice(0, 200) : null, JSON.stringify(scopes), JSON.stringify(items.map((i) => i.id)), iso(clock.now()));
+                .run(`mrd_${ids.ulid()}`, owner, req.principal.sub, readPurpose(req), JSON.stringify(scopes), JSON.stringify(items.map((i) => i.id)), iso(clock.now()));
         }
         return { items, count: items.length };
     }
@@ -889,8 +903,8 @@ function createMemory({ db, config, clock = { now: () => Date.now() }, log = con
 
 /**
  * The memory routes. A person's own Network token acts for themselves; a service token needs the capability and
- * names the person with `on_behalf_of`, but it may only search (audited) and import suggestions. Every other route is
- * person-only: a service gets 403 `capability.denied`.
+ * names the person with `on_behalf_of`, but it may only search and read the profile of a granted scope (both
+ * audited) and import suggestions. Every other route is person-only: a service gets 403 `capability.denied`.
  */
 function memoryRouter({ memory, memoryImport = null, auth, config, clock = { now: () => Date.now() }, log = console, sendError }) {
     const r = express.Router();
@@ -936,9 +950,9 @@ function memoryRouter({ memory, memoryImport = null, auth, config, clock = { now
         try { res.set('Cache-Control', 'no-store').json(await fn(req)); } catch (err) { sendError(res, err, req.ov); }
     };
     /**
-     * The person's own routes. A service with the read or write capability may only search (the audited agent read)
-     * and import suggestions; it may not browse, profile, patch or delete the person's memory. The guard runs after
-     * `guard`, which has set req.principal.
+     * The person's own routes. A service with the read or write capability may only search and read the profile (the
+     * audited agent reads) and import suggestions; it may not browse, patch or delete the person's memory. The guard
+     * runs after `guard`, which has set req.principal.
      */
     function personOnly(req, res, next) {
         if (req.principal.kind === 'service') {
@@ -952,7 +966,9 @@ function memoryRouter({ memory, memoryImport = null, auth, config, clock = { now
     r.patch('/api/v1/memory/items/:id', guard(WRITE_CAP), personOnly, run(async (req) => await memory.patch(req, ownerOf(req), req.params.id)));
     r.delete('/api/v1/memory/items/:id', guard(WRITE_CAP), personOnly, run(async (req) => await memory.remove(req, ownerOf(req), req.params.id)));
     r.delete('/api/v1/memory/items', guard(WRITE_CAP), personOnly, run(async (req) => await memory.removeBySource(req, ownerOf(req))));
-    r.get('/api/v1/memory/profile', guard(READ_CAP), personOnly, run(async (req) => await memory.profile(req, ownerOf(req))));
+    // M4: an agent with ai.memory.read may read the profile of a scope its grant names. The profile is a summary of
+    // that scope's active notes, so it is the same grant as search, and it is audited with the ids only.
+    r.get('/api/v1/memory/profile', guard(READ_CAP), run(async (req) => await memory.profile(req, ownerOf(req))));
     // M2b: the person's own read log (who read their memory, and how much of it). Person-only, like the other
     // browsing routes: a service has no business in the person's audit.
     r.get('/api/v1/memory/reads', guard(READ_CAP), personOnly, run(async (req) => await memory.reads(req, ownerOf(req))));
