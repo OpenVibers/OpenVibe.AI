@@ -17,7 +17,9 @@ const WEATHER = { type: 'function', function: { name: 'get_weather', description
 let h;
 const post = (body, tok = service) => request(h.base, 'POST', '/v1/chat/completions', { tok, body });
 
-t.test('boot', async () => { h = await boot(); });
+// The free allowance (a service acting for a person) would be gated by AI_FREE_PROVIDERS; in tests the
+// deterministic stub is the network's stand-in, so it is the named free-tier source.
+t.test('boot', async () => { h = await boot({ env: { AI_FREE_PROVIDERS: 'stub' } }); });
 
 t.test('a plain chat answers the Chat Completions shape, with usage and the run it was', async () => {
     const r = await post({ model: 'openvibe', messages: [{ role: 'system', content: 'Be brief.' }, { role: 'user', content: 'Say hello' }] });

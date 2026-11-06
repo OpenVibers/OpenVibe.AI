@@ -1,7 +1,9 @@
 'use strict';
-// Spend safety: a run nobody pays for (the free allowance, the anonymous Try it) may use only offers at or
-// below AI_FREE_MAX_OUTPUT_PRICE_USD_PER_MTOK (default $1 per 1M output tokens). A person's own token may pay
-// a dearer model from their Balance; their own key never goes through the router's cap at all.
+// Spend safety: a run nobody pays for (the free allowance, the anonymous Try it) may use only offers from
+// AI_FREE_PROVIDERS and at or below AI_FREE_MAX_OUTPUT_PRICE_USD_PER_MTOK (default 1.5 per 1M output tokens).
+// A person's own token may pay a dearer model from their Balance; their own key never goes through the
+// router's caps at all. The provider allowlist has its own test file (free-providers.test.js); this one names
+// its two test providers so it can exercise the ceiling alone.
 const assert = require('assert');
 const { boot, request, token, suite, seamServer, ALL } = require('./helpers');
 const { load } = require('../server/config');
@@ -12,14 +14,14 @@ let h; let srv; let route;
 const tok = token('test', ALL);
 const exchange = token('exchange', ALL);
 
-t.test('the ceiling is $1 by default and configurable', () => {
-    assert.strictEqual(load({}).freeUse.maxOutputPricePerMtok, 1);
+t.test('the ceiling is $1.5 by default and configurable', () => {
+    assert.strictEqual(load({}).freeUse.maxOutputPricePerMtok, 1.5);
     assert.strictEqual(load({ AI_FREE_MAX_OUTPUT_PRICE_USD_PER_MTOK: '2.5' }).freeUse.maxOutputPricePerMtok, 2.5);
 });
 
 t.test('boot two offers: cheap, and a frontier model over the ceiling', async () => {
     srv = await seamServer(() => ({ text: 'an answer', model: 'm', usage: { input: 5, output: 2 } }));
-    h = await boot({ env: { AI_STUB_FALLBACK: 'false', AI_PROVIDER_RETRIES: '0' } });
+    h = await boot({ env: { AI_STUB_FALLBACK: 'false', AI_PROVIDER_RETRIES: '0', AI_FREE_PROVIDERS: 'cheap,dear' } });
     for (const [key, label] of [['cheap', 'Cheap'], ['dear', 'Dear']]) {
         await h.registry.upsertProvider({ key, display_name: label, kind: 'http', status: 'active', base_url: srv.url, auth_mode: 'none', capabilities: ['chat', 'generate', 'json'], default_model: models[key].model_key, timeout_ms: 3000 }, { actor: 'test', origin: 'admin' });
         await h.registry.upsertModel({ provider_key: key, ...models[key] }, { actor: 'test' });

@@ -171,7 +171,9 @@ t.test('a booted service seeds the nine off, and the uncensored request is gated
         calls.push(body);
         return { id: 'chatcmpl-x', object: 'chat.completion', model: body.model, choices: [{ index: 0, message: { role: 'assistant', content: 'an answer from the adult offer' }, finish_reason: 'stop' }], usage: { prompt_tokens: 4, completion_tokens: 5 } };
     });
-    const h = await boot({ env: { OV_OAUTH_CLIENT_SECRET: 'test-secret', AI_STUB_FALLBACK: 'true' }, fetchImpl });
+    // The free allowance (a service naming a person) is gated by AI_FREE_PROVIDERS: this test's network is the
+    // seeded stub plus the uncensored offer it boots on the seam, so both are named as free-tier sources.
+    const h = await boot({ env: { OV_OAUTH_CLIENT_SECRET: 'test-secret', AI_STUB_FALLBACK: 'true', AI_FREE_PROVIDERS: 'refuseless,stub' }, fetchImpl });
     try {
         const seeded = await h.registry.listProviders();
         for (const p of pool.PROVIDERS) {

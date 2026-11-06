@@ -39,7 +39,7 @@ t.test('boot with a stub Network and a seam provider', async () => {
     });
     await new Promise((r) => network.listen(0, '127.0.0.1', r));
     seam = await seamServer(() => ({ text: `summary #${seam.calls}`, usage: { input: 30, output: 10 } }));
-    h = await boot({ env: { AI_STUB_FALLBACK: 'false', AI_OUTPUT_COST_PER_MTOK: '0.5', OV_OAUTH_CLIENT_SECRET: 'x'.repeat(40), OV_NETWORK_INTERNAL_URL: `http://127.0.0.1:${network.address().port}` } });
+    h = await boot({ env: { AI_STUB_FALLBACK: 'false', AI_OUTPUT_COST_PER_MTOK: '0.5', AI_FREE_PROVIDERS: 'seam', OV_OAUTH_CLIENT_SECRET: 'x'.repeat(40), OV_NETWORK_INTERNAL_URL: `http://127.0.0.1:${network.address().port}` } });
     await request(h.base, 'POST', '/api/v1/providers', { tok: live, body: { key: 'seam', kind: 'http', base_url: seam.url, auth_mode: 'none', capabilities: ['summarize', 'generate', 'chat', 'json'] } });
     await request(h.base, 'POST', '/api/v1/routes/default.chat/versions', { tok: live, body: { primary: { provider: 'seam' }, fallbacks: [] } });
 });

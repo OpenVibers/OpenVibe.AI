@@ -292,7 +292,7 @@ route('get', '/run-budgets/{jti}', {
 
 // ── Exchange read API (OpenVibe.Exchange) ───────────────────────────────────────────────────
 const exchangeOffer = {
-    type: 'object', required: ['provider', 'provider_name', 'model', 'kind', 'trust', 'free', 'price'],
+    type: 'object', required: ['provider', 'provider_name', 'model', 'kind', 'trust', 'free', 'free_tier', 'price'],
     properties: {
         provider: str({ description: 'The real upstream, never the router\'s internal provider key' }), provider_name: str(), model: str(),
         kind: str({ enum: ['chat', 'embedding', 'stt', 'image'] }),
@@ -300,6 +300,7 @@ const exchangeOffer = {
         trust: { type: 'string', enum: ['first-party', 'community'] },
         access: str({ enum: ['OWN_DEPLOYMENT', 'AUTHORIZED_WHOLESALE', 'UNVERIFIED'] }),
         free: { type: 'boolean', description: 'Prepaid capacity with no per-token price (a free server, a subscription, a local machine).' },
+        free_tier: { type: 'boolean', description: 'The free allowance and the anonymous Try it may use this offer: its provider is one of AI_FREE_PROVIDERS (default deepseek,local,community; local covers local2 and whisper.cpp) and its output price is at or below AI_FREE_MAX_OUTPUT_PRICE_USD_PER_MTOK (default 1.5). Distinct from free: a priced DeepSeek Flash offer is free_tier true while a dearer priced offer is false.' },
         price: nullable('object', { properties: { in: { type: 'number' }, out: { type: 'number' }, cached: { type: 'number' }, per: str(), currency: str() } }),
         price_source: nullable('string', { description: 'The price page the card was read from, when recorded' }),
         price_checked_at: nullable('string', { description: 'The date someone checked the price, when recorded' }),
@@ -323,7 +324,7 @@ const exchangeModel = {
 };
 route('get', '/exchange/catalog', {
     operationId: 'exchangeCatalog', summary: 'Every model and every offer that serves it', tags: ['exchange'], security: [],
-    description: 'Public. The live offers: price in, out and cached per million tokens, measured p50/p95, uptime, requests, and the provider data policy. A prepaid offer has no price (free: true). The window is 7 days. Models carry a kind (chat, embedding, stt, image); chat lists must use kind "chat" and never mix embeddings or speech-to-text.',
+    description: 'Public. The live offers: price in, out and cached per million tokens, measured p50/p95, uptime, requests, and the provider data policy. A prepaid offer has no price (free: true); free_tier says whether the free allowance and the anonymous Try it may use an offer at all (a named AI_FREE_PROVIDERS source under the output price ceiling). The window is 7 days. Models carry a kind (chat, embedding, stt, image); chat lists must use kind "chat" and never mix embeddings or speech-to-text.',
     parameters: [query('kind', str({ enum: ['chat', 'embedding', 'stt', 'image'] }), 'Only models of this kind')],
     responses: { 200: json('The models, grouped by model, with their offers', { type: 'object', required: ['models'], properties: {
         generated_at: str({ format: 'date-time' }), window_days: integer(), count: integer(),

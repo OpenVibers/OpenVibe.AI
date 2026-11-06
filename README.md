@@ -600,13 +600,18 @@ their price out. It is pricing, never admission: quotas, request counting and th
 unchanged, and no call is ever refused because the allowance is used up. Every card defaults to 0, so
 nothing is free and the field is absent until an operator configures an allowance.
 
-Free-use price ceiling (`AI_FREE_MAX_OUTPUT_PRICE_USD_PER_MTOK`, default 1): a run that nobody pays for
-— the free allowance (a first-party service naming a person, without that person's own token) or the
-Exchange's anonymous Try it — may use only offers at or below this output price per million tokens.
-The router skips dearer offers and answers `402 billing.payer_required` when every capable offer is
-above it. A person's own token (and so their Balance, AI #311), their own provider key, an app's
-project and a service's own run-token budget are not capped this way. The check is admission, not
-pricing: it never changes a price or a Balance reading.
+Free-use sources and price ceiling (`AI_FREE_PROVIDERS`, default `deepseek,local,community`;
+`AI_FREE_MAX_OUTPUT_PRICE_USD_PER_MTOK`, default 1.5): a run that nobody pays for — the free allowance
+(a first-party service naming a person, without that person's own token) or the Exchange's anonymous Try
+it — may use only offers from those sources and at or below this output price per million tokens. A
+source is a provider key; `local` covers every local model server (`local`, `local2`, whisper.cpp) and
+`community` the community machines. The design funds free use from the owner's DeepSeek key, local models
+and volunteers, never from Live's shared OpenAI key. The router skips the rest and answers
+`402 billing.payer_required` when every capable offer is outside those rules. A person's own token (and so
+their Balance, AI #311), their own provider key, an app's project and a service's own run-token budget are
+not capped this way. The check is admission, not pricing: it never changes a price or a Balance reading.
+The Exchange catalog marks each offer `free_tier` by the same two rules (distinct from `free`, which means
+prepaid capacity with no per-token price).
 
 Tier budgets (T6 step 8, decision D5; `server/govern.js`, off unless `AI_GOVERN_TIERS=1`): the SaaS tiers
 `free`, `paid` and `staff` on `openvibe-sdk/govern`, counted in Valkey. Before a run touches a provider

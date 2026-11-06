@@ -303,11 +303,12 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         // use paid capacity, counted against that budget; without it, only free capacity serves the run.
         const tokenBudget = runBudgets && principal.jti ? await runBudgets.spent(principal.jti) : null;
         const serviceBudgeted = Boolean(tokenBudget && (tokenBudget.budget_usd != null || tokenBudget.budget_tokens != null));
-        // Spend safety (server/providers/index.js): a run nobody pays for — the free allowance (a service naming
-        // a person, without their own token) or the Exchange's anonymous Try it (its service token, no person and
-        // no run-token budget, on ai.complete) — may use only offers under the free-use output price ceiling. A
-        // person's own token (their Balance), a project's run, a service's own run-token budget and a person's own
-        // key are paid by someone else, so the ceiling never applies to them.
+        // Spend safety (server/free-tier.js, server/providers/index.js): a run nobody pays for — the free
+        // allowance (a service naming a person, without their own token) or the Exchange's anonymous Try it (its
+        // service token, no person and no run-token budget, on ai.complete) — may use only offers from
+        // AI_FREE_PROVIDERS and under the free-use output price ceiling. A person's own token (their Balance), a
+        // project's run, a service's own run-token budget and a person's own key are paid by someone else, so
+        // neither rule applies to them.
         const anonymousTryIt = principal.kind !== 'app' && requester.type === 'service' && requester.id === 'exchange';
         const freeUse = !personPays && !serviceBudgeted && !app && credentialSubject === null && !projectProvider
             && (Boolean(runPerson) || (anonymousTryIt && wf.key === 'ai.complete'));
