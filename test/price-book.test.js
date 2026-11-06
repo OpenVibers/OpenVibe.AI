@@ -279,6 +279,19 @@ t.test('a null transport and lookup are the defaults, not a failure', async () =
     assert.doesNotMatch(String(bare.error), /not a function/, 'a null transport is the default transport');
 });
 
+t.test('a run that reads no listing leaves the book due', async () => {
+    // No registry: an earlier subtest leaves a provider in drill, and this run reads nothing anyway.
+    const book = createPriceBook({ db: h.db, registry: null, config: { nodeEnv: 'test' }, log: { log() {}, warn() {} },
+        transport: async () => { throw new Error('offline'); } });
+    await h.db.prepare("DELETE FROM price_book_state").run();
+    const report = await book.runOnce({ force: true });
+    assert.ok(Array.isArray(report.sources), 'the run ran: ' + JSON.stringify(report).slice(0, 200));
+    assert.strictEqual(report.sources.length, 0, 'nothing was read');
+    assert.ok(report.unreadable.length > 0, 'every listing is unreadable');
+    const row = await h.db.prepare("SELECT last_run_at FROM price_book_state WHERE id = 'pricebook'").get();
+    assert.ok(!row || row.last_run_at == null, 'the book is still due');
+});
+
 t.test('stop', async () => {
     await h.stop();
 });

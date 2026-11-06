@@ -303,8 +303,9 @@ function createPriceBook({ db, registry, config = {}, clock = { now: () => Date.
                 // The claim goes back whatever happened, so the next worker may run.
                 await state.release({ who });
             }
-            // The run is over: the next one is due when the interval has passed (whether or not a price moved).
-            await state.markRun();
+            // The run is over: the next one is due when the interval has passed (whether or not a price moved). A run
+            // that read no listing at all did not check anything, so the book stays due and the next tick tries again.
+            if (report.sources.length || !sources.length) await state.markRun();
         } catch (err) {
             report.error = err && err.code ? err.code : 'error';
             log.warn('[pricebook] the run stopped early: ' + report.error);
