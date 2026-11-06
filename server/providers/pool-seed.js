@@ -7,9 +7,9 @@
  * key is never offered, never called and never costs anything. The key slot itself appears in the owner's settings
  * because the store's schema is built from the registry's providers (server/settings.js).
  *
- * The models carry the price the price book recorded, with the page it was read from and the day it was read. A row
- * the owner has since edited keeps its price: the catalogue only fills a price that is missing or that the catalogue
- * itself wrote (its own source).
+ * The models carry the price the provider's own page gave, with that page and the day it was read. A price nobody
+ * publishes is null, never a guess. A row the owner has since edited keeps its price: the catalogue only fills a
+ * price that is missing or that the catalogue itself wrote (its own source).
  *
  * The provider's own model list is the authority for the exact id (the catalogue sync, server/providers/catalog.js):
  * when the owner syncs a provider, `applyCatalogPrices` gives the provider's own id the price the catalogue recorded
@@ -28,6 +28,9 @@ function recordOf(p) {
         metadata: {
             catalog: 'pool-providers',
             data_policy: p.data_policy,
+            // The privacy label of the provider: `private` only where its own terms say it keeps nothing and trains on
+            // nothing, `anonymized` for everyone else. The wording and the page it was read from travel with it.
+            privacy: p.privacy,
             ...(p.uncensored ? { uncensored: true } : {}),
             ...(p.role ? { role: p.role } : {}),
         },
@@ -39,11 +42,17 @@ function modelOf(p, m) {
     const metadata = {
         catalog: 'pool-providers',
         family: m.family || null,
-        id_source: 'price-book',
+        // The price came from the provider's own page, not from an aggregator's.
+        id_source: 'provider-page',
         checked: m.checked || null,
+        // What the provider states the weights are served in. Null unless it says so.
+        quantization: m.quantization == null ? null : m.quantization,
+        // The rate at which this model refuses. Null until a provider publishes its own or a measurement job owns it.
+        refusal_rate: m.refusal_rate == null ? null : m.refusal_rate,
         ...(m.note ? { note: m.note } : {}),
         ...(m.uncensored ? { uncensored: true } : {}),
         data_policy: p.data_policy,
+        privacy: p.privacy,
     };
     return {
         provider_key: p.key, model_key: m.model_key, display_name: m.display_name || m.model_key,
