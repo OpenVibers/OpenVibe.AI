@@ -172,6 +172,19 @@ t.test('local provider: never json, embed only with AI_LOCAL_EMBED_MODEL', () =>
     assert.strictEqual(load({ AI_LOCAL_EMBED_MODEL: ' nomic-embed-text ' }).localLlm.embedModel, 'nomic-embed-text');
 });
 
+t.test('second local chat model: provider local2, another family, no json or embed', () => {
+    const records = (env) => providerRecords(load(env), env);
+    assert.strictEqual(records({}).find(x => x.key === 'local2'), undefined, 'no local2 without AI_LOCAL_LLM2_URL');
+    const p = records({ AI_LOCAL_LLM2_URL: 'http://127.0.0.1:8092/v1', AI_LOCAL_LLM2_MODEL: ' llama-3.2-1b-instruct ' }).find(x => x.key === 'local2');
+    assert.ok(p, 'local2 is seeded beside local');
+    assert.strictEqual(p.base_url, 'http://127.0.0.1:8092/v1');
+    assert.strictEqual(p.default_model, 'llama-3.2-1b-instruct');
+    assert.deepStrictEqual(p.capabilities, ['chat', 'generate', 'summarize', 'classify', 'extract'], 'never json or embed');
+    assert.strictEqual(p.timeout_ms, 180000);
+    assert.strictEqual(p.priority, 5);
+    assert.deepStrictEqual([p.metadata.local, p.metadata.paid, p.metadata.billing_profile], [true, false, 'free']);
+});
+
 t.test('image: off without AI_IMAGE_MODEL; the Images API body, per-image usage and the stub PNG', async () => {
     const shared = (env) => providerRecords(load(env), env).find(x => x.key === 'shared');
     assert.ok(!shared({}).capabilities.includes('image'), 'no image capability without AI_IMAGE_MODEL');

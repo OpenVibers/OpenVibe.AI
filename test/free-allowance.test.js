@@ -57,6 +57,13 @@ t.test('free up to the allowance per metric, then fully priced; the real period 
     for (const r of rows) assert.deepStrictEqual([r.period_start, r.period_end], [Date.UTC(2026, 9, 4), Date.UTC(2026, 9, 5)]);
 });
 
+t.test('a volunteer\'s kudos buy a bigger output allowance', async () => {
+    await clear();
+    const fa = createFreeAllowance(tdb.db, { cardsFor: cardsWith({ free_allowance: 100, reset_period: 'day' }), bonusFor: async () => 40 });
+    const c = await fa.claim('s1', 'p', 'm', { out: 200 }, at(2026, 10, 4));
+    assert.strictEqual(c.byKind.out.tokens, 140, 'the card\'s 100 plus the 40 kudos tokens');
+});
+
 t.test('the counter resets at the period boundary: day and month; none never resets', async () => {
     await clear();
     const day = createFreeAllowance(tdb.db, { cardsFor: cardsWith({ free_allowance: 100, reset_period: 'day' }) });

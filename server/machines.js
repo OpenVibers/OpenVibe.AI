@@ -99,8 +99,12 @@ function createMachineModels({ config, env = process.env, fetchImpl = globalThis
         throw new AiError(503, 'machine.none', `none of the person's own machines answered (${tried.map((x) => `${x.machine}: ${x.error}`).join('; ').slice(0, 400)})`);
     }
 
-    async function once(machine, { subject, model, messages, maxTokens = null, temperature = null, signal = null, timeoutMs = 120000, tools = null, toolChoice = null }) {
-        const value = { model, messages, ...(maxTokens ? { max_tokens: Math.min(32768, Math.max(1, Math.round(maxTokens))) } : {}), ...(temperature != null ? { temperature: Math.min(2, Math.max(0, Number(temperature))) } : {}),
+    async function once(machine, { subject, model, messages, maxTokens = null, temperature = null, signal = null, timeoutMs = 120000, tools = null, toolChoice = null, community = false }) {
+        // The ack wire has no extra field for "this is the machine's offer to the network" (bot.command@1's value is
+        // closed), so the model carries the community/ prefix; the Node ai plugin strips it before its model server
+        // sees it and enforces the offer. The prefix never reaches the local model.
+        const asked = community && !String(model).startsWith('community/') ? `community/${model}` : model;
+        const value = { model: asked, messages, ...(maxTokens ? { max_tokens: Math.min(32768, Math.max(1, Math.round(maxTokens))) } : {}), ...(temperature != null ? { temperature: Math.min(2, Math.max(0, Number(temperature))) } : {}),
             ...(Array.isArray(tools) && tools.length ? { tools, ...(toolChoice === 'none' || toolChoice === 'auto' ? { tool_choice: toolChoice } : {}) } : {}) };
         const token = await tokenClient().getToken({ audience: 'openvibe.bot' });
         let res;
