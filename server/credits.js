@@ -433,8 +433,10 @@ function createCredits({ config, db = null, registry = null, env = process.env, 
          * Begin a request's Balance session, or null when there is no payer (the pool then refuses paid offers
          * that carry a versioned card), when an app names no project, or for a BYOK run (no managed route).
          */
-        begin({ requestId, ctx = {}, input = {}, attribution = null, onBehalfOf = null, credentialId = null } = {}) {
-            const payer = payerOf({ onBehalfOf: onBehalfOf || ctx.onBehalfOf || null, appId: ctx.appId });
+        begin({ requestId, ctx = {}, input = {}, attribution = null, onBehalfOf = null, credentialId = null, personPayer = true } = {}) {
+            // personPayer false: a service named the person, and only their own session token (or a subject
+            // assertion they authorised) may spend their Balance. The run gets no hold of theirs.
+            const payer = payerOf({ onBehalfOf: personPayer ? (onBehalfOf || ctx.onBehalfOf || null) : null, appId: ctx.appId });
             if (!payer) return null;
             // D12: an app spends its project's Balance; a person's own run is personal, so an attribution is
             // never turned into a project_id on a user's hold.

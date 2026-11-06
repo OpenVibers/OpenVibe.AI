@@ -23,8 +23,9 @@
  *                                              to ai for reveal to that origin, ADR-056) }; the key is revealed for
  *                                              that one run, and the project pays its provider directly
  *   x_openvibe.on_behalf_of                    a first-party service naming the person it acts for (a SubjectRef
- *                                              { type: 'user', id: 'usr_…' }, or the run token's own claim): their
- *                                              allowance and Balance pay. An app token may not name a person.
+ *                                              { type: 'user', id: 'usr_…' }, or the run token's own claim): their free
+ *                                              allowance and cache scope, never their Balance. A person's own token
+ *                                              runs for themselves and may hold it.
  *
  * GET /v1/models lists the registry's real models in ai.model@1 shape plus the dynamic aliases (behind
  * AI_MODEL_CATALOG; off, the legacy single `openvibe` model); GET /v1/models/{id} answers one. Both protocols share
@@ -103,7 +104,7 @@ function createLiveStream(res) {
         sentAny: () => any,
         finished: (i) => finishedIdx.has(i),
         fail(message, code) {
-            const status = code === 'ai.run_budget_reached' || code === 'billing.insufficient_funds' || code === 'billing.payer_required' ? 402 : /^(input|validation)\./.test(code || '') ? 400 : /quota|allowance|budget/.test(code || '') ? 429 : 503;
+            const status = code === 'ai.run_budget_reached' || code === 'ai.allowance_spent' || code === 'billing.insufficient_funds' || code === 'billing.payer_required' ? 402 : /^(input|validation)\./.test(code || '') ? 400 : /quota|allowance|budget/.test(code || '') ? 429 : 503;
             write({ error: { message: String(message || 'error').slice(0, 1000), type: status === 400 ? 'invalid_request_error' : status === 429 ? 'rate_limit_error' : status === 402 ? 'insufficient_quota' : 'api_error', code: code || null, param: null } });
             return out.done();
         },
@@ -185,11 +186,13 @@ function openaiRouter({ runs, auth, config, registry, log = console }) {
         if (b.prefer) body = { ...body, prefer: b.prefer };
         if (req.principal.kind === 'app') body = { ...body, attribution: appAttribution(req.principal) };
         // A first-party service naming the person it acts for (the runs API's on_behalf_of). Their free allowance
-        // and their Balance pay, and the run is theirs; an app run is its project's and never names a person, as on
-        // the runs API. A run token already carries the claim, which the auth layer reads into the principal.
+        // and cache scope are theirs; their Balance pays only when they run with their own token. An app run is its
+        // project's and never names a person, as on the runs API. A run token carries the claim, which the auth layer
+        // reads into the principal.
         const obo = b.x_openvibe && typeof b.x_openvibe === 'object' ? b.x_openvibe.on_behalf_of : undefined;
         if (obo !== undefined) {
             if (req.principal.kind === 'app') return openaiError(res, 403, 'an app run is attributed to its project, never to a person', 'capability.denied');
+            if (req.principal.kind === 'user' && (!obo || obo.id !== req.principal.subject.id)) return openaiError(res, 403, 'a person runs for themselves, never for someone else', 'capability.denied');
             body = { ...body, on_behalf_of: obo };
         }
         // The person's own key (Codes C3): x-openvibe-credential names the provider whose key this request uses.
@@ -221,7 +224,7 @@ function openaiRouter({ runs, auth, config, registry, log = console }) {
         }
         if (run.status === 'failed' || run.status === 'cancelled') {
             const code = (run.error && run.error.code) || 'run.failed';
-            const status = code === 'ai.run_budget_reached' || code === 'billing.insufficient_funds' || code === 'billing.payer_required' ? 402 : /^(input|validation)\./.test(code) ? 400 : /quota|allowance|budget/.test(code) ? 429
+            const status = code === 'ai.run_budget_reached' || code === 'ai.allowance_spent' || code === 'billing.insufficient_funds' || code === 'billing.payer_required' ? 402 : /^(input|validation)\./.test(code) ? 400 : /quota|allowance|budget/.test(code) ? 429
                 : code === 'project_secret.refused' ? 403 : code === 'credential.endpoint_refused' ? 422
                 : code === 'ai.model_unavailable' ? 400 : code === 'ai.model_not_found' ? 404 : 503;
             return openaiError(res, status, (run.error && run.error.detail) || code, code);
