@@ -21,6 +21,7 @@ const core = require('./core');
 const products = require('./products');
 const chat = require('./chat');
 const research = require('./research');
+const poolSeed = require('../providers/pool-seed');
 const { resolveSecret } = require('../util');
 
 const ROLE_TIMEOUT = { chat: 20000, vision: 30000, director: 25000, summary: 30000, legacy: 30000 };
@@ -95,6 +96,11 @@ async function seed({ registry, quotas, config, env = process.env, db }) {
             if (!same) await registry.upsertProvider({ base_url: null, secret_ref: null, ...p }, { actor: 'seed', origin: 'seed' });
         }
     }
+    // The providers OpenVibe buys managed capacity from (the Exchange remake, stage 2): Qwen, Kimi, GLM, MiniMax,
+    // DeepInfra, Novita, Featherless, Refuseless and OpenRouter. Each is registered off until its key is in the
+    // owner settings; the pool skips one whose key does not resolve. Prices come from the price book, with their
+    // page and the day they were read (server/providers/pool-providers.js).
+    await poolSeed.seedPoolProviders({ registry, actor: 'seed' });
     const shared = await registry.getProvider('shared');
 
     // Models
