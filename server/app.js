@@ -108,6 +108,9 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
     app.get('/api/ready', readiness.handler);
     // GET /openapi.json: the public OpenAPI 3.1 document (server/openapi.js); /api/v1/openapi.json redirects here.
     openapi.mount(app);
+    // OpenVibe.Exchange's read API (server/api/exchange.js): the public catalog and aggregate usage. Public on
+    // purpose — the site and anyone comparing prices reads the same numbers the router ranks on.
+    app.use(require('./api/exchange').exchangeRouter({ db, registry, pool, clock }));
     // GET /release.json (ADR-016) and POST /release-metrics (open tabs' update reports into /metrics).
     release.mount(app, { registry: metrics.registry });
 

@@ -290,6 +290,66 @@ route('get', '/run-budgets/{jti}', {
     responses: { 200: json('The budget and the spend', { type: 'object', required: ['jti'], properties: { jti: str(), budget_usd: nullable('number'), budget_tokens: nullable('integer'), spent_usd: nullable('number'), spent_tokens: nullable('integer'), expires_at: nullable('integer'), reached: { type: 'boolean' } } }), ...errors([401, 403, 422]) },
 });
 
+// ── Exchange read API (OpenVibe.Exchange) ───────────────────────────────────────────────────
+const exchangeOffer = {
+    type: 'object', required: ['provider', 'provider_name', 'model', 'trust', 'free', 'price'],
+    properties: {
+        provider: str(), provider_name: str(), model: str(),
+        id: nullable('string', { description: 'The exact artifact id a request may pin, when the registry records one' }),
+        trust: { type: 'string', enum: ['first-party', 'community'] },
+        access: str({ enum: ['OWN_DEPLOYMENT', 'AUTHORIZED_WHOLESALE', 'UNVERIFIED'] }),
+        free: { type: 'boolean', description: 'Prepaid capacity with no per-token price (a free server, a subscription, a local machine).' },
+        price: nullable('object', { properties: { in: { type: 'number' }, out: { type: 'number' }, cached: { type: 'number' }, per: str(), currency: str() } }),
+        speed: { type: 'object', properties: { p50_ms: nullable('number'), p95_ms: nullable('number') } },
+        uptime: nullable('number', { minimum: 0, maximum: 1 }),
+        requests_7d: integer({ minimum: 0 }), requests_today: integer({ minimum: 0 }),
+        data_policy: nullable('object', { properties: { trains: nullable('boolean'), retention_days: nullable('integer'), region: nullable('string'), anonymized: nullable('boolean', { description: 'The provider says the request is anonymised before the model sees it' }) } }),
+        updated_at: nullable('string'),
+    },
+};
+const exchangeModel = {
+    type: 'object', required: ['slug', 'name', 'family', 'uncensored', 'offers'],
+    properties: {
+        slug: str(), canonical: str(), name: str(), family: str(), variant: nullable('string'), uncensored: { type: 'boolean' },
+        type: str(), context: nullable('integer'), max_output: nullable('integer'),
+        capabilities: { type: 'object', properties: { tools: { type: 'boolean' }, json: { type: 'boolean' }, vision: { type: 'boolean' }, stream: { type: 'boolean' } } },
+        modalities: arrayOf(str()), description: nullable('string'),
+        requests_7d: integer({ minimum: 0 }), requests_today: integer({ minimum: 0 }), community: { type: 'boolean' },
+        offers: arrayOf(exchangeOffer),
+    },
+};
+route('get', '/exchange/catalog', {
+    operationId: 'exchangeCatalog', summary: 'Every model and every offer that serves it', tags: ['exchange'], security: [],
+    description: 'Public. The live offers: price in, out and cached per million tokens, measured p50/p95, uptime, requests, and the provider data policy. A prepaid offer has no price (free: true). The window is 7 days.',
+    responses: { 200: json('The models, grouped by model, with their offers', { type: 'object', required: ['models'], properties: {
+        generated_at: str({ format: 'date-time' }), window_days: integer(), count: integer(),
+        families: arrayOf({ type: 'object', properties: { name: str(), models: integer(), offers: integer() } }),
+        models: arrayOf(exchangeModel),
+    } }) },
+});
+route('get', '/exchange/models/{slug}', {
+    operationId: 'exchangeModel', summary: 'One model and its offers', tags: ['exchange'], security: [],
+    description: 'Public. The slug is "<org>/<model>", lowercased, e.g. deepseek/deepseek-chat.',
+    parameters: [path('slug', str())],
+    responses: { 200: json('The model', exchangeModel), 404: problem },
+});
+route('get', '/exchange/models/{org}/{model}', {
+    operationId: 'exchangeModelByParts', summary: 'One model, by its org and model', tags: ['exchange'], security: [],
+    description: 'Public. The same answer as /exchange/models/{slug}, for a client that has the two parts.',
+    parameters: [path('org', str()), path('model', str())],
+    responses: { 200: json('The model', exchangeModel), 404: problem },
+});
+route('get', '/exchange/usage', {
+    operationId: 'exchangeUsage', summary: 'Requests, tokens and spend by day, model and product', tags: ['exchange'], security: [],
+    description: 'Public and aggregate only: never a prompt, an answer or a person. A product is the service that ran the model (usage_daily.requester).',
+    parameters: [query('days', integer({ minimum: 1, maximum: 366 }), 'Default 30')],
+    responses: { 200: json('The aggregates', { type: 'object', properties: {
+        generated_at: str({ format: 'date-time' }), days: integer(), from: str(), to: str(),
+        today: { type: 'object' }, totals: { type: 'object' },
+        by_day: arrayOf({ type: 'object' }), by_model: arrayOf({ type: 'object' }), by_product: arrayOf({ type: 'object' }),
+    } }) },
+});
+
 // ── Action Center ────────────────────────────────────────────────────────────────────────────
 route('get', '/actions', {
     operationId: 'listActions', summary: 'The Action Center items for one person', tags: ['actions'], security: SERVICE,
@@ -309,7 +369,7 @@ function openapi() {
             contact: { name: 'OpenVibers', url: 'https://github.com/OpenVibers/OpenVibe.AI', email: 'contact@openvibe.network' },
         },
         servers: [{ url: SITE }],
-        tags: ['runs', 'operations', 'actions'].map((name) => ({ name })),
+        tags: ['runs', 'operations', 'actions', 'exchange'].map((name) => ({ name })),
         components: {
             securitySchemes: {
                 bearer: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT', description: 'A Network service or user token for audience openvibe.ai carrying the route\'s capability (ai.run.create, ai.run.read, ai.actions.read)' },
