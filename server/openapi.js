@@ -265,6 +265,31 @@ route('get', '/actions', {
     responses: { 200: json('common.action-list-result@1', { type: 'object', required: ['items'], properties: { items: arrayOf(ref('ActionItem')) } }), ...errors([400, 401, 403, 429]) },
 });
 
+// ── Routing presets and receipts (the Exchange, 2026-11-06) ───────────────────────────────────
+route('get', '/presets', {
+    operationId: 'listPresets', summary: 'The routing presets this caller may name', tags: ['presets'], security: SERVICE_OR_APP,
+    description: 'ai.run.create (an app token needs ai.app.run). The five built-in profiles — cheapest, fastest, private, uncensored, eu-only — and the caller\'s own: the ones its project or its account stored. A name is used as the model "@preset/<name>" or as the request\'s preset.',
+    responses: { 200: json('The presets', { type: 'object', required: ['presets'], properties: { presets: arrayOf(ref('Preset')) } }), ...errors([401, 403]) },
+});
+route('post', '/presets', {
+    operationId: 'createPreset', summary: 'Store (or replace) one routing preset', tags: ['presets'], security: SERVICE_OR_APP,
+    description: 'ai.run.create (an app token needs ai.app.run). The preset belongs to the caller\'s project (an app token) or to the person the token acts for. A built-in name cannot be overwritten: it is not the caller\'s.',
+    requestBody: body({ type: 'object', required: ['name'], properties: { name: str({ pattern: '^[a-z0-9][a-z0-9_-]{0,63}$' }), policy: ref('PresetPolicy') } }),
+    responses: { 201: json('The stored preset', { type: 'object', required: ['preset'], properties: { preset: ref('Preset') } }), 409: problem, 422: problem, ...errors([401, 403]) },
+});
+route('delete', '/presets/{name}', {
+    operationId: 'deletePreset', summary: 'Delete one routing preset', tags: ['presets'], security: SERVICE_OR_APP,
+    description: 'ai.run.create (an app token needs ai.app.run). The caller\'s own preset only; a built-in one is not theirs to delete.',
+    parameters: [path('name', str({ pattern: '^[a-z0-9][a-z0-9_-]{0,63}$' }))],
+    responses: { 200: json('The removal', { type: 'object', properties: { name: str(), removed: { type: 'boolean' } } }), 409: problem, 422: problem, ...errors([401, 403]) },
+});
+route('get', '/receipts/{id}', {
+    operationId: 'getReceipt', summary: 'The receipt of one answered request', tags: ['receipts'], security: SERVICE_OR_APP,
+    description: 'ai.run.read (or ai.run.create; an app token needs ai.app.run), or ai.usage.read. The receipt says which offer answered, what it charged, the tokens, the cache hits, the latency, why the router chose it and the fallbacks it would have used, who paid and the privacy label. It never carries the prompt or the answer. The same receipt is in the answer\'s x-openvibe-receipt header.',
+    parameters: [path('id', str({ pattern: '^rcpt_[0-9A-HJKMNP-TV-Z]{26}$' }))],
+    responses: { 200: json('The receipt', { type: 'object', required: ['receipt'], properties: { receipt: ref('Receipt') } }), 404: problem, ...errors([401, 403]) },
+});
+
 function openapi() {
     return {
         openapi: '3.1.0',
@@ -276,7 +301,7 @@ function openapi() {
             contact: { name: 'OpenVibers', url: 'https://github.com/OpenVibers/OpenVibe.AI', email: 'contact@openvibe.network' },
         },
         servers: [{ url: SITE }],
-        tags: ['runs', 'operations', 'actions'].map((name) => ({ name })),
+        tags: ['runs', 'operations', 'actions', 'presets', 'receipts'].map((name) => ({ name })),
         components: {
             securitySchemes: {
                 bearer: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT', description: 'A Network service or user token for audience openvibe.ai carrying the route\'s capability (ai.run.create, ai.run.read, ai.actions.read)' },
@@ -347,6 +372,52 @@ function openapi() {
                     cost_usd: nullable('number'), steps: nullable('integer'), error: nullable('string'),
                     created_at: str({ format: 'date-time' }), updated_at: str({ format: 'date-time' }), href: str(),
                     actions: arrayOf(str()),
+                } },
+                PresetPolicy: { type: 'object', properties: {
+                    objective: str({ enum: ['cheapest', 'fastest', 'balanced', 'private'] }),
+                    floor: str({ enum: ['fast', 'balanced', 'strong', 'frontier'] }),
+                    ceiling: nullable('number', { description: 'US dollars per million tokens: the highest price that may be paid' }),
+                    max_price: nullable('number', { description: 'US dollars per million tokens: the hard cap. No offer fits is a refusal before the call' }),
+                    quantization: arrayOf(str({ maxLength: 32 })),
+                    region: arrayOf(str({ maxLength: 32 })),
+                    data_policy: str({ enum: ['private', 'anonymized', 'community'] }),
+                    community: { type: 'boolean' },
+                    adult: { type: 'boolean' },
+                } },
+                Preset: { type: 'object', required: ['name', 'policy'], properties: {
+                    name: str(), description: nullable('string'), scope: str({ enum: ['builtin', 'owner', 'request'] }), builtin: { type: 'boolean' },
+                    owner: nullable('object'), policy: ref('PresetPolicy'),
+                    created_at: nullable(str({ format: 'date-time' })), updated_at: nullable(str({ format: 'date-time' })),
+                } },
+                Receipt: { type: 'object', required: ['id', 'run_id'], properties: {
+                    id: str(), run_id: str(), created_at: str({ format: 'date-time' }), workflow: nullable('string'),
+                    route: nullable('object'),
+                    preset: nullable({ type: 'object', properties: { name: str(), scope: str(), policy: ref('PresetPolicy') } }),
+                    offer: { type: 'object', properties: {
+                        provider: nullable('string'), model: nullable('string'), deployment: nullable('string'),
+                        provider_access: nullable('string'), resolved_model: nullable('string'),
+                    } },
+                    price: { type: 'object', properties: {
+                        in_per_mtok: nullable('number'), out_per_mtok: nullable('number'), cached_per_mtok: nullable('number'), source: nullable('string'),
+                    } },
+                    usage: { type: 'object', properties: {
+                        tokens_in: integer(), tokens_out: integer(), tokens_cached: integer(), tokens_cache_write: integer(), tokens_reasoning: integer(),
+                    } },
+                    cost_usd: nullable('number'), fee_usd: nullable('number'), fee_rate: nullable('number'),
+                    paid_by: str({ enum: ['openvibe_key', 'own_key', 'own_machine', 'plan'] }), paid_by_detail: nullable('string'), byok: { type: 'boolean' },
+                    latency_ms: nullable('integer'), ttft_ms: nullable('integer'),
+                    why: arrayOf(str()),
+                    fallbacks: arrayOf({ type: 'object', properties: {
+                        offer: str(), provider: nullable('string'), model: nullable('string'),
+                        why: nullable('string'), status: nullable('string'), reason: nullable('string'),
+                    } }),
+                    privacy: nullable({ type: 'object', properties: {
+                        label: str({ enum: ['private', 'anonymized', 'community'] }),
+                        retention: nullable('string'), training: nullable('boolean'), region: nullable('string'),
+                        trust: nullable('string'), known: { type: 'boolean' }, source: nullable('string'),
+                    } }),
+                    attempts: integer(),
+                    requester: nullable('object'), owner: nullable('object'),
                 } },
             },
         },
