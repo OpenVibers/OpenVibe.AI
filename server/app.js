@@ -122,10 +122,10 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
     if (benchEvents) app.use(benchEvents.router);
 
     // D11 owner settings (openvibe-shared/config): Network's admin proxy, acting for the owner, reads and writes
-    // ai.exchange and ai.provider_keys. Loopback only (the /internal guard above), guarded by ai.config.manage; the
+    // ai.exchange, ai.provider_keys and ai.gpus (the GPU provisioner's marketplace keys and its monthly cap). Loopback only (the /internal guard above), guarded by ai.config.manage; the
     // actor is Network's X-OV-Subject (usr_…), and a secret or x-danger change needs X-OV-Fresh: 1.
     if (settings) {
-        const configRoutes = adminRoutes([settings.exchange, settings.providerKeys.proxy], {
+        const configRoutes = adminRoutes([settings.exchange, settings.providerKeys.proxy, settings.gpus.proxy], {
             basePath: '/internal/config',
             requireAdmin: auth.requireCap(CAPS.configManage),
             actor: (req) => {
