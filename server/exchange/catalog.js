@@ -123,6 +123,18 @@ function createCatalog({ db, registry, pool, env = process.env, clock = { now: (
         const now = clock.now();
         const providers = await registry.listProviders();
         const byKey = new Map(providers.map((p) => [p.key, p]));
+        // The router's breaker state per provider (server/providers/index.js): an offer whose provider answered
+        // "insufficient balance" is exhausted until a call succeeds again, and the catalog says so rather than
+        // promising free capacity that cannot answer.
+        const healthRows = await db.prepare('SELECT provider_key, state, exhausted_at FROM provider_health').all().catch(() => []);
+        const healthByKey = new Map((healthRows || []).map((h) => [h.provider_key, h]));
+        const statusOf = (key) => {
+            const h = healthByKey.get(key);
+            if (!h || h.state === 'closed') return 'up';
+            if (h.state === 'open' && h.exhausted_at) return 'exhausted';
+            if (h.state === 'open') return 'down';
+            return 'degraded';
+        };
         const upstreamByKey = new Map();
         for (const p of providers) upstreamByKey.set(p.key, upstream.upstreamOf(p));
 
@@ -163,6 +175,8 @@ function createCatalog({ db, registry, pool, env = process.env, clock = { now: (
                 // capacity with no per-token card): both its provider is a named AI_FREE_PROVIDERS source and its
                 // output price is at or below AI_FREE_MAX_OUTPUT_PRICE_USD_PER_MTOK.
                 free_tier: allowsOffer({ providerKey: provider.key, providerRecord: provider, outputPrice: price ? price.out : null }, freeUse),
+                // up | degraded | down | exhausted (out of balance), from the router's breaker.
+                status: statusOf(provider.key),
                 // Rounded to the micro-dollar: a derived cached price was printed as 0.020000000000000004.
                 price: price ? { in: usd6(price.in), out: usd6(price.out), cached: usd6(price.cached), per: '1M tokens', currency: 'USD' } : null,
                 // Where the number came from and when someone checked it; null when nobody recorded it.
@@ -219,6 +233,9 @@ function createCatalog({ db, registry, pool, env = process.env, clock = { now: (
             m.cached_today = m.offers.reduce((n, o) => n + o.cached_today, 0);
             m.community = m.offers.some((o) => o.trust === 'community');
             m.priced = m.offers.some((o) => o.price);
+            // Free right now: a free-tier offer whose provider can answer (not exhausted, not down).
+            for (const o of m.offers) o.free_now = Boolean(o.free_tier) && (o.status === 'up' || o.status === 'degraded');
+            m.free_now = m.offers.some((o) => o.free_now);
             delete m.offers_listed;
         }
         models.sort((a, b) => b.requests_7d - a.requests_7d || b.requests_today - a.requests_today || a.name.localeCompare(b.name));
@@ -240,6 +257,8 @@ function createCatalog({ db, registry, pool, env = process.env, clock = { now: (
             window_days: days,
             ...(kind ? { kind } : {}),
             count: models.length,
+            // Whether any chat model can serve the free allowance right now (Exchange says "free paused" when not).
+            free_available: models.some((m) => m.kind === 'chat' && m.free_now),
             families: [...families.values()].sort((a, b) => b.models - a.models || a.name.localeCompare(b.name)),
             kinds: [...kinds.values()].sort((a, b) => KINDS.indexOf(a.kind) - KINDS.indexOf(b.kind)),
             models,
