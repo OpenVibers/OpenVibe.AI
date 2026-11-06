@@ -1166,8 +1166,10 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             // opening the circuit. Neither must take a shared provider away from other callers.
             if (lastErr && lastErr.code === 'media.unreadable') unreadable = lastErr;
             if (!callerFault(lastErr) && !rateLimited(lastErr)) await recordFailure(c.provider, lastErr);
-            tried.push({ provider: c.provider, error: String(lastErr && lastErr.message || lastErr).slice(0, 200) });
-            attempts.push({ key: 'openvibe', provider: c.provider, model: lastErr && lastErr.model || model, why: chosen || (fallback ? 'the next network provider after an earlier attempt failed' : 'the first network offer for this route'), status: lastErr && lastErr.code === 'provider.timeout' ? 'timeout' : 'failed', error: String(lastErr && lastErr.message || lastErr).slice(0, 300) });
+            // The code travels with the failure, so the state a provider answered in is readable: `provider.exhausted`
+            // is an account with no money left (the empty-failover job owns what happens next).
+            tried.push({ provider: c.provider, error: String(lastErr && lastErr.message || lastErr).slice(0, 200), code: (lastErr && lastErr.code) || null });
+            attempts.push({ key: 'openvibe', provider: c.provider, model: lastErr && lastErr.model || model, why: chosen || (fallback ? 'the next network provider after an earlier attempt failed' : 'the first network offer for this route'), status: lastErr && lastErr.code === 'provider.timeout' ? 'timeout' : 'failed', error: String(lastErr && lastErr.message || lastErr).slice(0, 300), code: (lastErr && lastErr.code) || null });
             log.warn(`[ai] ${operation} via ${c.provider}/${model || '-'} failed: ${lastErr && lastErr.message}`);
         }
         explain.selected = null;

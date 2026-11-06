@@ -42,15 +42,34 @@ async function postJson(url, headers, body, { signal, timeoutMs = 30000, fetchIm
     try { j = text ? JSON.parse(text) : {}; } catch { j = { raw: text }; }
     if (!res.ok) {
         const msg = (j.error && (j.error.message || j.error)) || `HTTP ${res.status}: ${String(text).slice(0, 200)}`;
-        throw new ProviderError(typeof msg === 'string' ? msg : JSON.stringify(msg), { status: res.status, code: res.status === 401 || res.status === 403 ? 'provider.auth' : 'provider.http', body: j });
+        const code = res.status === 401 || res.status === 403 ? 'provider.auth' : (exhaustedCode(res.status, j) || 'provider.http');
+        throw new ProviderError(typeof msg === 'string' ? msg : JSON.stringify(msg), { status: res.status, code, body: j });
     }
     return j;
+}
+
+/**
+ * A provider that says the account has run out of money. Each one answers in its own words: Refuseless answers 402
+ * with `insufficient_credits`, Alibaba and Abliteration.ai answer 402 for an empty balance, and the others say the
+ * balance or the quota is not sufficient. The state is the same everywhere — the account is exhausted, not the
+ * provider being ill — so it gets one name. What happens next (the circuit that takes the offer out of the pool) is
+ * the empty-failover job's business; this only says what the provider answered.
+ */
+const EXHAUSTED = /insufficient[\s_-]*(?:credit|balance|quota|fund)|out of (?:credit|balance)|balance is not sufficient|not enough balance|arrearage|exceeded your current quota/i;
+
+/** The code for a provider's "you have no money left" answer, or null when it is something else. */
+function exhaustedCode(status, body) {
+    if (status === 402) return 'provider.exhausted';
+    let text = '';
+    try { text = typeof body === 'string' ? body : JSON.stringify(body || ''); } catch { text = ''; }
+    return EXHAUSTED.test(text) ? 'provider.exhausted' : null;
 }
 
 /** Transient failures get one more try on the same provider (Live's rule). */
 function retryable(e) {
     if (!e) return false;
     if (e.code === 'provider.cancelled') return false;
+    if (e.code === 'provider.exhausted') return false;   // the account is empty: trying again costs the same nothing
     if (e.code === 'provider.timeout' || e.code === 'provider.unreachable') return true;
     if (e.status) return e.status === 429 || e.status >= 500;
     return /fetch failed|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket/i.test(e.message || '');
@@ -85,4 +104,5 @@ function schemaInstruction(json) {
 }
 
 module.exports = {
-    schemaInstruction, ProviderError, deadline, describeAbort, postJson, retryable, approxTokens, estimateUsage, sleep };
+    schemaInstruction, ProviderError, deadline, describeAbort, postJson, retryable, approxTokens, estimateUsage, sleep,
+    exhaustedCode, EXHAUSTED };

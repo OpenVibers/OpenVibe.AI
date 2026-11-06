@@ -1,5 +1,5 @@
 {
-  "note": "Recorded shapes of the nine OpenAI-compatible providers (docs: the provider's own API reference, checked 2026-11-04). Tests replay them against a local seam; no test reaches the network. The shapes are what each provider returns for a Chat Completions request: a completion (with a tool call where the model has tools) and an SSE stream of the same answer.",
+  "note": "Recorded shapes of the ten OpenAI-compatible providers (docs: the provider's own API reference, checked 2026-11-06). Tests replay them against a local seam; no test reaches the network. The shapes are what each provider returns for a Chat Completions request: a completion (with a tool call where the model has tools) and an SSE stream of the same answer.",
   "qwen": {
     "model": "qwen3.8-max",
     "completion": {
@@ -37,18 +37,18 @@
     "stream": ["hello ", "from ", "MiniMax"]
   },
   "deepinfra": {
-    "model": "deepseek-v4.1-flash-1017",
+    "model": "deepseek-ai/DeepSeek-V4.1-Flash-1017",
     "completion": {
-      "id": "chatcmpl-deepinfra-1", "object": "chat.completion", "model": "deepseek-v4.1-flash-1017",
+      "id": "chatcmpl-deepinfra-1", "object": "chat.completion", "model": "deepseek-ai/DeepSeek-V4.1-Flash-1017",
       "choices": [{ "index": 0, "message": { "role": "assistant", "content": null, "tool_calls": [{ "id": "call_1", "type": "function", "function": { "name": "weather", "arguments": "{\"city\":\"Paris\"}" } }] }, "finish_reason": "tool_calls" }],
       "usage": { "prompt_tokens": 20, "completion_tokens": 8, "total_tokens": 28, "prompt_tokens_details": { "cached_tokens": 4 } }
     },
     "stream": ["hello ", "from ", "DeepInfra"]
   },
   "novita": {
-    "model": "deepseek-v4.1-flash-1017",
+    "model": "deepseek/deepseek-v4.1-flash-1017",
     "completion": {
-      "id": "chatcmpl-novita-1", "object": "chat.completion", "model": "deepseek-v4.1-flash-1017",
+      "id": "chatcmpl-novita-1", "object": "chat.completion", "model": "deepseek/deepseek-v4.1-flash-1017",
       "choices": [{ "index": 0, "message": { "role": "assistant", "content": "hello from Novita" }, "finish_reason": "stop" }],
       "usage": { "prompt_tokens": 8, "completion_tokens": 4, "total_tokens": 12, "prompt_tokens_details": { "cached_tokens": 0 } }
     },
@@ -72,6 +72,15 @@
     },
     "stream": ["an ", "unlabelled ", "answer"]
   },
+  "abliteration": {
+    "model": "abliterated-model-large-flash",
+    "completion": {
+      "id": "chatcmpl-abliteration-1", "object": "chat.completion", "model": "abliterated-model-large-flash",
+      "choices": [{ "index": 0, "message": { "role": "assistant", "content": "hello from Abliteration" }, "finish_reason": "stop" }],
+      "usage": { "prompt_tokens": 10, "completion_tokens": 4, "total_tokens": 14, "prompt_tokens_details": { "cached_tokens": 0 } }
+    },
+    "stream": ["hello ", "from ", "Abliteration"]
+  },
   "openrouter": {
     "model": "openrouter/auto",
     "completion": {
@@ -80,5 +89,12 @@
       "usage": { "prompt_tokens": 5, "completion_tokens": 4, "total_tokens": 9, "prompt_tokens_details": { "cached_tokens": 0 } }
     },
     "stream": ["hello ", "from ", "OpenRouter"]
+  },
+  "exhausted": {
+    "note": "The answer a provider gives when the account has no money left, as the provider's own error page states it (read 2026-11-06). Refuseless states 402 `insufficient_credits`; the other providers say the same thing in their own words.",
+    "refuseless": {
+      "status": 402,
+      "body": { "error": { "code": "insufficient_credits", "message": "Out of credits", "type": "api_error" } }
+    }
   }
 }
