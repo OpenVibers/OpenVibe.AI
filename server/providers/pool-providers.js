@@ -26,8 +26,9 @@
  *                              none of the ten states it on the pages read on 2026-11-06.
  *   refusal_rate              null. It stays null until a provider publishes its own rate, or until a measurement
  *                              job of ours owns the number; an invented rate is worse than none.
- *   data_policy               what the provider says it does with a prompt, with the terms page and the day it was
- *                              checked.
+ *   data_policy               what the provider says it does with a prompt, in the facts the house reads (retention,
+ *                              trains, region, trust) with the terms page and the day it was checked. A fact the
+ *                              provider did not state is null, never a guess.
  *   provider_access           the commercial gate (docs/provider-matrix.md, 2026-11-03): only OWN_DEPLOYMENT and
  *                              AUTHORIZED_WHOLESALE may serve managed paid routes. UNVERIFIED and RESTRICTED offers
  *                              stay out of the managed pool while the model catalogue is on; the owner raises a
@@ -35,8 +36,8 @@
  *
  * The uncensored tier: the offers whose models are abliterated (Refuseless, Abliteration.ai, and the abliterated
  * models Featherless lists) are marked `uncensored: true`. Only an offer marked that way may answer a request with
- * `policy: "uncensored"`, and only a request from an 18+ account may ask for one (server/policy/tier.js, in the
- * policy PR).
+ * `policy: "uncensored"`, and only a request from an 18+ account may ask for one (server/policy/tier.js; the tier
+ * is written down in docs/uncensored-policy.md).
  *
  * Prices change only by review: this file is edited like code, and the price it carries is the price the router
  * ranks on and the balance is charged.
