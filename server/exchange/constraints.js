@@ -99,4 +99,20 @@ function refusal({ policy, excluded = [], cheapest = null }) {
     return { code: 'ai.max_price_exceeded', detail, max_price: cap, lowest_price: lowest, excluded };
 }
 
-module.exports = { applyConstraints, reasonFor, refusal, regionOk, tierRank };
+/**
+ * The refusal of a strict data policy: a preset asked for a privacy class and no offer has it. The request is
+ * refused here, before any provider is called, and the router never falls back to an offer that keeps or trains
+ * on the prompt (the plan of 2026-11-06, "Private AI": "the router refuses rather than falls back").
+ */
+function privacyRefusal({ policy, excluded = [] } = {}) {
+    const wanted = (policy && policy.data_policy) || 'private';
+    const leftPrivate = excluded.filter((e) => /^data_policy|^community_not_allowed/.test(e.reason || ''));
+    const detail = wanted === 'private'
+        ? 'Strict privacy is on: no offer that keeps nothing and trains on nothing can answer right now. '
+            + 'Nothing was sent to a provider that keeps or trains on your prompt, and the router does not fall back to one. '
+            + 'Try again later, or turn strict privacy off.'
+        : `Strict privacy is on: no offer with the data policy "${wanted}" can answer right now. Nothing was sent to a provider that does not meet it.`;
+    return { code: 'policy.privacy_unavailable', detail, data_policy: wanted, excluded: leftPrivate, excluded_all: excluded };
+}
+
+module.exports = { applyConstraints, reasonFor, refusal, privacyRefusal, regionOk, tierRank };

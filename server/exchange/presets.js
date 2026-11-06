@@ -173,6 +173,18 @@ function createPresets({ db, clock = { now: () => Date.now() }, log = console } 
         throw new AiError(404, 'ai.preset_not_found', `no preset ${wanted}: GET /api/v1/presets lists the ones you may name`);
     }
 
+    /** Like resolve(), but a name nobody has is null: the default preset of a key is optional, not a refusal. */
+    async function find({ principal, owners, name }) {
+        const wanted = checkName(name);
+        for (const owner of (owners && owners.length ? owners : ownersOf(principal))) {
+            const row = decode(await select.get(owner.type, owner.id, wanted));
+            if (row) return row;
+        }
+        const builtin = BUILTINS.find((b) => b.name === wanted);
+        if (builtin) return { name: builtin.name, description: builtin.description, scope: 'builtin', builtin: true, policy: { ...builtin.policy } };
+        return null;
+    }
+
     /** Store (or replace) one of the owner's presets. A built-in name cannot be overwritten: it is not the owner's. */
     async function put({ owner, name, policy }) {
         if (!owner || !owner.id) throw new AiError(422, 'ai.invalid', 'a preset belongs to an account or a project');
@@ -193,11 +205,13 @@ function createPresets({ db, clock = { now: () => Date.now() }, log = console } 
         return { name: key, removed: r.changes > 0 };
     }
 
-    return { list, builtins, visible, resolve, put, remove: remove_, normalizePolicy, ownersOf };
+    return { list, builtins, visible, resolve, find, put, remove: remove_, normalizePolicy, ownersOf };
 }
 
 /** The prefix a request uses to name a preset as its model: "@preset/cheapest". */
 const PRESET_MODEL_PREFIX = '@preset/';
+/** The preset a key uses when its request names none: "default", set from the Exchange's key switch. */
+const DEFAULT_PRESET = 'default';
 
 /**
  * The preset a request names, and the policy that goes with it.
@@ -206,7 +220,9 @@ const PRESET_MODEL_PREFIX = '@preset/';
  *   preset: "<name>"          the preset beside the model
  *   max_price: 0.42           the hard cap on its own (USD per million tokens), whatever the preset says
  *
- * A request that names none and caps nothing has no preset: null comes back and nothing changes.
+ * A request from a developer key that names none uses that key owner's "default" preset, when they saved one:
+ * that is the strict-privacy switch on a key. A request that names none and has no default has no preset: null
+ * comes back and nothing changes.
  */
 async function resolveRequest({ presets, principal, body = {} } = {}) {
     const raw = body.model == null ? '' : String(body.model).trim();
@@ -221,7 +237,14 @@ async function resolveRequest({ presets, principal, body = {} } = {}) {
     }
     if (!name && body.preset && typeof body.preset === 'object' && typeof body.preset.name === 'string') name = body.preset.name.trim();
     const hasCap = body.max_price != null && body.max_price !== '';
-    if (!name && !inline && !hasCap) return null;
+    if (!name && !inline && !hasCap) {
+        // A developer key's default preset, when its owner saved one: the strict-privacy switch on a key.
+        if (presets && principal && principal.kind === 'app') {
+            const saved = await presets.find({ principal, name: DEFAULT_PRESET });
+            if (saved) return { name: saved.name, scope: saved.scope || 'owner', policy: { ...(saved.policy || {}) } };
+        }
+        return null;
+    }
     let policy = {};
     let scope = 'request';
     let resolved = null;
@@ -242,4 +265,4 @@ async function resolveRequest({ presets, principal, body = {} } = {}) {
     return { name: resolved ? resolved.name : (name || 'request'), scope, policy };
 }
 
-module.exports = { createPresets, normalizePolicy, checkName, ownersOf, resolveRequest, BUILTINS, builtinNames, isBuiltin, NAME_RE, OBJECTIVES, FLOORS, DATA_POLICIES, REGIONS, PRESET_MODEL_PREFIX };
+module.exports = { createPresets, normalizePolicy, checkName, ownersOf, resolveRequest, BUILTINS, builtinNames, isBuiltin, NAME_RE, OBJECTIVES, FLOORS, DATA_POLICIES, REGIONS, PRESET_MODEL_PREFIX, DEFAULT_PRESET };
