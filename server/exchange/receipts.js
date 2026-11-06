@@ -91,6 +91,8 @@ function buildReceipt({ run, explain = null, usage = {}, price = null, privacy =
             deployment: (provider || (ok && ok.provider) || run.provider_key) || null,
             provider_access: (x.openvibe && x.openvibe.provider_access) || null,
             resolved_model: (x.openvibe && x.openvibe.resolved_model) || null,
+            // The host's own model answered (local / local2): the receipt says so, beside the provider name.
+            local: Boolean(x.provider_local),
         },
         price: {
             in_per_mtok: round(price && price.in),
@@ -122,6 +124,7 @@ function compact(receipt) {
         id: receipt.id,
         run_id: receipt.run_id,
         offer: offer.provider ? `${offer.provider}${offer.model ? `/${offer.model}` : ''}` : null,
+        local: Boolean(offer.local),
         price: { in: receipt.price && receipt.price.in_per_mtok, out: receipt.price && receipt.price.out_per_mtok, cached: receipt.price && receipt.price.cached_per_mtok },
         tokens: { in: receipt.usage && receipt.usage.tokens_in, out: receipt.usage && receipt.usage.tokens_out, cached: receipt.usage && receipt.usage.tokens_cached },
         cost_usd: receipt.cost_usd,

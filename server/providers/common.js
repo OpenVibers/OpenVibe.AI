@@ -47,6 +47,25 @@ async function postJson(url, headers, body, { signal, timeoutMs = 30000, fetchIm
     return j;
 }
 
+/**
+ * The provider's own answer that its account is out of money: DeepSeek answers HTTP 402 with
+ * `{ "error": { "message": "Insufficient Balance" } }`; OpenAI-shaped gateways use 429/403 with
+ * `insufficient_quota`, or name a credit balance. This is not the caller's fault and not a transient
+ * failure: the provider is exhausted until someone tops it up (server/providers/index.js opens its
+ * circuit for the long cooldown and never retries into it).
+ */
+const BALANCE_RE = /insufficient\s+(balance|quota|credit|credits|funds)|out\s+of\s+(balance|credit|credits|funds)|credit\s+balance\s+is\s+too\s+low|balance\s+(is\s+)?(too\s+)?low|exceeded\s+your\s+current\s+quota|billing\s+(hard\s+)?limit/i;
+function insufficientBalance(err) {
+    if (!err) return false;
+    if (err.status === 402) return true;
+    const body = err.body && typeof err.body === 'object' ? err.body : {};
+    const inner = body.error && typeof body.error === 'object' ? body.error : body;
+    const code = String((inner && (inner.code || inner.type)) || err.code || '');
+    const message = String((inner && inner.message) || body.message || err.message || '');
+    if ((err.status === 403 || err.status === 429) && /insufficient_quota|billing/i.test(`${code} ${message}`)) return true;
+    return BALANCE_RE.test(`${code} ${message}`);
+}
+
 /** Transient failures get one more try on the same provider (Live's rule). */
 function retryable(e) {
     if (!e) return false;
@@ -85,4 +104,4 @@ function schemaInstruction(json) {
 }
 
 module.exports = {
-    schemaInstruction, ProviderError, deadline, describeAbort, postJson, retryable, approxTokens, estimateUsage, sleep };
+    schemaInstruction, ProviderError, deadline, describeAbort, postJson, retryable, approxTokens, estimateUsage, sleep, insufficientBalance };
