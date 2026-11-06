@@ -20,10 +20,12 @@ t.test('the ceiling is $1.5 by default and configurable', () => {
 });
 
 t.test('boot two offers: cheap, and a frontier model over the ceiling', async () => {
-    srv = await seamServer(() => ({ text: 'an answer', model: 'm', usage: { input: 5, output: 2 } }));
+    // OpenAI format: the anonymous Try it and a person's own token reach the service through ai.complete
+    // (a Chat Completions passthrough), which only an OpenAI-format provider offers.
+    srv = await seamServer(() => ({ model: 'm', choices: [{ index: 0, message: { role: 'assistant', content: 'an answer' }, finish_reason: 'stop' }], usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 } }));
     h = await boot({ env: { AI_STUB_FALLBACK: 'false', AI_PROVIDER_RETRIES: '0', AI_FREE_PROVIDERS: 'cheap,dear' } });
     for (const [key, label] of [['cheap', 'Cheap'], ['dear', 'Dear']]) {
-        await h.registry.upsertProvider({ key, display_name: label, kind: 'http', status: 'active', base_url: srv.url, auth_mode: 'none', capabilities: ['chat', 'generate', 'json'], default_model: models[key].model_key, timeout_ms: 3000 }, { actor: 'test', origin: 'admin' });
+        await h.registry.upsertProvider({ key, display_name: label, kind: 'openai', status: 'active', base_url: `${srv.url}/v1`, auth_mode: 'none', capabilities: ['chat', 'generate', 'json'], default_model: models[key].model_key, timeout_ms: 3000 }, { actor: 'test', origin: 'admin' });
         await h.registry.upsertModel({ provider_key: key, ...models[key] }, { actor: 'test' });
     }
     route = await h.registry.createRouteVersion('test.free-ceiling', { capability: 'chat', constraints: { objective: 'correctness' }, timeout_ms: 3000 }, { actor: 'test' });
@@ -60,3 +62,5 @@ t.test('the anonymous ai.complete run is capped; the same request on a person\'s
 });
 
 t.test('stop', async () => { await h.stop(); await srv.close(); });
+
+t.run();
