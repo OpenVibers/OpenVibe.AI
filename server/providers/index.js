@@ -38,6 +38,18 @@ const { createWarmCache } = require('./warm-cache');
 const { createProviderMetrics } = require('./metrics');
 const { createVariantEvidence } = require('./bench-variant');
 const { createRoutingEvidence } = require('./evidence');
+const exchangeConstraints = require('../exchange/constraints');
+const exchangePrivacy = require('../exchange/privacy');
+const floor = require('../policy/floor');
+const tier = require('../policy/tier');
+
+/** Is this offer allowed under the request's content policy? Standard never runs an uncensored offer; the adult tier runs nothing else. */
+async function policyAllows(registry, provider, modelId, policy = 'standard') {
+    if (!provider) return false;
+    const row = modelId ? await registry.getModel(provider.key, modelId) : null;
+    const offerUncensored = tier.offerIsUncensored(provider, row);
+    return policy === 'uncensored' ? offerUncensored : !offerUncensored;
+}
 
 /** 4xx that the request itself caused (bad image, schema, max_tokens...), as opposed to auth, rate or availability. */
 function callerFault(err) {
@@ -48,6 +60,59 @@ function callerFault(err) {
 /** An upstream 429 is rate-limit capacity, not provider ill health: it shifts to the next candidate but must not open the circuit. */
 function rateLimited(err) {
     return (err && err.status === 429) || (err && err.code === 'provider.rate_limited');
+}
+
+/**
+ * The hard floor on a streamed answer (server/policy/floor.js). The text is checked as it grows, before each chunk
+ * goes out: a chunk that makes the answer break the floor is never delivered, and the stream stops with
+ * `policy.floor_refused`. (Text already delivered cannot be recalled; the check is per chunk and over the whole
+ * answer so far, including tool-call arguments.)
+ */
+function createFloorGuard(emit, { hold = 0 } = {}) {
+    let all = '';           // the whole answer so far: the floor checks this, never only the held tail
+    let held = '';          // the text not yet delivered (hold characters, or nothing)
+    let args = '';
+    const queued = [];       // { d, text } in arrival order; text is the content the delta carries
+    const refuse = (r) => Object.assign(new Error(r.detail), { code: 'policy.floor_refused', status: 403, detail: r.detail, rule: r.rule });
+    const checkNow = () => {
+        const r = floor.checkAnswer([all, args].filter(Boolean));
+        if (!r.ok) throw refuse(r);
+    };
+    function flush(final) {
+        while (queued.length && (final || held.length > hold)) {
+            const head = queued[0];
+            const over = held.length - hold;
+            if (head.text.length && !final && head.text.length > over) {
+                // Split the delta: deliver only what is outside the held tail.
+                const cut = head.text.length - over;
+                emit({ ...head.d, delta: { ...head.d.delta, content: head.text.slice(0, cut) } });
+                head.text = head.text.slice(cut);
+                held = held.slice(cut);
+                return;
+            }
+            queued.shift();
+            held = held.slice(head.text.length);
+            emit(head.text && head.d && head.d.delta ? { ...head.d, delta: { ...head.d.delta, content: head.text } } : head.d);
+        }
+    }
+    return {
+        push(d) {
+            if (!d || typeof d !== 'object') return;
+            const content = d.delta && typeof d.delta.content === 'string' ? d.delta.content : '';
+            if (content) { all += content; held += content; }
+            for (const t of (d.delta && d.delta.tool_calls) || []) {
+                if (t && t.function && t.function.arguments) args += String(t.function.arguments);
+            }
+            checkNow();
+            queued.push({ d, text: content });
+            flush(false);
+        },
+        finish() {
+            checkNow();
+            flush(true);
+        },
+        get text() { return all; },
+    };
 }
 
 /** The model a person's credential uses when they stored none, per provider (executeWithCredential). */
@@ -134,7 +199,7 @@ function selfModelFor(cred, operation, req, ctx, prefs) {
     return { model, kind, why };
 }
 
-function createProviderPool({ db, registry, config, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, credentialFetch = null, machineModels = null, community = null, bench = null, variantEvidence = null }) {
+function createProviderPool({ db, registry, config, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, credentialFetch = null, machineModels = null, community = null, bench = null, variantEvidence = null, adultStatus = null }) {
     // A person's own machine as their model (credential provider node, server/machines.js).
     const machines = machineModels || require('../machines').createMachineModels({ config, env, fetchImpl });
     const cache = new Map();          // key -> { stamp, adapter }
@@ -343,6 +408,9 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         const addOffer = async (p, model, caps) => {
             const id = offerId(p.key, model);
             if (seen.has(id)) return;
+            // The content policy narrows the pool before placement: an uncensored offer never answers a standard
+            // request, and the adult tier has no other offer to run on.
+            if (!(await policyAllows(registry, p, model, ctx.contentPolicy || 'standard'))) return;
             seen.add(id);
             const creds = p.auth_mode === 'none' || credentialNotRequired(p) || Boolean(resolveSecret(p.secret_ref, env));
             const h = await health(p.key);
@@ -468,16 +536,19 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         for (const c of list) {
             const entry = await adapter(c.provider);
             const p = entry && entry.record;
+            const modelId = c.model || (p && p.default_model) || null;
             const why = await skipReason(p, entry && entry.adapter, features);
             const offered = appOffered(ctx, p);
             const access = accessOffered(p);
-            const excluded = !offered ? (p && billingProfile(p) === 'byok' ? 'byok' : 'free_only')
+            const policyOk = p ? await policyAllows(registry, p, modelId, ctx.contentPolicy || 'standard') : false;
+            const excluded = !policyOk ? 'content_policy'
+                : !offered ? (p && billingProfile(p) === 'byok' ? 'byok' : 'free_only')
                 : !access ? `provider_access ${modelCatalog.accessOf(p)}` : why;
             explain.candidates.push({
-                provider: c.provider, model: c.model || (p && p.default_model) || null, eligible: offered && access && !why,
+                provider: c.provider, model: modelId, eligible: offered && access && policyOk && !why,
                 excluded_reason: excluded, cost: null, latency: null,
             });
-            if (offered && access) order.push({ provider: c.provider, model: c.model || null });
+            if (offered && access && policyOk) order.push({ provider: c.provider, model: c.model || null });
         }
         return { order, explain };
     }
@@ -513,7 +584,8 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         }
         // A scoped route never ends on synthetic text (media.paid falls back to its extractive overview); an image
         // has no such fallback, so the dev/test stub PNG (AI_STUB_FALLBACK, off in production) still closes it.
-        if (config.stubFallback && (!(route.constraints && route.constraints.provider_scope) || operation === 'image')
+        if (config.stubFallback && (ctx.contentPolicy || 'standard') !== 'uncensored'
+            && (!(route.constraints && route.constraints.provider_scope) || operation === 'image')
             && !order.some(c => c.provider === 'stub') && await registry.getProvider('stub')) {
             order.push({ provider: 'stub', model: null });
             explain.candidates.push({ provider: 'stub', model: null, eligible: true, excluded_reason: null, cost: 0, latency: null });
@@ -542,6 +614,27 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         const row = model ? await registry.getModel(p.key, model) : null;
         const meta = row && row.metadata ? row.metadata : {};
         return Number(meta.timeout_ms) || Number(p.timeout_ms) || 0;
+    }
+
+    /**
+     * What a routing preset's rules need to know about one offer (server/exchange/constraints.js): its price, the
+     * catalogue's tier, its quantization, the region it runs in and its privacy class. Everything is read from the
+     * catalogue, the rate cards and the provider's own record: nothing is guessed.
+     */
+    async function constraintFacts(c) {
+        const d = await describeCandidate(c);
+        const meta = (d.row && d.row.metadata) || {};
+        const artifact = d.row ? modelCatalog.artifactOf(d.row, d.record) : null;
+        const declared = exchangePrivacy.dataPolicyOf(d.record);
+        const region = (declared && declared.region)
+            || (d.record && d.record.metadata && d.record.metadata.region) || null;
+        return {
+            priceIn: d.priceIn, priceOut: d.priceOut,
+            tier: d.caps.tier || 'balanced',
+            quant: (artifact && artifact.quant) || meta.quant || null,
+            region,
+            privacy: exchangePrivacy.labelFor({ record: d.record }),
+        };
     }
 
     /**
@@ -802,11 +895,39 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
     }
 
     async function execute(route, operation, req, ctx = {}) {
-        if (ctx.credential) return await executeWithCredential(ctx.credential, operation, req, ctx);
+        const contentPolicy = ctx.contentPolicy || 'standard';
+        const refuseFloor = (r) => new AiError(403, 'policy.floor_refused', r.detail, { rule: r.rule, policy: contentPolicy });
+        if (ctx.credential) {
+            // A person's own key is not an offer marked uncensored, and the adult tier is network supply only. The
+            // hard floor still holds: it is about the request and the answer, not about who pays.
+            if (contentPolicy === 'uncensored') throw new AiError(403, 'policy.uncensored_refused', 'the adult tier is served by network offers only; a personal key cannot answer it');
+            const asked = floor.checkRequest(req);
+            if (!asked.ok) throw refuseFloor(asked);
+            const out = await executeWithCredential(ctx.credential, operation, req, ctx);
+            const answer = floor.checkResult(out.result);
+            if (!answer.ok) throw refuseFloor(answer);
+            return out;
+        }
         const features = [operation];
         if (req.image) features.push('vision');
         if (req.json) features.push('json');
         if (req.openai && Array.isArray(req.openai.tools) && req.openai.tools.length) features.push('tools');
+        // The Exchange remake's content policy: standard (every request) or uncensored (18+ accounts only, uncensored
+        // offers only). The 18+ answer comes from Network (server/policy/adult-status.js), never from the caller.
+        const admission = await tier.admit({
+            policy: contentPolicy,
+            appRun: Boolean(ctx.appRun),
+            subject: ctx.onBehalfOf ? { type: 'user', id: String(ctx.onBehalfOf) } : null,
+            adultFor: adultStatus ? (id) => adultStatus.adultFor(id) : null,
+        });
+        if (!admission.ok) throw new AiError(admission.status, admission.code, admission.detail, { policy: contentPolicy });
+        const uncensored = admission.uncensored;
+        if (uncensored && !['chat', 'complete', 'messages'].includes(operation)) {
+            throw new AiError(422, 'input.invalid', `the uncensored policy is for chat answers, not ${operation}`);
+        }
+        // The hard floor holds on every offer, uncensored or not: the request is refused before a provider is called.
+        const floorIn = floor.checkRequest(req);
+        if (!floorIn.ok) throw refuseFloor(floorIn);
         // L36 Y7: the task, read off the request itself: what it needs, what it wants out, how heavy it is.
         const task = detectTask({ operation, req, ctx, route });
         // L37: a soft preference. The caller names a provider (and a model if it wants one). It never disables the
@@ -822,7 +943,8 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         // L40: the time to the first token, when the answer streams.
         let attemptStart = 0;
         let ttftMs = null;
-        const onDelta = typeof req.onDelta === 'function' ? (d) => { streamed = true; if (ttftMs === null && attemptStart) ttftMs = Date.now() - attemptStart; req.onDelta(d); } : null;
+        const floorGuard = typeof req.onDelta === 'function' ? createFloorGuard(req.onDelta) : null;
+        const onDelta = floorGuard ? (d) => { streamed = true; if (ttftMs === null && attemptStart) ttftMs = Date.now() - attemptStart; floorGuard.push(d); } : null;
         // L36 Y1: a run on behalf of a person tries the person's OWN keys first, for the providers that can serve the
         // request. With only_my_keys it never falls back; otherwise the network is the fallback and the explain says so.
         const prefs = ctx.selfPreferences || {};
@@ -834,8 +956,10 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         const ceiling = freeCeiling != null ? freeCeiling : prefs.price_ceiling_usd_per_mtok;
         let freeCeilingSkipped = false;   // every capable offer was dearer than the free ceiling
         const selfAttempts = [];
-        const selfList = Array.isArray(ctx.selfCredentials) ? ctx.selfCredentials : [];
-        if (selfList.length || (ctx.selfSubject && prefs.only_my_keys)) {
+        // The adult tier is network supply only: a person's own provider key is not an offer marked uncensored, and
+        // only such an offer may answer an uncensored request. Their key is still used for every standard request.
+        const selfList = uncensored ? [] : (Array.isArray(ctx.selfCredentials) ? ctx.selfCredentials : []);
+        if (!uncensored && (selfList.length || (ctx.selfSubject && prefs.only_my_keys))) {
             const order = [...selfList].sort((a, b) => {
                 const rank = (x) => (x.status === 'failing' ? 2 : x.status === 'untested' ? 1 : 0);
                 // L37: the person's own key for the provider they asked for answers first, at no fee.
@@ -860,6 +984,8 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                 const key = paidByOf(cred);
                 try {
                     const out = await executeWithCredential(cred, operation, req, { ...ctx, defaultModel: pick.model });
+                    const answer = floor.checkResult(out.result);
+                    if (!answer.ok) throw refuseFloor(answer);
                     const attempts = [...selfAttempts, { key, provider: cred.provider, model: pick.model, why: pick.why, status: 'ok', error: null }];
                     // L37: the preference was honoured when their own key for that provider answered.
                     if (preferState && prefer.provider && String(cred.provider) === prefer.provider) {
@@ -877,6 +1003,8 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                         },
                     };
                 } catch (err) {
+                    // A breach is the request's, not the key's: never fall back to another provider to get it answered.
+                    if (err && err.code === 'policy.floor_refused') throw err;
                     const detail = String(err && (err.detail || err.message) || err).slice(0, 300);
                     selfAttempts.push({ key, provider: cred.provider, model: pick.model, why: pick.why, status: 'failed', error: detail });
                 }
@@ -893,7 +1021,10 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         // Community capacity (design: "Offer to the network"; plan E4): only a request that opted in may run on a
         // person's machine, never an exact pin, never a BYOK run. The canaries run before the first answer; a failure
         // stops that machine and the ordinary network answers instead. The answer is labelled in explain.openvibe.
-        if (community && ctx.communityOptIn && !ctx.credential && !ctx.byok && !ctx.exact) {
+        // Community placement runs before the catalog pool. A preset with price, privacy, region, or quality
+        // rules must use the catalog path so those rules are checked before any offer is called.
+        const communityPresetSafe = !ctx.presetPolicy || Object.keys(ctx.presetPolicy).every((key) => key === 'community');
+        if (community && ctx.communityOptIn && communityPresetSafe && !ctx.credential && !ctx.byok && !ctx.exact) {
             try {
                 const out = await community.execute({ route, operation, req, ctx });
                 if (out) return out;
@@ -906,7 +1037,10 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         // CHECKPOINT D3: an exact id runs only its own artifact. The candidates are the catalog's deployments of
         // that id, filtered first by commercial access and what the request needs; no other model is ever added.
         const exact = ctx.exact || null;
-        const policy = ctx.policy || (exact ? 'exact' : null);
+        // A routing preset's objective is the more specific request: it decides what the router optimises
+        // (cheapest, fastest, balanced, private). An exact id stays exact: a pin is never re-ranked.
+        const presetObjective = ctx.presetPolicy && ctx.presetPolicy.objective ? ctx.presetPolicy.objective : null;
+        const policy = (exact || ctx.policy === 'exact') ? 'exact' : (presetObjective || ctx.policy || null);
         let list;
         let explain;
         if (exact) {
@@ -920,7 +1054,9 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                 const missing = hardNeeds(capabilitiesOf(row, p), task);
                 const why = [];
                 const card = row ? modelCatalog.retailRate(row) : null;
+                const policyOk = p ? await policyAllows(registry, p, offer.model, ctx.contentPolicy || 'standard') : false;
                 if (!p) why.push('unknown_provider');
+                else if (!policyOk) why.push('content_policy');
                 else if (ctx.creditsRequired && !isFreeProvider(p) && card && card.version) { why.push('payer_required'); payerSkipped = true; }
                 else {
                     // The free allowance / anonymous Try it cannot pin a model above the output price ceiling.
@@ -948,6 +1084,11 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         } else {
             ({ order: list, explain } = await candidates(route, features, operation, ctx));
             if (policy) explain.policy = policy;
+        }
+        // The adult tier only runs offers explicitly marked uncensored; when none is live (no key, no agreement, the
+        // circuit open) the answer is the reason, never a standard model quietly standing in.
+        if (uncensored && list.length === 0) {
+            throw new AiError(503, 'policy.uncensored_unavailable', 'no uncensored offer can answer this request right now', { explain });
         }
         // L36 Y3: free_first puts the free tiers ahead of metered ones for this person's fallback. Own-key attempts above
         // are already free to them, so this only reorders the network.
@@ -1004,6 +1145,29 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             }
             explain.prefer = preferState;
         }
+        // The routing preset's rules (server/exchange/constraints.js): the floor, the ceiling, the hard max_price,
+        // the quantization, the region, the data policy and the community switch. An offer a rule removes leaves
+        // the order with its reason; a hard max_price that no offer fits refuses the request here, before any
+        // provider is called, with the prices that were refused.
+        if (ctx.presetPolicy && Object.keys(ctx.presetPolicy).length) {
+            const { order: allowed, excluded } = await exchangeConstraints.applyConstraints({
+                list, policy: ctx.presetPolicy, facts: constraintFacts,
+            });
+            if (ctx.presetPolicy.max_price != null && !allowed.length) {
+                const refusal = exchangeConstraints.refusal({ policy: ctx.presetPolicy, excluded });
+                throw new AiError(400, refusal.code, refusal.detail, {
+                    max_price: refusal.max_price,
+                    lowest_price: refusal.lowest_price,
+                    excluded: refusal.excluded,
+                    explain: { ...explain, preset: { name: ctx.presetName || null, policy: ctx.presetPolicy } },
+                });
+            }
+            list = allowed;
+            for (const x of excluded) {
+                explain.candidates.push({ provider: x.provider, model: x.model, eligible: false, excluded_reason: x.reason, cost: null, latency: null });
+            }
+            explain.preset = { name: ctx.presetName || null, policy: ctx.presetPolicy };
+        }
         // AI Exchange P7: an alias route (economy/fast/balanced/auto) is ranked by measured evidence when
         // AI_ROUTING_EVIDENCE is on. planAi (openvibe-sdk/placement) is the planner: this only prepares its
         // inputs, keeps the incumbent for N decisions and explains the answer. Private never leaves local
@@ -1018,6 +1182,8 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             }
         }
         const evidenceReason = explain.evidence ? explain.evidence.reason : null;
+        explain.content_policy = contentPolicy;
+        if (uncensored) explain.label = tier.LABEL;
         const attempts = [...selfAttempts];
         explain.paid_by = 'openvibe';
         explain.attempts = attempts;
@@ -1110,6 +1276,8 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                     policyReason: evidenceReason,
                     fallbackReason: fallback ? `the first eligible offer did not answer; a later offer on this same route answered${evidenceReason ? ` (${evidenceReason})` : ''}` : null,
                 });
+                // The label is known before the call, so a streamed answer can carry it in its first SSE comment.
+                if (uncensored) { attemptFacts.content_policy = 'uncensored'; attemptFacts.label = tier.LABEL; }
                 // The hold needs the offer's retail card, whether it is prepaid, and the real output cap.
                 const attemptRow = p && model ? await registry.getModel(p.key, model) : null;
                 const attemptMeta = { provider: p ? p.key : null, model, maxTokens: req.maxTokens, paid: !isFreeProvider(p), retail: modelCatalog.retailRate(attemptRow) };
@@ -1132,6 +1300,12 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                     if (operation === 'embed' && (!Array.isArray(result.vectors) || result.vectors.length !== req.input.length
                         || result.vectors.some(v => !Array.isArray(v) || !v.length || v.some(n => typeof n !== 'number' || !Number.isFinite(n)))))
                         throw new ProviderError('embedding response has invalid vectors', { code: 'provider.output' });
+                    // The floor on the way out, over the answer's own shape (chat text, completion choices, tool
+                    // arguments, a message's blocks): an answer that carries a breach never leaves this function.
+                    if (floorGuard) floorGuard.finish();
+                    const floorOut = floor.checkResult(result);
+                    if (!floorOut.ok) throw new AiError(403, 'policy.floor_refused', floorOut.detail, { rule: floorOut.rule, policy: contentPolicy });
+                    if (uncensored) { result.policy = 'uncensored'; result.label = tier.LABEL; }
                     const latency = Date.now() - t0;
                     const usage = result.usage || { input: 0, output: 0, cached: 0 };
                     await recordEvidence({ provider: c.provider, model, ok: true, timeout: false, ttftMs, latencyMs: latency,
@@ -1171,6 +1345,16 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                     await recordEvidence({ provider: c.provider, model, ok: false, timeout: Boolean(err && err.code === 'provider.timeout'), latencyMs: Date.now() - t0 });
                     statFor(c.provider).failures++;
                     if (ctx.logRequest) ctx.logRequest({ ...base, status: err && err.code === 'provider.timeout' ? 'timeout' : 'error', latency_ms: Date.now() - t0, error: String(err && err.message || err).slice(0, 500) });
+                    // A stream that broke off still delivers what the upstream had already said (the guard's held tail
+                    // included), unless that tail itself breaks the floor.
+                    if (streamed && floorGuard) {
+                        try { floorGuard.finish(); }
+                        catch (guardErr) {
+                            if (guardErr && guardErr.code === 'policy.floor_refused') throw new AiError(403, 'policy.floor_refused', guardErr.detail || guardErr.message, { rule: guardErr.rule, policy: contentPolicy });
+                            throw guardErr;
+                        }
+                    }
+                    if (streamed && err && err.code === 'policy.floor_refused') throw new AiError(403, 'policy.floor_refused', err.detail || err.message, { rule: err.rule, policy: contentPolicy });
                     if (streamed) throw new AiError(502, 'provider.stream_broken', `the answer broke off after it began streaming: ${String(err && err.message || err).slice(0, 200)}`, { tried: [...tried, { provider: c.provider, error: String(err && err.message || err).slice(0, 200) }], explain });
                     // A timed-out image may still be generated and billed upstream: never pay for it twice.
                     if (attempt < retries && retryable(err) && !(operation === 'image' && err.code === 'provider.timeout')) { await sleep(config.retryDelayMs + Math.floor(Math.random() * Math.min(700, config.retryDelayMs)), ctx.signal).catch(() => {}); continue; }
@@ -1209,4 +1393,4 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
     return { adapter, health, resetHealth, execute, executeWithCredential, offers, benchView, priceFor, costOf, rateCardsFor, providerStates, stats, statFor, candidates, machines, routingEvidence };
 }
 
-module.exports = { createProviderPool, machineMessages, machineTools };
+module.exports = { createProviderPool, createFloorGuard, policyAllows, machineMessages, machineTools };

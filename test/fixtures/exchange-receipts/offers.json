@@ -1,0 +1,328 @@
+{
+  "note": "Recorded upstream answers (OpenAI's Chat Completions shape), replayed by the test's fake providers. The prices and the data policies are the ones the test registers in the catalogue; the answers themselves are recorded, not invented.",
+  "recorded_at": "2026-11-06",
+  "offers": {
+    "swift": {
+      "kind": "openai",
+      "model": "swift-m",
+      "price": {
+        "in_per_mtok": 1,
+        "out_per_mtok": 2
+      },
+      "data_policy": {
+        "retention": "none",
+        "training": false,
+        "region": "eu",
+        "trust": "first-party"
+      },
+      "quant": "q4_k_m",
+      "response": {
+        "id": "chatcmpl-rec-swift",
+        "object": "chat.completion",
+        "created": 1761955200,
+        "model": "swift-m",
+        "system_fingerprint": null,
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "The first-party answer."
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 120,
+          "completion_tokens": 30,
+          "total_tokens": 150,
+          "prompt_tokens_details": {
+            "cached_tokens": 40
+          }
+        }
+      },
+      "stream": [
+        {
+          "id": "chatcmpl-rec-swift",
+          "object": "chat.completion.chunk",
+          "created": 1761955200,
+          "model": "swift-m",
+          "choices": [
+            {
+              "index": 0,
+              "delta": {
+                "role": "assistant",
+                "content": "The first-party answer."
+              },
+              "finish_reason": null
+            }
+          ]
+        },
+        {
+          "id": "chatcmpl-rec-swift",
+          "object": "chat.completion.chunk",
+          "created": 1761955200,
+          "model": "swift-m",
+          "choices": [
+            {
+              "index": 0,
+              "delta": {},
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 120,
+            "completion_tokens": 30,
+            "total_tokens": 150,
+            "prompt_tokens_details": {
+              "cached_tokens": 40
+            }
+          }
+        }
+      ]
+    },
+    "crowd": {
+      "model": "crowd-m",
+      "price": {
+        "in_per_mtok": 0.2,
+        "out_per_mtok": 0.6
+      },
+      "data_policy": {
+        "retention": "standard",
+        "training": false,
+        "region": "global",
+        "trust": "community"
+      },
+      "quant": "q8_0",
+      "response": {
+        "id": "chatcmpl-rec-crowd",
+        "object": "chat.completion",
+        "created": 1761955200,
+        "model": "crowd-m",
+        "system_fingerprint": null,
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "The community answer."
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 120,
+          "completion_tokens": 30,
+          "total_tokens": 150,
+          "prompt_tokens_details": {
+            "cached_tokens": 40
+          }
+        }
+      },
+      "kind": "openai",
+      "stream": [
+        {
+          "id": "chatcmpl-rec-crowd",
+          "object": "chat.completion.chunk",
+          "created": 1761955200,
+          "model": "crowd-m",
+          "choices": [
+            {
+              "index": 0,
+              "delta": {
+                "role": "assistant",
+                "content": "The community answer."
+              },
+              "finish_reason": null
+            }
+          ]
+        },
+        {
+          "id": "chatcmpl-rec-crowd",
+          "object": "chat.completion.chunk",
+          "created": 1761955200,
+          "model": "crowd-m",
+          "choices": [
+            {
+              "index": 0,
+              "delta": {},
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 120,
+            "completion_tokens": 30,
+            "total_tokens": 150,
+            "prompt_tokens_details": {
+              "cached_tokens": 40
+            }
+          }
+        }
+      ]
+    },
+    "dear": {
+      "model": "dear-m",
+      "price": {
+        "in_per_mtok": 3,
+        "out_per_mtok": 15
+      },
+      "data_policy": {
+        "retention": "limited",
+        "training": true,
+        "region": "us",
+        "trust": "first-party"
+      },
+      "quant": "q4_k_m",
+      "response": {
+        "id": "chatcmpl-rec-dear",
+        "object": "chat.completion",
+        "created": 1761955200,
+        "model": "dear-m",
+        "system_fingerprint": null,
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "The expensive answer."
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 120,
+          "completion_tokens": 30,
+          "total_tokens": 150,
+          "prompt_tokens_details": {
+            "cached_tokens": 40
+          }
+        }
+      },
+      "kind": "openai",
+      "stream": [
+        {
+          "id": "chatcmpl-rec-dear",
+          "object": "chat.completion.chunk",
+          "created": 1761955200,
+          "model": "dear-m",
+          "choices": [
+            {
+              "index": 0,
+              "delta": {
+                "role": "assistant",
+                "content": "The expensive answer."
+              },
+              "finish_reason": null
+            }
+          ]
+        },
+        {
+          "id": "chatcmpl-rec-dear",
+          "object": "chat.completion.chunk",
+          "created": 1761955200,
+          "model": "dear-m",
+          "choices": [
+            {
+              "index": 0,
+              "delta": {},
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 120,
+            "completion_tokens": 30,
+            "total_tokens": 150,
+            "prompt_tokens_details": {
+              "cached_tokens": 40
+            }
+          }
+        }
+      ]
+    },
+    "anthropic": {
+      "kind": "anthropic",
+      "model": "anth-m",
+      "price": {
+        "in_per_mtok": 5,
+        "out_per_mtok": 20
+      },
+      "data_policy": {
+        "retention": "limited",
+        "training": true,
+        "region": "us",
+        "trust": "first-party"
+      },
+      "quant": "q4_k_m",
+      "response": {
+        "id": "msg_rec-anth",
+        "type": "message",
+        "role": "assistant",
+        "model": "anth-m",
+        "content": [
+          {
+            "type": "text",
+            "text": "The Anthropic-format answer."
+          }
+        ],
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 120,
+          "output_tokens": 30,
+          "cache_read_input_tokens": 40
+        }
+      },
+      "stream": [
+        {
+          "type": "message_start",
+          "message": {
+            "id": "msg_rec-anth",
+            "type": "message",
+            "role": "assistant",
+            "model": "anth-m",
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null,
+            "usage": {
+              "input_tokens": 120,
+              "output_tokens": 0
+            }
+          }
+        },
+        {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": ""
+          }
+        },
+        {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "text_delta",
+            "text": "The Anthropic-format answer."
+          }
+        },
+        {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        {
+          "type": "message_delta",
+          "delta": {
+            "stop_reason": "end_turn",
+            "stop_sequence": null
+          },
+          "usage": {
+            "output_tokens": 30
+          }
+        },
+        {
+          "type": "message_stop"
+        }
+      ]
+    }
+  }
+}

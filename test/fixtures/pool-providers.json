@@ -1,0 +1,84 @@
+{
+  "note": "Recorded shapes of the nine OpenAI-compatible providers (docs: the provider's own API reference, checked 2026-11-04). Tests replay them against a local seam; no test reaches the network. The shapes are what each provider returns for a Chat Completions request: a completion (with a tool call where the model has tools) and an SSE stream of the same answer.",
+  "qwen": {
+    "model": "qwen3.8-max",
+    "completion": {
+      "id": "chatcmpl-qwen-1", "object": "chat.completion", "model": "qwen3.8-max",
+      "choices": [{ "index": 0, "message": { "role": "assistant", "content": "hello from Qwen" }, "finish_reason": "stop" }],
+      "usage": { "prompt_tokens": 12, "completion_tokens": 4, "total_tokens": 16, "prompt_tokens_details": { "cached_tokens": 2 } }
+    },
+    "stream": ["hello ", "from ", "Qwen"]
+  },
+  "kimi": {
+    "model": "kimi-k3.1-pro",
+    "completion": {
+      "id": "chatcmpl-kimi-1", "object": "chat.completion", "model": "kimi-k3.1-pro",
+      "choices": [{ "index": 0, "message": { "role": "assistant", "content": "hello from Kimi" }, "finish_reason": "stop" }],
+      "usage": { "prompt_tokens": 10, "completion_tokens": 4, "total_tokens": 14, "prompt_tokens_details": { "cached_tokens": 0 } }
+    },
+    "stream": ["hello ", "from ", "Kimi"]
+  },
+  "glm": {
+    "model": "glm-5.3-flash",
+    "completion": {
+      "id": "chatcmpl-glm-1", "object": "chat.completion", "model": "glm-5.3-flash",
+      "choices": [{ "index": 0, "message": { "role": "assistant", "content": "hello from GLM" }, "finish_reason": "stop" }],
+      "usage": { "prompt_tokens": 11, "completion_tokens": 4, "total_tokens": 15, "prompt_tokens_details": { "cached_tokens": 1 } }
+    },
+    "stream": ["hello ", "from ", "GLM"]
+  },
+  "minimax": {
+    "model": "MiniMax-M3.1-Flash",
+    "completion": {
+      "id": "chatcmpl-minimax-1", "object": "chat.completion", "model": "MiniMax-M3.1-Flash",
+      "choices": [{ "index": 0, "message": { "role": "assistant", "content": "hello from MiniMax" }, "finish_reason": "stop" }],
+      "usage": { "prompt_tokens": 9, "completion_tokens": 4, "total_tokens": 13, "prompt_tokens_details": { "cached_tokens": 0 } }
+    },
+    "stream": ["hello ", "from ", "MiniMax"]
+  },
+  "deepinfra": {
+    "model": "deepseek-v4.1-flash-1017",
+    "completion": {
+      "id": "chatcmpl-deepinfra-1", "object": "chat.completion", "model": "deepseek-v4.1-flash-1017",
+      "choices": [{ "index": 0, "message": { "role": "assistant", "content": null, "tool_calls": [{ "id": "call_1", "type": "function", "function": { "name": "weather", "arguments": "{\"city\":\"Paris\"}" } }] }, "finish_reason": "tool_calls" }],
+      "usage": { "prompt_tokens": 20, "completion_tokens": 8, "total_tokens": 28, "prompt_tokens_details": { "cached_tokens": 4 } }
+    },
+    "stream": ["hello ", "from ", "DeepInfra"]
+  },
+  "novita": {
+    "model": "deepseek-v4.1-flash-1017",
+    "completion": {
+      "id": "chatcmpl-novita-1", "object": "chat.completion", "model": "deepseek-v4.1-flash-1017",
+      "choices": [{ "index": 0, "message": { "role": "assistant", "content": "hello from Novita" }, "finish_reason": "stop" }],
+      "usage": { "prompt_tokens": 8, "completion_tokens": 4, "total_tokens": 12, "prompt_tokens_details": { "cached_tokens": 0 } }
+    },
+    "stream": ["hello ", "from ", "Novita"]
+  },
+  "featherless": {
+    "model": "Qwen/Qwen3-14B",
+    "completion": {
+      "id": "chatcmpl-featherless-1", "object": "chat.completion", "model": "Qwen/Qwen3-14B",
+      "choices": [{ "index": 0, "message": { "role": "assistant", "content": "hello from Featherless" }, "finish_reason": "stop" }],
+      "usage": { "prompt_tokens": 7, "completion_tokens": 4, "total_tokens": 11, "prompt_tokens_details": { "cached_tokens": 0 } }
+    },
+    "stream": ["hello ", "from ", "Featherless"]
+  },
+  "refuseless": {
+    "model": "deepseek-v4.1-flash-abliterated",
+    "completion": {
+      "id": "chatcmpl-refuseless-1", "object": "chat.completion", "model": "deepseek-v4.1-flash-abliterated",
+      "choices": [{ "index": 0, "message": { "role": "assistant", "content": "an unlabelled answer" }, "finish_reason": "stop" }],
+      "usage": { "prompt_tokens": 6, "completion_tokens": 3, "total_tokens": 9, "prompt_tokens_details": { "cached_tokens": 0 } }
+    },
+    "stream": ["an ", "unlabelled ", "answer"]
+  },
+  "openrouter": {
+    "model": "openrouter/auto",
+    "completion": {
+      "id": "gen-openrouter-1", "object": "chat.completion", "model": "openrouter/auto",
+      "choices": [{ "index": 0, "message": { "role": "assistant", "content": "hello from OpenRouter" }, "finish_reason": "stop" }],
+      "usage": { "prompt_tokens": 5, "completion_tokens": 4, "total_tokens": 9, "prompt_tokens_details": { "cached_tokens": 0 } }
+    },
+    "stream": ["hello ", "from ", "OpenRouter"]
+  }
+}

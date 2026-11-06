@@ -24,7 +24,7 @@ const pkg = require('../package.json');
 
 const { adminRoutes } = require('openvibe-shared/config');
 
-function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, credentials = null, preferences = null, grants = null, vault = null, settings = null, benchEvents = null, runBudgets = null, memory = null, memoryImport = null, community = null }) {
+function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, credentials = null, preferences = null, grants = null, vault = null, settings = null, benchEvents = null, runBudgets = null, memory = null, memoryImport = null, community = null, presets = null, receipts = null }) {
     const app = express();
     // /.well-known/agent.json (openvibe-shared/agent-layer, SEO-2): what this site serves, for agents.
     require('openvibe-shared/agent-layer').mount(app, { descriptor: require('./agent-descriptor') });
@@ -110,7 +110,7 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
     openapi.mount(app);
     // OpenVibe.Exchange's read API (server/api/exchange.js): the public catalog and aggregate usage. Public on
     // purpose — the site and anyone comparing prices reads the same numbers the router ranks on.
-    app.use(require('./api/exchange').exchangeRouter({ db, registry, pool, env, clock }));
+    app.use(require('./api/exchange').exchangeRouter({ db, registry, pool, env, clock, presets, receipts, auth, log }));
     // GET /release.json (ADR-016) and POST /release-metrics (open tabs' update reports into /metrics).
     release.mount(app, { registry: metrics.registry });
 
@@ -146,9 +146,9 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
     app.use(runsRouter({ runs, registry, auth, config, log }));
     app.use(actionsRouter({ runs, registry, auth, log }));
     // The OpenAI-compatible endpoint (POST /v1/chat/completions, GET /v1/models): runs of ai.complete.
-    app.use(require('./api/openai').openaiRouter({ runs, auth, config, registry, log }));
+    app.use(require('./api/openai').openaiRouter({ runs, auth, config, registry, presets, receipts, log }));
     // The Anthropic-compatible endpoint (POST /v1/messages, GET /v1/models): runs of ai.messages (Codes C3).
-    app.use(require('./api/messages').messagesRouter({ runs, auth, config, registry, log }));
+    app.use(require('./api/messages').messagesRouter({ runs, auth, config, registry, presets, receipts, log }));
     app.use(require('./api/attribution-quotas').attributionQuotasRouter({ db, quotas, auth, clock, sendError: (res, err, ctx) => sendError(res, err, ctx, log) }));
     if (memory) app.use(require('./memory').memoryRouter({ memory, memoryImport, auth, config, clock, log, sendError: (res, err, ctx) => sendError(res, err, ctx, log) }));
     if (credentials) app.use(require('./credentials').credentialsRouter({ credentials, auth, registry, sendError: (res, err, ctx) => sendError(res, err, ctx, log) }));

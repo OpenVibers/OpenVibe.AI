@@ -224,7 +224,8 @@ coding agents, Codes' harnesses) points its base URL at `https://ai.openvibe.ser
   upstream for `default.chat` by price and health, and a request with `tools` goes only to a provider that declares
   `tools`. The answer's `model` names the model that ran.
 - **Answer:** `chat.completion` with the upstream's `choices` and `usage`, plus `x_openvibe` (`run_id`, `provider`,
-  `fallback_used`, `cost_usd`) and the `X-OpenVibe-Run-Id` header.
+  `fallback_used`, `cost_usd`, the privacy label and the receipt id) and the `X-OpenVibe-Run-Id` header. The
+  answer's receipt is in `x-openvibe-receipt` (compact JSON) and `x-openvibe-receipt-id`.
 - **Streaming:** `stream: true` answers server-sent events in the chunk format **as the upstream streams them**.
   - An OpenAI-format upstream (the router's, or the project's own) is asked with `stream: true` and
     `stream_options.include_usage`, and each delta goes out when it arrives: text, and a tool call's id, name and
@@ -252,6 +253,64 @@ coding agents, Codes' harnesses) points its base URL at `https://ai.openvibe.ser
     not https answers 400, and a first-party service token naming a provider answers 403.
   - Production app runs that use the router are limited to free and local capacity (see Developer apps). Today that is
     a small local model without tools, so a coding agent's loop needs its project's own provider.
+
+## Presets, receipts, BYOK and the privacy label
+
+The Exchange's routing profiles and the receipt of every answer (the plan of 2026-11-06, "Product lines
+and features", item 1). `server/exchange/` holds the four parts: `presets.js`, `privacy.js`,
+`constraints.js` and `receipts.js`; `server/api/exchange.js` serves them and `migrations/0031_exchange_presets_receipts.sql`
+holds them.
+
+### Presets
+
+A preset is a named set of routing constraints. Five are built in — `cheapest`, `fastest`, `private`,
+`uncensored`, `eu-only` — and they are code, not rows: nobody can overwrite or delete one (409
+`ai.preset_builtin`). The others belong to an account (the person a token acts for) or to a Network
+project (an app's project).
+
+- `GET /api/v1/presets` lists the presets the caller may name: the built-in ones and their own.
+- `POST /api/v1/presets` stores (or replaces) one of their own: `{ "name": "…", "policy": { … } }`.
+- `DELETE /api/v1/presets/{name}` removes one of their own.
+
+The policy's knobs: `objective` (`cheapest`, `fastest`, `balanced`, `private`), `floor` (`fast`,
+`balanced`, `strong`, `frontier`), `ceiling` and `max_price` (US dollars per million tokens),
+`quantization`, `region`, `data_policy` (`private`, `anonymized`, `community`), `community` (may a
+community machine answer) and `adult` (the uncensored tier: the 18+ gate is the pool's own, never the
+preset's — the preset only names the tier the request asks for). A knob nobody knows is dropped, never
+stored, so a typo cannot come back as a rule nobody reads.
+
+A request names a preset as the model `"@preset/cheapest"` or beside it as `"preset": "cheapest"`; it
+may also write its profile inline (`"preset": { "policy": { … } }`) and cap the price on its own
+(`"max_price": 0.42`). A name nobody has is a 404 (`ai.preset_not_found`), never a silent default.
+
+The rules filter the pool **before** the call: an offer that breaks one is out, and the receipt says
+which rule removed it. A hard `max_price` that no offer fits is refused before anything is called, with
+a problem document (`ai.max_price_exceeded`) that carries the cap, the lowest price on offer and the
+offers that were excluded.
+
+### Receipts
+
+Every answered request carries a receipt: the offer that answered, the price it charged, the tokens in
+and out, the cache reads and writes, the latency, why the router chose it, the fallbacks it would have
+used, who paid and the privacy label. It never carries the prompt or the answer.
+
+- **In the answer:** the header `x-openvibe-receipt-id` and `x-openvibe-receipt` (the same facts, compact
+  JSON). A streamed answer names its receipt in the headers and carries the whole one in the last chunk.
+- **On its own:** `GET /v1/receipts/{id}` (and the documented `GET /api/v1/receipts/{id}`), readable by the
+  caller that made the run, by the person it was for, and by whoever may read the usage
+  (`ai.usage.read`). Anyone else gets a 404, not a refusal that says there is something there.
+- **Kept with the usage:** the receipt goes with its run (`runs.receipt_id` points at it) and is pruned
+  with the runs' retention window.
+
+### BYOK and the privacy label
+
+A run on the person's own key (BYOK) is metered at 0 %: the receipt says `paid_by: own_key` (or
+`own_machine`), `byok: true` and `fee_usd: 0`. The OpenVibe key pays the list price plus the fee.
+
+Every answer carries a privacy label — `private`, `anonymized` or `community` — read from the offer's
+declared data policy: the person's own machine is private, an offer that keeps nothing and trains on
+nothing is private, a community offer is community, and anything else is anonymized. The label is on the
+receipt and in the answer's `x_openvibe`.
 
 ## Memory
 
@@ -281,7 +340,8 @@ their own export; a deletion removes the rows. Unset `AI_MEMORY_KEY` turns every
   upstream that speaks Anthropic's format (Anthropic, DeepSeek's and MiniMax's Anthropic-compatible endpoints); an
   OpenAI-format provider is never converted.
 - **Answer:** a `message` (`id`, `role`, `model`, `content`, `stop_reason`, `usage`), and the run id in
-  `X-OpenVibe-Run-Id`.
+  `X-OpenVibe-Run-Id`. The answer's receipt is in `x-openvibe-receipt` (compact JSON) and
+  `x-openvibe-receipt-id`.
 - **Streaming:** `stream: true` answers Anthropic's own server-sent events as they arrive (`message_start`,
   `content_block_start`, `content_block_delta`, `content_block_stop`, `message_delta`, `message_stop`, `ping`); the run
   still ends with the whole message.
@@ -751,6 +811,7 @@ mix vectors from different providers (re-embed when the provider changes).
 | Word timing (`live.media.transcribe` with `words: true`): whisper's `-ojf` tokens and Parakeet's token lines become each segment's words with their times; punctuation joins a word without moving its end; one unit per token in Japanese; fillers and control tokens are not words | `test/word-timing.test.js` |
 | `media.analyze` on a real 28 s fixture: signals, scenes and loud moments measured, highlights with evidence, the local model's overview from the facts only; the local model down → extractive and said; paid only with `allow_paid` and a `media.paid` budget, never past it; too little disk refused before downloading | `test/media-analysis.test.js` |
 | Import from a Live snapshot: dry run, holds, idempotent re-run | `test/import.test.js` |
+| Routing presets: the five built-in ones, a caller's own stored per account and per project, each knob applied (floor, ceiling, max_price, quantization, region, data policy, community), a hard max_price refused before the call with a problem document, every answer's receipt (offer, price, tokens, cache hits, latency, why, fallbacks, privacy label, BYOK at 0 %) in the headers and at `GET /v1/receipts/{id}`, and the Anthropic endpoint and the stream carrying the same receipt | `test/exchange-presets-receipts.test.js` |
 | Capability proposals are valid contracts documents matching what is enforced | `test/proposals.test.js` |
 
 ## Security
