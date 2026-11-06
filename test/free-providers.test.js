@@ -37,10 +37,12 @@ t.test('the default sources, the local family and the ceiling rule', () => {
 });
 
 t.test('boot a named source and a cheaper provider outside the list', async () => {
-    srv = await seamServer(() => ({ text: 'an answer', model: 'm', usage: { input: 5, output: 2 } }));
+    // OpenAI format: the free allowance and a person's own token reach the service through ai.complete
+    // (a Chat Completions passthrough), which only an OpenAI-format provider offers.
+    srv = await seamServer(() => ({ model: 'm', choices: [{ index: 0, message: { role: 'assistant', content: 'an answer' }, finish_reason: 'stop' }], usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 } }));
     h = await boot({ env: { AI_STUB_FALLBACK: 'false', AI_PROVIDER_RETRIES: '0' } });
     for (const key of ['deepseek', 'openai']) {
-        await h.registry.upsertProvider({ key, display_name: key, kind: 'http', status: 'active', base_url: srv.url, auth_mode: 'none', capabilities: ['chat', 'generate', 'json'], default_model: models[key].model_key, timeout_ms: 3000 }, { actor: 'test', origin: 'admin' });
+        await h.registry.upsertProvider({ key, display_name: key, kind: 'openai', status: 'active', base_url: `${srv.url}/v1`, auth_mode: 'none', capabilities: ['chat', 'generate', 'json'], default_model: models[key].model_key, timeout_ms: 3000 }, { actor: 'test', origin: 'admin' });
         await h.registry.upsertModel({ provider_key: key, ...models[key] }, { actor: 'test' });
     }
     route = await h.registry.createRouteVersion('test.free-providers', { capability: 'chat', constraints: { objective: 'correctness' }, timeout_ms: 3000 }, { actor: 'test' });
@@ -88,3 +90,5 @@ t.test('`local` covers a second local server (local2) for a free run', async () 
 });
 
 t.test('stop', async () => { await h.stop(); await srv.close(); });
+
+t.run();
