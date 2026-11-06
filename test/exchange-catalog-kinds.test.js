@@ -93,6 +93,32 @@ t.test('chat, embeddings, speech-to-text and image are separate kinds, and ?kind
     assert.strictEqual(bad.body.code, 'exchange.kind_invalid');
 });
 
+t.test('an out-of-balance provider is exhausted, and its free offer is not free now', async () => {
+    // A catalog of its own (the route's answer is cached for 30 s), over the same database and registry.
+    const { createCatalog } = require('../server/exchange/catalog');
+    const catalog = createCatalog({ db: h.db, registry: h.registry, pool: h.pool, env: h.env, config: h.config });
+    const flashOf = (out) => out.models.find((m) => m.slug === 'deepseek/deepseek-flash');
+
+    const before = await catalog.models({ days: 7 });
+    const flash0 = flashOf(before).offers.find((o) => o.provider === 'deepseek');
+    assert.strictEqual(flash0.status, 'up');
+    assert.strictEqual(flash0.free_now, true, 'a free-tier offer of a healthy provider is free now');
+    assert.strictEqual(before.free_available, true);
+
+    const now = Date.now();
+    await h.db.prepare(`INSERT INTO provider_health (provider_key, state, consecutive_failures, opened_at, exhausted_at, last_error, last_success_at, last_failure_at)
+        VALUES ('deepseek', 'open', 1, ?, ?, 'insufficient balance', NULL, ?)`).run(now, now, now);
+    const after = await catalog.models({ days: 7 });
+    const flash = flashOf(after);
+    const offer = flash.offers.find((o) => o.provider === 'deepseek');
+    assert.strictEqual(offer.status, 'exhausted');
+    assert.strictEqual(offer.free_tier, true, 'still a free-tier source by the rules');
+    assert.strictEqual(offer.free_now, false, 'but not free right now');
+    assert.strictEqual(flash.free_now, false);
+    assert.strictEqual(after.free_available, false, 'no chat model can serve the free allowance');
+    await h.db.prepare("DELETE FROM provider_health WHERE provider_key = 'deepseek'").run();
+});
+
 t.test('an unknown shared upstream is no offer at all', async () => {
     const unknown = upstream.upstreamOf({ key: 'shared', display_name: 'Shared provider', base_url: 'https://proxy.internal/v1', metadata: {} });
     assert.strictEqual(unknown, null);
