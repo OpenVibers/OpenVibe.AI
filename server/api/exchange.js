@@ -35,7 +35,7 @@ function memo(fn, ttlMs, clock) {
     };
 }
 
-function exchangeRouter({ db, registry, pool, env = process.env, clock = { now: () => Date.now() }, config = null, presets, receipts, auth, log = console, ownEndpoints = null }) {
+function exchangeRouter({ db, registry, pool, quotas = null, env = process.env, clock = { now: () => Date.now() }, config = null, presets, receipts, auth, log = console, ownEndpoints = null }) {
     const catalog = createCatalog({ db, registry, pool, env, clock, config });
     const usage = createUsage({ db, clock });
     // The price book's log: what a price was, what it became and when it was read.
@@ -226,6 +226,25 @@ function exchangeRouter({ db, registry, pool, env = process.env, clock = { now: 
             return res.json(value);
         } catch (err) { return next(err); }
     });
+
+    // The caller's own usage (the MCP server and the Exchange's developer page read it): a person sees their
+    // subject, a developer app its project. The public aggregate above is never per person; this one is never
+    // anyone else's.
+    r.get('/api/v1/exchange/me/usage', read, wrap(async (req) => {
+        const p = req.principal || {};
+        if (!p.kind) throw new AiError(403, 'capability.denied', 'a person or a developer app reads its own usage');
+        if (!quotas) throw new AiError(503, 'exchange.unavailable', 'usage is not configured here');
+        const who = p.kind === 'app' ? `project:${p.projectId}` : `user:${p.subject && p.subject.id}`;
+        const day = (v, field) => {
+            if (v == null || v === '') return undefined;
+            const s = String(v).slice(0, 10);
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) throw new AiError(422, 'ai.invalid', `${field} must be YYYY-MM-DD`);
+            return s;
+        };
+        const from = day(req.query.from, 'from');
+        const to = day(req.query.to, 'to');
+        return { requester: who, usage: await quotas.usage({ from, to, requester: who }) };
+    }));
 
     return r;
 }

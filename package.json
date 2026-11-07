@@ -4,9 +4,13 @@
   "private": true,
   "description": "OpenVibe.AI: providers, models, routing profiles, versioned prompt templates and workflows, runs, request logs, citations, scoped cache, quotas and audit for every OpenVibe product. Extracted from OpenVibe.Live's AI subsystem.",
   "main": "server/index.js",
+  "bin": {
+    "openvibe-exchange-mcp": "bin/openvibe-exchange-mcp.js"
+  },
   "scripts": {
     "start": "node server/index.js",
     "dev": "NODE_ENV=development node server/index.js",
+    "mcp:exchange": "node bin/openvibe-exchange-mcp.js",
     "test": "node test/run.js",
     "test:pg": "AI_TEST_STORE=pg node test/run.js"
   },
@@ -26,7 +30,7 @@
     "express": "^4.21.2",
     "iovalkey": "^0.4.0",
     "openvibe-contracts": "https://codeload.github.com/OpenVibers/OpenVibe.Contracts/tar.gz/refs/tags/v0.289.1",
-    "openvibe-sdk": "https://codeload.github.com/OpenVibers/OpenVibe.SDK/tar.gz/refs/tags/v0.91.0",
+    "openvibe-sdk": "https://codeload.github.com/OpenVibers/OpenVibe.SDK/tar.gz/refs/tags/v0.93.0",
     "openvibe-shared": "https://codeload.github.com/OpenVibers/OpenVibe.Shared/tar.gz/refs/tags/v4.124.0",
     "pg": "^8.23.0"
   },

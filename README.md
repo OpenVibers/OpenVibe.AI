@@ -696,6 +696,63 @@ listing it was read from and the day it was read.
 The tests never touch the network: the listings are recorded (`test/fixtures/pricebook/`, written by
 `scripts/record-price-book.js`) and replayed through the reader's transport seam.
 
+## Webhooks and the MCP server
+
+The Exchange's developer tools (the plan of 2026-11-06, "For builders", item 7): `openvibe-sdk/exchange` has
+verified webhooks since 0.91.0; `server/exchange/webhooks.js` is the sender, and `server/mcp/exchange.js` the MCP
+server.
+
+### Webhooks
+
+A person's token or a developer app registers an https receiver on the Exchange API:
+
+| Route | What |
+|---|---|
+| `POST /api/v1/exchange/webhooks` | `{url, events?, description?}` → `201 {webhook}`; the signing `secret` (`whsec_…`) is in this answer only |
+| `GET /api/v1/exchange/webhooks` | the caller's receivers (never a secret) |
+| `DELETE /api/v1/exchange/webhooks/{id}` | remove one and its delivery history |
+| `GET /api/v1/exchange/webhooks/{id}/deliveries` | the delivery log: event, attempts, status, the receiver's answer and the payload |
+
+Three events: `usage` (an answered run: the tokens, the money and who paid), `earnings` (a community offer earned
+credits or kudos) and `offer.down` (an endpoint offer was removed). Every delivery carries
+`X-OpenVibe-Signature-V2: t=<unix seconds>, v2=<hex HMAC-SHA256 of "<t>.<raw body>">` — exactly what
+`require('openvibe-sdk/exchange').verifyWebhook(rawBody, header, secret)` checks — plus `X-OpenVibe-Event`,
+`X-OpenVibe-Delivery` and `X-OpenVibe-Webhook-Id`. A payload never carries a prompt or an answer.
+
+The receiver URL goes through the same egress guard as a community endpoint: https, a public host name, never an IP
+literal, port 443 or 8443, no query or fragment, and the DNS answer is judged inside the connection. A delivery is a
+row, not a call in the request that caused it: a 408/425/429/5xx or a network failure is retried with an exponential
+backoff (`AI_WEBHOOK_BASE_DELAY_MS`, up to `AI_WEBHOOK_MAX_DELAY_MS`, `AI_WEBHOOK_MAX_ATTEMPTS`); any other non-2xx
+fails it at once. The worker is off in test mode and in `NODE_ENV=test`.
+
+### The MCP server
+
+`bin/openvibe-exchange-mcp.js` speaks MCP over stdio in the repo that owns the Exchange API:
+
+```json
+{
+  "mcpServers": {
+    "openvibe-exchange": {
+      "command": "openvibe-exchange-mcp",
+      "env": { "OPENVIBE_EXCHANGE_TOKEN": "your Network developer key" }
+    }
+  }
+}
+```
+
+The tools are `exchange_models` (the live catalog: price in/out per million, measured p50/p95, uptime, health and the
+data policy), `exchange_chat` (one completion on the person's allowance, or their own stored provider key when
+`credential` names a provider) and `exchange_usage` (the person's own requests, tokens and spend by day and model,
+from `GET /api/v1/exchange/me/usage`). `exchange_models` is public; the other two refuse a call without a token
+before any request, and a 401 from the Exchange is refused back as the tool's error. The token is never printed,
+logged or stored.
+
+### The CLI
+
+`openvibe-node exchange serve --model qwen3:32b --public-url https://…/v1` (OpenVibe.Node) serves the local model
+through an OpenAI-compatible listener and registers it on the existing endpoint-seller API with the person's
+`OPENVIBE_DEVELOPER_KEY`; Ctrl-C removes the offer. See that repo's README.
+
 ## Workflows
 
 - **Seed product workflows** — `wiki.generate_space`, `wiki.generate_page` (both on route `wiki.write`, see [MegaSource](#megasource-research)), `blog.draft_post`,
@@ -988,6 +1045,6 @@ Part of the [OpenVibe network](https://openvibe.network). Built in the open by [
 
 <!-- versions:start -->
 - openvibe-contracts: v0.289.1
-- openvibe-sdk: v0.91.0
+- openvibe-sdk: v0.93.0
 - openvibe-shared: v4.124.0
 <!-- versions:end -->
