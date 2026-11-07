@@ -404,6 +404,11 @@ t.test('an abort mid-stream settles the partial usage, never a release', async (
         }
         assert.ok(run, 'the run reached a terminal state');
         assert.strictEqual(run.status, 'cancelled');
+        // The cancel route marks the run cancelled before the worker unwinds the provider stream; the
+        // settle (or release) follows in that unwind. Wait for it instead of assuming it already happened.
+        for (let i = 0; i < 500 && billing.settlements.size === 0 && billing.releases.length === 0; i++) {
+            await new Promise((r) => setTimeout(r, 20));
+        }
         assert.strictEqual(billing.releases.length, 0, 'an abort settles; it does not release');
         assert.strictEqual(billing.settlements.size, 1);
         const settleCall = billing.calls.filter((c) => c.path.endsWith('/settle'))[0];
