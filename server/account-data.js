@@ -58,6 +58,14 @@ const TABLES = [
     // removed when the account goes, so it stops receiving traffic too.
     { table: 'community_endpoint_offers', subject: 'owner_subject', file: 'community-endpoint-offers.json', order: 'created_at',
         columns: ['id', 'name', 'base_url', 'models', 'hours', 'concurrency', 'price_in', 'price_out', 'audience', 'group_id', 'created_at', 'updated_at'] },
+    // Your own endpoint (the Exchange remake, build order 7): a private GPU rent. It is the person's own
+    // data while the account lives, so it goes in the export. On deletion the row is anonymized at once and
+    // marked stopping, and the next reconciler pass gives the GPU back and lets Billing settle the seconds;
+    // the money rows themselves are kept like the ledger.
+    { table: 'own_endpoints', subject: 'subject', file: 'own-endpoints.json', order: 'created_at',
+        columns: ['id', 'status', 'source', 'catalog_key', 'display_name', 'weights_repo', 'weights_file', 'lora_repo', 'lora_file',
+            'idle_minutes', 'max_runtime_minutes', 'marketplace', 'price_per_hour', 'charged_nano', 'created_at', 'ready_at', 'stopped_at'],
+        erase: { keep: 'the GPU rent and its Billing hold are money records; extraErase anonymizes them and stops the rent so Billing can settle' } },
     // The person's own quota (server/quota.js): a limit that only means something while the account lives.
     { table: 'quotas', subject: 'scope_id', value: (usr) => `user:${usr}`, file: null },
     // What the person used, counted against their allowance: the spend ledger, kept.
@@ -76,6 +84,13 @@ async function extraExport(db, subject) {
 
 /** The person's runs go, with the rows that hang under them (the requests, the citations, the cached answers). */
 async function extraErase(t, subjects, counts) {
+    // A private GPU rent is stopped and anonymized now; its Billing hold and money stay until the reconciler
+    // gives the instance back and settles the seconds (the table's erase is a keep for that reason).
+    counts.add(counts.erased, 'own_endpoints', await t.exec(`UPDATE own_endpoints
+        SET status = CASE WHEN status IN ('requested','starting','running','stopping') THEN 'stopping' ELSE status END,
+            subject = NULL, display_name = 'deleted endpoint', weights_repo = NULL, weights_file = NULL,
+            lora_repo = NULL, lora_file = NULL, url = NULL, updated_at = now()
+        WHERE subject = ANY($1::text[])`, [subjects]));
     // Plan E5: the free-tier counters. A shared device counter is kept while another account still uses the device;
     // when this person was the last one, the device counter and its velocity bucket go too.
     const hashes = (await t.many('SELECT DISTINCT device_hash FROM abuse_devices WHERE subject = ANY($1::text[])', [subjects])).map((r) => r.device_hash);
