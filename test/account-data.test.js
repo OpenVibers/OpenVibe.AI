@@ -10,7 +10,7 @@ const http = require('http');
 const { uncovered, createNetworkSender } = require('openvibe-sdk/account-data');
 const { signDeliveryHeaders } = require('openvibe-sdk/events');
 const { boot, suite } = require('./helpers');
-const { TABLES } = require('../server/account-data');
+const { TABLES, EXEMPT } = require('../server/account-data');
 
 const t = suite('account-data');
 const SECRET = `whsec_${'fixture'.repeat(6)}`;
@@ -41,7 +41,7 @@ t.test('every table that names a person is covered or exempted with a reason', a
     const stub = await startNetworkStub();
     const h = await boot({ env: { AI_EVENTS_SECRET: SECRET, AI_EVENTS_SUBSCRIBE: '0', OV_NETWORK_INTERNAL_URL: stub.url, OV_OAUTH_CLIENT_SECRET: 'ai-secret' } });
     try {
-        const missing = await uncovered(h.db, { tables: TABLES, exempt: { account_data_events: 'the ledger of requests itself: which export and deletion AI applied' } });
+        const missing = await uncovered(h.db, { tables: TABLES, exempt: { ...EXEMPT, account_data_events: 'the ledger of requests itself: which export and deletion AI applied' } });
         assert.deepStrictEqual(missing, [], `a table with a person column is neither covered nor exempted: ${missing.join(', ')}`);
     } finally { await h.stop(); await stub.close(); }
 });

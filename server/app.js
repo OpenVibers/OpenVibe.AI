@@ -24,7 +24,7 @@ const pkg = require('../package.json');
 
 const { adminRoutes } = require('openvibe-shared/config');
 
-function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, credentials = null, preferences = null, grants = null, vault = null, settings = null, benchEvents = null, runBudgets = null, memory = null, memoryImport = null, community = null, endpoints = null, presets = null, receipts = null, balance = null, gpus = null, abuse = null, priceBook = null }) {
+function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, credentials = null, preferences = null, grants = null, vault = null, settings = null, benchEvents = null, runBudgets = null, memory = null, memoryImport = null, memoryServices = null, memorySharing = null, community = null, endpoints = null, presets = null, receipts = null, balance = null, gpus = null, abuse = null, priceBook = null }) {
     const app = express();
     // /.well-known/agent.json (openvibe-shared/agent-layer, SEO-2): what this site serves, for agents.
     require('openvibe-shared/agent-layer').mount(app, { descriptor: require('./agent-descriptor') });
@@ -159,7 +159,9 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
     // The Anthropic-compatible endpoint (POST /v1/messages, GET /v1/models): runs of ai.messages (Codes C3).
     app.use(require('./api/messages').messagesRouter({ runs, auth, config, registry, presets, receipts, log }));
     app.use(require('./api/attribution-quotas').attributionQuotasRouter({ db, quotas, auth, clock, sendError: (res, err, ctx) => sendError(res, err, ctx, log) }));
-    if (memory) app.use(require('./memory').memoryRouter({ memory, memoryImport, auth, config, clock, log, sendError: (res, err, ctx) => sendError(res, err, ctx, log) }));
+    if (memory) app.use(require('./memory').memoryRouter({ memory, memoryImport, services: memoryServices, sharing: memorySharing, auth, config, clock, log, sendError: (res, err, ctx) => sendError(res, err, ctx, log) }));
+    // Memory M5: the uniform share routes for kind memory-store (and /api/v1/share/people, /api/v1/shared-with-me).
+    if (memorySharing) app.use(memorySharing.router());
     if (credentials) app.use(require('./credentials').credentialsRouter({ credentials, auth, registry, sendError: (res, err, ctx) => sendError(res, err, ctx, log) }));
     // The budget of a Codes run token (Codes C3): Codes registers it when it mints the token.
     if (runBudgets) app.use(require('./api/run-budgets').runBudgetsRouter({ runBudgets, auth, log, sendError: (res, err, ctx) => sendError(res, err, ctx, log) }));
