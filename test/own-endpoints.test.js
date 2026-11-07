@@ -109,7 +109,7 @@ t.test('the two owner inputs are marked for Setup: key and cap, group GPUs, need
         const sum = await h.settings.gpus.store.summary();
         for (const key of ['vast.key', 'runpod.key', 'monthly_cap']) {
             const field = sum.schema.properties[key];
-            assert.strictEqual(field['x-owner-input'].group, 'GPUs', key + ' is grouped under GPUs');
+            assert.strictEqual(field['x-owner-input'].group, 'gpus', key + ' is grouped under gpus');
             assert.strictEqual(field['x-required-for'], 'own endpoints', key + ' is needed for own endpoints');
             assert.ok(String(field.title || '').length > 2, key + ' has a plain title');
             assert.ok(String(field.description || '').length >= 30, key + ' has a description');
