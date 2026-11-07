@@ -32,7 +32,7 @@ const { AiError } = require('./util');
 const { gracefulStop, telemetry } = require('openvibe-sdk/service');
 const { createPgTelemetrySink, startTelemetryRetention } = require('openvibe-sdk/telemetry');
 
-async function start({ config, db: givenDb = null, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, listen = true, credentialFetch = null, valkey = null, research = null, machineModels = null, variantEvidence = null, community: givenCommunity = null, communityEndpoints: givenEndpoints = null, webhooks: givenWebhooks = null, abuse: givenAbuse = null } = {}) {
+async function start({ config, db: givenDb = null, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, listen = true, credentialFetch = null, valkey = null, research = null, machineModels = null, variantEvidence = null, community: givenCommunity = null, communityEndpoints: givenEndpoints = null, webhooks: givenWebhooks = null, abuse: givenAbuse = null, memoryTransport = null, memoryLookup = null } = {}) {
     config = config || load(env);
     schemas.configure(config.schemaCache);
     // PostgreSQL (ADR-035): opened and migrated here unless the caller (a test) hands in a migrated handle.
@@ -158,6 +158,10 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     // The store's own maintenance (Memory M2c/M3): owner by owner, with a per-run cap, and the expired import
     // drafts. It is off in test mode and off while a provider is in a drill (server/memory/jobs.js).
     const memoryJobs = require('./memory/jobs').createMemoryJobs({ memory, memoryImport, config, clock, log, registry });
+    // Memory M5: the memory services with the person's own key (mem0, Letta, Zep), and the store's team sharing.
+    // Sharing is null when this deployment has no Network client secret or Events URL; its routes answer 503.
+    const memoryServices = require('./memory/services').createMemoryServices({ db, config, clock, log, memory, transport: memoryTransport, lookup: memoryLookup });
+    const memorySharing = require('./memory/sharing').createMemorySharing({ db, config, env, clock, log, fetchImpl });
     // The living price book (plan E1): the weekly job that reads every catalogued provider's own price listing and
     // keeps the price the router charges in step with it. A change of more than 20% waits for the owner on the
     // operator console. Off in test mode (the tests replay the recorded listings) and off under a drill.
@@ -169,7 +173,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         clientSecret: env.OV_OAUTH_CLIENT_SECRET, fetch: fetchImpl,
     }) : null;
     const benchEvents = createBenchEvents({ bench, accountData, accountSend, config, log, fetchImpl, clientSecret: env.OV_OAUTH_CLIENT_SECRET });
-    const app = createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, grants, vault, settings, benchEvents, runBudgets, memory, memoryImport, community, endpoints, webhooks, presets, receipts, balance, gpus, abuse, priceBook, ownEndpoints });
+    const app = createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, grants, vault, settings, benchEvents, runBudgets, memory, memoryImport, memoryServices, memorySharing, community, endpoints, webhooks, presets, receipts, balance, gpus, abuse, priceBook, ownEndpoints });
     let jwks = null;
     let keyLoaded = Promise.resolve(null);
     if (!keys.pinned && config.nodeEnv !== 'test') {
@@ -212,6 +216,8 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     if (listen && config.nodeEnv !== 'test') webhooks.start();
     if (listen) balance.start();
     if (listen && config.memoryJobs && config.memoryJobs.enabled) memoryJobs.start();
+    // Team sharing's expiry sweep and delivery queue: production only, so a test's database has no background writers.
+    if (listen && config.nodeEnv !== 'test' && memorySharing) memorySharing.start();
     // The price book reads the providers' listings once a week; it never starts in test mode or under a drill.
     if (listen && config.priceBook && config.priceBook.enabled) priceBook.start();
     // Durable Credit settles: the same jobs rule as Memory (never in test mode, never under a provider drill; the
@@ -249,6 +255,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         if (accountSubscription) accountSubscription.stop();
         userModules.stop();
         memoryJobs.stop();
+        if (memorySharing) memorySharing.stop();
         priceBook.stop();
         webhooks.stop();
         if (credits) credits.stopSettlements();
@@ -266,7 +273,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         if (!givenDb) await db.close();
     }
 
-    return { config, db, registry, pool, quotas, tiers, cache, fetcher, engine, runs, keys, keyLoaded, auth, app, server, bench, benchEvents, memory, memoryJobs, priceBook, credits: creditsRef, settings, vault, community, endpoints, webhooks, gpus, abuse, close, ownEndpoints };
+    return { config, db, registry, pool, quotas, tiers, cache, fetcher, engine, runs, keys, keyLoaded, auth, app, server, bench, benchEvents, memory, memoryJobs, memoryServices, memorySharing, priceBook, credits: creditsRef, settings, vault, community, endpoints, webhooks, gpus, abuse, ownEndpoints, close };
 }
 
 if (require.main === module) {
