@@ -892,6 +892,10 @@ the release's sha256) in `/opt/llama.cpp/b11222` with `/opt/llama.cpp/current`, 
 streams always win: 2 threads, at most 1.5 CPUs, nice 19, 3 GB. It uses about 0.9 GB and generates about
 28 tokens/s. Without it, `media.analyze` writes an extractive overview and says so. To swap the model, put the
 file beside it, change `--model`/`--alias` and `AI_LOCAL_LLM_MODEL`, and restart both units.
+Both servers run two slots (`--parallel 2`, 2026-11-07): llama.cpp batches the slots into each step, so a second
+request no longer waits for the first; the 8192-token context is split, 4096 a slot. Install a changed unit by hand:
+`sudo install -m 0644 deploy/systemd/openvibe-llm*.service /etc/systemd/system/ && sudo systemctl daemon-reload &&
+sudo systemctl restart openvibe-llm openvibe-llm2` (AI falls over to `shared` for the seconds they restart).
 
 `deploy/systemd/openvibe-llm2.service` is the optional second chat server: the same llama.cpp build and models
 directory on `127.0.0.1:8092`, a different model family, and the provider `local2`
