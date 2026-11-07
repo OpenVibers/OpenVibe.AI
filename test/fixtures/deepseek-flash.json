@@ -1,0 +1,31 @@
+{
+  "_comment": "The shape DeepSeek V4.1 Flash returned on 2026-11-07 (one real call, 9.5k-token prompt, max_tokens 300): the answer is in choices[0].message.content and the thinking in reasoning_content, with reasoning_tokens counted inside completion_tokens. Identifiers are redacted.",
+  "completion": {
+    "id": "chatcmpl-redacted",
+    "object": "chat.completion",
+    "created": 0,
+    "model": "deepseek-flash",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "{\"at\":\"0:00\",\"why\":\"All repeated descriptions are identical, so the beginning is the only identifiable moment to clip.\"}",
+          "reasoning_content": "The prompt repeats the same scene; the only identifiable moment is the start. I should return strict JSON with one sentence."
+        },
+        "logprobs": null,
+        "finish_reason": "stop"
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 9556,
+      "completion_tokens": 182,
+      "total_tokens": 9738,
+      "prompt_tokens_details": { "cached_tokens": 0 },
+      "completion_tokens_details": { "reasoning_tokens": 154 },
+      "prompt_cache_hit_tokens": 0,
+      "prompt_cache_miss_tokens": 9556
+    },
+    "system_fingerprint": "redacted"
+  }
+}

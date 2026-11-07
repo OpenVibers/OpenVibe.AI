@@ -1385,7 +1385,16 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                 if (uncensored) { attemptFacts.content_policy = 'uncensored'; attemptFacts.label = tier.LABEL; }
                 // The hold needs the offer's retail card, whether it is prepaid, and the real output cap.
                 const attemptRow = p && model ? await registry.getModel(p.key, model) : null;
-                const attemptMeta = { provider: p ? p.key : null, model, maxTokens: req.maxTokens, paid: !isFreeProvider(p), retail: modelCatalog.retailRate(attemptRow) };
+                // A reasoning model spends the same max_tokens allowance thinking before it writes: a caller's
+                // 300-token cap can be all reasoning, leaving content empty (finish_reason 'length', output 0).
+                // The registry says how much room this model needs on top of the answer the caller asked for.
+                const reserve = Number(attemptRow && attemptRow.metadata && attemptRow.metadata.reasoning_reserve_tokens) || 0;
+                const requestedMax = Number(req.maxTokens);
+                const modelMax = reserve > 0 && Number.isSafeInteger(requestedMax) && requestedMax >= 1
+                    && ['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich', 'complete', 'messages'].includes(operation)
+                    ? requestedMax + reserve
+                    : req.maxTokens;
+                const attemptMeta = { provider: p ? p.key : null, model, maxTokens: modelMax, paid: !isFreeProvider(p), retail: modelCatalog.retailRate(attemptRow) };
                 const routed = typeof ctx.onRoute === 'function' ? await ctx.onRoute(attemptFacts, attemptMeta) : null;
                 if (routed && routed.skip) {
                     statFor(c.provider).skipped++;
@@ -1395,8 +1404,9 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                     continue candidate;
                 }
                 // max_cost_usd, when it binds, comes back as the affordable output cap for this attempt.
-                const callMax = routed && Number.isSafeInteger(routed.maxTokens) && routed.maxTokens >= 1 && routed.maxTokens !== req.maxTokens ? routed.maxTokens : null;
-                let callReq = callMax == null ? req : { ...req, maxTokens: callMax };
+                const callMax = routed && Number.isSafeInteger(routed.maxTokens) && routed.maxTokens >= 1 && routed.maxTokens !== modelMax ? routed.maxTokens : null;
+                let callReq = modelMax !== req.maxTokens ? { ...req, maxTokens: modelMax } : req;
+                if (callMax != null) callReq = { ...callReq, maxTokens: callMax };
                 // The host's model writes a short answer: its own cap, never more, whatever the route asked for.
                 if (local && operation !== 'embed') {
                     const localMax = Math.max(1, (config.localLlm && config.localLlm.maxTokens) || 512);

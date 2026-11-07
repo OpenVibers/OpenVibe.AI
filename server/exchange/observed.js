@@ -11,9 +11,10 @@
  *
  * Uptime is per real provider attempt, not per run status. A failed run counts against an offer only
  * when an attempt row names that provider and model; a run refused before routing, over quota or by
- * validation has no such row and counts against nothing. An attempt that answered (status ok) is a
- * success even when the run afterwards failed validation (`output.empty` / `output.invalid`): the
- * offer did answer. A skipped or cancelled row was never an answer and is not a sample.
+ * validation has no such row and counts against nothing. An attempt is a success only when it produced
+ * output: an ok row whose run ended `output.empty`, or a text attempt that spent every output token
+ * (tokens_out = 0, e.g. all of max_tokens went to reasoning), is a failure of that provider and model.
+ * A skipped or cancelled row was never an answer and is not a sample.
  *
  * The latency of an answer is its time to the first token when the receipt recorded one (a streamed
  * answer), else the total provider latency of the attempt that answered. Uptime and speed need enough
@@ -23,6 +24,8 @@
  */
 const DAY_MS = 86400000;
 const MIN_SAMPLES = 20;
+// sha256(''): what the router stores as a request's output_hash when the provider produced no content.
+const EMPTY_OUTPUT_HASH = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
 const dayOf = (ms) => new Date(ms).toISOString().slice(0, 10);
 
 // What an upstream appends to a registry name: -2025-08-07, -v3-0324, -4-5-20251001, :free, @rev.
@@ -60,11 +63,19 @@ function percentile(values, p) {
 }
 
 function createObserved({ db, clock = { now: () => Date.now() } }) {
-    // One sample per real provider attempt: ok is a success, error or timeout is a failure. Skipped and
-    // cancelled rows are not samples (no provider was tried, or the caller left). The run's own provider
-    // and model are not used here: a fallback run can name several offers, and a failed run keeps none.
+    // One sample per real provider attempt: ok with output is a success; error, timeout, an empty run
+    // and a text attempt that spent every token are failures. Skipped and cancelled rows are not samples
+    // (no provider was tried, or the caller left). The run's own provider and model are not used here: a
+    // fallback run can name several offers, and a failed run keeps none.
     const attemptRows = db.prepare(`SELECT to_char(r.created_at::timestamptz AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day,
-            CASE q.status WHEN 'ok' THEN 'succeeded' ELSE 'failed' END AS status,
+            CASE
+                WHEN q.status <> 'ok' THEN 'failed'
+                WHEN r.error_code = 'output.empty' THEN 'failed'
+                WHEN q.operation IN ('chat', 'generate', 'summarize', 'classify', 'extract', 'enrich', 'complete', 'messages')
+                     AND COALESCE(q.tokens_out, 0) = 0
+                     AND (q.output_hash IS NULL OR q.output_hash = '${EMPTY_OUTPUT_HASH}') THEN 'failed'
+                ELSE 'succeeded'
+            END AS status,
             q.provider_key AS provider_key, q.model_key AS model_key,
             COUNT(*)::bigint AS n
         FROM requests q
@@ -92,6 +103,10 @@ function createObserved({ db, clock = { now: () => Date.now() } }) {
         LEFT JOIN ai_receipts rc ON rc.run_id = r.id
         WHERE q.status = 'ok' AND q.latency_ms IS NOT NULL
           AND r.status IN ('succeeded', 'failed')
+          AND (r.error_code IS NULL OR r.error_code <> 'output.empty')
+          AND NOT (q.operation IN ('chat', 'generate', 'summarize', 'classify', 'extract', 'enrich', 'complete', 'messages')
+                   AND COALESCE(q.tokens_out, 0) = 0
+                   AND (q.output_hash IS NULL OR q.output_hash = '${EMPTY_OUTPUT_HASH}'))
           AND r.created_at::timestamptz >= ?::timestamptz AND r.created_at::timestamptz <= ?::timestamptz`);
 
     /** The real attempts and cached answers of the window, and the UTC day that is "today". */
