@@ -12,7 +12,7 @@ const { ids } = require('openvibe-contracts');
 const { uncovered } = require('openvibe-sdk/account-data');
 const { signDeliveryHeaders } = require('openvibe-sdk/events');
 const { boot, request, suite, seamServer, token, privateKey, ISSUER } = require('./helpers');
-const { TABLES } = require('../server/account-data');
+const { TABLES, EXEMPT } = require('../server/account-data');
 const { sha256 } = require('../server/util');
 const { PROFILE_INTERVAL_MS, PROFILE_ITEMS } = require('../server/memory');
 
@@ -327,7 +327,7 @@ t.test('account data: the export shows the sources and the links, and the erase 
     const { seam } = await startSeam();
     const h = await bootWithSeam({ AI_EVENTS_SECRET: SECRET, AI_EVENTS_SUBSCRIBE: '0', OV_NETWORK_INTERNAL_URL: stub.url, OV_OAUTH_CLIENT_SECRET: 'ai-secret' }, seam);
     try {
-        const missing = await uncovered(h.db, { tables: TABLES, exempt: { account_data_events: 'the ledger of requests itself: which export and deletion AI applied' } });
+        const missing = await uncovered(h.db, { tables: TABLES, exempt: { ...EXEMPT, account_data_events: 'the ledger of requests itself: which export and deletion AI applied' } });
         assert.deepStrictEqual(missing, []);
         const who = userToken(A);
         await request(h.base, 'POST', '/api/v1/memory/items:batch', { tok: who, body: { items: [{ text: DARK, source: 'cursor' }] } });
