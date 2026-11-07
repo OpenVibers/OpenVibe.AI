@@ -216,7 +216,7 @@ function minimax(text) {
  * DeepSeek's pricing page (markdown, transposed): the models are the columns and the prices the rows, with an
  * OFF-PEAK and a PEAK rate for each. The card carries the peak rate (the page halves it off-peak).
  */
-function deepseek(text) {
+function deepseekBand(text, want) {
     const out = {};
     for (const t of markdownTables(text)) {
         const columns = [];
@@ -229,7 +229,7 @@ function deepseek(text) {
         for (const row of t.rows) {
             const metric = String(row[1] || '').toUpperCase();
             const band = String(row[2] || '').toUpperCase();
-            if (band !== 'PEAK') continue;                       // the catalogue holds the peak rate
+            if (band !== want) continue;                         // one band at a time: the peak one, or the off-peak one
             let field = null;
             if (metric.includes('CACHE HIT')) field = 'cached';
             else if (metric.includes('CACHE MISS')) field = 'in';
@@ -244,6 +244,36 @@ function deepseek(text) {
         }
     }
     return out;
+}
+
+/** The DeepSeek listing's peak prices: the card the router charges. */
+function deepseek(text) {
+    return deepseekBand(text, 'PEAK');
+}
+
+/**
+ * The off-peak hours (UTC) a listing publishes, if it publishes any. The window is read from the page's
+ * own words; a listing that does not say when its off-peak price applies has no window, and a paid route
+ * without a window is not eligible for a batch.
+ */
+function offPeakWindow(text) {
+    const m = /off[-\s]?peak[^\n]{0,160}?(\d{1,2})[:.](\d{2})\s*(?:-|–|—|to|until)\s*(\d{1,2})[:.](\d{2})/i.exec(String(text || ''));
+    if (!m) return null;
+    const start = Number(m[1]) % 24;
+    const end = Number(m[3]) % 24;
+    if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+    return { start_hour: start, end_hour: end };
+}
+
+/**
+ * The off-peak window and the prices inside it, as the listing publishes them. DeepSeek's pricing page
+ * carries an OFF-PEAK row for every model beside the PEAK one, and the hours the off-peak price applies.
+ */
+function deepseekOffPeak(text) {
+    const prices = deepseekBand(text, 'OFF-PEAK');
+    const window = offPeakWindow(text);
+    if (!window || !Object.keys(prices).length) return { window: null, prices: {} };
+    return { window, prices };
 }
 
 /**

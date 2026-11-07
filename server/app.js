@@ -24,7 +24,7 @@ const pkg = require('../package.json');
 
 const { adminRoutes } = require('openvibe-shared/config');
 
-function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, credentials = null, preferences = null, grants = null, vault = null, settings = null, benchEvents = null, runBudgets = null, memory = null, memoryImport = null, memoryServices = null, memorySharing = null, community = null, endpoints = null, webhooks = null, presets = null, receipts = null, balance = null, gpus = null, abuse = null, priceBook = null, ownEndpoints = null }) {
+function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, credentials = null, preferences = null, grants = null, vault = null, settings = null, benchEvents = null, runBudgets = null, memory = null, memoryImport = null, memoryServices = null, memorySharing = null, community = null, endpoints = null, webhooks = null, presets = null, receipts = null, balance = null, gpus = null, abuse = null, priceBook = null, ownEndpoints = null, refusal = null, batches = null }) {
     const app = express();
     // /.well-known/agent.json (openvibe-shared/agent-layer, SEO-2): what this site serves, for agents.
     require('openvibe-shared/agent-layer').mount(app, { descriptor: require('./agent-descriptor') });
@@ -126,6 +126,8 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
     // Exchange webhooks (the plan's "For builders", item 7): a developer registers an https receiver and reads its
     // delivery log. The signature is the one openvibe-sdk/exchange verifies; the receiver URL goes through the guard.
     if (webhooks) app.use(require('./api/webhooks').webhooksRouter({ webhooks, auth, log }));
+    // The half-price batches: many prompts submitted at once, answered later (server/batch/).
+    if (batches) app.use(require('./api/batches').batchesRouter({ batches, auth, config, clock, log }));
     // GET /release.json (ADR-016) and POST /release-metrics (open tabs' update reports into /metrics).
     release.mount(app, { registry: metrics.registry });
 

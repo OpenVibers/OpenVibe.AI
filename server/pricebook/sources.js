@@ -22,6 +22,8 @@ const SOURCES = [
         url: 'https://api-docs.deepseek.com/quick_start/pricing.md',
         kind: 'text',
         parse: parsers.deepseek,
+        // The off-peak window the same listing publishes, read for the batch capacity rules.
+        offPeak: parsers.deepseekOffPeak,
     },
     {
         key: 'qwen',
