@@ -119,11 +119,58 @@ function table(caption, head, rows, empty = 'None.') {
 }
 
 const NAV = [
-    ['/console', 'Overview', 'overview'], ['/console/providers', 'Providers', 'providers'], ['/console/routes', 'Routes', 'routes'],
-    ['/console/templates', 'Templates', 'templates'], ['/console/workflows', 'Workflows', 'workflows'], ['/console/runs', 'Runs', 'runs'],
-    ['/console/quotas', 'Quotas', 'quotas'], ['/console/usage', 'Usage', 'usage'], ['/console/cache', 'Cache', 'cache'], ['/console/abuse', 'Abuse', 'abuse'], ['/console/audit', 'Audit', 'audit'],
+    ['/console', 'Overview', 'overview'], ['/console/providers', 'AI providers', 'providers'], ['/console/routes', 'Routing rules', 'routes'],
+    ['/console/templates', 'Prompt templates', 'templates'], ['/console/workflows', 'Saved AI tasks', 'workflows'], ['/console/runs', 'Runs', 'runs'],
+    ['/console/quotas', 'Limits', 'quotas'], ['/console/usage', 'Usage', 'usage'], ['/console/cache', 'Cache', 'cache'], ['/console/abuse', 'Abuse', 'abuse'], ['/console/audit', 'Audit', 'audit'],
     ['/console/gpus', 'GPUs', 'gpus'],
     ['/console/pricebook', 'Prices', 'pricebook'],
+    ['/console/glossary', 'What words mean', 'glossary'],
+];
+
+// ── Plain words (the owner-setup design, section 3) ──────────
+/** A provider's health as a sentence, never a circuit code (closed / open / half_open stay in grey after it). */
+function healthText(h, { breaker = {}, now = Date.now() } = {}) {
+    const st = (h && h.state) || 'closed';
+    if (st === 'closed') return { text: h && h.consecutive_failures ? `Working (${h.consecutive_failures} error${h.consecutive_failures === 1 ? '' : 's'} in a row so far)` : 'Working', cls: 'ok' };
+    if (st === 'half_open') return { text: 'Testing again: the next request tries it once', cls: 'warn' };
+    const cooldown = h.exhausted_at ? Number(breaker.exhaustedCooldownMs || 600000) : Number(breaker.cooldownMs || 60000);
+    const at = h.opened_at ? new Date(Number(h.opened_at) + cooldown) : null;
+    const hhmm = at && Number.isFinite(at.getTime()) ? `${at.toISOString().slice(11, 16)} UTC` : 'soon';
+    const why = h.exhausted_at ? 'the provider says the account is out of balance' : `${h.consecutive_failures || 1} error${(h.consecutive_failures || 1) === 1 ? '' : 's'} in a row`;
+    void now;
+    return { text: `Paused after ${why}; tries again at ${hhmm}`, cls: 'bad' };
+}
+/** Where a provider's key comes from, in words: entered here, the server's settings file, not set or not needed. */
+function keyText(p, hint) {
+    if (p.credentials === 'not_required' || p.auth_mode === 'none') return html`<span class="muted">Not needed</span>`;
+    const ref = /^env:([A-Z][A-Z0-9_]*)$/.exec(String(p.secret_ref || ''));
+    if (hint) return html`<span class="ok">Entered here, locked</span><br><span class="muted">ends ${hint.hint}, set ${when(hint.updated_at)}</span>`;
+    if (p.credentials === 'configured' && ref) return html`<span class="ok">From the server's settings file</span> (<code>${ref[1]}</code>)`;
+    if (p.credentials === 'configured') return html`<span class="ok">Entered here, locked</span>`;
+    return html`<span class="bad">Not set</span>${ref ? html`<br><span class="muted">the settings file has no <code>${ref[1]}</code></span>` : ''}`;
+}
+/** A billing profile in words. */
+const BILLING_WORDS = { metered: 'Spends Credits per request', subscription: 'A plan with a monthly fee shared by everyone', prepaid: 'A prepaid balance at the provider', payg: 'A prepaid balance at the provider', free: 'Free', customer_byok: "The person's own key pays", byok: "The person's own key pays" };
+/** What a provider's terms allow, in words. */
+const ACCESS_WORDS = { OWN_DEPLOYMENT: 'Runs on our own machine: no provider terms', AUTHORIZED_WHOLESALE: 'Our agreement allows reselling it', CUSTOMER_BYOK: "Only with the person's own key", RESTRICTED: 'Do not sell: their terms forbid it', UNVERIFIED: 'Not checked yet: treated as Do not sell' };
+const billingText = (p) => BILLING_WORDS[String((p.billing_profile || (p.metadata && p.metadata.billing_profile) || '')).toLowerCase()] || '';
+const accessText = (p) => ACCESS_WORDS[String(p.provider_access || 'UNVERIFIED').toUpperCase()] || '';
+/** The queue as a sentence. */
+const queueText = (q) => `Doing ${n(q.running)} now, ${n(q.queued)} waiting. At most ${n(q.max_concurrent)} at once; more wait in line (up to ${n(q.max_queued)}).`;
+const STUB_WORDS = 'For testing only. When on, people get a canned answer instead of an error.';
+/** The words that must stay, each with one line (the console's glossary page, and the admin panel's). */
+const GLOSSARY = [
+    ['Credits', 'What people spend on AI. A paid request holds Credits before it runs and spends what it used after.'],
+    ['BYOK (bring your own key)', "A person's own provider key: their requests run on it and their provider bills them, not OpenVibe."],
+    ['Resale', "Selling a provider's models to other people. Only providers whose terms allow it (\"Our agreement allows reselling it\") are offered to others."],
+    ['Cache', 'A stored answer. The same request, from the same person, for the same task and versions, gets it back without paying a provider again.'],
+    ['Limit (quota)', 'The most requests, tokens or dollars one service, person or app may use in a minute, hour or day. Past it, requests are refused until the window resets.'],
+    ['Saved AI task (workflow)', 'A named job such as "summarize a stream", made of steps, each using a prompt template and a routing rule.'],
+    ['Prompt template', 'The words sent to the model for a task, with blanks the request fills in.'],
+    ['Routing rule (route)', 'Which providers and models may answer a task, and in what order they are tried when one fails.'],
+    ['Token', 'The unit models read and write, about three quarters of a word. Prices are per million tokens.'],
+    ['Health', 'Whether a provider is answering. After several errors in a row it is paused for a while so requests go elsewhere, then tried once again.'],
+    ['Practice answers', 'Canned answers from a built-in test provider, used only when every real provider fails and the switch is on. For testing, never for people.'],
 ];
 
 // The console's pages are noindex; the one public page drawn with this layout (/stats) passes robots, a description and
@@ -171,27 +218,43 @@ function overview({ staff, csrf, st, counts24, failures24, queue, cacheTotals, p
     const runs24 = Object.values(counts24).reduce((a, b) => a + b, 0);
     return layout({
         title: 'Overview', section: 'overview', staff, csrf, body: html`<h1>Overview</h1>
+<p class="muted">How OpenVibe's AI is doing right now: which providers answer, what ran and failed today, and what it cost. Come here first when something seems slow or wrong; each card links to the page that explains it.</p>
 <div class="card"><p class="m0">This session may: ${staff.caps.map((c, i) => html`${i ? '; ' : ''}${CAP_LABELS[c] || c}`)}.</p></div>
 <div class="grid">
-<div class="card"><div class="k">Providers</div><div class="v">${n(st.providers.filter((p) => p.status === 'active').length)} active</div>
-<div class="muted">${problems.length ? html`<span class="bad">${problems.length} need attention</span>` : 'no credential or circuit problem'} · stub fallback ${stubFallback ? 'on' : 'off'}</div><a href="/console/providers">Providers</a></div>
+<div class="card"><div class="k">AI providers</div><div class="v">${n(st.providers.filter((p) => p.status === 'active').length)} switched on</div>
+<div class="muted">${problems.length ? html`<span class="bad">${problems.length} need${problems.length === 1 ? 's' : ''} attention</span>` : 'every key works and none is paused'}</div>
+<div class="muted">Practice answers when every provider fails: <strong>${stubFallback ? 'on' : 'off'}</strong>. ${STUB_WORDS}</div><a href="/console/providers">AI providers</a></div>
 <div class="card"><div class="k">Runs, last 24 h</div><div class="v">${n(runs24)}</div>
 <div class="muted">${Object.entries(counts24).map(([s, c], i) => html`${i ? ' · ' : ''}${s} ${n(c)}`)}</div><a href="/console/runs">Runs</a></div>
 <div class="card"><div class="k">Failed, last 24 h</div><div class="v">${counts24.failed ? html`<span class="bad">${n(counts24.failed)}</span>` : '0'}</div>
 <div class="muted">${failures24.length ? failures24.slice(0, 3).map((f, i) => html`${i ? ' · ' : ''}${f.error_code || '(none)'} ${n(f.n)}`) : 'none'}</div><a href="/console/runs?status=failed">Failed runs</a></div>
 <div class="card"><div class="k">Spend today (${st.today.day})</div><div class="v">${usd(st.today.cost_usd)}</div><div class="muted">${n(st.today.requests)} provider requests</div><a href="/console/usage">Usage</a></div>
-<div class="card"><div class="k">Queue</div><div class="v">${n(queue.running)} running</div><div class="muted">${n(queue.queued)} queued · up to ${n(queue.max_concurrent)} at once, ${n(queue.max_queued)} waiting</div></div>
-<div class="card"><div class="k">Definitions</div><div class="v">${n(st.workflows)} workflows</div><div class="muted">${n(st.templates)} templates · ${n(st.routes)} routes</div><a href="/console/workflows">Workflows</a></div>
+<div class="card"><div class="k">Queue</div><div class="v">${n(queue.running)} running</div><div class="muted">${queueText(queue)}</div></div>
+<div class="card"><div class="k">Saved AI tasks</div><div class="v">${n(st.workflows)}</div><div class="muted">${n(st.templates)} prompt templates · ${n(st.routes)} routing rules. A saved task runs prompt templates on the providers its routing rule allows.</div><a href="/console/workflows">Saved AI tasks</a></div>
 <div class="card"><div class="k">Cache</div><div class="v">${n(cacheTotals.entries)} entries</div><div class="muted">${n(cacheTotals.hits)} hits served</div><a href="/console/cache">Cache</a></div>
 </div>
 <h2>Needs attention</h2>
-${table('Provider problems', ['Provider', 'Kind', 'Problem'], problems.map((p) => html`<tr><td><code>${p.key}</code></td><td>${p.kind}</td><td class="bad">${p.problem}</td></tr>`), 'none.')}
+${table('Provider problems', ['Provider', 'Kind', 'What is wrong'], problems.map((p) => html`<tr><td><code>${p.key}</code></td><td>${p.kind}</td><td class="bad">${p.problem}</td></tr>`), 'none: every switched-on provider has a key and is answering.')}
 ${table('Failed runs in the last 24 hours, by error code', ['Error code', 'Runs', 'Workflows', 'Last'], failures24.map((f) => html`<tr>
 <td><a href="/console/runs${qs({ status: 'failed', code: f.error_code })}"><code>${f.error_code || '(none)'}</code></a></td><td>${n(f.n)}</td><td>${n(f.workflows)}</td><td>${when(f.last_at)}</td></tr>`), 'no failed runs.')}
-${table('Busiest quota windows', ['Scope', 'Window', 'Used', 'Limit', 'Resets in'], topQuotas.map((c) => html`<tr>
-<td>${c.quota.scope_type} <code>${c.scope_id}</code>${c.quota.workflow_prefix ? html` · <code>${c.quota.workflow_prefix}*</code>` : ''}</td><td>${c.quota.window}</td>
-<td>${limitsUsed(c)}</td><td>${limits(c.quota)}</td><td>${secs(c.resets_in_seconds)}</td></tr>`), 'no active quota.')}`,
+${table('Limits closest to running out', ['Who it limits', 'Window', 'Used', 'Limit', 'Resets in'], topQuotas.map((c) => html`<tr>
+<td>${scopeText(c.quota.scope_type, c.scope_id)}${c.quota.workflow_prefix ? html` · tasks starting <code>${c.quota.workflow_prefix}</code>` : ''}</td><td>${WINDOW_WORDS[c.quota.window] || c.quota.window}</td>
+<td>${limitsUsed(c)}</td><td>${limits(c.quota)}</td><td>${secs(c.resets_in_seconds)}</td></tr>`), 'no limit is set.')}`,
     });
+}
+
+/** Who a limit applies to, in words; the scope type and id stay in code after it. */
+const SCOPE_WORDS = {
+    global: { label: 'Everyone together', line: 'One shared limit for every request to AI.' },
+    service: { label: 'One OpenVibe service', line: 'A service such as Live or Codes; * gives every service its own limit.' },
+    actor: { label: 'One person or agent', line: 'The person or agent a request is made for; * gives each one their own limit.' },
+    attribution: { label: "One app's user", line: 'A user of a service as that service names them (live:user:42); * gives each their own limit.' },
+};
+const WINDOW_WORDS = { minute: 'per minute', hour: 'per hour', day: 'per day (UTC)' };
+function scopeText(type, id) {
+    const w = SCOPE_WORDS[type];
+    const who = id === '*' ? (type === 'global' ? '' : ', each on its own') : '';
+    return html`${w ? w.label : type}${who} <code>${id}</code>`;
 }
 
 function limits(q) {
@@ -211,34 +274,41 @@ function limitsUsed(c) {
     return parts.join(' · ') || `${n(c.used.requests)} requests`;
 }
 
-function providers({ staff, csrf, rows, models, canManage, stubFallback, notice, error, keyHints = new Map() }) {
-    const keyCell = (p) => {
-        const h = keyHints.get(p.key);
-        return h && String(p.secret_ref || '') === `vault:${p.key}` ? html`<br><span class="muted">key ${h.hint}, set ${when(h.updated_at)}</span>` : '';
+function providers({ staff, csrf, rows, models, canManage, stubFallback, notice, error, keyHints = new Map(), breaker = {}, now = Date.now() }) {
+    const healthCell = (p) => {
+        const h = healthText(p.health, { breaker, now });
+        return html`<span class="${h.cls}">${h.text}</span> <span class="muted">${(p.health && p.health.state) || 'closed'}</span>${p.health && p.health.last_error ? html`<br><span class="muted">last error: ${clip(p.health.last_error, 160)}</span>` : ''}`;
+    };
+    const termsCell = (p) => {
+        const b = billingText(p);
+        const a = accessText(p);
+        return html`${b || '—'}${a ? html`<br><span class="muted">${a}</span>` : ''}`;
     };
     const manageRow = (p) => (canManage && p.kind !== 'stub' && p.kind !== 'whisper' ? html`<tr class="sub"><td colspan="10"><details><summary>Key and models for <code>${p.key}</code></summary>
 <form class="inline" method="post" action="/console/providers/${enc(p.key)}/sync">${csrfField(csrf)}<button type="submit">Read its model list</button> <span class="muted">every model it offers, described (what it does, how strong); new ones arrive switched off</span></form>
 <form class="inline" method="post" action="/console/providers/${enc(p.key)}/key">${csrfField(csrf)}<label>New API key <input type="password" name="api_key" required minlength="8" autocomplete="off" spellcheck="false"></label><button type="submit">Replace key</button></form>
 <form class="inline" method="post" action="/console/providers/${enc(p.key)}/models">${csrfField(csrf)}<label>Model <input type="text" name="model_key" required maxlength="200" placeholder="deepseek-flash" spellcheck="false"></label>
 <label><input type="checkbox" name="vision" value="1"> reads pictures</label> <label><input type="checkbox" name="tools" value="1"> tools</label>
-<label>$ in / Mtok <input type="number" name="cost_in" step="0.0001" min="0" class="num"></label> <label>$ out / Mtok <input type="number" name="cost_out" step="0.0001" min="0" class="num"></label>
-<label>$ cache read / Mtok <input type="number" name="cost_cache_read" step="0.0001" min="0" class="num"></label> <label>$ cache write / Mtok <input type="number" name="cost_cache_write" step="0.0001" min="0" class="num"></label>
+<label>Price per million words read (input), in dollars <input type="number" name="cost_in" step="0.0001" min="0" class="num"></label> <label>Price per million words written (output), in dollars <input type="number" name="cost_out" step="0.0001" min="0" class="num"></label>
+<label>Price per million words read from cache, in dollars <input type="number" name="cost_cache_read" step="0.0001" min="0" class="num"></label> <label>Price per million words written to cache, in dollars <input type="number" name="cost_cache_write" step="0.0001" min="0" class="num"></label>
 <label>from the price page <input type="url" name="price_source" placeholder="https://…/pricing"></label><button type="submit">Register model</button></form></details></td></tr>` : '');
     return layout({
-        title: 'Providers', section: 'providers', staff, csrf, notice, error, body: html`<h1>Providers and models</h1>
-${canManage ? html`<p><a class="button" href="/console/providers/new">Add a provider</a> <span class="muted">DeepSeek, OpenRouter, Groq, Gemini, Mistral, Together, Fireworks, Cerebras, xAI, OpenAI, Anthropic or any OpenAI-compatible API. Then choose it on a route's page.</span></p>` : ''}
-<p class="muted">Credentials are secret <em>references</em> (<code>env:NAME</code>, or <code>vault:NAME</code> for a key added here, sealed in the AI configuration store and bound to the provider's origin) resolved inside the service; this page shows the name and whether it resolves, never a value. Routes try their primary and then each fallback in order; the table below is in provider priority order. The deterministic stub joins every route as a last resort: <strong>${stubFallback ? 'on' : 'off'}</strong> (<code>AI_STUB_FALLBACK</code>).</p>
-${table('Providers', ['Provider', 'Kind', 'Status', 'Credentials', 'Circuit', 'Base URL', 'Default model', 'Can do', 'Priority / timeout', ...(canManage ? ['Actions'] : [])], rows.map((p) => html`<tr>
-<td><code>${p.key}</code><br><span class="muted">${p.display_name}</span></td><td>${p.kind}</td><td>${badge(p.status)}</td>
-<td>${badge(p.credentials)}${p.secret_ref ? html`<br><code>${p.secret_ref}</code>` : ''}${keyCell(p)}<br><span class="muted">${p.auth_mode}</span></td>
-<td>${badge(p.health.state)}${p.health.consecutive_failures ? html`<br><span class="muted">${n(p.health.consecutive_failures)} failure(s) in a row</span>` : ''}${p.health.last_error ? html`<br><span class="muted">${clip(p.health.last_error, 160)}</span>` : ''}</td>
+        title: 'AI providers', section: 'providers', staff, csrf, notice, error, body: html`<h1>AI providers</h1>
+<p class="muted">The companies whose models OpenVibe can use, and the key for each. Add one to make its models available; a provider with no working key is skipped.</p>
+${canManage ? html`<p><a class="button" href="/console/providers/new">Add a provider</a> <span class="muted">DeepSeek, OpenRouter, Groq, Gemini, Mistral, Together, Fireworks, Cerebras, xAI, OpenAI, Anthropic or any OpenAI-compatible API. Then choose it on a routing rule's page.</span></p>` : ''}
+<p class="muted">A key entered here is locked with AI's own lock key, bound to the provider's address and never shown again (only its last four characters). A key from the server's settings file is named, never shown. When a provider fails, the request goes to the next one in this order.</p>
+<div class="card"><p class="m0">Practice answers when every provider fails: <strong>${stubFallback ? 'on' : 'off'}</strong> <span class="muted">(<code>AI_STUB_FALLBACK</code>)</span>. ${STUB_WORDS}</p></div>
+${table('AI providers, in the order they are tried', ['Provider', 'Kind', 'Status', 'Key', 'Health', 'Who pays · terms', 'Base URL', 'Default model', 'Can do', 'Order · time limit', ...(canManage ? ['Actions'] : [])], rows.map((p) => html`<tr>
+<td><code>${p.key}</code><br><span class="muted">${p.display_name}</span></td><td>${p.kind}</td><td>${p.status === 'active' ? html`<span class="ok">On</span>` : html`<span class="bad">Off</span>`}</td>
+<td>${keyText(p, keyHints.get(p.key))}</td>
+<td>${healthCell(p)}</td><td>${termsCell(p)}</td>
 <td class="mono">${safeUrl(p.base_url)}</td><td>${p.default_model ? html`<code>${p.default_model}</code>` : '—'}</td><td>${(p.capabilities || []).join(', ') || '—'}</td>
-<td>${n(p.priority)} · ${n(p.timeout_ms)} ms<br><span class="muted">${p.origin}, updated ${when(p.updated_at)}</span></td>
+<td>${n(p.priority)} · ${n(Math.round((p.timeout_ms || 0) / 1000))} s<br><span class="muted">${p.origin}, updated ${when(p.updated_at)}</span></td>
 ${canManage ? html`<td><form class="inline" method="post" action="/console/providers/${enc(p.key)}/status">${csrfField(csrf)}<input type="hidden" name="status" value="${p.status === 'active' ? 'disabled' : 'active'}"><button type="submit" class="${p.status === 'active' ? 'danger' : ''}">${p.status === 'active' ? 'Disable' : 'Enable'}<span class="sr-only"> ${p.key}</span></button></form>
-${p.health.state !== 'closed' || p.health.consecutive_failures ? html` <form class="inline" method="post" action="/console/providers/${enc(p.key)}/reset">${csrfField(csrf)}<button type="submit">Reset circuit<span class="sr-only"> of ${p.key}</span></button></form>` : ''}</td>` : ''}
-</tr>${manageRow(p)}`), 'no providers.')}
-${canManage ? '' : html`<p class="muted">Enabling, disabling and circuit resets need <code>ai.provider.manage</code> (the owner's <code>staff.secrets.manage</code>).</p>`}
-${table('Models', ['Provider', 'Model', 'Type', 'Status', 'Strength', 'Context / max output', 'Cost per Mtok (in / out / cached / cache write)', 'Supports'], models.map((m) => html`<tr>
+${p.health.state !== 'closed' || p.health.consecutive_failures ? html` <form class="inline" method="post" action="/console/providers/${enc(p.key)}/reset">${csrfField(csrf)}<button type="submit">Try it again now<span class="sr-only"> (${p.key})</span></button></form>` : ''}</td>` : ''}
+</tr>${manageRow(p)}`), 'no providers yet. Add DeepSeek to start: Add a provider.')}
+${canManage ? '' : html`<p class="muted">Switching providers on and off and trying a paused one again need <code>ai.provider.manage</code> (the owner's <code>staff.secrets.manage</code>).</p>`}
+${table('Models', ['Provider', 'Model', 'Type', 'Status', 'Strength', 'Context / longest answer (tokens)', 'Price per million words, in dollars (read / written / read from cache / written to cache)', 'Supports'], models.map((m) => html`<tr>
 <td><code>${m.provider_key}</code></td><td><code>${m.model_key}</code>${m.display_name && m.display_name !== m.model_key ? html`<br><span class="muted">${m.display_name}</span>` : ''}</td><td>${m.type}</td>
 <td>${badge(m.status)}${m.metadata && m.metadata.missing_since ? html`<br><span class="muted">no longer listed since ${when(m.metadata.missing_since)}</span>` : ''}${canManage ? html`<form class="inline" method="post" action="/console/models/${enc(m.provider_key)}/${enc(m.model_key)}/status">${csrfField(csrf)}<input type="hidden" name="status" value="${m.status === 'active' ? 'disabled' : 'active'}"><button type="submit">${m.status === 'active' ? 'Turn off' : 'Turn on'}<span class="sr-only"> ${m.model_key}</span></button></form>` : ''}</td>
 <td>${m.metadata && m.metadata.tier ? html`${m.metadata.tier}${m.metadata.reasoning ? ', thinks first' : ''}${m.metadata.note ? html`<br><span class="muted">${m.metadata.note}</span>` : ''}` : '—'}</td>
@@ -267,9 +337,9 @@ ${vaultReady ? '' : html`<p class="bad">Keys cannot be stored on this server: th
 }
 
 const KINDS = {
-    routes: { one: 'route', title: 'Routes', statuses: ['active', 'disabled'] },
-    templates: { one: 'template', title: 'Templates', statuses: ['draft', 'active', 'deprecated', 'archived'] },
-    workflows: { one: 'workflow', title: 'Workflows', statuses: ['draft', 'active', 'deprecated', 'archived'] },
+    routes: { one: 'routing rule', title: 'Routing rules', statuses: ['active', 'disabled'], line: 'A routing rule says which providers and models may answer a task, and in what order they are tried when one fails. Change one to move a task to a cheaper or stronger model.' },
+    templates: { one: 'prompt template', title: 'Prompt templates', statuses: ['draft', 'active', 'deprecated', 'archived'], line: 'A prompt template is the words sent to the model for a task, with blanks the request fills in. Change one when answers need different instructions.' },
+    workflows: { one: 'saved AI task', title: 'Saved AI tasks', statuses: ['draft', 'active', 'deprecated', 'archived'], line: 'A saved AI task is a named job (summarize a stream, describe a picture) made of steps, each using a prompt template and a routing rule. Services ask for a task by its name.' },
 };
 const target = (c) => (c ? html`<code>${c.provider}</code>${c.model ? html` / <code>${c.model}</code>` : ''}` : '—');
 
@@ -314,6 +384,7 @@ function definitions({ staff, csrf, kind, rows, inUse }) {
     }
     return layout({
         title: k.title, section: kind, staff, csrf, body: html`<h1>${k.title}</h1>
+<p class="muted">${k.line}</p>
 <p class="muted">Every edit is a new version and old versions stay readable; runs record the versions they used. ${kind === 'routes'
             ? 'A route runs its newest version, which must be active.'
             : 'Runs use the newest active version ("in use"); a newer draft is not used until it is made active.'} Versions are created through the admin API (<code>POST /api/v1/${kind}/:key/versions</code>).</p>
@@ -457,27 +528,30 @@ ${output.text != null ? html`<pre>${output.text}</pre>` : html`<div class="card 
 
 function quotas({ staff, csrf, counters, all, canManage, notice, error, form = {} }) {
     const sel = (name, opts, cur) => html`<select name="${name}" id="q-${name}">${opts.map((o) => html`<option value="${o}"${o === cur ? html` selected` : ''}>${o}</option>`)}</select>`;
+    const labelled = { scope_type: Object.fromEntries(Object.entries(SCOPE_WORDS).map(([k, v]) => [k, `${v.label}: ${v.line}`])), window: { minute: 'Per minute', hour: 'Per hour', day: 'Per day (UTC)' }, status: { active: 'On: requests past it are refused', disabled: 'Off: kept, but nothing is refused' } };
+    const choose = (name, opts, cur) => html`<select name="${name}" id="q-${name}">${opts.map((o) => html`<option value="${o}"${o === cur ? html` selected` : ''}>${(labelled[name] && labelled[name][o]) || o}</option>`)}</select>`;
+    void sel;
     return layout({
-        title: 'Quotas', section: 'quotas', staff, csrf, notice, error, body: html`<h1>Quotas</h1>
-<p class="muted">A quota limits requests, tokens and/or cost for one scope in one UTC window, and is checked before any provider call (a refusal is 429 <code>quota.exceeded</code>). Scope <code>*</code> on a service, actor or attribution quota gives each principal its own window.</p>
-${table('Active quotas and their current windows', ['Scope', 'Window', 'Workflow prefix', 'Limit', 'Used this window', 'Window started', 'Resets in'], counters.map((c) => html`<tr>
-<td>${c.quota.scope_type} <code>${c.scope_id}</code></td><td>${c.quota.window}</td><td>${c.quota.workflow_prefix ? html`<code>${c.quota.workflow_prefix}</code>` : '—'}</td>
-<td>${limits(c.quota)}</td><td>${limitsUsed(c)}</td><td>${when(c.window_start)}</td><td>${secs(c.resets_in_seconds)}</td></tr>`), 'no active quota with a single scope.')}
-${table('Every quota', ['#', 'Scope', 'Window', 'Workflow prefix', 'Limit', 'Status', 'Origin', 'Updated'], all.map((q) => html`<tr>
-<td>${q.id}</td><td>${q.scope_type} <code>${q.scope_id}</code></td><td>${q.window}</td><td>${q.workflow_prefix ? html`<code>${q.workflow_prefix}</code>` : '—'}</td>
-<td>${limits(q)}</td><td>${badge(q.status)}</td><td>${q.origin}</td><td>${when(q.updated_at)}</td></tr>`), 'no quotas.')}
-${canManage ? html`<h2>Add or change a quota</h2>
+        title: 'Limits', section: 'quotas', staff, csrf, notice, error, body: html`<h1>Limits</h1>
+<p class="muted">A limit caps how many requests, tokens or dollars one service, person or app may use in a minute, hour or day; it is checked before any provider is paid, and a request past it is refused until the window resets (the API answers 429 <code>quota.exceeded</code>). Change one when a service needs more room or to stop one person or app from spending too much.</p>
+${table('Limits in use and how much of each is used', ['Who it limits', 'Window', 'Only tasks starting with', 'Limit', 'Used this window', 'Window started', 'Resets in'], counters.map((c) => html`<tr>
+<td>${scopeText(c.quota.scope_type, c.scope_id)}</td><td>${WINDOW_WORDS[c.quota.window] || c.quota.window}</td><td>${c.quota.workflow_prefix ? html`<code>${c.quota.workflow_prefix}</code>` : 'every task'}</td>
+<td>${limits(c.quota)}</td><td>${limitsUsed(c)}</td><td>${when(c.window_start)}</td><td>${secs(c.resets_in_seconds)}</td></tr>`), 'no limit is in use for a single service, person or app.')}
+${table('Every limit', ['#', 'Who it limits', 'Window', 'Only tasks starting with', 'Limit', 'Status', 'Set by', 'Updated'], all.map((q) => html`<tr>
+<td>${q.id}</td><td>${scopeText(q.scope_type, q.scope_id)}</td><td>${WINDOW_WORDS[q.window] || q.window}</td><td>${q.workflow_prefix ? html`<code>${q.workflow_prefix}</code>` : 'every task'}</td>
+<td>${limits(q)}</td><td>${q.status === 'active' ? html`<span class="ok">On</span>` : html`<span class="muted">Off</span>`} <span class="muted">${q.status}</span></td><td>${q.origin}</td><td>${when(q.updated_at)}</td></tr>`), 'no limits yet. Add one below to cap a service, a person or an app.')}
+${canManage ? html`<h2>Add or change a limit</h2>
 <form class="stack" method="post" action="/console/quotas">${csrfField(csrf)}
-<p class="muted m0">A quota with the same scope, window and workflow prefix is updated in place. Leave a limit empty for none; disable a quota with its status.</p>
-<label for="q-scope_type">Scope type${sel('scope_type', ['global', 'service', 'actor', 'attribution'], form.scope_type || 'service')}</label>
-<label>Scope id (<code>*</code> for global, or each principal)<input type="text" name="scope_id" maxlength="200" value="${form.scope_id || ''}" autocomplete="off" spellcheck="false" placeholder="live"></label>
-<label for="q-window">Window${sel('window', ['minute', 'hour', 'day'], form.window || 'day')}</label>
-<label>Max requests<input type="number" name="max_requests" min="0" step="1" value="${form.max_requests || ''}"></label>
-<label>Max tokens<input type="number" name="max_tokens" min="0" step="1" value="${form.max_tokens || ''}"></label>
-<label>Max cost (USD)<input type="number" name="max_cost_usd" min="0" step="any" value="${form.max_cost_usd || ''}"></label>
-<label>Workflow prefix (optional)<input type="text" name="workflow_prefix" maxlength="120" value="${form.workflow_prefix || ''}" autocomplete="off" spellcheck="false" placeholder="live."></label>
-<label for="q-status">Status${sel('status', ['active', 'disabled'], form.status || 'active')}</label>
-<button class="primary" type="submit">Save quota</button></form>` : html`<p class="muted">Changing quotas needs <code>ai.provider.manage</code> (the owner's <code>staff.secrets.manage</code>).</p>`}`,
+<p class="muted m0">A limit for the same who, window and task prefix is updated in place. Leave a number empty for no limit on it; switch a limit off with its status instead of deleting it.</p>
+<label for="q-scope_type">Who it limits${choose('scope_type', ['global', 'service', 'actor', 'attribution'], form.scope_type || 'service')}</label>
+<label>Which one (<code>*</code> for everyone, or each one on its own; a service name such as <code>live</code>, a person such as <code>user:usr_…</code>)<input type="text" name="scope_id" maxlength="200" value="${form.scope_id || ''}" autocomplete="off" spellcheck="false" placeholder="live"></label>
+<label for="q-window">Window${choose('window', ['minute', 'hour', 'day'], form.window || 'day')}</label>
+<label>Most requests in the window<input type="number" name="max_requests" min="0" step="1" value="${form.max_requests || ''}"></label>
+<label>Most tokens in the window (a token is about three quarters of a word)<input type="number" name="max_tokens" min="0" step="1" value="${form.max_tokens || ''}"></label>
+<label>Most dollars in the window<input type="number" name="max_cost_usd" min="0" step="any" value="${form.max_cost_usd || ''}"></label>
+<label>Only saved AI tasks whose name starts with (optional)<input type="text" name="workflow_prefix" maxlength="120" value="${form.workflow_prefix || ''}" autocomplete="off" spellcheck="false" placeholder="live."></label>
+<label for="q-status">Status${choose('status', ['active', 'disabled'], form.status || 'active')}</label>
+<button class="primary" type="submit">Save limit</button></form>` : html`<p class="muted">Changing limits needs <code>ai.provider.manage</code> (the owner's <code>staff.secrets.manage</code>).</p>`}`,
     });
 }
 
@@ -613,17 +687,17 @@ function gpus({ staff, csrf, state, canManage, notice, error }) {
     const mk = st.marketplaces || {};
     return layout({
         title: 'OpenVibe GPUs', section: 'gpus', staff, csrf, notice, error, body: html`<h1>OpenVibe GPUs</h1>
-<p class="muted">The rented GPUs: what is running, what it cost this month, and the cap it may never pass. The provisioner is ${st.enabled ? 'on' : 'off'}${st.enabled ? '' : ' (' + st.reason + ')'}: it starts nothing until a marketplace API key and a monthly cap are set in the owner settings.</p>
+<p class="muted">The GPUs AI rents by the second to run open models: what is running, what it cost this month, and the monthly cap it may never pass. Come here to start or stop a model's GPU, or to see why none is running; the keys and the cap are set in the admin panel's Setup tab.</p>
 <div class="grid">
-  <div class="card"><div class="k">Status</div><div class="v">${st.enabled ? 'on' : 'off'}</div><div class="muted">${st.reason || 'a key and a cap are set'}</div></div>
+  <div class="card"><div class="k">Renting GPUs</div><div class="v">${st.enabled ? 'On' : 'Off'}</div><div class="muted">${st.enabled ? 'a marketplace key and a monthly cap are set' : html`Off because ${st.reason || 'no marketplace key or monthly cap is set'}. Nothing is rented and nothing is spent until both are set.`}</div></div>
   <div class="card"><div class="k">Spent this month</div><div class="v">${usdNano(st.spent_nano)}</div><div class="muted">${st.month}</div></div>
-  <div class="card"><div class="k">Committed</div><div class="v">${usdNano(st.committed_nano)}</div><div class="muted">the worst case: what the running instances may still cost</div></div>
-  <div class="card"><div class="k">Monthly cap</div><div class="v">${st.cap_nano ? usdNano(st.cap_nano) : '—'}</div><div class="muted">never passed</div></div>
+  <div class="card"><div class="k">Could still cost</div><div class="v">${usdNano(st.committed_nano)}</div><div class="muted">the most the GPUs running now may cost before they are given back</div></div>
+  <div class="card"><div class="k">Monthly cap</div><div class="v">${st.cap_nano ? usdNano(st.cap_nano) : 'Not set'}</div><div class="muted">${st.cap_nano ? 'AI never starts a GPU that could pass it' : 'without a cap nothing is rented'}</div></div>
 </div>
-<p class="muted">Idle ${n(st.idle_minutes)} minute(s) before an instance scales to zero · max runtime ${n(st.max_runtime_minutes)} minute(s) · warm window ${st.warm_window || 'none'} · region ${st.region} · Vast.ai key ${mk.vast ? 'set' : 'not set'} · RunPod key ${mk.runpod ? 'set' : 'not set'}</p>
-<p class="muted">Vast and RunPod bill per second, so the ledger charges the seconds an instance really ran: the price per second is next to the hourly price. The cold start is measured from the launch to the first answered request.</p>
-${table('Models', ['Model', 'Marketplace', 'Runtime', 'GPU', 'Status', 'Cold start', 'Actions'], models.map((m) => gpuModelRow(m, canManage, csrf)), 'no model is known.')}
-${table('Instances', ['Model', 'Marketplace', 'GPU', 'Price / hour', 'Status', 'Endpoint', 'Started', 'Cold start', 'Reserved', 'Spent'], instances.map((i) => gpuInstanceRow(i)), 'no instance has been rented.')}
+<p class="muted">An unused GPU is given back after ${n(st.idle_minutes)} minute${Number(st.idle_minutes) === 1 ? '' : 's'}; one GPU runs at most ${n(st.max_runtime_minutes)} minutes; ${st.warm_window ? `GPUs stay ready ${st.warm_window} UTC` : 'no hours keep GPUs ready'}; GPUs are rented in ${st.region}. Vast.ai key: ${mk.vast ? 'set' : 'not set'} · RunPod key: ${mk.runpod ? 'set' : 'not set'}.</p>
+<p class="muted">Vast.ai and RunPod bill by the second, so only the seconds a GPU really ran are charged; the price per second is next to the price per hour. "First answer after" is the time from renting a GPU to its first answer.</p>
+${table('Models that can run on a rented GPU', ['Model', 'Marketplace', 'Runs with', 'GPU', 'Status', 'First answer after', 'Actions'], models.map((m) => gpuModelRow(m, canManage, csrf)), 'no model is set up to run on a rented GPU yet.')}
+${table('GPUs rented', ['Model', 'Marketplace', 'GPU', 'Price per hour', 'Status', 'Address', 'Started', 'First answer after', 'Most it may cost', 'Spent'], instances.map((i) => gpuInstanceRow(i)), 'no GPU has been rented.')}
 `,
     });
 }
@@ -705,11 +779,17 @@ ${table('Audit rows, newest first', ['#', 'At', 'Actor', 'Action', 'Target', 'De
  * one was applied by the job and is in the log. The listing the price was read from is on every row, so the
  * owner can go and read it before saying yes.
  */
+const PRICE_FIELD_WORDS = {
+    in_per_mtok: 'Price per million words read (input), in dollars',
+    out_per_mtok: 'Price per million words written (output), in dollars',
+    cached_per_mtok: 'Price per million words read from cache, in dollars',
+    cache_write_per_mtok: 'Price per million words written to cache, in dollars',
+};
 function priceChangeRow(c, { csrf, canManage, actions = false } = {}) {
     const pct = c.change_pct == null ? null : Number(c.change_pct) * 100;
     return html`<tr>
   <td><code>${c.provider_key}</code> / <code>${c.model_key}</code></td>
-  <td>${c.field.replace(/_per_mtok$/, '')}</td>
+  <td>${PRICE_FIELD_WORDS[c.field] || c.field.replace(/_per_mtok$/, '')}</td>
   <td>${c.old_price == null ? html`<span class="muted">no price</span>` : usd(Number(c.old_price))}</td>
   <td>${usd(Number(c.new_price))}</td>
   <td>${pct == null ? html`<span class="muted">new price</span>` : (pct >= 0 ? '+' : '') + pct.toFixed(1) + ' %'}</td>
@@ -729,7 +809,7 @@ function pricebook({ staff, csrf, report, state, pending, recent, canManage, not
     const row = state || {};
     return layout({
         title: 'Price book', section: 'pricebook', staff, csrf, notice, error, body: html`<h1>Price book</h1>
-<p class="muted">Every catalogued provider's own price listing, read once a week. A price comes from the provider that sells it and never from a guess; a listing that cannot be read leaves every price alone. A change of more than 20% waits here for the owner; a smaller one the job applies at once.</p>
+<p class="muted">What each model costs, read once a week from the provider's own price page. Come here to approve or reject a big price change: a change of more than 20% waits for you, a smaller one is applied at once, and a page that cannot be read leaves every price as it was.</p>
 <div class="grid">
   <div class="card"><div class="k">Last run</div><div class="v">${row.last_run_at ? String(row.last_run_at).slice(0, 10) : (st.checked_at || 'never')}</div><div class="muted">${row.last_run_at ? 'finished ' + when(row.last_run_at) : 'the job has not run yet'}</div></div>
   <div class="card"><div class="k">Waiting for the owner</div><div class="v">${n((pending || []).length)}</div><div class="muted">a change of more than 20%</div></div>
@@ -745,6 +825,15 @@ ${table('Pending price changes', ['Model', 'Price', 'Was', 'Now', 'Change', 'Che
 <h2>What the job changed</h2>
 ${table('Applied price changes', ['Model', 'Price', 'Was', 'Now', 'Change', 'Checked', 'Read from'], (recent || []).map((c) => priceChangeRow(c, { csrf, canManage })), 'the job has not changed a price yet.')}
 `,
+    });
+}
+
+/** What the words on these pages mean: the same glossary as the admin panel's. */
+function glossary({ staff, csrf }) {
+    return layout({
+        title: 'What words mean', section: 'glossary', staff, csrf, body: html`<h1>What words mean</h1>
+<p class="muted">The few words these pages cannot avoid, each in one line. Everything else on the console is meant to read without them; if something still does not, it is a mistake to fix.</p>
+<div class="card"><dl>${GLOSSARY.map(([word, line]) => html`<dt>${word}</dt><dd>${line}</dd>`)}</dl></div>`,
     });
 }
 
@@ -806,4 +895,4 @@ function allowance(cards) {
 /** The price and latency cells, as plain HTML strings for the public /stats page (server/home.js renderStats). */
 const statsFormat = { ms, rate, price: (cards) => render(price(cards)), allowance: (cards) => render(allowance(cards)) };
 
-module.exports = { CSP, html, esc, safeUrl, statsFormat, pages: { signIn, message, overview, providers, providerNew, definitions, definition, runs, run, runReceipt, quotas, usage, cache, abuse: abusePage, audit, exchange, gpus, pricebook } };
+module.exports = { CSP, html, esc, safeUrl, statsFormat, healthText, queueText, GLOSSARY, pages: { signIn, message, overview, providers, providerNew, definitions, definition, runs, run, runReceipt, quotas, usage, cache, abuse: abusePage, audit, exchange, gpus, pricebook, glossary } };

@@ -8,7 +8,7 @@ const { createRelease } = require('openvibe-shared/release');
 const { createAiReadiness, registerAiGauges } = require('./observability');
 const { runsRouter } = require('./api/runs');
 const { actionsRouter } = require('./api/actions');
-const { sendError } = require('./util');
+const { sendError, providerSecret } = require('./util');
 const openapi = require('./openapi');
 const { adminRouter } = require('./api/admin');
 const { CAPS } = require('./auth');
@@ -23,6 +23,7 @@ const home = require('./home');
 const pkg = require('../package.json');
 
 const { adminRoutes } = require('openvibe-shared/config');
+const ownerInputs = require('./owner-inputs');
 
 function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, credentials = null, preferences = null, grants = null, vault = null, settings = null, benchEvents = null, runBudgets = null, memory = null, memoryImport = null, community = null, endpoints = null, presets = null, receipts = null, balance = null, gpus = null, abuse = null, priceBook = null }) {
     const app = express();
@@ -147,6 +148,35 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
             requireFresh: (req) => String(req.get('x-ov-fresh') || '') === '1',
             log,
         });
+        // The Setup tab's Test button (owner-setup design): one cheap authenticated read with the stored key, an answer
+        // in one line, never the key (server/owner-inputs.js). Before the config routes, so a Shared
+        // release with its own test hook never shadows this one.
+        app.use(ownerInputs.testRoute({
+            guard: auth.requireCap(CAPS.configManage),
+            log,
+            now: clock.now,
+            resolve: async (namespace, key) => {
+                if (namespace === settings.providerKeys.namespace && key.endsWith('.key')) {
+                    const provider = await registry.getProvider(key.slice(0, -4));
+                    if (!provider || provider.kind === 'stub' || provider.kind === 'whisper' || provider.auth_mode === 'none') return null;
+                    const own = require('./vault').get(provider.key);
+                    if (own) return { value: own, source: 'vault', provider };
+                    const ref = /^env:([A-Z][A-Z0-9_]{0,63})$/.exec(String(provider.secret_ref || ''));
+                    const value = providerSecret(provider, env);
+                    return { value, source: value ? (ref ? 'env' : 'vault') : null, env: ref ? ref[1] : null, provider };
+                }
+                if (namespace === settings.gpus.namespace && (key === 'vast.key' || key === 'runpod.key')) {
+                    const v = settings.gpus.values();
+                    const marketplace = key.slice(0, -4);
+                    const value = marketplace === 'vast' ? v.vast_key : v.runpod_key;
+                    return { value, source: value ? 'vault' : null, marketplace, origin: marketplace === 'vast' ? v.vast_origin : v.runpod_origin };
+                }
+                return null;
+            },
+            run: (namespace, key, value, found) => (found.provider
+                ? ownerInputs.testProviderKey(found.provider, value, { fetchImpl })
+                : ownerInputs.testGpuKey(found.marketplace, value, { fetchImpl, origin: found.origin })),
+        }));
         app.use(configRoutes.handle);
     }
 

@@ -301,7 +301,7 @@ t.test('every page: server-rendered, no script, noindex, no-store, strict CSP, c
         `/console/runs/${runIds.failLive}`, `/console/runs/${runIds.ok}`, '/console/quotas', '/console/usage', '/console/cache', '/console/audit', '/console/audit?kind=all'];
     for (const p of list) assertPage(await get(p, cookies.admin), p);
     const prov = await get('/console/providers', cookies.admin);
-    assert.ok(prov.text.includes('<code>env:AI_API_KEY</code>'), 'the secret reference name is shown');
+    assert.ok(prov.text.includes('<code>AI_API_KEY</code>') && /From the server's settings file|the settings file has no/.test(prov.text), 'the settings-file name is shown, in words');
     assert.ok(prov.text.includes(`${seam.url}/complete`) && !prov.text.includes('token='), 'base URLs lose their query string');
     assert.ok(!prov.text.includes('action="/console/providers/okseam/status"'), 'an admin gets no provider buttons');
     assert.ok(prov.text.includes('need <code>ai.provider.manage</code> (the owner'));
@@ -414,7 +414,7 @@ t.test('owner: add a provider with its key (kept encrypted), replace the key, re
     assert.strictEqual((await h.settings.providerKeys.store.summary()).secrets['cheapapi.key'].hint, ADDED_KEY.slice(-4));
     x = await get('/console/providers', cookies.owner);
     assert.ok(!x.text.includes(ADDED_KEY), 'the page never shows the key');
-    assert.match(x.text, new RegExp(`key …${ADDED_KEY.slice(-4)}`));
+    assert.match(x.text, new RegExp(`Entered here, locked</span><br><span class="muted">ends …${ADDED_KEY.slice(-4)}`));
     x = await post('/console/providers', cookies.owner, { preset: 'custom', key: 'cheapapi', base_url: 'https://api.cheap.test/v1', api_key: ADDED_KEY, _csrf: csrf.owner });
     assert.ok(x.status >= 400, 'no second provider of the same name');
     x = await post('/console/providers/cheapapi/key', cookies.owner, { api_key: REPLACED_KEY, _csrf: csrf.owner });
