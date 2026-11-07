@@ -85,6 +85,7 @@ function createGpuProvisioner({
     env = process.env,
     log = console,
     models = catalog.list(),
+    ownEndpoints = null,
 } = {}) {
     const now = () => clock.now();
     const iso = (ms) => new Date(ms).toISOString();
@@ -229,16 +230,35 @@ function createGpuProvisioner({
         return false;
     }
 
+    /** The live private rent of an endpoint, if one is still up. */
+    async function liveInstanceForEndpoint(ownEndpointId) {
+        if (!ownEndpointId) return null;
+        const row = await db.prepare('SELECT * FROM gpu_instances WHERE own_endpoint_id = ? AND status IN (?, ?, ?) ORDER BY created_at DESC LIMIT 1')
+            .get(String(ownEndpointId), 'starting', 'running', 'stopping');
+        return row || null;
+    }
+
     /**
      * Start an instance for a model: the cheapest offer that fits, inside the cap.
      * Returns { ok, reason } - it never throws for the owner's reasons (off, no offer, cap).
      */
-    async function launch(modelKey, { actor = 'service:ai' } = {}) {
-        const cfg = config();
-        if (!cfg.enabled) return { ok: false, code: 'gpu.off', reason: cfg.reason };
+    async function launch(modelKey, opts = {}) {
         const spec = models.find((m) => m.key === modelKey) || catalog.find(modelKey);
         if (!spec) throw new AiError(404, 'ai.not_found', 'no such GPU model');
-        const existing = await liveInstance(spec.key);
+        return launchSpec(spec, opts);
+    }
+
+    /**
+     * Start an instance for a spec. A shared model offer registers itself with the router; a person's own
+     * endpoint (ownEndpointId set) never does: it stays private, and its owner reaches it through AI.
+     *
+     *   beforeCreate({ offer, hourly, reserved, maxMinutes, marketplace })   the endpoint's Billing hold, if
+     *       any, is taken here - before the marketplace is called, so nothing runs that the person cannot pay.
+     */
+    async function launchSpec(spec, { actor = 'service:ai', ownEndpointId = null, idleMinutes = null, maxRuntimeMinutes = null, beforeCreate = null } = {}) {
+        const cfg = config();
+        if (!cfg.enabled) return { ok: false, code: 'gpu.off', reason: cfg.reason };
+        const existing = ownEndpointId ? await liveInstanceForEndpoint(ownEndpointId) : await liveInstance(spec.key);
         if (existing) return { ok: true, instance: describe(existing), note: 'already running' };
         const adapter = adapterFor(spec.marketplace, cfg);
         if (!adapter) return { ok: false, code: 'gpu.no_key', reason: 'no ' + spec.marketplace + ' API key' };
@@ -278,10 +298,22 @@ function createGpuProvisioner({
         if (affordableHours < 1n) {
             return { ok: false, code: 'gpu.cap', reason: 'the monthly cap leaves less than an hour of GPU time (' + money.usdText(cap - sum.committed_nano) + ' left)' };
         }
-        const maxMinutes = Math.min(cfg.max_runtime_minutes, Number(affordableHours) * 60);
+        const affordableMinutes = Number(affordableHours) * 60;
+        const requestedMax = maxRuntimeMinutes == null ? affordableMinutes : Math.max(1, Math.min(affordableMinutes, Math.trunc(Number(maxRuntimeMinutes) || 0)));
+        const maxMinutes = Math.min(cfg.max_runtime_minutes, requestedMax);
         const reserved = hourly * BigInt(Math.ceil(maxMinutes / 60));
         if (sum.committed_nano + reserved > cap) {
             return { ok: false, code: 'gpu.cap', reason: 'the monthly cap leaves no room for ' + spec.display_name };
+        }
+
+        // 2b. the payer's hold, for a person's own endpoint: taken before the marketplace is called, so an
+        //     instance never runs that the person cannot pay for.
+        if (beforeCreate) {
+            try {
+                await beforeCreate({ offer, hourly, reserved, maxMinutes, marketplace: spec.marketplace });
+            } catch (err) {
+                return { ok: false, code: (err && err.code) || 'gpu.billing', reason: String((err && err.message) || err).slice(0, 300) };
+            }
         }
 
         // 3. the row comes first. The marketplace is told the label of a row that already exists and
@@ -291,10 +323,12 @@ function createGpuProvisioner({
         const t = now();
         await db.prepare(`INSERT INTO gpu_instances (id, model_key, provider_key, marketplace, offer_id, remote_id, status, endpoint, month,
                 gpu_name, gpu_ram_mb, num_gpus, disk_gb, reliability, region, price_per_hour, hourly_nano, reserved_nano, spent_nano,
-                max_runtime_minutes, started_at, charged_at, destroy_failures, label, cold_start_ms, health_failures, created_at, updated_at)
+                max_runtime_minutes, started_at, charged_at, destroy_failures, label, cold_start_ms, health_failures, created_at, updated_at,
+                own_endpoint_id, idle_minutes)
             VALUES (@id, @model_key, @provider_key, @marketplace, @offer_id, NULL, 'starting', NULL, @month,
                 @gpu_name, @gpu_ram_mb, @num_gpus, @disk_gb, @reliability, @region, @price_per_hour, @hourly_nano, @reserved_nano, 0,
-                @max_runtime_minutes, @started_at, @charged_at, 0, @label, NULL, 0, @created_at, @updated_at)`)
+                @max_runtime_minutes, @started_at, @charged_at, 0, @label, NULL, 0, @created_at, @updated_at,
+                @own_endpoint_id, @idle_minutes)`)
             .run({
                 id, model_key: spec.key, provider_key: spec.provider_key, marketplace: spec.marketplace,
                 offer_id: String(offer.id), month: monthOf(t),
@@ -304,10 +338,12 @@ function createGpuProvisioner({
                 price_per_hour: String(offer.price_per_hour), hourly_nano: hourly.toString(), reserved_nano: reserved.toString(),
                 max_runtime_minutes: maxMinutes, started_at: iso(t), charged_at: iso(t), label: id,
                 created_at: iso(t), updated_at: iso(t),
+                own_endpoint_id: ownEndpointId, idle_minutes: idleMinutes == null ? null : clampInt(idleMinutes, 1, 1440, cfg.idle_minutes),
             });
         await audit(actor, 'gpu.instance.requested', 'gpu_instance', id, {
             model: spec.key, marketplace: spec.marketplace, offer_id: String(offer.id), hourly_nano: hourly.toString(),
             reserved_nano: reserved.toString(), max_runtime_minutes: maxMinutes, label: id,
+            ...(ownEndpointId ? { own_endpoint_id: ownEndpointId } : {}),
         });
 
         // 4. rent it. The marketplace is given the label of the row above, so the instance can always be
@@ -435,7 +471,12 @@ function createGpuProvisioner({
         await charge(fresh || row, t, reason);
         await db.prepare("UPDATE gpu_instances SET status = 'destroyed', destroyed_at = ?, endpoint = NULL, destroy_failures = 0, updated_at = ? WHERE id = ?")
             .run(iso(t), iso(t), row.id);
-        await disableProvider(row.provider_key, reason);
+        if (row.own_endpoint_id && ownEndpoints && typeof ownEndpoints.afterDestroy === 'function') {
+            // the person's endpoint is over: settle what it cost and say why it stopped
+            await ownEndpoints.afterDestroy(fresh || row, reason).catch((err) => log.warn && log.warn('[gpu] the endpoint settle failed: ' + String(err && err.message)));
+        } else {
+            await disableProvider(row.provider_key, reason);
+        }
         await audit(actor, 'gpu.instance.destroy', 'gpu_instance', row.id, { reason, model: row.model_key });
         return { ok: true, reason };
     }
@@ -546,8 +587,12 @@ function createGpuProvisioner({
 
     /** One pass over the live instances: the reservation, the idle timer, the health. */
     async function reconcileInstance(row, cfg) {
-        const spec = models.find((m) => m.key === row.model_key) || catalog.find(row.model_key);
+        const priv = Boolean(row.own_endpoint_id);
+        const spec = priv
+            ? (ownEndpoints && typeof ownEndpoints.specFor === 'function' ? ownEndpoints.specFor(row) : null)
+            : (models.find((m) => m.key === row.model_key) || catalog.find(row.model_key));
         if (!spec) return { changed: false };
+        const idleMinutes = Number(row.idle_minutes) > 0 ? Number(row.idle_minutes) : cfg.idle_minutes;
         const t = now();
         const started = toMs(row.started_at) || t;
 
@@ -562,12 +607,12 @@ function createGpuProvisioner({
 
         // 2. the idle timer: the offer scales to zero (unless it is inside the warm window). The clock runs
         //    from the moment the instance was ready, not from the moment it was rented: an instance that is still
-        //    starting is never idle.
+        //    starting is never idle. A person's own endpoint has its own idle timer.
         if (row.status === 'running') {
             const lastUsed = toMs(row.last_used_at) || toMs(row.ready_at) || started;
-            if (t - lastUsed >= cfg.idle_minutes * 60_000 && !inWarmWindow(cfg.warm_window, t)) {
+            if (t - lastUsed >= idleMinutes * 60_000 && !inWarmWindow(cfg.warm_window, t)) {
                 await destroy({ ...row, charged_at: row.charged_at }, 'idle');
-                return { changed: true, action: 'scaled_to_zero', reason: 'idle for ' + cfg.idle_minutes + ' minutes' };
+                return { changed: true, action: 'scaled_to_zero', reason: 'idle for ' + idleMinutes + ' minutes' };
             }
         }
 
@@ -587,7 +632,7 @@ function createGpuProvisioner({
             const state = String((info && info.state) || 'unknown').toLowerCase();
             if (DEAD_STATES.includes(state)) {
                 await destroy({ ...row, charged_at: row.charged_at }, 'the instance ' + state);
-                await request(spec.key, 'launch', 'service:ai');
+                if (!priv) await request(spec.key, 'launch', 'service:ai');
                 return { changed: true, action: 'died', reason: 'the instance ' + state };
             }
             const endpoint = info && info.endpoint ? String(info.endpoint) : '';
@@ -598,7 +643,7 @@ function createGpuProvisioner({
                     .run(failures, iso(t), iso(t), row.id);
                 if (failures >= HEALTH_FAILURES) {
                     await destroy({ ...row, charged_at: row.charged_at }, 'the endpoint never answered');
-                    await request(spec.key, 'launch', 'service:ai');
+                    if (!priv) await request(spec.key, 'launch', 'service:ai');
                     return { changed: true, action: 'died', reason: 'the endpoint never answered' };
                 }
                 return { changed: false, health_failures: failures };
@@ -607,7 +652,11 @@ function createGpuProvisioner({
                 // the cold start: from the launch to the first answered request
                 await db.prepare("UPDATE gpu_instances SET status = 'running', endpoint = ?, ready_at = ?, last_health_at = ?, health_failures = 0, cold_start_ms = ?, updated_at = ? WHERE id = ?")
                     .run(endpoint, iso(t), iso(t), String(Math.max(0, t - started)), iso(t), row.id);
-                await register(spec, { ...row, endpoint });
+                if (priv) {
+                    if (ownEndpoints && typeof ownEndpoints.ready === 'function') await ownEndpoints.ready({ ...row, endpoint }, endpoint);
+                } else {
+                    await register(spec, { ...row, endpoint });
+                }
                 return { changed: true, action: 'ready' };
             }
             return { changed: false };
@@ -626,9 +675,10 @@ function createGpuProvisioner({
             await db.prepare('UPDATE gpu_instances SET health_failures = ?, last_health_at = ?, updated_at = ? WHERE id = ?')
                 .run(failures, iso(t), iso(t), row.id);
             if (failures < HEALTH_FAILURES) return { changed: false, health_failures: failures };
-            // the instance died: the offer leaves the pool and a new one is rented
+            // the instance died: a shared offer leaves the pool and a new one is rented; a person's own
+            // endpoint stops (they can start it again when they want it).
             await destroy({ ...row, charged_at: row.charged_at }, 'the endpoint stopped answering');
-            await request(spec.key, 'launch', 'service:ai');
+            if (!priv) await request(spec.key, 'launch', 'service:ai');
             return { changed: true, action: 'died', reason: 'the endpoint stopped answering' };
         }
         return { changed: false };
@@ -670,6 +720,8 @@ function createGpuProvisioner({
             reserved_nano: String(toNano(row.reserved_nano)),
             spent_nano: String(toNano(row.spent_nano)),
             max_runtime_minutes: row.max_runtime_minutes,
+            idle_minutes: row.idle_minutes == null ? null : Number(row.idle_minutes),
+            own_endpoint_id: row.own_endpoint_id || null,
             label: row.label,
             cold_start_ms: row.cold_start_ms == null ? null : String(row.cold_start_ms),
             destroy_failures: Number(row.destroy_failures || 0),
@@ -778,16 +830,47 @@ function createGpuProvisioner({
         };
     }
 
+    /** The private-endpoint hooks, attached once the endpoint module exists (server/index.js). */
+    function attachEndpoints(hooks) {
+        ownEndpoints = hooks || null;
+        return ownEndpoints;
+    }
+
+    /** The live rent of an endpoint (for its owner's proxy and its stop). */
+    async function instanceForEndpoint(ownEndpointId) {
+        return liveInstanceForEndpoint(ownEndpointId);
+    }
+
+    /** A request reached an offer: the idle timer runs from now, not from the moment it became ready. */
+    async function noteUse(providerKey) {
+        if (!providerKey) return 0;
+        const res = await db.prepare("UPDATE gpu_instances SET last_used_at = ?, updated_at = ? WHERE provider_key = ? AND status = 'running'")
+            .run(iso(now()), iso(now()), String(providerKey));
+        return Number(res && res.changes) || 0;
+    }
+
+    /** Give an endpoint's rent back (its owner pressed stop); the afterDestroy hook settles the money. */
+    async function destroyEndpoint(ownEndpointId, reason = 'the owner stopped it', { actor = 'service:ai' } = {}) {
+        const row = await liveInstanceForEndpoint(ownEndpointId);
+        if (!row) return { ok: true, note: 'not running' };
+        return destroy(row, reason, { actor });
+    }
+
     return {
         state,
         tick,
         launch,
+        attachEndpoints,
+        launchSpec,
         request,
         config,
         moneySummary,
         sweepOrphans,
         destroyFailures,
         orphanCount,
+        instanceForEndpoint,
+        noteUse,
+        destroyEndpoint,
         /** For the tests: the same thing the reconciler does with one instance. */
         reconcileInstance,
         inWarmWindow,

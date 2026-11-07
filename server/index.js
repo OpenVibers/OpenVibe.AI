@@ -128,6 +128,11 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         startSettlements() { return credits ? credits.startSettlements() : null; },
         stopSettlements() { return credits ? credits.stopSettlements() : undefined; },
     };
+    // A person's own endpoint (the design's product line 6): a private rent on the same GPU provisioner, with a
+    // Billing hold before it starts and the exact seconds settled when it stops. It is off until the owner has
+    // a GPU key and a monthly cap AND Balance billing is on; the public status says which one is missing.
+    const ownEndpoints = require('./gpu/endpoints').createOwnEndpoints({ db, gpus, credits: creditsRef, settings, config, clock, fetchImpl, log });
+    gpus.attachEndpoints(ownEndpoints);
     const runs = createRuns({ db, registry, engine, cache, quotas, config, clock, log, userModules, credentials, preferences, tiers, projectSecrets, pool, runBudgets, credits: creditsRef, community, presets, receipts, abuse });
     await seed({ registry, quotas, config, env, db });
     // The seed creates or moves providers from the environment: publish their origins (the schema and every key's
@@ -161,7 +166,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         clientSecret: env.OV_OAUTH_CLIENT_SECRET, fetch: fetchImpl,
     }) : null;
     const benchEvents = createBenchEvents({ bench, accountData, accountSend, config, log, fetchImpl, clientSecret: env.OV_OAUTH_CLIENT_SECRET });
-    const app = createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, grants, vault, settings, benchEvents, runBudgets, memory, memoryImport, community, endpoints, presets, receipts, balance, gpus, abuse, priceBook });
+    const app = createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, grants, vault, settings, benchEvents, runBudgets, memory, memoryImport, community, endpoints, presets, receipts, balance, gpus, ownEndpoints, abuse, priceBook });
     let jwks = null;
     let keyLoaded = Promise.resolve(null);
     if (!keys.pinned && config.nodeEnv !== 'test') {
@@ -189,7 +194,9 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     let gpuReconciler = null;
     if (listen && config.nodeEnv !== 'test') {
         gpuReconciler = setInterval(() => {
-            gpus.tick().catch((err) => log.warn('[gpu] the reconciler failed: ' + err.message));
+            ownEndpoints.tick()
+                .then(() => gpus.tick())
+                .catch((err) => log.warn('[gpu] the reconciler failed: ' + err.message));
         }, 60 * 1000);
         gpuReconciler.unref?.();
     }
@@ -253,7 +260,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         if (!givenDb) await db.close();
     }
 
-    return { config, db, registry, pool, quotas, tiers, cache, fetcher, engine, runs, keys, keyLoaded, auth, app, server, bench, benchEvents, memory, memoryJobs, priceBook, credits: creditsRef, settings, vault, community, endpoints, gpus, abuse, close };
+    return { config, db, registry, pool, quotas, tiers, cache, fetcher, engine, runs, keys, keyLoaded, auth, app, server, bench, benchEvents, memory, memoryJobs, priceBook, credits: creditsRef, settings, vault, community, endpoints, gpus, ownEndpoints, abuse, close };
 }
 
 if (require.main === module) {
