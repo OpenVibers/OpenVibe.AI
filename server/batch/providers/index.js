@@ -36,16 +36,17 @@ const PROVIDERS = Object.freeze({
         limits: { maxItems: 50000, maxBytes: 200 * 1024 * 1024, oneModelPerFile: true },
         source: 'https://platform.openai.com/docs/guides/batch',
     },
-    // DashScope's OpenAI-compatible batch (file input): the same file-and-batch shape as OpenAI's,
-    // at half the price of real-time inference.
+    // DashScope's OpenAI-compatible batch (file input): the same file-and-batch shape as OpenAI's, at
+    // half the price of real-time inference. Its own page says: up to 50 000 requests per file and a
+    // maximum file size of 500 MB, one model per line's body, completion window '24h'.
     qwen: {
         adapter: 'openai-compatible',
         label: 'DashScope Batch (file input)',
         discount: 0.5,
         window: '24h',
         enabled: true,
-        limits: { maxItems: 10000, maxBytes: 100 * 1024 * 1024, oneModelPerFile: true },
-        source: 'https://www.alibabacloud.com/help/en/model-studio/batch-inference-api',
+        limits: { maxItems: 50000, maxBytes: 500 * 1024 * 1024, oneModelPerFile: true },
+        source: 'https://www.alibabacloud.com/help/en/model-studio/user-guide/batch-inference',
     },
     // Moonshot's Batch API: a JSONL file of at most 100 MB, one model per file, billed at 60% of the
     // standard price (a 40% discount).
@@ -56,7 +57,7 @@ const PROVIDERS = Object.freeze({
         window: '24h',
         enabled: true,
         limits: { maxItems: 10000, maxBytes: 100 * 1024 * 1024, oneModelPerFile: true },
-        source: 'https://platform.moonshot.ai/docs/api/batch.md',
+        source: 'https://platform.kimi.ai/docs/guide/use-batch-api.md',
     },
     // DeepInfra's OpenAI-compatible Batch API: 20% cheaper than real time, answered within 24 hours.
     deepinfra: {
@@ -66,7 +67,7 @@ const PROVIDERS = Object.freeze({
         window: '24h',
         enabled: true,
         limits: { maxItems: 10000, maxBytes: 100 * 1024 * 1024, oneModelPerFile: true },
-        source: 'https://deepinfra.com/docs/batch-inference',
+        source: 'https://deepinfra.com/docs/batch/batch-endpoints',
     },
     // Anthropic's Message Batches: the requests go in the body (no file), the answers come back as
     // a JSONL file at the results URL the batch names. Half the list price.

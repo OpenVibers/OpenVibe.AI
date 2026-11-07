@@ -204,7 +204,7 @@ listed and is never called):
 | provider | adapter | batch price | window | limits |
 |---|---|---|---|---|
 | `shared` (OpenAI) | OpenAI-compatible | half the list price | 24 h | 50 000 requests, 200 MB, one model per file |
-| `qwen` (DashScope) | OpenAI-compatible | half the real-time price | 24 h | 10 000 requests, 100 MB, one model per file |
+| `qwen` (DashScope) | OpenAI-compatible | half the real-time price | 24 h | 50 000 requests, 500 MB, one model per file |
 | `kimi` (Moonshot) | OpenAI-compatible | 60% of the list price | 24 h | 10 000 requests, 100 MB, one model per file |
 | `deepinfra` | OpenAI-compatible | 80% of the list price | 24 h | 10 000 requests, 100 MB, one model per file |
 | `anthropic` | Message Batches | half the list price | 24 h | 100 000 requests, 256 MB (adapter written, not enabled) |
