@@ -43,6 +43,9 @@ const TABLES = [
     // Memory M3: import previews are drafts, never part of the person's export; they go with the account like the
     // notes they would become. The payload is sealed, and the row is never read by the account export.
     { table: 'memory_imports', subject: 'owner', value: (usr) => `user:${usr}`, file: null, erase: 'delete' },
+    // Memory M5: a connected memory service's sealed key. It goes with the account and is never exported: the key is
+    // not the person's data to read back, and its existence is shown on the Memory page instead.
+    { table: 'memory_service_connections', subject: 'subject', file: null, erase: 'delete' },
     { table: 'free_allowance_usage', subject: 'subject', file: 'free-allowance.json', erase: { keep: ledger } },
     // D11 owner settings: the revisions are the service's configuration audit trail, kept like the catalogues.
     { table: 'config_snapshots', subject: 'created_by', file: null, erase: { keep: 'the configuration history is the service\'s; created_by is the operator audit trail' } },
@@ -58,6 +61,14 @@ const TABLES = [
     // removed when the account goes, so it stops receiving traffic too.
     { table: 'community_endpoint_offers', subject: 'owner_subject', file: 'community-endpoint-offers.json', order: 'created_at',
         columns: ['id', 'name', 'base_url', 'models', 'hours', 'concurrency', 'price_in', 'price_out', 'audience', 'group_id', 'created_at', 'updated_at'] },
+    // Your own endpoint (the Exchange remake, build order 7): a private GPU rent. It is the person's own
+    // data while the account lives, so it goes in the export. On deletion the row is anonymized at once and
+    // marked stopping, and the next reconciler pass gives the GPU back and lets Billing settle the seconds;
+    // the money rows themselves are kept like the ledger.
+    { table: 'own_endpoints', subject: 'subject', file: 'own-endpoints.json', order: 'created_at',
+        columns: ['id', 'status', 'source', 'catalog_key', 'display_name', 'weights_repo', 'weights_file', 'lora_repo', 'lora_file',
+            'idle_minutes', 'max_runtime_minutes', 'marketplace', 'price_per_hour', 'charged_nano', 'created_at', 'ready_at', 'stopped_at'],
+        erase: { keep: 'the GPU rent and its Billing hold are money records; extraErase anonymizes them and stops the rent so Billing can settle' } },
     // The person's own quota (server/quota.js): a limit that only means something while the account lives.
     { table: 'quotas', subject: 'scope_id', value: (usr) => `user:${usr}`, file: null },
     // What the person used, counted against their allowance: the spend ledger, kept.
@@ -76,6 +87,13 @@ async function extraExport(db, subject) {
 
 /** The person's runs go, with the rows that hang under them (the requests, the citations, the cached answers). */
 async function extraErase(t, subjects, counts) {
+    // A private GPU rent is stopped and anonymized now; its Billing hold and money stay until the reconciler
+    // gives the instance back and settles the seconds (the table's erase is a keep for that reason).
+    counts.add(counts.erased, 'own_endpoints', await t.exec(`UPDATE own_endpoints
+        SET status = CASE WHEN status IN ('requested','starting','running','stopping') THEN 'stopping' ELSE status END,
+            subject = NULL, display_name = 'deleted endpoint', weights_repo = NULL, weights_file = NULL,
+            lora_repo = NULL, lora_file = NULL, url = NULL, updated_at = now()
+        WHERE subject = ANY($1::text[])`, [subjects]));
     // Plan E5: the free-tier counters. A shared device counter is kept while another account still uses the device;
     // when this person was the last one, the device counter and its velocity bucket go too.
     const hashes = (await t.many('SELECT DISTINCT device_hash FROM abuse_devices WHERE subject = ANY($1::text[])', [subjects])).map((r) => r.device_hash);
@@ -88,6 +106,16 @@ async function extraErase(t, subjects, counts) {
         counts.add(counts.erased, 'abuse_velocity', await t.exec("DELETE FROM abuse_velocity WHERE kind = 'device' AND key_hash = $1", [hash]));
     }
     const ids = (await t.many(`SELECT id FROM runs WHERE on_behalf_of IS NOT NULL AND on_behalf_of::jsonb ->> 'type' = 'user' AND on_behalf_of::jsonb ->> 'id' = ANY($1::text[])`, [subjects])).map((r) => r.id);
+    // Memory M5: the store's share rows. The person's own store goes, their memberships and requests go, and a
+    // transfer with them on either side goes. The append-only log stays as a tombstone, like every other audit row.
+    const forms = subjects.map((s) => JSON.stringify({ type: 'user', id: s }));
+    const members = await t.exec('DELETE FROM share_members WHERE subject = ANY($1::jsonb[])', [forms]);
+    const requests = await t.exec('DELETE FROM share_access_requests WHERE subject = ANY($1::jsonb[])', [forms]);
+    const owned = await t.exec("DELETE FROM shares WHERE service = 'ai' AND kind = 'memory-store' AND owner_subject = ANY($1::jsonb[])", [forms]);
+    const transfers = await t.exec("DELETE FROM share_transfers WHERE service = 'ai' AND kind = 'memory-store' AND (from_subject = ANY($1::jsonb[]) OR to_subject = ANY($1::jsonb[]))", [forms]);
+    if (Number(members) || Number(requests) || Number(owned) || Number(transfers)) {
+        counts.add(counts.erased, 'share_rows', Number(members) + Number(requests) + Number(owned) + Number(transfers));
+    }
     if (!ids.length) return;
     counts.add(counts.erased, 'requests', await t.exec('DELETE FROM requests WHERE run_id = ANY($1::text[])', [ids]));
     counts.add(counts.erased, 'citations', await t.exec('DELETE FROM citations WHERE run_id = ANY($1::text[])', [ids]));
@@ -108,4 +136,11 @@ function create({ db, log = console, memory = null } = {}) {
     return createAccountData({ db, service: 'ai', tables: TABLES, extraExport: exportAll, extraErase, log });
 }
 
-module.exports = { create, TABLES, TOPICS, extraExport, extraErase };
+// The sharing system's own tables carry a person as a jsonb subject (a member, an access request), which the table
+// map cannot express; they are erased in extraErase above, with the rest of the person's rows.
+const EXEMPT = {
+    share_members: 'the sharing system own member rows: the subject is a jsonb subject, so they are erased in extraErase',
+    share_access_requests: 'the sharing system own access requests: the subject is a jsonb subject, so they are erased in extraErase',
+};
+
+module.exports = { create, TABLES, TOPICS, EXEMPT, extraExport, extraErase };

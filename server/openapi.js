@@ -139,6 +139,67 @@ route('post', '/memory/items/{id}/settle', {
     requestBody: body({ type: 'object', required: ['keep'], properties: { keep: str({ description: 'The id of the item that stays' }) } }),
     responses: { 200: json('The kept item and the archived one', memoryResult), 404: problem, 409: problem, 422: problem, 503: problem, ...errors([401, 403]) },
 });
+// ── Memory M5: services, the portable file and team sharing ─────────────────────────────────────
+const memoryServiceList = {
+    type: 'object', required: ['providers'],
+    properties: { providers: { type: 'array', items: { type: 'object', additionalProperties: true } } },
+};
+const memoryServiceView = { type: 'object', required: ['service'], properties: { service: { type: 'object', additionalProperties: true } } };
+const memoryServicePut = {
+    type: 'object',
+    properties: {
+        key: str({ minLength: 8, maxLength: 400, description: 'The person’s own key. It is sealed and never returned.' }),
+        base_url: str({ maxLength: 500, description: 'A self-hosted endpoint: https, port 443 or 8443, a public host name that resolves to a public address, no credentials or query.' }),
+        account: str({ maxLength: 200, description: 'An optional user or agent id the service needs.' }),
+    },
+};
+route('get', '/memory/services', {
+    operationId: 'listMemoryServices', summary: 'The memory services the person connected', tags: ['memory'], security: memorySecurity,
+    description: 'ai.memory.read. One entry per mem0, Letta and Zep: whether it is connected, its last four key characters (never the key), its health and the last sync count.',
+    responses: { 200: json('The services', memoryServiceList), 503: problem, ...errors([401, 403]) },
+});
+route('put', '/memory/services/{provider}', {
+    operationId: 'putMemoryService', summary: 'Store or replace a memory service key and test it', tags: ['memory'], security: memorySecurity,
+    description: 'ai.memory.write. The key is sealed with AI_CREDENTIALS_KEY and never returned, logged or put in an error. A refused key keeps the connection with status failing and a short redacted reason.',
+    parameters: [path('provider', str({ enum: ['mem0', 'letta', 'zep'] }))],
+    requestBody: body(memoryServicePut),
+    responses: { 200: json('The connection, without the key', memoryServiceView), 422: problem, 503: problem, ...errors([401, 403]) },
+});
+route('delete', '/memory/services/{provider}', {
+    operationId: 'deleteMemoryService', summary: 'Forget a memory service key', tags: ['memory'], security: memorySecurity,
+    description: 'ai.memory.write. The sealed row is deleted; the notes it imported stay until the person deletes them.',
+    parameters: [path('provider', str({ enum: ['mem0', 'letta', 'zep'] }))],
+    responses: { 200: json('What was removed', { type: 'object', properties: { removed: integer() } }), 404: problem, 503: problem, ...errors([401, 403]) },
+});
+route('post', '/memory/services/{provider}/sync', {
+    operationId: 'syncMemoryService', summary: 'Read a connected service and put its notes in the store', tags: ['memory'], security: memorySecurity,
+    description: 'ai.memory.write. The key is opened for this call only. Up to 1,000 records are read; the store redacts each item again and dedupes by its text MAC. The answer is counts, never text.',
+    parameters: [path('provider', str({ enum: ['mem0', 'letta', 'zep'] }))],
+    responses: { 200: json('What the sync found and imported', { type: 'object', additionalProperties: true }), 502: problem, 503: problem, ...errors([401, 403]) },
+});
+route('get', '/memory/export', {
+    operationId: 'exportMemory', summary: 'The one portable memory file (ai.memory-export@1)', tags: ['memory'], security: memorySecurity,
+    description: 'ai.memory.read. The person’s own items decrypted for their own export, at most 10,000, with no id, owner, merge link or conflict pair. The body is the person’s plaintext: answer it no-store.',
+    parameters: [query('scope', str({ description: 'user or project:<slug>; empty for every scope' }))],
+    responses: { 200: json('The portable file', { type: 'object', additionalProperties: true }), 503: problem, ...errors([401, 403]) },
+});
+route('post', '/memory/import', {
+    operationId: 'importMemory', summary: 'Import a portable memory file', tags: ['memory'], security: memorySecurity,
+    description: 'ai.memory.write. The body must validate ai.memory-export@1. Each item is redacted again; a secret-only item is skipped and a conflict is imported as a suggestion. Dedupe is by text MAC within owner and scope.',
+    requestBody: body({ type: 'object', additionalProperties: true }),
+    responses: { 200: json('What was imported', { type: 'object', additionalProperties: true }), 422: problem, 503: problem, ...errors([401, 403]) },
+});
+route('get', '/memory/shared', {
+    operationId: 'listSharedMemory', summary: 'The memory stores other people shared with the person', tags: ['memory'], security: memorySecurity,
+    description: 'ai.memory.read. The person’s own token only. Ids and access metadata only, never a note.',
+    responses: { 200: json('The shared stores', { type: 'object', properties: { stores: arrayOf({ type: 'object', additionalProperties: true }) } }), 503: problem, ...errors([401, 403]) },
+});
+route('get', '/memory/stores/{owner}', {
+    operationId: 'readSharedMemory', summary: 'One shared store’s active notes', tags: ['memory'], security: memorySecurity,
+    description: 'ai.memory.read. canView is checked first: the owner or a member sees active notes, read-only; anybody else gets memory.not_found, never a count or a title.',
+    parameters: [path('owner', str({ pattern: '^usr_[0-9A-HJKMNP-TV-Z]{26}$' })), query('scope', str())],
+    responses: { 200: json('The shared store’s active notes', { type: 'object', additionalProperties: true }), 404: problem, 503: problem, ...errors([401, 403]) },
+});
 route('get', '/memory/profile', {
     operationId: 'getMemoryProfile', summary: 'The cached profile for one scope', tags: ['memory'], security: memorySecurity,
     description: 'ai.memory.read. The person\u2019s own profile, or an agent\u2019s: a service token with on_behalf_of reads only a scope its grant names, and that read is audited in memory_reads with the note ids it was built from, never the text. Rebuilt by the cheap tier only when items_hash changes, at most once an hour per owner and scope; the result is stored as written.',
@@ -385,6 +446,47 @@ route('get', '/exchange/catalog', {
         kinds: arrayOf({ type: 'object', properties: { kind: str(), models: integer(), offers: integer() } }),
         models: arrayOf(exchangeModel),
     } }) },
+});
+route('get', '/exchange/endpoints', {
+    operationId: 'exchangeOwnEndpointStatus', summary: 'Your own endpoint: whether it is on, and the plain reason when it is not', tags: ['exchange'], security: [],
+    description: 'Public. Your own endpoint (the Exchange remake, product line 6) is a private GPU rent: a chosen model or your own Hugging Face weights, reached only by its owner, scaled to zero when idle, and paid for by the owner\'s Balance. It is off while the owner has no GPU provider key (ai.gpus vast.key or runpod.key), no monthly GPU cap (ai.gpus monthly_cap), or Balance billing is not on. `reason` is a plain sentence the Exchange page shows; `reasons` lists each missing piece. `models` is what a private endpoint may serve today.',
+    responses: { 200: json('The status', { type: 'object', required: ['enabled', 'reason'], properties: {
+        enabled: { type: 'boolean' },
+        reason: str(),
+        reasons: arrayOf(str()),
+        billing: { type: 'boolean' },
+        marketplace: nullable('string'),
+        idle_minutes: integer(), max_idle_minutes: integer(), max_runtime_minutes: integer(),
+        public_base: str(),
+        models: arrayOf({ type: 'object', properties: { key: str(), display_name: str(), context_window: integer(), vram_mb: integer(), gpu_names: arrayOf(str()) } }),
+    } }) },
+});
+route('get', '/own-endpoints', {
+    operationId: 'listOwnEndpoints', summary: 'The caller\'s private endpoints', tags: ['exchange'], security: [{ bearer: [] }],
+    description: 'Only the person themselves: a Network user token (audience openvibe.network or openvibe.ai) whose subject is usr_…. A service, app, module or node token is refused whatever capabilities it holds. A private endpoint is never registered as an offer, so no router and no catalogue sees it.',
+    responses: { 200: json('The endpoints and the public status', { type: 'object', required: ['endpoints'], properties: { endpoints: arrayOf({ type: 'object' }), status: { type: 'object' } } }), ...errors([401, 403]) },
+});
+route('post', '/own-endpoints', {
+    operationId: 'createOwnEndpoint', summary: 'Start a private endpoint on a chosen model or your own weights', tags: ['exchange'], security: [{ bearer: [] }],
+    description: 'Only a person. Name `model` (a key from GET /exchange/endpoints) or `weights` ({ repo, file, lora_repo?, lora_file? }: a Hugging Face .gguf and an optional LoRA, fetched by the rented container). The endpoint is started by the reconciler on the cheapest fit, after a Billing hold of its worst case; a start that would pass the owner\'s monthly cap is refused with a plain reason, and nothing is rented. 409 own_endpoint.off carries the same reason the public status does.',
+    requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: {
+        model: str(), idle_minutes: integer({ minimum: 1, maximum: 120 }),
+        weights: { type: 'object', required: ['repo', 'file'], properties: { repo: str(), file: str(), lora_repo: str(), lora_file: str() } },
+        display_name: str(),
+    } } } } },
+    responses: { 201: json('The endpoint', { type: 'object', required: ['endpoint'], properties: { endpoint: { type: 'object' } } }), 409: problem, 422: problem, ...errors([401, 403]) },
+});
+route('get', '/own-endpoints/{id}', {
+    operationId: 'getOwnEndpoint', summary: 'One of the caller\'s endpoints', tags: ['exchange'], security: [{ bearer: [] }],
+    description: 'Only its owner. The status, the price an hour, what it has charged, the public URL while it runs, and the plain reason it stopped.',
+    parameters: [path('id', str({ pattern: '^oep_[0-9A-HJKMNP-TV-Z]{26}$' }))],
+    responses: { 200: json('The endpoint', { type: 'object', required: ['endpoint'], properties: { endpoint: { type: 'object' } } }), 404: problem, ...errors([401, 403]) },
+});
+route('post', '/own-endpoints/{id}/stop', {
+    operationId: 'stopOwnEndpoint', summary: 'Give the private endpoint back', tags: ['exchange'], security: [{ bearer: [] }],
+    description: 'Only its owner. The reconciler gives the rent back; Billing settles the seconds it ran, and the price stops.',
+    parameters: [path('id', str({ pattern: '^oep_[0-9A-HJKMNP-TV-Z]{26}$' }))],
+    responses: { 200: json('The endpoint', { type: 'object', required: ['endpoint'], properties: { endpoint: { type: 'object' } } }), 404: problem, ...errors([401, 403]) },
 });
 route('get', '/exchange/models/{slug}', {
     operationId: 'exchangeModel', summary: 'One model and its offers', tags: ['exchange'], security: [],

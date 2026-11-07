@@ -88,6 +88,38 @@ state, the measured cold start (from the launch to the first answered request), 
 with its price (the hour and the second), endpoint, cold start and money. "Start" and "Stop" write a request row;
 the reconciler (one implementation, the same one the service runs) does the work.
 
+## Your own endpoint (the private rent)
+
+The Exchange's product line 6, "your own endpoint", is the same provisioner with a private rent on top
+(`server/gpu/endpoints.js`, migration `0042_own_endpoints.sql`):
+
+- a person picks one of the models above, or brings their own Hugging Face `.gguf` (and an optional
+  LoRA), from OpenVibe.Exchange's `/own` page or the person API (`/api/v1/own-endpoints`);
+- the reconciler starts it on the cheapest offer that fits, exactly like the shared models, and **never
+  registers it as an offer**: the router and the catalogue never see it, and the GPU is reached only
+  through AI's proxy at `/api/v1/own-endpoints/:id/v1` with the owner's own Network user token;
+- the person's Balance pays for it. Before the marketplace is called, a Billing hold is taken for the
+  worst case the rent may cost (the reservation); when it stops, the exact seconds are settled:
+  `usage.input_tokens` carries the milliseconds, `retail.version` is `gpu-second@1`, and the per-request
+  remainder carries the last nano so the Billing charge equals the GPU ledger's `spent_nano` to the
+  nano. Billing is the only place the person is charged; the `gpu_spend` rows are the owner's cost
+  record, never the person's charge;
+- the idle timer is the endpoint's own (`idle_minutes`, 1-120, default the owner's `idle_minutes`),
+  measured from the last proxied request (`gpu_instances.last_used_at`). The maximum run is 120 minutes
+  (or the owner's `max_runtime_minutes` when lower), so a start's hold is bounded;
+- the owner's monthly cap is checked before the hold: a new start that would pass it is refused with a
+  plain reason and nothing is rented.
+
+The feature is off while **any** of the three is missing, and the public
+`GET /api/v1/exchange/endpoints` answers the plain reason the Exchange page shows:
+
+1. `ai.gpus` `vast.key` or `runpod.key` (the owner's GPU provider key),
+2. `ai.gpus` `monthly_cap` (the hard monthly cap),
+3. Balance billing (`AI_CREDITS` and Billing), because an endpoint is paid for per second.
+
+The first two are `x-owner-input` fields (group `GPUs`, `x-required-for: "own endpoints"`) so the admin
+panel's Setup tab lists them with what they turn on and where to get them.
+
 ## The tests
 
 `test/gpu.test.js` runs the provisioner against the recorded marketplace answers
@@ -101,6 +133,17 @@ the reconciler (one implementation, the same one the service runs) does the work
 - an instance the marketplace accepted before the row knew its id is recovered, not thrown away,
 - an instance with our label and no row of ours is found and given back,
 - a destroy that keeps failing is tried again every pass and the operator is alerted.
+
+`test/own-endpoints.test.js` covers the private rent with the same recorded marketplace, a fake clock, a
+local fake Billing and a canned GPU answer:
+
+- off without a GPU key or a cap, and off without Balance billing, each with its plain reason;
+- the Billing hold is taken before the marketplace is called;
+- a private rent is never registered as an offer, and the owner's OpenAI-compatible call is proxied;
+- a service token cannot manage or call a person's endpoint;
+- the endpoint's own idle timer scales it to zero, and the settle charge equals the GPU `spent_nano`;
+- the monthly cap refuses a new start with a plain reason and moves no money;
+- own weights and a LoRA produce the right container command, and a non-Hugging-Face address is refused.
 
 ## What the owner has to check before the first launch
 
