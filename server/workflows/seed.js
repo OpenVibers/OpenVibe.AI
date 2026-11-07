@@ -78,7 +78,12 @@ function sharedProviderRecord(config, env) {
             ? ['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich', 'json', 'vision']
             // image only with AI_IMAGE_MODEL: the Images API is OpenAI-shaped, and image generation is off without it.
             : ['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich', 'json', 'vision', 'embed', 'transcribe', ...(config.image && config.image.model ? ['image'] : [])],
-        timeout_ms: s.timeoutMs, priority: 10, metadata: { configured_by: 'AI_PROVIDER/AI_BASE_URL/AI_API_KEY/AI_MODEL', provider_name: s.provider || 'openai-compatible', billing_profile: 'metered' },
+        timeout_ms: s.timeoutMs, priority: 10, metadata: { configured_by: 'AI_PROVIDER/AI_BASE_URL/AI_API_KEY/AI_MODEL', provider_name: s.provider || 'openai-compatible', billing_profile: 'metered',
+            // OpenAI's own API sells a Flex tier (about half the price, slower) and a Batch API (half the
+            // price, within 24 hours). A self-hosted gateway does not, so the multipliers belong to
+            // OpenAI's own page only: https://platform.openai.com/docs/guides/flex-processing and
+            // https://platform.openai.com/docs/guides/batch (read 2026-11-07).
+            ...(/api\.openai\.com/i.test(base) ? { tier_rates: { flex: 0.5, batch: 0.5 } } : {}) },
     };
 }
 
@@ -174,6 +179,8 @@ async function seed({ registry, quotas, config, env = process.env, db }) {
         }
     }
 
+    // The room a background route gets (BA1): a Flex tier answers in minutes, not seconds.
+    const BACKGROUND_TIMEOUT = 180000;
     // Routes. A capability pool covers every provider that can serve the capability, ordered by
     // openvibe-sdk/placement (brief §4/§5): no static primary/fallbacks and no AI_MODEL_<ROLE> pins.
     // The shared provider is the pool's authority (objective correctness): it serves while it is healthy and
@@ -198,8 +205,12 @@ async function seed({ registry, quotas, config, env = process.env, db }) {
     await registry.seedVersioned('route', 'default.json', pool(60000, { options: { temperature: 0.3 }, max_output_tokens: 2400, response_format: 'json' }));
     await registry.seedVersioned('route', 'default.embedding', pool(30000, { 'capability': 'embed', constraints: { objective: 'balanced' } }));
     // media.analyze (WS-O task 5): the local model when there is one; the paid route is used only under a media.paid budget.
-    if (config.localLlm && config.localLlm.url) await registry.seedVersioned('route', 'media.local', pool(config.localLlm.timeoutMs, { 'capability': 'summarize', constraints: { objective: 'balanced', provider_scope: 'local' }, options: { temperature: 0.3 }, max_output_tokens: 350 }));
-    await registry.seedVersioned('route', 'media.paid', pool(60000, { 'capability': 'summarize', constraints: { objective: 'correctness', provider_scope: 'paid', ...(authority ? { authority } : {}) }, options: { temperature: 0.3 }, max_output_tokens: 350 }));
+    // Both are background work (BA1): nobody watches a VOD's overview arrive, so the route says it may wait.
+    // The run's own route (media.analysis) exists whatever the host has: it carries the class of the work, and the
+    // step inside it picks the local or the paid route for the answer it actually gives.
+    await registry.seedVersioned('route', 'media.analysis', pool(BACKGROUND_TIMEOUT, { 'capability': 'chat', constraints: { objective: 'balanced', latency_class: 'background' } }));
+    if (config.localLlm && config.localLlm.url) await registry.seedVersioned('route', 'media.local', pool(config.localLlm.timeoutMs, { 'capability': 'summarize', constraints: { objective: 'balanced', latency_class: 'background', provider_scope: 'local' }, options: { temperature: 0.3 }, max_output_tokens: 350 }));
+    await registry.seedVersioned('route', 'media.paid', pool(60000, { 'capability': 'summarize', constraints: { objective: 'correctness', latency_class: 'background', provider_scope: 'paid', ...(authority ? { authority } : {}) }, options: { temperature: 0.3 }, max_output_tokens: 350 }));
     // Images (metered per image) only with AI_IMAGE_MODEL: paid providers' registered image models, the shared one first.
     if (imageModel) await registry.seedVersioned('route', 'default.image', pool(120000, { 'capability': 'image', constraints: { objective: 'correctness', provider_scope: 'paid', authority: `shared:${imageModel}` } }));
     for (const key of HISTORICAL_ROUTES) await registry.seedVersioned('route', key, { primary: { provider: 'shared', model: null }, fallbacks: [], options: {}, max_output_tokens: null, response_format: 'json', timeout_ms: null, alias_of: 'default.json' });
@@ -213,6 +224,26 @@ async function seed({ registry, quotas, config, env = process.env, db }) {
     const creativeModel = env.AI_CREATIVE_MODEL || (shared && shared.kind === 'openai' && /api\.openai\.com/i.test(shared.base_url || '') ? 'gpt-5-mini' : null);
     if (creativeModel && !await registry.getModel('shared', creativeModel)) await registry.upsertModel({ provider_key: 'shared', model_key: creativeModel, type: 'chat', supports: { json: true, vision: true } }, { actor: 'seed' });
     await registry.seedVersioned('route', 'live.creative', pool(ROLE_TIMEOUT.chat, creativeModel ? { constraints: { objective: 'correctness', latency_class: 'interactive', model: creativeModel, authority: `shared:${creativeModel}` } } : {}));
+    // The background routes (BA1): the same pools as the interactive ones, but the route says the work may
+    // wait (constraints.latency_class 'background'). The router then looks for the cheapest tier that can
+    // answer in minutes: the host's own idle model, a Flex tier, or a provider's off-peak hours. The timeout
+    // is longer, because a Flex tier is slower than the standard one. A workflow's route is what gives it
+    // its class, so a workflow that uses one of these routes runs in the background.
+    //
+    // These routes name NO model: the whole point of a background run is that the cheapest offer that can do
+    // the work may answer it. The authority is still the shared provider (the network's choice). The host's own
+    // idle model answers first only on a route with constraints.allow_local: true, and none of these sets it yet
+    // (Opus, 11-07): their text is what people read on Trade, Live and the Rundown, and a 1.5B model is not measured
+    // for it. A route that names its model (the creative one below) keeps that model.
+    const backgroundPool = (timeoutMs, extra = {}) => ({ 'capability': 'chat', constraints: { objective: 'correctness', latency_class: 'background', ...(authority ? { authority } : {}) }, pinned: [], fallbacks: [], options: {}, max_output_tokens: null, response_format: 'text', timeout_ms: timeoutMs, alias_of: null, ...extra });
+    // Each one carries the Live role it serves (legacy, summary, vision, director), so a person who gave their
+    // own key a model for that role still gets it (server/providers/index.js roleOfRoute).
+    await registry.seedVersioned('route', 'background.legacy', backgroundPool(BACKGROUND_TIMEOUT));
+    await registry.seedVersioned('route', 'background.summary', backgroundPool(BACKGROUND_TIMEOUT));
+    await registry.seedVersioned('route', 'background.vision', backgroundPool(BACKGROUND_TIMEOUT));
+    await registry.seedVersioned('route', 'background.director', backgroundPool(BACKGROUND_TIMEOUT));
+    await registry.seedVersioned('route', 'background.json', backgroundPool(BACKGROUND_TIMEOUT, { options: { temperature: 0.3 }, max_output_tokens: 2400, response_format: 'json' }));
+    await registry.seedVersioned('route', 'background.creative', backgroundPool(BACKGROUND_TIMEOUT, creativeModel ? { constraints: { objective: 'correctness', latency_class: 'background', model: creativeModel, authority: `shared:${creativeModel}` } } : {}));
     // Chat's AI members (server/workflows/chat.js): conversation text, so an alias of the chat pool.
     // Space's spaces (server/workflows/space.js): the builder writes whole apps, so it gets the creative model and room to
     // finish; a space's own AI is conversation text, an alias of the chat pool.

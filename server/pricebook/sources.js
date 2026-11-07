@@ -24,6 +24,9 @@ const SOURCES = [
         parse: parsers.deepseek,
         // The off-peak window the same listing publishes, read for the batch capacity rules.
         offPeak: parsers.deepseekOffPeak,
+        // The peak hours it publishes, as off-peak weekday blocks (BA1): one daily window cannot say
+        // "peak 01:00-04:00 and 06:00-10:00 UTC, Monday through Friday".
+        offPeakBlocks: parsers.deepseekOffPeakBlocks,
     },
     {
         key: 'qwen',

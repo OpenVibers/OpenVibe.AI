@@ -353,6 +353,8 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
         let last = null;
         const usage = { input: 0, output: 0, cached: 0 };
         let cost = 0;
+        // BA1: what the wait earned, over every call the run made (a run may call a provider more than once).
+        let saved = 0;
         let exec = null;
         let jsonSchema = null;
         for (const step of wf.steps) {
@@ -365,6 +367,7 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
                 usage.output += exec.usage.output || 0;
                 usage.cached += exec.usage.cached || 0;
                 cost += exec.cost || 0;
+                saved += Number(exec.savedUsd) || 0;
             }
             if (last.jsonSchema) jsonSchema = last.jsonSchema;
         }
@@ -386,6 +389,8 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
             provider: exec ? exec.provider : null, model: exec ? exec.model : null, fallbackUsed: Boolean(exec && exec.fallbackUsed),
             ...(exec && exec.result && exec.result.label ? { contentPolicy: exec.result.policy || 'uncensored', label: exec.result.label } : {}),
             usage, cost,
+            // BA1: the tier the answer really ran on, and what waiting for it earned.
+            serviceTier: exec ? exec.serviceTier || null : null, savedUsd: saved,
             route: last.route || null,
             explain: exec ? exec.explain || null : null,
         };

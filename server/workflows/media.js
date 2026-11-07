@@ -71,6 +71,10 @@ const workflows = [
             },
         },
         steps: [{ kind: 'media_analysis', stt_route: 'live.stt', template: 'media.analyze.overview', local_route: 'media.local', paid_route: 'media.paid' }],
+        // BA1: the route this workflow runs on, and with it the class it may wait in. The step resolves its
+        // own routes (the local model, the paid one, speech-to-text); this is the run's own route and the
+        // class the router reads: nobody watches a VOD's overview arrive, so it is background work.
+        default_route: 'media.analysis',
         // Not cached: a result made while the local model was down (or before a budget) must not outlive that, and
         // callers keep what they asked for (Live's vod_ai_state/clip_ai_state).
         cache_mode: 'none',

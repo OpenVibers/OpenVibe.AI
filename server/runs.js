@@ -22,6 +22,7 @@ const { parseCostUsd } = require('./credits');
 const { CACHE_INPUT } = require('./workflows/hooks');
 const { preferenceLines } = require('./user-modules');
 const { preferredTarget } = require('./providers/task');
+const latency = require('./latency');
 const tier = require('./policy/tier');
 const schemas = require('./schemas');
 const events = require('./events');
@@ -132,6 +133,9 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                 origin: 'ai', workflow: r.workflow_key, workflow_version: r.workflow_version, template_version: r.template_version, route: r.route_key, route_version: r.route_version,
                 provider: r.provider_key, model: r.model_key, fallback_used: Boolean(r.fallback_used), run_id: r.id, cached_from: r.cached_from, synthetic: Boolean(r.synthetic),
             },
+            // BA1: how long the caller may wait, and the tier the run really ran on.
+            latency_class: r.latency_class || latency.DEFAULT,
+            service_tier: r.service_tier || null,
             usage: { tokens_in: r.tokens_in, tokens_out: r.tokens_out, cost_usd: r.cost_usd, attempts: r.attempts, usage_sample_ids: r.usage_sample_ids || (r.usage_sample_id ? [r.usage_sample_id] : null) },
             explain: parseJson(r.explain, null),
             citations_count: r.citations_count,
@@ -187,7 +191,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
      * principal: { sub, subject: {type, id} }
      * Returns { run, created, promise? }.
      */
-    async function create(body, principal, { trace = null, requestId = null, retryOf = null, onDelta = null, onRoute = null, abuse: requestAbuse = null, discount = null, exact = null, costCheck = null, communityOfferId = null } = {}) {
+    async function create(body, principal, { trace = null, requestId = null, retryOf = null, onDelta = null, onRoute = null, abuse: requestAbuse = null, discount = null, exact = null, costCheck = null, communityOfferId = null, callerWaitMs = 0 } = {}) {
         if (!body || typeof body !== 'object') throw new AiError(400, 'input.invalid', 'JSON body required');
         const wfKey = String(body.workflow || '');
         const wf = body.version ? await registry.getWorkflow(wfKey, Number(body.version)) : await registry.activeWorkflow(wfKey);
@@ -252,6 +256,16 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             }
         }
         const options = body.options && typeof body.options === 'object' ? body.options : {};
+        // BA1: the latency class of this run. The workflow's own class is the route it uses
+        // (constraints.latency_class); a caller may ask for a SLOWER class with options.latency and never a
+        // faster one: a background workflow stays in the background whatever the caller asks for.
+        const workflowClass = latency.ofRoute(route);
+        const askedLatency = options.latency != null ? options.latency : null;
+        const resolvedLatency = latency.resolve(workflowClass, askedLatency);
+        if (resolvedLatency.error) throw new AiError(422, 'input.invalid', resolvedLatency.error, { latency_class: workflowClass });
+        const latencyClass = resolvedLatency.class;
+        // A faster class than the workflow allows was asked for: it runs in its own class, and the run's options say so.
+        if (resolvedLatency.clamped) options.latency_clamped = resolvedLatency.clamped;
         // Community capacity is opt-in per request: a person's machine sees the prompt, so only a caller that says so
         // may be placed there. The OpenAI and Messages routes set body.community from x-openvibe-community.
         let communityOptIn = body.community === true || options.community === true;
@@ -366,6 +380,11 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             ...(pinned ? { routePin: pinned } : {}),
             // The preset's policy, and the name it was named by: the router filters the offers with the policy.
             ...(preset ? { presetPolicy, presetName } : {}),
+            // BA1: the class this run may wait in. The router reads it to pick the tier.
+            latencyClass,
+            // BA1: a caller that waits (?wait=) gets its answer inside the wait: a Flex attempt may use the wait
+            // minus the 25 s a standard retry needs (at least 10 s); a caller that polls gives the tier all its room.
+            ...(latencyClass === 'background' && Number(callerWaitMs) > 0 ? { flexBudgetMs: Math.max(10000, Number(callerWaitMs) - 25000) } : {}),
             // POST /v1/chat/completions with stream: true: the upstream's deltas, as they arrive (kept in memory only).
             ...(typeof onDelta === 'function' ? { onDelta } : {}),
             // The offer the router picked, before the first token: the SSE disclosure's first comment (D3).
@@ -391,6 +410,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             source_service: requester.type === 'service' ? requester.id : null,
             target: body.target ? JSON.stringify(body.target) : null, target_key: ctx.targetKey,
             input: null, input_hash: inputHash, idempotency_key: idem, trace_id: trace, request_id: requestId, retry_of: retryOf,
+            latency_class: latencyClass,
             options: JSON.stringify({ cache: options.cache !== false && credentialSubject === null && !projectProvider && !pinned && !selfKeys && !communityOptIn, debug: Boolean(options.debug), input_retained: kept.full,
                 ...(credentialSubject !== null ? { credential_subject: credentialSubject } : {}), ...(credentialProvider !== null ? { credential_provider: credentialProvider } : {}),
                 ...(selfKeys ? { self_subject: runPerson } : {}),
@@ -418,9 +438,9 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                 const cacheExplain = { objective: 'cache', reasons: ["the answer was already in this scope's cache; no provider was called"], paid_by: 'cache', selected: null, candidates: [], attempts: [] };
                 await db.tx(async () => {
                     await db.prepare(`INSERT INTO runs (id, workflow_key, workflow_version, template_key, template_version, route_key, route_version, status, requester_type, requester_id, on_behalf_of, attribution,
-                        source_service, target, target_key, input, input_hash, output, model_key, cache_key, cached_from, retry_of, idempotency_key, trace_id, request_id, options, explain, created_at, started_at, finished_at, citations_count)
+                        source_service, target, target_key, input, input_hash, output, model_key, cache_key, cached_from, retry_of, idempotency_key, trace_id, request_id, options, explain, latency_class, created_at, started_at, finished_at, citations_count)
                         VALUES (@id, @workflow_key, @workflow_version, @template_key, @template_version, @route_key, @route_version, 'cached', @requester_type, @requester_id, @on_behalf_of, @attribution,
-                        @source_service, @target, @target_key, @input, @input_hash, @output, @model_key, @cache_key, @cached_from, @retry_of, @idempotency_key, @trace_id, @request_id, @options, @explain, @created_at, @created_at, @created_at, 0)`)
+                        @source_service, @target, @target_key, @input, @input_hash, @output, @model_key, @cache_key, @cached_from, @retry_of, @idempotency_key, @trace_id, @request_id, @options, @explain, @latency_class, @created_at, @created_at, @created_at, 0)`)
                         .run({ ...base, output: JSON.stringify(hit.output), model_key: hit.model_key, cache_key: cacheKey, cached_from: hit.run_id, explain: JSON.stringify(cacheExplain) });
                     const src = await citations(hit.run_id);
                     if (src.length) await addCitations(id, src.map(c => ({ ...c, provenance: { ...c.provenance, via_cache: hit.run_id } })), 'cache');
@@ -466,9 +486,9 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         try {
             await db.tx(async () => {
                 await db.prepare(`INSERT INTO runs (id, workflow_key, workflow_version, template_key, template_version, route_key, route_version, status, requester_type, requester_id, on_behalf_of, attribution,
-                    source_service, target, target_key, input, input_hash, cache_key, retry_of, idempotency_key, trace_id, request_id, options, created_at)
+                    source_service, target, target_key, input, input_hash, cache_key, retry_of, idempotency_key, trace_id, request_id, options, latency_class, created_at)
                     VALUES (@id, @workflow_key, @workflow_version, @template_key, @template_version, @route_key, @route_version, 'queued', @requester_type, @requester_id, @on_behalf_of, @attribution,
-                    @source_service, @target, @target_key, @input, @input_hash, @cache_key, @retry_of, @idempotency_key, @trace_id, @request_id, @options, @created_at)`)
+                    @source_service, @target, @target_key, @input, @input_hash, @cache_key, @retry_of, @idempotency_key, @trace_id, @request_id, @options, @latency_class, @created_at)`)
                     .run({ ...base, cache_key: cacheKey });
                 await events.runChanged(await getRow(id));
             });
@@ -818,7 +838,10 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                 ...(selfSubject ? { selfSubject, selfCredentials: selfCredentials || [], selfPreferences } : {}),
                 ...(credential ? { credential, role: input && typeof input.role === 'string' ? input.role : null } : {}),
                 ...(billingDelta ? { onDelta: billingDelta } : {}),
-                ...(onRoute ? { onRoute } : {}) });
+                ...(onRoute ? { onRoute } : {}),
+                // BA1: the class this run may wait in: the router picks the tier from it.
+                latencyClass: ctx.latencyClass || latency.DEFAULT,
+                ...(ctx.flexBudgetMs ? { flexBudgetMs: ctx.flexBudgetMs } : {}) });
             // The Exchange remake: an uncensored answer is labelled in the run's own output, whatever its shape, so
             // every surface that reads it (the API routes, the console, a product) shows what produced it.
             if (r.output && r.label) {
@@ -831,8 +854,9 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             // The status, its citations and the ai.run.succeeded event commit together.
             const done = await db.tx(async () => {
                 const d = await db.prepare(`UPDATE runs SET status = 'succeeded', output = ?, grounding = ?, synthetic = ?, provider_key = ?, model_key = ?, fallback_used = ?, attempts = ?, tokens_in = ?, tokens_out = ?, cost_usd = ?,
-                    route_key = COALESCE(?, route_key), route_version = COALESCE(?, route_version), explain = ?, finished_at = ? WHERE id = ? AND status = 'running'`)
+                    service_tier = ?, saved_usd = ?, route_key = COALESCE(?, route_key), route_version = COALESCE(?, route_version), explain = ?, finished_at = ? WHERE id = ? AND status = 'running'`)
                     .run(JSON.stringify(r.output), JSON.stringify(r.grounding || null), r.synthetic ? 1 : 0, r.provider, r.model, r.fallbackUsed ? 1 : 0, attempts, r.usage.input, r.usage.output, r.cost,
+                        r.serviceTier || null, Number(r.savedUsd) || 0,
                         r.route ? r.route.key : null, r.route ? r.route.version : null, r.explain ? JSON.stringify(r.explain) : null, iso(clock.now()), id);
                 if (!d.changes) return d;
                 if (r.citations.length) await addCitations(id, r.citations, 'workflow');

@@ -64,7 +64,9 @@ function runsRouter({ runs, registry, auth, config, log = console }) {
         if (req.principal.kind === 'app') body = appBody(req.principal, body, req.body);
         checkNamespace(req, String(body.workflow || ''));
         const idem = body.idempotency_key || req.ov.idempotencyKey || undefined;
-        const created = await runs.create({ ...body, idempotency_key: idem }, req.principal, { trace: req.ov.traceId, requestId: req.ov.requestId, abuse: req.abuse });
+        // BA1: the caller's wait goes with the run, so a background run answers inside it (a Flex tier that is
+        // too slow for the wait gives way to the standard tier in time; most callers do not poll after a 202).
+        const created = await runs.create({ ...body, idempotency_key: idem }, req.principal, { trace: req.ov.traceId, requestId: req.ov.requestId, abuse: req.abuse, callerWaitMs: waitMs });
         const run = await runs.explained(await runs.wait(created, waitMs));
         const status = !created.created ? 200 : (runs.TERMINAL.has(run.status) ? 201 : 202);
         if (status === 202) res.setHeader('Location', `/api/v1/runs/${run.id}`);

@@ -67,8 +67,10 @@ t.test('route versions and disabling a route', async () => {
 t.test('historical route keys are explicit aliases of default.json', async () => {
     const r = await request(h.base, 'GET', '/api/v1/routes/news.summarize', { tok });
     assert.strictEqual(r.body.route.alias_of, 'default.json');
+    // BA1: news.summarize_story runs in the background now, so the run records the background route. The
+    // historical key itself is still an explicit alias of default.json (the line above).
     const run1 = await run({ workflow: 'news.summarize_story', input: { sources: [{ source_type: 'news.article', content: 'x' }] } });
-    assert.strictEqual(run1.body.run.route.key, 'default.json');
+    assert.strictEqual(run1.body.run.route.key, 'background.json');
 });
 
 t.test('seed: a code change becomes a new version, unless an admin versioned the key', async () => {

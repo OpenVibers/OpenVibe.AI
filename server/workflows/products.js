@@ -37,11 +37,11 @@ const templates = [
         'Topic: {{topic}}{{#audience}}\nAudience: {{audience}}{{/audience}}\nPages at most: {{max_pages}}\n\n'),
     productTemplate('wiki.generate_page', 'Wiki: write a page', 'Write one page of the wiki from the numbered sources, encyclopedic and engaging, the way a well-kept wiki reads. `summary`: one or two plain sentences saying what the subject is. `lead`: the opening paragraph or two, in Markdown. `sections`: follow the requested outline where the sources support it (skip or merge headings they do not), each with a `heading` and a Markdown `body` of one or more full paragraphs (a list where it reads better), each citing its sources; about 500 to 1500 words in all when the sources allow, shorter when they do not. Link other pages of this wiki, and only titles from the list of pages, as [[Exact Title]] the first time each is mentioned. `infobox`: up to twelve key facts as `label` and `value` (for example First appearance, Voiced by, Created by, Release date, Location), each cited; the Wikidata facts are good material. `images`: up to three pictures from the numbered list of pictures that clearly show this page\'s subject, judged by their title and description (never a picture of something or someone else, and none when no picture fits), each with its `index`, a short factual `caption`, and `section`: the heading it illustrates, or lead for the page\'s main picture. Never write source numbers or "[n]" in the text.', 'wiki.write',
         'Page title: {{title}}\nWiki topic: {{topic}}{{#outline}}\nRequested outline: {{json outline}}{{/outline}}\n\nPages of this wiki (link only these, as [[Title]]):\n{{pages_block}}\n\n{{#images_block}}Pictures (by number):\n{{images_block}}\n\n{{/images_block}}'),
-    productTemplate('blog.draft_post', 'Blog: draft a post', 'Draft a blog post in Markdown for the brief. Claims of fact must cite sources; opinion and framing need none. If there are no sources, write only what needs no facts and list the facts you would need in gaps.', 'blog.draft',
+    productTemplate('blog.draft_post', 'Blog: draft a post', 'Draft a blog post in Markdown for the brief. Claims of fact must cite sources; opinion and framing need none. If there are no sources, write only what needs no facts and list the facts you would need in gaps.', 'background.json',
         'Topic: {{topic}}{{#brief}}\nBrief: {{brief}}{{/brief}}{{#tone}}\nTone: {{tone}}{{/tone}}{{#audience}}\nAudience: {{audience}}{{/audience}}\n\n'),
-    productTemplate('blog.write_digest', 'Blog: write a desk digest', 'Write one digest post for an OpenVibe.Blog desk from the numbered sources (the items its sources published in the period). Pick the items a reader of this desk would most want to know about, about twelve at most, and skip routine, minor or duplicate ones. Group them into two to five sections, most important first. Each section is a list of short paragraphs, one story per paragraph, two to four plain sentences saying what happened and why it matters to this desk\'s readers, exactly as the sources state it; each paragraph lists the numbers of the sources it rests on in its `citations`. Never write source numbers, "(Source n)" or brackets in the text itself. Neutral and readable: no opinion stated as fact, no hype, no advice, no predictions. Name prices, dates and numbers only as the sources give them. List in gaps only what a reader would miss (an item you could not make sense of, a missing date or price). title: a headline naming the one or two biggest stories, at most 90 characters, without the words digest, desk, roundup or snapshot and without a date. dek: one sentence about the period.', 'blog.draft',
+    productTemplate('blog.write_digest', 'Blog: write a desk digest', 'Write one digest post for an OpenVibe.Blog desk from the numbered sources (the items its sources published in the period). Pick the items a reader of this desk would most want to know about, about twelve at most, and skip routine, minor or duplicate ones. Group them into two to five sections, most important first. Each section is a list of short paragraphs, one story per paragraph, two to four plain sentences saying what happened and why it matters to this desk\'s readers, exactly as the sources state it; each paragraph lists the numbers of the sources it rests on in its `citations`. Never write source numbers, "(Source n)" or brackets in the text itself. Neutral and readable: no opinion stated as fact, no hype, no advice, no predictions. Name prices, dates and numbers only as the sources give them. List in gaps only what a reader would miss (an item you could not make sense of, a missing date or price). title: a headline naming the one or two biggest stories, at most 90 characters, without the words digest, desk, roundup or snapshot and without a date. dek: one sentence about the period.', 'background.json',
         'Desk: {{desk}}{{#about}}\nThe desk covers: {{about}}{{/about}}\nPeriod: {{period}}\n\n'),
-    productTemplate('news.summarize_story', 'News: summarize a story', 'Write a neutral, factual summary of the story the sources report: a headline, a summary, key points and a timeline, all cited. Attribute contested claims to their source. The tone, when given, changes the length and the explaining, never the facts or the neutrality: brief is two or three sentences and at most three key points; explained also says, from the sources, what the subject is and why it matters, for someone new to it.', 'news.summarize',
+    productTemplate('news.summarize_story', 'News: summarize a story', 'Write a neutral, factual summary of the story the sources report: a headline, a summary, key points and a timeline, all cited. Attribute contested claims to their source. The tone, when given, changes the length and the explaining, never the facts or the neutrality: brief is two or three sentences and at most three key points; explained also says, from the sources, what the subject is and why it matters, for someone new to it.', 'background.json',
         '{{#topic}}Topic: {{topic}}\n\n{{/topic}}{{#tone}}Tone: {{tone}}\n\n{{/tone}}'),
     productTemplate('news.compare_perspectives', 'News: compare perspectives', 'Group the sources into distinct perspectives on the question, summarize each fairly in its own terms, and list where they agree and disagree. Do not pick a winner.', 'news.summarize',
         'Question or topic: {{topic}}\n\n'),
@@ -51,7 +51,7 @@ const templates = [
         'Offer as submitted:\n{{json offer}}\n\n'),
     productTemplate('coupons.extract_coupon', 'Coupons: extract coupons', 'Extract every coupon code the sources state, with its restrictions and expiry. If the expiry is not stated, expires_at is null and expiry_known is false. Never mark a code as working; validity is decided by reports, not by you.', 'coupons.extract',
         '{{#merchant}}Merchant: {{json merchant}}\n\n{{/merchant}}'),
-    productTemplate('trade.summarize_market_context', 'Trade: market context', 'Summarize the sourced market and filing context for the instrument. Return: summary (two to four plain sentences on what the latest figures and filings show, such as the latest period\'s numbers next to the same period a year before, exactly as the sources state them); observations (one per notable figure or filing: text, observed_at as the period end or date the source gives, and citations); stale_sources (the numbers of sources older than the staleness window); disclaimer (exactly "Informational only; not investment advice."); citations; gaps. Do arithmetic only on numbers the sources give, and say what you compared. Every observation carries the observation time from its source. Informational only: no advice, no predictions, no recommendations, no price targets.', 'trade.summarize',
+    productTemplate('trade.summarize_market_context', 'Trade: market context', 'Summarize the sourced market and filing context for the instrument. Return: summary (two to four plain sentences on what the latest figures and filings show, such as the latest period\'s numbers next to the same period a year before, exactly as the sources state them); observations (one per notable figure or filing: text, observed_at as the period end or date the source gives, and citations); stale_sources (the numbers of sources older than the staleness window); disclaimer (exactly "Informational only; not investment advice."); citations; gaps. Do arithmetic only on numbers the sources give, and say what you compared. Every observation carries the observation time from its source. Informational only: no advice, no predictions, no recommendations, no price targets.', 'background.json',
         'Instrument: {{json instrument}}{{#stale_after_hours}}\nStaleness window: {{stale_after_hours}} hours{{/stale_after_hours}}\n\n'),
     productTemplate('codes.generate_docs', 'Codes: generate documentation', 'Write developer documentation for the project from the provided source files: an overview and sections in Markdown. Cite the files each section describes. Do not document behaviour the files do not show.', 'codes.generate_docs',
         'Project: {{project}}{{#audience}}\nAudience: {{audience}}{{/audience}}\n\n'),
@@ -59,7 +59,7 @@ const templates = [
         'World: {{world}}\nRequest: {{prompt}}\n\n'),
     productTemplate('tools.describe', 'Tools: describe a tool', 'Describe one OpenVibe tool for the people who use it, from its descriptor (the numbered sources: its registry entry, inputs, outputs and limits): a one-line summary, what it does, how to use it step by step, what each input and output means, its limits, and a short FAQ. Cite the descriptor fields each statement rests on. Do not claim formats, sizes or features the descriptor does not list; say what is unknown in gaps.', 'tools.describe',
         'Tool: {{tool}}{{#audience}}\nAudience: {{audience}}{{/audience}}\n\n'),
-    productTemplate('food.suggest_recipes', 'Food: suggest recipes', 'Suggest up to three simple, low-cost recipes the person can cook, built first from their pantry. An ingredient from the pantry has from_pantry true and needs no citation. Every other ingredient must be one of the foods in the numbered sources (OpenVibe.Food\'s food list) and cite it; if a recipe needs something the sources do not list, leave that recipe out and name the missing food in gaps. State amounts in everyday units. Never state prices, calories, nutrition or health claims: the app works out costs from its own data. Keep steps short and safe (cook meat, poultry and eggs through).', 'food.suggest',
+    productTemplate('food.suggest_recipes', 'Food: suggest recipes', 'Suggest up to three simple, low-cost recipes the person can cook, built first from their pantry. An ingredient from the pantry has from_pantry true and needs no citation. Every other ingredient must be one of the foods in the numbered sources (OpenVibe.Food\'s food list) and cite it; if a recipe needs something the sources do not list, leave that recipe out and name the missing food in gaps. State amounts in everyday units. Never state prices, calories, nutrition or health claims: the app works out costs from its own data. Keep steps short and safe (cook meat, poultry and eggs through).', 'background.json',
         'Pantry: {{json pantry}}{{#people}}\nCooking for: {{people}}{{/people}}{{#ask}}\nRequest: {{ask}}{{/ask}}\n\n'),
     productTemplate('rent.screen_listing', 'Rent: screen a listing for scam signs', 'Read one rental listing a person posted and say whether a member of staff should look at it for the signs of a rental scam. The signs: asking for a deposit, rent or any payment before the place can be viewed (payment_before_viewing); asking to pay by wire transfer, gift cards, cryptocurrency or a payment app sent to a stranger (unusual_payment); an owner who is abroad or otherwise cannot show the place in person (owner_unavailable); pressure to decide or pay at once, such as many other applicants or today only (pressure); asking for identity documents, a social security number or bank details before any viewing (personal_data_request); moving the conversation to a private email or messaging app while refusing calls or visits (off_platform_only). A low price alone is not a sign: you cannot know the area. Ordinary rules (no pets, references, a deposit paid at signing, proof of income at application) are not signs. Quote the exact words behind each sign you name. When no sign is clearly present, answer allow with signals none; choose review only when the words show at least one sign.', 'rent.screen',
         'Listing:\n"""\n{{json listing}}\n"""\n\n'),
@@ -99,14 +99,14 @@ const workflows = [
         key: 'blog.draft_post', name: 'Draft a blog post', namespace: 'blog',
         input_schema: OBJ({ topic: STR(300), brief: STR(4000), tone: STR(200), audience: STR(300), sources: SOURCES(0) }, ['topic']),
         output_schema: OBJ({ title: STR(200), dek: STR(400), body_markdown: STR(40000), tags: ARR(STR(40), 10), citations: CITES, gaps: GAPS }),
-        default_route: 'blog.draft',
+        default_route: 'background.json',
     },
     {
         // OpenVibe.Blog's AI desks (server/desks.js): a digest of what a desk's sources published, each section cited.
         key: 'blog.write_digest', name: 'Write a desk digest', namespace: 'blog',
         input_schema: OBJ({ desk: STR(120), about: STR(400), period: STR(120), sources: SOURCES(2) }, ['desk', 'period', 'sources']),
         output_schema: OBJ({ title: STR(200), dek: STR(400), sections: ARR(OBJ({ heading: STR(160), paragraphs: ARR(CLAIM, 8) }), 6), citations: CITES, gaps: GAPS }),
-        default_route: 'blog.draft',
+        default_route: 'background.json',
     },
     {
         key: 'news.summarize_story', name: 'Summarize a news story', namespace: 'news',
@@ -114,7 +114,7 @@ const workflows = [
         // someone new to the subject: what it is and why it matters, still only from the sources).
         input_schema: OBJ({ topic: STR(300), tone: { enum: ['brief', 'neutral', 'explained'] }, sources: SOURCES(1) }, ['sources']),
         output_schema: OBJ({ headline: STR(200), summary: STR(3000), key_points: ARR(CLAIM, 20), timeline: ARR(OBJ({ when: STR(60), what: STR(500), citations: CITES }), 30), citations: CITES, gaps: GAPS }),
-        default_route: 'news.summarize',
+        default_route: 'background.json',
     },
     {
         key: 'news.compare_perspectives', name: 'Compare perspectives on a story', namespace: 'news',
@@ -162,7 +162,7 @@ const workflows = [
             disclaimer: { const: 'Informational only; not investment advice.' },
             citations: CITES, gaps: GAPS,
         }),
-        default_route: 'trade.summarize',
+        default_route: 'background.json',
     },
     {
         key: 'codes.generate_docs', name: 'Generate documentation from code', namespace: 'codes',
@@ -199,7 +199,7 @@ const workflows = [
             }), 3),
             citations: CITES, gaps: GAPS,
         }),
-        default_route: 'food.suggest',
+        default_route: 'background.json',
     },
     {
         key: 'rent.screen_listing', name: 'Screen a rental listing for scam signs', namespace: 'rent',
@@ -267,14 +267,14 @@ templates.push({
     input_schema: { type: 'object' }, output_schema: { type: 'object' },
     system_prompt: 'You describe one picture for OpenVibe.Pics so people who cannot see it know what it shows. alt: one plain sentence of at most 140 characters saying what the picture shows (never "image of" or "picture of"). caption: one or two sentences with the detail a sighted person would notice first. tags: up to six short lowercase words for what is in it. Describe only what is visible. Never name or guess who a real person is, and never read out personal details shown in it (names, addresses, number plates, phone numbers). If it shows text, say what kind of text it is rather than quoting personal parts. Output only JSON matching the schema.',
     user_prompt: '{{#title}}The uploader titled it: {{title}}\n{{/title}}Describe the picture.',
-    default_route: 'pics.vision', owner: 'media-hub', metadata: { json_name: 'pics_describe_image' },
+    default_route: 'background.json', owner: 'media-hub', metadata: { json_name: 'pics_describe_image' },
 });
 workflows.push({
     key: 'pics.describe_image', name: 'Describe a picture', namespace: 'pics',
     input_schema: OBJ({ image: IMAGE, title: STR(120) }, ['image']),
     output_schema: OBJ({ alt: STR(160), caption: STR(400), tags: ARR(STR(30), 6), gaps: GAPS }),
     steps: [{ kind: 'llm', template: 'pics.describe_image', operation: 'generate', output: 'json', image: 'image', image_max_width: 1024, prepare: 'pics.describe_image', params: { max_tokens: 400, temperature: 0.2 } }],
-    default_route: 'pics.vision',
+    default_route: 'background.json',
     // A person's picture: never shared between callers (the stored run keeps only the image's hash).
     cache_mode: 'none',
     metadata: { seed: true },
@@ -288,14 +288,14 @@ templates.push({
     input_schema: { type: 'object' }, output_schema: { type: 'object' },
     system_prompt: 'You write for "Is This Real?", OpenVibe.Blog\'s satire desk: absurd, deadpan mock-explainers that treat a ridiculous question as if it were a serious public-health or consumer issue, in the style of an earnest internet explainer that has completely lost the plot. Escalate the absurdity section by section; invented studies, invented institutes and invented experts with obviously silly names are the joke. Rules you never break: the piece must be plainly fiction to any reader; never name, quote or describe a real living person, and never put words in the mouth of a real company, brand, government body or organisation; no jokes about real tragedies, victims, illness, minors, or any group of people by race, religion, gender, sexuality or disability; never give steps, amounts or methods for anything dangerous (drugs, weapons, self-harm, dangerous stunts), even as a joke, and when the topic brushes against one, the punchline is that nobody should try it; no slurs. Profanity is allowed but use it sparingly. title: the question, as a headline. dek: one deadpan sentence in the voice of the piece (never a description of the piece). body_markdown: 350 to 700 words in Markdown with two to four ## sections; no title heading. tags: up to five lower-case words. Output only JSON matching the schema.',
     user_prompt: 'Question: {{topic}}{{#angle}}\nAngle: {{angle}}{{/angle}}',
-    default_route: 'blog.draft', owner: 'blog', metadata: { json_name: 'blog_write_satire' },
+    default_route: 'background.json', owner: 'blog', metadata: { json_name: 'blog_write_satire' },
 });
 workflows.push({
     key: 'blog.write_satire', name: 'Write a satire post', namespace: 'blog',
     input_schema: OBJ({ topic: STR(300), angle: STR(300) }, ['topic']),
     output_schema: OBJ({ title: STR(200), dek: STR(300), body_markdown: STR(12000), tags: ARR(STR(40), 5) }),
     steps: [{ kind: 'llm', template: 'blog.write_satire', operation: 'generate', output: 'json', params: { max_tokens: 2400, temperature: 0.9 } }],
-    default_route: 'blog.draft',
+    default_route: 'background.json',
     cache_mode: 'private',
     metadata: { seed: true },
 });

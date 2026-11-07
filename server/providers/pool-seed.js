@@ -31,6 +31,8 @@ function recordOf(p) {
             // The privacy label of the provider: `private` only where its own terms say it keeps nothing and trains on
             // nothing, `anonymized` for everyone else. The wording and the page it was read from travel with it.
             privacy: p.privacy,
+            // The tiers the provider itself sells and at what price (BA1): a Flex tier, a batch API.
+            ...(p.tier_rates ? { tier_rates: p.tier_rates } : {}),
             ...(p.uncensored ? { uncensored: true } : {}),
             ...(p.role ? { role: p.role } : {}),
         },

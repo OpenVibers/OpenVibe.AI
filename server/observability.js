@@ -88,7 +88,7 @@ function createAiReadiness({ db, registry, pool, keys, runs, release = null }) {
 }
 
 /** AI gauges on the openvibe-shared/metrics registry. */
-function registerAiGauges(registry, { runs, registry: ai, pool, balance = null, gpus = null, abuse = null }) {
+function registerAiGauges(registry, { runs, registry: ai, pool, balance = null, gpus = null, abuse = null, db = null }) {
     registry.gauge({
         name: 'ai_runs', help: 'Runs waiting for a slot (queued) and holding one (running)', labelNames: ['state'],
         collect: () => {
@@ -128,6 +128,26 @@ function registerAiGauges(registry, { runs, registry: ai, pool, balance = null, 
     registry.gauge({
         name: 'ai_gpu_orphan_instances', help: 'Marketplace GPU instances with our label that no live row owns and that are still waiting to be given back', labelNames: ['marketplace'],
         collect: async () => (gpus ? await gpus.orphanCount() : []),
+    });
+    // BA1: the tier every run really ran on, and what waiting earned. A run's tier is the tier the provider
+    // answered on ('standard', 'flex', 'offpeak', 'local'), never the tier we hoped for.
+    registry.gauge({
+        name: 'ai_runs_by_tier', help: 'Runs by the tier they really ran on', labelNames: ['tier', 'provider'],
+        collect: async () => {
+            if (!db) return [];
+            const rows = await db.prepare(`SELECT service_tier AS tier, provider_key AS provider, COUNT(*)::bigint AS n
+                FROM runs WHERE service_tier IS NOT NULL GROUP BY service_tier, provider_key`).all();
+            return (rows || []).map((r) => ({ labels: { tier: r.tier, provider: r.provider || '' }, value: Number(r.n) || 0 }));
+        },
+    });
+    // What waiting earned: the standard price minus the price the run really paid.
+    registry.gauge({
+        name: 'ai_saved_usd', help: 'What waiting earned: the standard price minus the price the run really paid',
+        collect: async () => {
+            if (!db) return 0;
+            const row = await db.prepare('SELECT COALESCE(SUM(saved_usd), 0) AS saved FROM runs').get();
+            return Number(row && row.saved) || 0;
+        },
     });
 }
 

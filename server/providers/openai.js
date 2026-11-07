@@ -9,6 +9,10 @@
  *   transcribe                      POST {base}/audio/transcriptions   (Whisper-style)
  *   image                           POST {base}/images/generations     (dall-e-*, gpt-image-1)
  *
+ * A chat completion may carry a service tier (`serviceTier`, BA1): a Flex tier is slower and cheaper, and
+ * the provider may refuse it. The answer's own service_tier comes back with the result, so the run is
+ * priced on the tier that really answered.
+ *
  * Structured output steps down json_schema -> json_object -> prose for gateways that lack it
  * (Live's behaviour); prose JSON is repaired by the engine.
  */
@@ -23,7 +27,7 @@ const TEXT_OPS = ['chat', 'generate', 'summarize', 'classify', 'extract', 'enric
 
 function isReasoningModel(m) { return /^(gpt-5|o\d)/i.test(m || ''); }
 
-function buildBody({ model, system, messages, image, json, maxTokens, temperature, cacheKey, baseUrl }, jsonMode) {
+function buildBody({ model, system, messages, image, json, maxTokens, temperature, cacheKey, baseUrl, serviceTier }, jsonMode) {
     const msgs = [];
     // Stepped down from json_schema: the schema travels in the instructions instead.
     const hint = json && jsonMode !== 'schema' ? schemaInstruction(json) : '';
@@ -47,6 +51,9 @@ function buildBody({ model, system, messages, image, json, maxTokens, temperatur
     if (json && jsonMode === 'schema') body.response_format = { type: 'json_schema', json_schema: { name: json.name || 'result', schema: json.schema, strict: json.strict !== false } };
     else if (json && jsonMode === 'object') body.response_format = { type: 'json_object' };
     if (cacheKey && /api\.openai\.com/i.test(baseUrl)) body.prompt_cache_key = String(cacheKey).slice(0, 64);
+    // The service tier (BA1): a Flex tier is slower and cheaper, and the provider may refuse it. The tier
+    // travels in the request; the answer says which tier it really ran on (the pool prices that one).
+    if (serviceTier) body.service_tier = String(serviceTier);
     return body;
 }
 
@@ -66,7 +73,7 @@ function createOpenAiProvider(record, { apiKey = '', fetchImpl = globalThis.fetc
                 const j = await postJson(`${baseUrl}/chat/completions`, headers(), body, { signal: req.signal, timeoutMs: req.timeoutMs, fetchImpl });
                 const msg = j.choices && j.choices[0] && j.choices[0].message;
                 const text = (msg && typeof msg.content === 'string' ? msg.content : '').trim();
-                return { text, json: null, model: j.model || req.model, usage: usageParser.openAiCompatibleUsage(j.usage || {}) };
+                return { text, json: null, model: j.model || req.model, serviceTier: j.service_tier || null, usage: usageParser.openAiCompatibleUsage(j.usage || {}) };
             } catch (e) {
                 // Gateways without structured-output support: schema -> json_object -> prose.
                 if (e instanceof ProviderError && e.status === 400 && jsonMode && /response_format|json_schema|schema|strict/i.test(e.message)) {
@@ -154,6 +161,8 @@ function createOpenAiProvider(record, { apiKey = '', fetchImpl = globalThis.fetc
             if (req.maxTokens) body.max_tokens = req.maxTokens;
             if (req.temperature != null) body.temperature = req.temperature;
         }
+        // The service tier (BA1): a Flex tier travels with the request and the answer says which tier it ran on.
+        if (req.serviceTier) body.service_tier = String(req.serviceTier);
         if (typeof req.onDelta === 'function') return await completeStreaming(body, req);
         const j = await postJson(`${baseUrl}/chat/completions`, headers(), body, { signal: req.signal, timeoutMs: req.timeoutMs, fetchImpl });
         if (!Array.isArray(j.choices) || !j.choices.length) throw new ProviderError('completion has no choices', { code: 'provider.output' });
@@ -163,6 +172,7 @@ function createOpenAiProvider(record, { apiKey = '', fetchImpl = globalThis.fetc
             completion: { choices: j.choices, system_fingerprint: j.system_fingerprint || null },
             text: typeof msg.content === 'string' ? msg.content : '',
             model: j.model || req.model,
+            serviceTier: j.service_tier || null,
             usage: usageParser.openAiCompatibleUsage(u),
         };
     }

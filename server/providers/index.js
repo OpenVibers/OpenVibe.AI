@@ -37,6 +37,8 @@ const { createGeminiProvider } = require('./gemini');
 const { createHttpSeamProvider } = require('./http');
 const { createWhisperProvider } = require('./whisper');
 const rates = require('./rate-cards');
+const tiers = require('./tiers');
+const latency = require('../latency');
 const { detectTask, capabilitiesOf, hardNeeds, rank, reasonFor, workKind, leadingText, preferredTarget, preferMatches } = require('./task');
 const modelCatalog = require('./model-catalog');
 const { createWarmCache } = require('./warm-cache');
@@ -193,11 +195,20 @@ function credentialCanServe(provider, operation, req) {
     return false;
 }
 /** The model a self key should use for this run: the person's default for the kind, else their stored model. */
+/**
+ * The Live role a route names, so a person's own key answers with the model they stored for that role.
+ *
+ * The background routes (BA1) carry the role too: the AI viewers director plan runs in the background, but a
+ * person who gave their key a director model still wants that model to write it.
+ */
+const ROLE_ROUTE = /^(?:live|background)\.(chat|vision|director|summary|legacy)$/;
+const roleOfRoute = (routeKey) => (ROLE_ROUTE.exec(String(routeKey || '')) || [])[1] || null;
+
 function selfModelFor(cred, operation, req, ctx, prefs) {
     const kind = workKind(operation, req, ctx);
     const choice = prefs && prefs.defaults ? prefs.defaults[kind] : 'auto';
     const stored = cred.models || {};
-    const role = ctx.role || ((/^live\.(chat|vision|director|summary|legacy)$/.exec(ctx.routeKey || '') || [])[1]) || null;
+    const role = ctx.role || roleOfRoute(ctx.routeKey);
     const model = (choice && choice !== 'auto') ? choice
         : (req.image && stored.vision) || (role && stored[role]) || stored[kind] || stored.chat
             || CREDENTIAL_DEFAULT_MODEL[cred.provider] || 'gpt-4o-mini';
@@ -205,7 +216,7 @@ function selfModelFor(cred, operation, req, ctx, prefs) {
     return { model, kind, why };
 }
 
-function createProviderPool({ db, registry, config, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, credentialFetch = null, machineModels = null, community = null, bench = null, variantEvidence = null, adultStatus = null }) {
+function createProviderPool({ db, registry, config, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, credentialFetch = null, machineModels = null, community = null, bench = null, variantEvidence = null, adultStatus = null, offPeak = null }) {
     // A person's own machine as their model (credential provider node, server/machines.js).
     const machines = machineModels || require('../machines').createMachineModels({ config, env, fetchImpl });
     const cache = new Map();          // key -> { stamp, adapter }
@@ -323,6 +334,85 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
     async function costOf(providerKey, model, usage) {
         const cards = await rateCardsFor(providerKey, model);
         return cards ? rates.costOfUsage(cards, usage) : 0;
+    }
+
+    // ── The tier a run is priced on (BA1) ────────────────────────────
+    /**
+     * The order a run that may wait tries its candidates in: the host's own model first, when it is idle
+     * and the route's quality allows it.
+     *
+     * The quality gate: a route that names its model (constraints.model) keeps that model — a small local
+     * model never answers work whose route says which model it wants (The Rundown is written by the creative
+     * model, never by the host's llama.cpp). The authority is the network's choice of provider, not a demand
+     * for a model: the host's own model may still answer first, because it costs the network nothing. The
+     * local model serves short text only (localCanServe), and the attempt loop skips it when the host's one
+     * local slot is busy, so a paid outage never turns into a stampede and a busy host never waits for it.
+     */
+    async function orderForWaiting(list, { route, operation, req }) {
+        const c = (route && route.constraints) || {};
+        if (c.model) return list;
+        // Opt-in per route (Opus, 11-07): the host's small model writes only where a route says its output may come
+        // from one. Without the flag the router's own order stands, so no visible text changes quality.
+        if (c.allow_local !== true) return list;
+        if (!localCanServe(route, operation, req)) return list;
+        const local = [];
+        const rest = [];
+        for (const candidate of list) {
+            const p = await registry.getProvider(candidate.provider);
+            if (p && isLocalModel(p)) local.push(candidate);
+            else rest.push(candidate);
+        }
+        return local.length ? [...local, ...rest] : list;
+    }
+
+    /**
+     * The tier one candidate may run on, for a run that may wait:
+     *
+     *   local     the host's own model: capacity the network already pays for;
+     *   flex      a provider that publishes a Flex tier (OpenAI, DeepInfra): slower, cheaper;
+     *   offpeak   a provider whose own price is lower right now (DeepSeek's off-peak hours);
+     *   standard  everything else.
+     *
+     * The tier is what the run is priced on, so it is only ever a tier the provider actually sells: a
+     * provider with no Flex multiplier and no off-peak price is a standard run.
+     */
+    async function tierFor({ p, model, operation, at }) {
+        if (!p) return 'standard';
+        if (isLocalModel(p)) return 'local';
+        if (tiers.TIERED_OPS.has(operation) && tiers.multiplierOf(p, 'flex') != null) return 'flex';
+        if (offPeak && model) {
+            const off = await offPeak.priceAt(p.key, model, at);
+            if (off && (off.input != null || off.output != null)) return 'offpeak';
+        }
+        return 'standard';
+    }
+
+    /**
+     * The cost of one call on the tier it really ran on, and what the wait earned: the standard price
+     * minus the real one.
+     *
+     * A tier nobody priced is priced at the standard rate. The network never claims a saving it cannot
+     * see: a provider that does not say which tier it served is priced at the list price.
+     */
+    async function costOnTier({ providerKey, model, usage, tier, p }) {
+        const cards = await rateCardsFor(providerKey, model);
+        if (!cards) return { cost: 0, standard: 0, saved: 0 };
+        const standard = rates.costOfUsage(cards, usage);
+        if (tier === 'standard' || tier === 'local') return { cost: standard, standard, saved: 0 };
+        if (tier === 'offpeak') {
+            const off = offPeak ? await offPeak.priceAt(providerKey, model, clock.now()) : null;
+            if (!off) return { cost: standard, standard, saved: 0 };
+            // The provider's own off-peak price, and only where it is lower than the card's price.
+            const cheaper = (card, price) => (price == null || price > card.unit_price_usd ? card : { ...card, unit_price_usd: price });
+            const offCards = { in: cheaper(cards.in, off.input), cached: cheaper(cards.cached, off.cached_read), out: cheaper(cards.out, off.output), cache_write: cards.cache_write };
+            const cost = rates.costOfUsage(offCards, usage);
+            return { cost, standard, saved: Math.max(0, standard - cost) };
+        }
+        const multiplier = tiers.multiplierOf(p, tier);
+        if (multiplier == null) return { cost: standard, standard, saved: 0 };
+        const tierCards = rates.cardsForTier(cards, { multiplier, tier });
+        const cost = rates.costOfUsage(tierCards, usage);
+        return { cost, standard, saved: Math.max(0, standard - cost) };
     }
 
     // ── Provider state: platform.provider-state@1 per provider, from usage_daily and the breaker ──
@@ -772,7 +862,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         const completing = operation === 'complete';
         if (!completing && !['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich'].includes(operation)) throw new AiError(422, 'credential.unsupported', `a person's own machine answers text only, not ${operation}`);
         if (req.image) throw new AiError(422, 'credential.unsupported', 'a person\'s own machine reads no pictures yet');
-        const wanted = ctx.role || ((/^live\.(chat|vision|director|summary|legacy)$/.exec(ctx.routeKey || '') || [])[1]) || null;
+        const wanted = ctx.role || roleOfRoute(ctx.routeKey);
         const model = (wanted && cred.models[wanted]) || cred.models.chat;
         if (!model) throw new AiError(422, 'credential.no_model', 'the person\'s own machine credential names no model (models.chat)');
         const sysText = [...(req.system || []).map((x) => x.text), req.json ? schemaInstruction(req.json) : ''].filter(Boolean).join('\n\n');
@@ -826,7 +916,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         if (!messaging && !completing && !['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich'].includes(operation)) throw new AiError(422, 'credential.unsupported', `a person's own key is used for text only, not ${operation}`);
         const guardedFetch = credentialFetch || require('./guarded-fetch').guardedFetch;
         // The person's model for this role: the run's input.role, else the Live role its route names (live.director).
-        const wanted = ctx.role || ((/^live\.(chat|vision|director|summary|legacy)$/.exec(ctx.routeKey || '') || [])[1]) || null;
+        const wanted = ctx.role || roleOfRoute(ctx.routeKey);
         const role = wanted && cred.models[wanted] ? wanted : null;
         // On the person's Anthropic key the model the caller asked for is theirs to choose; elsewhere the model they stored
         // is the one their provider serves (a Claude Code model name does not exist at DeepSeek).
@@ -1272,6 +1362,15 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         // L36 Y7: the fallback chain stops after three providers.
         const maxAttempts = (config.routing && config.routing.maxAttempts) || DEFAULT_MAX_ATTEMPTS;
         let attemptsMade = 0;
+        // BA1: a run that may wait (the 'background' class) looks for capacity that is cheap because it may
+        // take minutes: the host's own idle model first, when the route's quality allows it. The provider
+        // order stays the router's own (the authority keeps critical work); what changes is the tier each
+        // candidate runs on, and that is decided per candidate below.
+        const latencyClass = latency.isClass(ctx.latencyClass) ? ctx.latencyClass : latency.DEFAULT;
+        if (latencyClass !== latency.DEFAULT && !exact) {
+            list = await orderForWaiting(list, { route, operation, req });
+            explain.latency_class = latencyClass;
+        }
         candidate:
         for (let i = 0; i < list.length; i++) {
             const c = list[i];
@@ -1363,12 +1462,24 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             // An image generation outlasts the shared provider's chat timeout (AI_PROVIDER_TIMEOUT_MS): the route's wins. So does a
             // route that says so (options.outlast_provider_timeout: space.build writes a whole app, a minute or two). Otherwise
             // the provider's timeout stays strict, so a slow provider fails over quickly.
+            // BA1: a run that may wait gets the room its class allows (a Flex tier answers in minutes, not
+            // seconds), so the provider's own chat timeout does not cut it short.
+            const waiting = latencyClass !== latency.DEFAULT;
             const outlast = operation === 'image' || Boolean(route.options && route.options.outlast_provider_timeout);
             const own = await providerTimeout(p, model);
-            const cap = outlast ? Math.max(own, Number(route.timeout_ms) || 0, operation === 'image' ? 600000 : 0) : (own || 600000);
+            const room = waiting ? Math.max(latency.timeoutMs(latencyClass), Number(route.timeout_ms) || 0) : 0;
+            const cap = (outlast || waiting) ? Math.max(own, Number(route.timeout_ms) || 0, room, operation === 'image' ? 600000 : 0) : (own || 600000);
             const timeoutMs = Math.max(1000, Math.min(req.timeoutMs || route.timeout_ms || own || DEFAULT_PROVIDER_TIMEOUT_MS, cap));
             const retries = config.providerRetries;
-            for (let attempt = 0; attempt <= retries; attempt++) {
+            // BA1: the tier this candidate runs on. A background run asks for the cheaper tier the
+            // provider sells. A refusal of that tier (a Flex tier with no capacity, or a model that does
+            // not serve it) sends the same run once more on the standard tier: the refusal is counted and
+            // logged, and it produced no tokens, so nothing is billed for it. The batch class has no tier
+            // yet: its own API is BA2, so a batch run is priced at the standard rate until then.
+            const wantedTier = latencyClass === 'background' ? await tierFor({ p, model, operation, at: clock.now() }) : 'standard';
+            let askedTier = wantedTier;
+            let attempt = 0;
+            while (attempt <= retries) {
                 if (ctx.signal && ctx.signal.aborted) throw new AiError(409, 'run.cancelled', 'run was cancelled');
                 const started = clock.now();
                 const t0 = Date.now();
@@ -1412,11 +1523,17 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                     const localMax = Math.max(1, (config.localLlm && config.localLlm.maxTokens) || 512);
                     callReq = { ...callReq, maxTokens: Math.min(Number(callReq.maxTokens) || localMax, localMax) };
                 }
+                // The service tier travels with the request (BA1): a Flex tier is slower and cheaper.
+                if (askedTier === 'flex') callReq = { ...callReq, serviceTier: 'flex' };
                 try {
                     const fn = a[operation];
                     if (typeof fn !== 'function') throw new ProviderError(`${operation} not implemented`, { code: 'provider.unsupported' });
                     statFor(c.provider).calls += p.kind === 'stub' ? 0 : 1;   // stub counts its own calls
-                    const result = await fn({ ...callReq, ...(onDelta ? { onDelta } : {}), model, signal: ctx.signal, timeoutMs });
+                    // BA1: a Flex attempt for a caller that waits gets only the part of the wait it may use, so a
+                    // too-slow tier gives way to the standard one in time (ctx.flexBudgetMs, server/runs.js).
+                    const flexCapped = askedTier === 'flex' && Number(ctx.flexBudgetMs) > 0;
+                    const attemptTimeout = flexCapped ? Math.max(1000, Math.min(timeoutMs, Number(ctx.flexBudgetMs))) : timeoutMs;
+                    const result = await fn({ ...callReq, ...(onDelta ? { onDelta } : {}), model, signal: ctx.signal, timeoutMs: attemptTimeout });
                     if (operation === 'embed' && (!Array.isArray(result.vectors) || result.vectors.length !== req.input.length
                         || result.vectors.some(v => !Array.isArray(v) || !v.length || v.some(n => typeof n !== 'number' || !Number.isFinite(n)))))
                         throw new ProviderError('embedding response has invalid vectors', { code: 'provider.output' });
@@ -1432,7 +1549,14 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                         outputTokens: usage.output || 0, inputTokens: usage.input || 0, cachedTokens: usage.cached || 0 });
                     // An image is metered per image (usage.output = images), and no rate card prices one yet (an owner/T5
                     // item): its cost is 0 rather than the image count read as output tokens on the token cards.
-                    const cost = operation === 'image' ? 0 : await costOf(c.provider, result.model || model, usage);
+                    // BA1: the cost is the tier the answer really ran on, and the wait's saving is the
+                    // standard price minus that one. A provider that does not say which tier it served is
+                    // priced at the list price: a saving nobody confirmed is not a saving.
+                    const ranOn = tiers.tierOfAnswer(result, askedTier);
+                    const priced = operation === 'image'
+                        ? { cost: 0, standard: 0, saved: 0 }
+                        : await costOnTier({ providerKey: c.provider, model: result.model || model, usage, tier: ranOn, p });
+                    const cost = priced.cost;
                     statFor(c.provider).ok++;
                     await recordSuccess(c.provider);
                     if (ctx.logRequest) {
@@ -1456,7 +1580,11 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                     explain.attempts = attempts;
                     explain.openvibe = attemptFacts;
                     if (local) explain.provider_local = true;   // the Exchange receipt labels the offer local (server/exchange/receipts.js)
-                    return { result, provider: c.provider, providerKind: p.kind, local, model: result.model || model, fallbackUsed: fallback || selfAttempts.some(a => a.status !== 'skipped'), usage, cost, latencyMs: latency, ttftMs, synthetic: Boolean(result.synthetic || a.synthetic), tried, startedAt: started, explain };
+                    // BA1: the tier the run really ran on, and what waiting earned.
+                    explain.service_tier = ranOn;
+                    if (wantedTier !== 'standard') explain.requested_tier = wantedTier;
+                    if (priced.saved > 0) explain.saved_usd = priced.saved;
+                    return { result, provider: c.provider, providerKind: p.kind, local, model: result.model || model, fallbackUsed: fallback || selfAttempts.some(a => a.status !== 'skipped'), usage, cost, latencyMs: latency, ttftMs, synthetic: Boolean(result.synthetic || a.synthetic), tried, startedAt: started, serviceTier: ranOn, savedUsd: priced.saved, standardCostUsd: priced.standard, explain };
                 } catch (err) {
                     lastErr = err;
                     if (ctx.signal && ctx.signal.aborted) {
@@ -1480,7 +1608,19 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                     // A timed-out image may still be generated and billed upstream: never pay for it twice.
                     // An insufficient-balance answer is never retried: the same provider cannot answer until it is topped up.
                     if (insufficientBalance(err)) resting = true;
-                    if (attempt < retries && !insufficientBalance(err) && retryable(err) && !(operation === 'image' && err.code === 'provider.timeout')) { await sleep(config.retryDelayMs + Math.floor(Math.random() * Math.min(700, config.retryDelayMs)), ctx.signal).catch(() => {}); continue; }
+                    // BA1: the provider refused the tier we asked for (a Flex tier with no capacity, or a
+                    // model that does not serve it). The same run goes once more on the standard tier: the
+                    // refusal is counted and logged above, and it produced no tokens, so nothing is billed
+                    // for it. The retry does not spend one of the provider's own retries.
+                    const flexTooSlow = askedTier === 'flex' && Number(ctx.flexBudgetMs) > 0 && err && err.code === 'provider.timeout' && !(ctx.signal && ctx.signal.aborted);
+                    if (askedTier === 'flex' && (tiers.isTierRefusal(err, 'flex') || flexTooSlow)) {
+                        askedTier = 'standard';
+                        const why = flexTooSlow ? 'the flex tier was slower than the caller waits' : 'the provider refused the flex tier';
+                        attempts.push({ key: 'openvibe', provider: c.provider, model, why: chosen || 'the router chose it', status: 'failed', error: why });
+                        log.warn(`[ai] ${c.provider}: ${why}; the same run goes again on the standard tier`);
+                        continue;
+                    }
+                    if (attempt < retries && !insufficientBalance(err) && retryable(err) && !(operation === 'image' && err.code === 'provider.timeout')) { attempt += 1; await sleep(config.retryDelayMs + Math.floor(Math.random() * Math.min(700, config.retryDelayMs)), ctx.signal).catch(() => {}); continue; }
                     break;
                 }
             }

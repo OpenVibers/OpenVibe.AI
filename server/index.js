@@ -80,7 +80,10 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     const bench = createBenchEvidence({ db, registry, config, clock, fetchImpl, log });
     // Network owns the 18+ account flag; the adult tier checks it before placement.
     const adultStatus = require('./policy/adult-status').createAdultStatus({ config, env, fetchImpl, clock, log });
-    const pool = createProviderPool({ db, registry, config, clock, fetchImpl, env, log, credentialFetch, machineModels: machines, community, bench, variantEvidence, adultStatus });
+    // The price book's off-peak windows (BA1): what a provider's own price is inside the hours it publishes.
+    // The router reads them to know when a provider is at its off-peak price (server/providers/tiers.js).
+    const offPeak = require('./pricebook/offpeak').createOffPeak({ db, clock });
+    const pool = createProviderPool({ db, registry, config, clock, fetchImpl, env, log, credentialFetch, machineModels: machines, community, bench, variantEvidence, adultStatus, offPeak });
     // The hourly provider balance probe (server/providers/balance.js): a gauge for the operator alert, started
     // only when the service listens (never in tests) and off under a restore drill.
     const balance = require('./providers/balance').createBalanceProbe({ registry, config, env, fetchImpl, clock, log });
@@ -165,8 +168,6 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     // The living price book (plan E1): the weekly job that reads every catalogued provider's own price listing and
     // keeps the price the router charges in step with it. A change of more than 20% waits for the owner on the
     // operator console. Off in test mode (the tests replay the recorded listings) and off under a drill.
-    // The price book's off-peak windows: what a provider's own price is inside a window it publishes.
-    const offPeak = require('./pricebook/offpeak').createOffPeak({ db, clock });
     const priceBook = require('./pricebook').createPriceBook({ db, registry, config, clock, log, offPeak });
     // The measured refusal rates (server/refusal/): the weekly job that asks every offer the same published,
     // harmless questions and publishes how often it refused them. Due-based, like the price book.
