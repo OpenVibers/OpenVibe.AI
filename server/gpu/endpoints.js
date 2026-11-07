@@ -24,7 +24,7 @@
  * injected fetch (the recorded answers in test/fixtures/gpu), and Billing through the Credits manager's.
  */
 const { ids } = require('openvibe-contracts');
-const { AiError, sha256, iso } = require('../util');
+const { AiError, sha256 } = require('../util');
 const money = require('./money');
 const catalog = require('./catalog');
 
@@ -65,7 +65,7 @@ function clamp(value, min, max, fallback) {
  * The module. `credits` is AI's Credits facade (server/index.js): `credits.enabled` is the live
  * AI_CREDITS flag and `credits.manager` the client to Billing's hold/settle API.
  */
-function createOwnEndpoints({ db, gpus, credits, settings, config = null, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, models = catalog.list() } = {}) {
+function createOwnEndpoints({ db, gpus, credits, config = null, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, models = catalog.list() } = {}) {
     const now = () => clock.now();
     const at = (ms) => new Date(ms).toISOString();
     const byKey = new Map((models || []).map((m) => [m.key, m]));

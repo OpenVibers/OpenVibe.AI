@@ -102,7 +102,8 @@ The Exchange's product line 6, "your own endpoint", is the same provisioner with
   worst case the rent may cost (the reservation); when it stops, the exact seconds are settled:
   `usage.input_tokens` carries the milliseconds, `retail.version` is `gpu-second@1`, and the per-request
   remainder carries the last nano so the Billing charge equals the GPU ledger's `spent_nano` to the
-  nano. Billing is the only ledger; nothing here writes money;
+  nano. Billing is the only place the person is charged; the `gpu_spend` rows are the owner's cost
+  record, never the person's charge;
 - the idle timer is the endpoint's own (`idle_minutes`, 1-120, default the owner's `idle_minutes`),
   measured from the last proxied request (`gpu_instances.last_used_at`). The maximum run is 120 minutes
   (or the owner's `max_runtime_minutes` when lower), so a start's hold is bounded;

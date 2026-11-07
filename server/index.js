@@ -131,7 +131,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     // A person's own endpoint (the design's product line 6): a private rent on the same GPU provisioner, with a
     // Billing hold before it starts and the exact seconds settled when it stops. It is off until the owner has
     // a GPU key and a monthly cap AND Balance billing is on; the public status says which one is missing.
-    const ownEndpoints = require('./gpu/endpoints').createOwnEndpoints({ db, gpus, credits: creditsRef, settings, config, clock, fetchImpl, log });
+    const ownEndpoints = require('./gpu/endpoints').createOwnEndpoints({ db, gpus, credits: creditsRef, config, clock, fetchImpl, log });
     gpus.attachEndpoints(ownEndpoints);
     const runs = createRuns({ db, registry, engine, cache, quotas, config, clock, log, userModules, credentials, preferences, tiers, projectSecrets, pool, runBudgets, credits: creditsRef, community, presets, receipts, abuse });
     await seed({ registry, quotas, config, env, db });
