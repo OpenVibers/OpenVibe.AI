@@ -32,7 +32,10 @@ t.test('a solved challenge is accepted exactly once', async () => {
 t.test('a wrong nonce, an expired challenge and another device are refused', async () => {
     const pow = createPow({ db: tdb.db, clock, bits: 5, ttlMs: 60_000 });
     const one = await pow.issue({});
-    assert.strictEqual(await pow.verify(`${one.challenge}:0`, {}), false);
+    // Nonce 0 solves roughly one challenge in 32 at 5 bits, so it is not a reliable "wrong" nonce.
+    let wrong = 0;
+    while (zeroBits(digest(one.challenge, wrong)) >= 5) wrong++;
+    assert.strictEqual(await pow.verify(`${one.challenge}:${wrong}`, {}), false);
     const two = await pow.issue({ deviceHash: 'b'.repeat(64) });
     const good = `${two.challenge}:${solve(two.challenge, 5)}`;
     assert.strictEqual(await pow.verify(good, { deviceHash: 'c'.repeat(64) }), false, 'issued for one device');
