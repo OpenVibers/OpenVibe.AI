@@ -1,20 +1,28 @@
 'use strict';
 /**
- * What the Exchange catalog measures: uptime, p50/p95 and request counts from the runs that actually
- * happened, never from a rollup keyed by a different model id.
+ * What the Exchange catalog measures: uptime, p50/p95 and request counts from the provider attempts
+ * that actually happened, never from a rollup keyed by a different model id.
  *
  * A registry model row names the model ("gpt-5-nano"); a run records the id its upstream resolved
  * ("gpt-5-nano-2025-08-07"). A run belongs to the longest registry key it extends by a revision —
  * a date, a version or a tag. `gpt-5` therefore never collects `gpt-5-mini-2025-08-07`; the mini row
  * does, by exact name. Cached answers carry no provider of their own, so they follow the run they
- * reused (`cached_from`). A failed run answered nothing, so the provider and model it last tried are
- * read from its request rows.
+ * reused (`cached_from`).
+ *
+ * Uptime is per real provider attempt, not per run status. A failed run counts against an offer only
+ * when an attempt row names that provider and model; a run refused before routing, over quota or by
+ * validation has no such row and counts against nothing. An attempt that answered (status ok) is a
+ * success even when the run afterwards failed validation (`output.empty` / `output.invalid`): the
+ * offer did answer. A skipped or cancelled row was never an answer and is not a sample.
  *
  * The latency of an answer is its time to the first token when the receipt recorded one (a streamed
- * answer), else the total provider latency of the attempt that answered. No samples means null, not 0.
+ * answer), else the total provider latency of the attempt that answered. Uptime and speed need enough
+ * samples: 20 real attempts in the window. Below that both are null while `requests_7d` still says how
+ * many attempts there were. No samples means null, not 0.
  * Nothing here is per person, and neither a prompt nor an answer is read.
  */
 const DAY_MS = 86400000;
+const MIN_SAMPLES = 20;
 const dayOf = (ms) => new Date(ms).toISOString().slice(0, 10);
 
 // What an upstream appends to a registry name: -2025-08-07, -v3-0324, -4-5-20251001, :free, @rev.
@@ -52,40 +60,50 @@ function percentile(values, p) {
 }
 
 function createObserved({ db, clock = { now: () => Date.now() } }) {
-    // Counted per day, status and effective offer. A cached run's provider is the run it reused; a
-    // failed run's is its last attempt (only a provider call can fail an offer — a refused request
-    // never reached one).
-    const runRows = db.prepare(`SELECT to_char(r.created_at::timestamptz AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day, r.status,
-            COALESCE(r.provider_key, src.provider_key, a.provider_key) AS provider_key,
-            COALESCE(r.model_key, src.model_key, a.model_key) AS model_key,
+    // One sample per real provider attempt: ok is a success, error or timeout is a failure. Skipped and
+    // cancelled rows are not samples (no provider was tried, or the caller left). The run's own provider
+    // and model are not used here: a fallback run can name several offers, and a failed run keeps none.
+    const attemptRows = db.prepare(`SELECT to_char(r.created_at::timestamptz AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day,
+            CASE q.status WHEN 'ok' THEN 'succeeded' ELSE 'failed' END AS status,
+            q.provider_key AS provider_key, q.model_key AS model_key,
+            COUNT(*)::bigint AS n
+        FROM requests q
+        JOIN runs r ON r.id = q.run_id
+        WHERE q.status IN ('ok', 'error', 'timeout')
+          AND r.status IN ('succeeded', 'failed')
+          AND r.created_at::timestamptz >= ?::timestamptz AND r.created_at::timestamptz <= ?::timestamptz
+        GROUP BY 1, 2, 3, 4`);
+    // A cached answer called no provider; it follows the run it reused (`cached_from`).
+    const cachedRows = db.prepare(`SELECT to_char(r.created_at::timestamptz AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day,
+            'cached' AS status,
+            COALESCE(r.provider_key, src.provider_key) AS provider_key,
+            COALESCE(r.model_key, src.model_key) AS model_key,
             COUNT(*)::bigint AS n
         FROM runs r
         LEFT JOIN runs src ON src.id = r.cached_from
-        LEFT JOIN LATERAL (
-            SELECT q.provider_key, q.model_key FROM requests q
-            WHERE q.run_id = r.id AND q.status <> 'skipped'
-            ORDER BY q.seq DESC LIMIT 1
-        ) a ON r.status = 'failed'
-        WHERE r.status IN ('succeeded', 'failed', 'cached')
+        WHERE r.status = 'cached'
           AND r.created_at::timestamptz >= ?::timestamptz AND r.created_at::timestamptz <= ?::timestamptz
         GROUP BY 1, 2, 3, 4`);
-    const latencyRows = db.prepare(`SELECT COALESCE(r.provider_key, q.provider_key) AS provider_key,
-            COALESCE(r.model_key, q.model_key) AS model_key,
+    const latencyRows = db.prepare(`SELECT q.provider_key AS provider_key,
+            q.model_key AS model_key,
             q.latency_ms, rc.body->>'ttft_ms' AS ttft_ms
-        FROM runs r
-        JOIN requests q ON q.run_id = r.id AND q.status = 'ok'
+        FROM requests q
+        JOIN runs r ON r.id = q.run_id
         LEFT JOIN ai_receipts rc ON rc.run_id = r.id
-        WHERE r.status = 'succeeded' AND q.latency_ms IS NOT NULL
+        WHERE q.status = 'ok' AND q.latency_ms IS NOT NULL
+          AND r.status IN ('succeeded', 'failed')
           AND r.created_at::timestamptz >= ?::timestamptz AND r.created_at::timestamptz <= ?::timestamptz`);
 
-    /** The real runs and answering attempts of the window, and the UTC day that is "today". */
+    /** The real attempts and cached answers of the window, and the UTC day that is "today". */
     async function read({ days = 7 } = {}) {
         const now = clock.now();
         const span = Math.max(1, Number(days) || 7);
         const from = new Date(now - span * DAY_MS).toISOString();
         const to = new Date(now).toISOString();
-        const [runs, latencies] = await Promise.all([runRows.all(from, to), latencyRows.all(from, to)]);
-        return { from, to, today: dayOf(now), runs, latencies };
+        const [attempts, cached, latencies] = await Promise.all([
+            attemptRows.all(from, to), cachedRows.all(from, to), latencyRows.all(from, to),
+        ]);
+        return { from, to, today: dayOf(now), runs: [...attempts, ...cached], latencies };
     }
 
     return { read };
@@ -143,8 +161,11 @@ function fold(observed, drafts) {
     }
     for (const [d, s] of stats) {
         const real = s.succeeded + s.failed;
-        d.offer.speed = { p50_ms: s.p50, p95_ms: s.p95 };
-        d.offer.uptime = real > 0 ? s.succeeded / real : null;
+        // A measured number needs enough samples to mean something: below 20 real attempts the catalog
+        // says "not measured yet" (null) but still reports how many attempts there were.
+        const enough = real >= MIN_SAMPLES;
+        d.offer.speed = { p50_ms: enough ? s.p50 : null, p95_ms: enough ? s.p95 : null };
+        d.offer.uptime = enough ? s.succeeded / real : null;
         d.offer.requests_7d = real;
         d.offer.requests_today = s.succeeded_today + s.failed_today;
         d.offer.cached_7d = s.cached;
@@ -153,4 +174,4 @@ function fold(observed, drafts) {
     return stats;
 }
 
-module.exports = { createObserved, fold, modelMatches, percentile };
+module.exports = { createObserved, fold, modelMatches, percentile, MIN_SAMPLES };
