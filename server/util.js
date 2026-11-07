@@ -55,6 +55,16 @@ function resolveSecret(ref, env = process.env) {
     return env[m[1]] ? String(env[m[1]]) : '';
 }
 
+/**
+ * A provider's key: the owner's key in the provider-key store when one is set (the admin panel's Setup tab or the
+ * console), else what its secret_ref names (env:NAME, the server's settings file, stays the fallback).
+ */
+function providerSecret(p, env = process.env) {
+    if (!p) return '';
+    const own = p.key ? require('./vault').get(p.key) : '';
+    return own || resolveSecret(p.secret_ref, env);
+}
+
 function secretRefValid(ref) {
     return ref == null || ref === '' || /^env:[A-Z][A-Z0-9_]{0,63}$/.test(String(ref)) || /^vault:[a-z0-9][a-z0-9._-]{0,63}$/.test(String(ref));
 }
@@ -77,4 +87,4 @@ function parseJsonLoose(text) {
     } catch { return null; }
 }
 
-module.exports = { stableStringify, sha256, parseJson, iso, AiError, sendError, resolveSecret, secretRefValid, parseJsonLoose };
+module.exports = { stableStringify, sha256, parseJson, iso, AiError, sendError, resolveSecret, providerSecret, secretRefValid, parseJsonLoose };

@@ -17,6 +17,7 @@
  */
 const { createConfigStore, ConfigError } = require('openvibe-shared/config');
 const { AiError } = require('./util');
+const { keyPage } = require('./owner-inputs');
 
 const EXCHANGE_NAMESPACE = 'ai.exchange';
 const PROVIDER_KEYS_NAMESPACE = 'ai.provider_keys';
@@ -24,73 +25,117 @@ const GPU_NAMESPACE = 'ai.gpus';
 const SERVICE = 'ai';
 const SELF = Object.freeze({ type: 'service', id: SERVICE });
 const GROUP = 'AI Exchange';
+const BATCHES_NAMESPACE = 'ai.batches';
 const PROVIDER_GROUP = 'Provider keys';
 const GPU_GROUP = 'OpenVibe GPUs';
 // The marketplaces the GPU provisioner rents from. AI owns these origins and writes them into the
 // namespace, so the owner's key is sealed to the marketplace it was entered for.
 const GPU_ORIGINS = Object.freeze({ vast: 'https://console.vast.ai', runpod: 'https://api.runpod.io' });
 
-/** Bounds from server/config.js (load()), so the schema and the code agree. */
+/**
+ * Bounds from server/config.js (load()), so the schema and the code agree. Every field has a title in plain words and
+ * a description that says what it does, what happens at the default and what more or less means (the owner-setup
+ * design's clarity rules); the routing-evidence tuning is x-advanced, folded under "Advanced settings".
+ */
 const EXCHANGE_SCHEMA = Object.freeze({
     $schema: 'https://json-schema.org/draft/2020-12/schema',
-    title: 'AI Exchange',
+    title: 'What the Exchange offers',
+    description: 'Which models people can pick on openvibe.exchange, whether paid AI spends Credits, and how AI chooses between the models of a route. Change these when you open the Exchange, start charging, or want AI to learn which model works best.',
     type: 'object',
     additionalProperties: false,
     properties: {
         model_catalog: {
-            type: 'boolean', title: 'Model catalogue', 'x-group': GROUP, 'x-env': 'AI_MODEL_CATALOG',
-            description: 'Serve the truthful model catalogue: exact ids, dynamic aliases and the offers each route can use. Off means today\'s single `openvibe` model.',
+            type: 'boolean', title: 'List every model by name', 'x-group': GROUP, 'x-env': 'AI_MODEL_CATALOG',
+            description: 'When on, the Exchange and the API list every model by its exact name, with the providers that can serve it. Off (the default) shows a single model called "openvibe" that picks one for the person.',
         },
         credits: {
-            type: 'boolean', title: 'Credits', 'x-group': GROUP, 'x-env': 'AI_CREDITS', 'x-danger': true,
-            description: 'Paid AI requests hold and spend Credits',
+            type: 'boolean', title: 'Charge Credits for paid AI', 'x-group': GROUP, 'x-env': 'AI_CREDITS', 'x-danger': true,
+            description: 'When on, a paid AI request first holds Credits from the person\'s balance and then spends what it used. Off (the default) charges nothing. Turn it on only after Billing\'s Credits are open; turning it off again stops charging at once.',
         },
         routing_evidence: {
-            type: 'boolean', title: 'Routing evidence', 'x-group': GROUP, 'x-env': 'AI_ROUTING_EVIDENCE',
-            description: 'Rank alias routes by measured cost per success instead of their recorded order.',
+            type: 'boolean', title: 'Pick models by measured results', 'x-group': GROUP, 'x-env': 'AI_ROUTING_EVIDENCE',
+            description: 'When on, AI orders the models of a route by what each one really cost per good answer, measured from recent requests. Off (the default) keeps the order the route was written in.',
         },
         alpha: {
-            type: 'number', title: 'Evidence EWMA alpha', 'x-group': GROUP, 'x-env': 'AI_ROUTING_EVIDENCE_ALPHA',
-            minimum: 0.01, maximum: 1,
-            description: 'How fast a new measurement moves the per-deployment EWMA (0.01 keeps the most history, 1 trusts the last call).',
+            type: 'number', title: 'How fast results change the order', 'x-group': GROUP, 'x-env': 'AI_ROUTING_EVIDENCE_ALPHA', 'x-advanced': true,
+            minimum: 0.01, maximum: 1, 'x-example': 0.2,
+            description: 'How much one new request moves a model\'s measured score, from 0.01 to 1 (default 0.2). Higher follows the last few requests; lower remembers a longer history.',
         },
         min_samples: {
-            type: 'integer', title: 'Minimum samples', 'x-group': GROUP, 'x-env': 'AI_ROUTING_EVIDENCE_MIN_SAMPLES',
-            minimum: 1,
-            description: 'Below this many attempts evidence is sparse: it is reported, never trusted to reorder a route.',
+            type: 'integer', title: 'Requests before results count', 'x-group': GROUP, 'x-env': 'AI_ROUTING_EVIDENCE_MIN_SAMPLES', 'x-advanced': true,
+            minimum: 1, 'x-example': 20,
+            description: 'A model needs at least this many measured requests before its results may change the order (default 20). Higher waits for more proof; lower trusts results sooner.',
         },
         success_floor: {
-            type: 'number', title: 'Success floor', 'x-group': GROUP, 'x-env': 'AI_ROUTING_EVIDENCE_SUCCESS_FLOOR',
-            minimum: 0.01, maximum: 1,
-            description: 'A candidate below this success probability is never promoted by evidence.',
+            type: 'number', title: 'Lowest success rate to move up', 'x-group': GROUP, 'x-env': 'AI_ROUTING_EVIDENCE_SUCCESS_FLOOR', 'x-advanced': true,
+            minimum: 0.01, maximum: 1, 'x-example': 0.1,
+            description: 'A model that answers well less often than this share of the time (0.1 is one in ten, the default) is never moved up, however cheap it is.',
         },
         hysteresis_decisions: {
-            type: 'integer', title: 'Hysteresis decisions', 'x-group': GROUP, 'x-env': 'AI_ROUTING_EVIDENCE_DECISIONS',
-            minimum: 1,
-            description: 'Consecutive decisions a challenger must win before it replaces the incumbent.',
+            type: 'integer', title: 'Wins needed to take first place', 'x-group': GROUP, 'x-env': 'AI_ROUTING_EVIDENCE_DECISIONS', 'x-advanced': true,
+            minimum: 1, 'x-example': 3,
+            description: 'How many choices in a row a challenger must win before it replaces the model in first place (default 3). Higher keeps the order steady; lower switches sooner.',
         },
         exploration_share: {
-            type: 'number', title: 'Exploration share', 'x-group': GROUP, 'x-env': 'AI_ROUTING_EVIDENCE_EXPLORE',
-            minimum: 0, maximum: 1,
-            description: 'The share of decisions that explore a challenger; 0 never leaves the incumbent.',
+            type: 'number', title: 'Share of requests that try another model', 'x-group': GROUP, 'x-env': 'AI_ROUTING_EVIDENCE_EXPLORE', 'x-advanced': true,
+            minimum: 0, maximum: 1, 'x-example': 0.05,
+            description: 'The share of requests sent to a challenger to measure it, from 0 to 1 (default 0: never). 0.05 tries another model on one request in twenty.',
         },
         affinity_gain: {
-            type: 'number', title: 'Affinity gain', 'x-group': GROUP, 'x-env': 'AI_ROUTING_EVIDENCE_AFFINITY',
-            minimum: 0, maximum: 1,
-            description: 'How much a deployment\'s familiarity with a prompt family adds to its measured score.',
+            type: 'number', title: 'Bonus for a model that knows the task', 'x-group': GROUP, 'x-env': 'AI_ROUTING_EVIDENCE_AFFINITY', 'x-advanced': true,
+            minimum: 0, maximum: 1, 'x-example': 0.05,
+            description: 'How much a model\'s past success on the same kind of prompt adds to its score, from 0 to 1 (default 0.05). Higher keeps a task on the model that did it well.',
         },
         min_gain: {
-            type: 'number', title: 'Minimum gain', 'x-group': GROUP, 'x-env': 'AI_ROUTING_EVIDENCE_MIN_GAIN',
-            minimum: 0, maximum: 1,
-            description: 'A challenger replaces the incumbent only when it scores at least this much better.',
+            type: 'number', title: 'How much better a challenger must be', 'x-group': GROUP, 'x-env': 'AI_ROUTING_EVIDENCE_MIN_GAIN', 'x-advanced': true,
+            minimum: 0, maximum: 1, 'x-example': 0.15,
+            description: 'A challenger replaces the first model only when it scores at least this much better, from 0 to 1 (default 0.15, fifteen percent). Higher switches less often.',
         },
         expected_output_tokens: {
-            type: 'integer', title: 'Expected output tokens', 'x-group': GROUP, 'x-env': 'AI_ROUTING_EVIDENCE_OUTPUT_TOKENS',
-            minimum: 1,
-            description: 'The output-token estimate used to price a candidate before it answers.',
+            type: 'integer', title: 'Expected answer length (tokens)', 'x-group': GROUP, 'x-env': 'AI_ROUTING_EVIDENCE_OUTPUT_TOKENS', 'x-advanced': true,
+            minimum: 1, 'x-example': 512,
+            description: 'The answer length, in tokens (about three quarters of a word each), used to price a model before it answers (default 512). Raise it when most answers are long.',
         },
     },
 });
+
+/**
+ * The ai.batches store: the owner's batch settings.
+ *
+ *   loss_budget_usd_per_day  how much the network may lose per UTC day by answering a batch on ordinary
+ *                            capacity after its deadline. Zero (the default) means it never does: a batch
+ *                            that finds no spare low-cost capacity expires, and the customer is charged
+ *                            nothing.
+ */
+const BATCH_SCHEMA = Object.freeze({
+    $schema: 'https://json-schema.org/draft/2020-12/schema',
+    title: 'AI batches',
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+        loss_budget_usd_per_day: {
+            type: 'number', title: 'Batch loss budget (per day)', 'x-group': 'money', 'x-owner-input': true,
+            'x-env': 'AI_BATCH_LOSS_BUDGET_USD_PER_DAY', minimum: 0,
+            description: 'How much the network may lose per day by answering a batch on ordinary capacity after its deadline. Zero means a batch that finds no spare low-cost capacity expires and the customer is charged nothing.',
+        },
+    },
+});
+
+/** The store's effective values put into the live config object (undefined keys keep the code/env default). */
+function applyBatches(config, values = {}) {
+    if (!config.batches) return;
+    if (Object.prototype.hasOwnProperty.call(values, 'loss_budget_usd_per_day') && values.loss_budget_usd_per_day !== undefined) {
+        config.batches.lossBudgetUsdPerDay = Math.max(0, Number(values.loss_budget_usd_per_day) || 0);
+    }
+}
+
+/** The ai.batches store: the owner's batch settings. */
+async function createBatchesSettings({ db, env, log, onChange }) {
+    const store = await createConfigStore({
+        db, service: SERVICE, namespace: BATCHES_NAMESPACE, schema: BATCH_SCHEMA, env, log, onChange,
+    });
+    return { store, proxy: store, namespace: BATCHES_NAMESPACE, values: () => store.get() || {} };
+}
 
 /** The store's effective values put into the live config object (undefined keys keep the code/env default). */
 function applyExchange(config, values = {}) {
@@ -130,90 +175,130 @@ function originOf(baseUrl) {
 const GPU_SCHEMA = Object.freeze({
     $schema: 'https://json-schema.org/draft/2020-12/schema',
     title: 'OpenVibe GPUs',
+    description: 'The GPUs AI rents by the second to run open models, the key of the marketplace it rents from and the most it may spend in a month. Change these to start renting, to move to another marketplace or to raise or lower the cap.',
     type: 'object',
     additionalProperties: false,
     properties: {
         'vast.origin': {
-            type: 'string', title: 'Vast.ai origin', 'x-group': GPU_GROUP,
-            description: 'The origin of the Vast.ai API. AI writes it; the key below is sealed to it.',
+            type: 'string', title: 'Address the Vast.ai key is locked to', 'x-group': GPU_GROUP, 'x-advanced': true,
+            description: 'The Vast.ai address AI sends the key to. AI writes it itself; the key below only opens for this address, so it can never be sent anywhere else.',
         },
         'vast.key': {
             type: 'string', title: 'Vast.ai API key', 'x-group': GPU_GROUP, 'x-bind': 'vast.origin',
-            description: "The owner's write-only Vast.ai API key, sealed to the origin above.",
+            description: 'The key AI rents Vast.ai GPUs with. Without it (and without a RunPod key) no GPU is rented. It is locked after saving and never shown again, only its last four characters.',
+            'x-example': 'a1b2c3…',
             'x-owner-input': {
                 group: 'gpus',
-                unlocks: 'Lets OpenVibe rent a GPU on Vast.ai for OpenVibe GPUs and for a person’s own endpoint. Without it Vast.ai is never searched and nothing is rented there.',
-                get_it_at: 'https://console.vast.ai/account/',
-                get_it_how: 'Open Account → API Keys, create a key, and paste it here. It is stored locked and never shown again.',
-                test: false,
+                unlocks: 'Lets AI rent Vast.ai GPUs to run open models when they are needed, and for a person’s own endpoint. Without a GPU key and a monthly cap nothing is rented.',
+                get_it_at: 'https://cloud.vast.ai/manage-keys/',
+                get_it_how: 'Create an API key with the Instance read and write permissions, for the account whose credit pays for the GPUs.',
+                test: true,
             },
-            'x-required-for': 'own endpoints',
+            'x-required-for': 'Renting GPUs and own endpoints',
         },
         'runpod.origin': {
-            type: 'string', title: 'RunPod origin', 'x-group': GPU_GROUP,
-            description: 'The origin of the RunPod API. AI writes it; the key below is sealed to it.',
+            type: 'string', title: 'Address the RunPod key is locked to', 'x-group': GPU_GROUP, 'x-advanced': true,
+            description: 'The RunPod address AI sends the key to. AI writes it itself; the key below only opens for this address, so it can never be sent anywhere else.',
         },
         'runpod.key': {
             type: 'string', title: 'RunPod API key', 'x-group': GPU_GROUP, 'x-bind': 'runpod.origin',
-            description: "The owner's write-only RunPod API key, sealed to the origin above.",
+            description: 'The key AI rents RunPod GPUs with. Without it (and without a Vast.ai key) no GPU is rented. It is locked after saving and never shown again, only its last four characters.',
+            'x-example': 'rpa_…',
             'x-owner-input': {
                 group: 'gpus',
-                unlocks: 'Lets OpenVibe rent a GPU on RunPod when RunPod is cheaper or Vast.ai has no fit. Without it RunPod is never searched and nothing is rented there.',
+                unlocks: 'Lets AI rent RunPod GPUs to run open models when they are needed, and for a person’s own endpoint. Without a GPU key and a monthly cap nothing is rented.',
                 get_it_at: 'https://www.runpod.io/console/user/settings',
-                get_it_how: 'Open Settings → API Keys, create a key, and paste it here. It is stored locked and never shown again.',
-                test: false,
+                get_it_how: 'Under API Keys create a key with Read/Write access, for the account whose balance pays for the GPUs.',
+                test: true,
             },
-            'x-required-for': 'own endpoints',
+            'x-required-for': 'Renting GPUs and own endpoints',
         },
         monthly_cap: {
-            type: 'integer', title: 'Monthly GPU cap', 'x-group': GPU_GROUP, 'x-unit': 'nano_usd', 'x-danger': true,
-            minimum: 0,
-            description: 'The hard monthly cap for the rented GPUs, in nano-USD. The provisioner never spends past it: it refuses to start an instance and says why. Without a cap the provisioner stays off.',
+            type: 'integer', title: 'Most the GPUs may cost in a month', 'x-group': GPU_GROUP, 'x-unit': 'nano_usd', 'x-danger': true,
+            minimum: 0, 'x-example': 50000000000,
+            description: 'The most the rented GPUs may cost in one calendar month (in billionths of a dollar: 50000000000 is $50). AI never passes it: it refuses to start a GPU and says why. Unset, nothing is rented.',
             'x-owner-input': {
                 group: 'gpus',
-                unlocks: 'Sets the most the rented GPUs may cost you in a month. A new instance (including a person’s own endpoint) is refused before it starts when its time would pass this cap. Without it nothing is rented.',
-                get_it_at: 'https://openvibe.network/admin#ai',
-                get_it_how: 'Decide the most you are willing to spend on rented GPUs in a month, and enter it here. Lower is safer; higher lets more models and endpoints run.',
+                unlocks: 'Lets AI rent GPUs up to this amount each month. Without a cap nothing is rented, even with a key.',
+                get_it_at: 'https://ai.openvibe.services/console/gpus',
+                get_it_how: 'Pick the most you are happy to spend on GPUs in a month; the GPU page shows what this month has cost so far.',
                 test: false,
             },
-            'x-required-for': 'own endpoints',
+            'x-required-for': 'Renting GPUs and own endpoints',
         },
         idle_minutes: {
-            type: 'integer', title: 'Idle minutes', 'x-group': GPU_GROUP,
-            minimum: 1, maximum: 1440,
-            description: 'How long an instance serves nobody before it scales to zero (the default is 10).',
+            type: 'integer', title: 'Minutes a GPU may sit unused (minutes)', 'x-group': GPU_GROUP,
+            minimum: 1, maximum: 1440, 'x-example': 10,
+            description: 'How many minutes a rented GPU may serve nobody before it is given back (default 10). Higher answers the next request faster; lower costs less.',
         },
         max_runtime_minutes: {
-            type: 'integer', title: 'Max runtime (minutes)', 'x-group': GPU_GROUP,
-            minimum: 1, maximum: 10080,
-            description: 'How long one instance may run at most. When the time is up the instance is given back, so the money never runs past the cap (the default is 720).',
+            type: 'integer', title: 'Longest one GPU may run (minutes)', 'x-group': GPU_GROUP,
+            minimum: 1, maximum: 10080, 'x-example': 720,
+            description: 'How many minutes one rented GPU may run at most before it is given back, busy or not (default 720, twelve hours). Lower limits what one GPU can cost.',
         },
         warm_window: {
-            type: 'string', title: 'Warm window (UTC)', 'x-group': GPU_GROUP,
-            pattern: '^([0-2][0-9]):[0-5][0-9]-([0-2][0-9]):[0-5][0-9]$',
-            description: 'An optional window in which idle instances stay up, as "19:00-23:00" (UTC). Empty means no warm window.',
+            type: 'string', title: 'Hours to keep GPUs ready (UTC)', 'x-group': GPU_GROUP,
+            pattern: '^([0-2][0-9]):[0-5][0-9]-([0-2][0-9]):[0-5][0-9]$', 'x-example': '19:00-23:00',
+            description: 'A daily window, in UTC, when an unused GPU stays rented so the first answer is fast, written like 19:00-23:00. Empty (the default) gives every unused GPU back after the idle minutes.',
         },
         region: {
-            type: 'string', title: 'Region', 'x-group': GPU_GROUP,
-            description: 'The region the marketplace offers must be in (the default is US).',
+            type: 'string', title: 'Region the GPUs must be in', 'x-group': GPU_GROUP, 'x-example': 'US',
+            description: 'The region a rented GPU must be in, as the marketplace names it (default US). Another region may be cheaper but answers people here more slowly.',
         },
     },
 });
 
-/** The namespace for the providers there are today: <p>.origin (internal) and <p>.key (secret, bound to it). */
-function providerKeysSchema(providers) {
+/** Providers that never take a key: the stub, whisper.cpp and the local model servers (auth_mode none). */
+const keyless = (p) => p.kind === 'stub' || p.kind === 'whisper' || p.auth_mode === 'none';
+
+/**
+ * The namespace for the providers there are today: <p>.origin (internal, advanced) and <p>.key (secret, bound to it).
+ * `providers` are registry records (a bare key is accepted too). A provider that takes a key is an owner input in the
+ * Setup tab's "AI providers" group, with its key page and a test (its model list); the shared provider's key is also
+ * the image model's key, because images run on the shared provider's Images API (AI_IMAGE_MODEL).
+ */
+function providerKeysSchema(providers, { imageModel = '' } = {}) {
     const properties = {};
-    for (const key of providers) {
+    for (const raw of providers) {
+        const p = typeof raw === 'string' ? { key: raw } : raw;
+        const key = p.key;
+        const name = p.display_name || key;
         properties[`${key}.origin`] = {
-            type: 'string', title: `${key} origin`, 'x-group': PROVIDER_GROUP,
-            description: `The origin of ${key}'s base URL. AI writes it; the key below is sealed to it.`,
+            type: 'string', title: `Address the ${name} key is locked to`, 'x-group': PROVIDER_GROUP, 'x-advanced': true,
+            description: `The address of ${name}'s API that its key is sent to. AI writes it from the provider's base URL; the key only opens for this address, so it can never be sent anywhere else.`,
         };
-        properties[`${key}.key`] = {
-            type: 'string', title: `${key} key`, 'x-group': PROVIDER_GROUP, 'x-bind': `${key}.origin`,
-            description: `The owner's write-only API key for ${key}, sealed to its origin; changing the base URL locks it until it is entered again.`,
+        const field = {
+            type: 'string', title: `${name} API key`, 'x-group': PROVIDER_GROUP, 'x-bind': `${key}.origin`,
+            description: `The key AI uses to call ${name}. It is locked after saving and never shown again, only its last four characters; changing the provider's base URL locks it until it is entered again.`,
         };
+        if (keyless(p)) {
+            field.title = `${name} key (not used)`;
+            field.description = `${name} runs without a key, so nothing needs to be entered here. A key saved here would be sent only to the address above.`;
+            field['x-advanced'] = true;
+        } else {
+            const page = keyPage(p);
+            const images = key === 'shared' && imageModel;
+            field['x-owner-input'] = {
+                group: 'ai-providers',
+                unlocks: images
+                    ? `Lets AI answer with ${name}'s models and make pictures with ${imageModel}. Without a working key ${name} is skipped and image generation stays off.`
+                    : key === 'shared' && p.kind !== 'anthropic'
+                        ? `Lets AI answer with ${name}'s models; it is also the image model's key once an image model is chosen (AI_IMAGE_MODEL). Without a working key ${name} is skipped.`
+                        : `Lets AI answer with ${name}'s models. Without a working key ${name} is skipped and its requests go to the next provider.`,
+                ...(page.get_it_at ? { get_it_at: page.get_it_at } : {}),
+                get_it_how: page.get_it_how,
+                test: true,
+            };
+            if (images) field['x-required-for'] = 'Image generation';
+        }
+        properties[`${key}.key`] = field;
     }
-    return { $schema: 'https://json-schema.org/draft/2020-12/schema', title: 'AI provider keys', type: 'object', additionalProperties: false, properties };
+    return {
+        $schema: 'https://json-schema.org/draft/2020-12/schema',
+        title: 'AI providers',
+        description: 'The companies whose models OpenVibe can use, and the key for each. Add or replace a key when you sign up with a provider or rotate a key; a provider with no working key is skipped.',
+        type: 'object', additionalProperties: false, properties,
+    };
 }
 
 const classify = (key) => (String(key).endsWith('.key') ? 'secret' : 'internal');
@@ -222,7 +307,7 @@ const classify = (key) => (String(key).endsWith('.key') ? 'secret' : 'internal')
  * The ai.provider_keys store, with the schema rebuilt when a provider is added. `store` is a Proxy so the admin
  * routes, mounted once, keep using the current store; the vault cache is refreshed in onActivate.
  */
-function createProviderKeys({ db, registry, env = process.env, log = console, onChange }) {
+function createProviderKeys({ db, registry, env = process.env, log = console, onChange, imageModel = '' }) {
     const vault = require('./vault');
     let store = null;
     let names = [];
@@ -248,8 +333,9 @@ function createProviderKeys({ db, registry, env = process.env, log = console, on
         const providers = await registry.listProviders();
         const next = [...new Set(providers.map((p) => p.key))].sort();
         if (store && next.length === names.length && next.every((k, i) => k === names[i])) return store;
+        const records = next.map((k) => providers.find((p) => p.key === k));
         store = await createConfigStore({
-            db, service: SERVICE, namespace: PROVIDER_KEYS_NAMESPACE, schema: providerKeysSchema(next),
+            db, service: SERVICE, namespace: PROVIDER_KEYS_NAMESPACE, schema: providerKeysSchema(records, { imageModel }),
             classify, env, log, onChange, onActivate: activate,
         });
         names = next;
@@ -399,15 +485,17 @@ async function createSettings({ db, config, registry, clock = { now: () => Date.
         },
     });
     applyExchange(config, exchange.get());
-    const providerKeys = createProviderKeys({ db, registry, env, log, onChange });
+    const providerKeys = createProviderKeys({ db, registry, env, log, onChange, imageModel: (config.image && config.image.model) || '' });
     await providerKeys.refresh();
+    const batches = await createBatchesSettings({ db, env, log, onChange });
+    applyBatches(config, batches.values());
     const gpus = await createGpuSettings({ db, env, log, onChange });
     if (exchange.sealed) await exchange.reseal().catch((err) => log.warn(`[config] ${EXCHANGE_NAMESPACE}: reseal failed: ${err.message}`));
     if (providerKeys.sealed) await providerKeys.store.reseal().catch((err) => log.warn(`[config] ${PROVIDER_KEYS_NAMESPACE}: reseal failed: ${err.message}`));
-    return { exchange, providerKeys, gpus, onChange };
+    return { exchange, providerKeys, gpus, batches, onChange };
 }
 
 module.exports = {
-    EXCHANGE_NAMESPACE, PROVIDER_KEYS_NAMESPACE, GPU_NAMESPACE, SERVICE, SELF, EXCHANGE_SCHEMA, GPU_SCHEMA, GPU_ORIGINS,
-    applyExchange, originOf, providerKeysSchema, createGpuSettings, createSettings,
+    EXCHANGE_NAMESPACE, PROVIDER_KEYS_NAMESPACE, GPU_NAMESPACE, BATCHES_NAMESPACE, SERVICE, SELF, EXCHANGE_SCHEMA, GPU_SCHEMA, GPU_ORIGINS, BATCH_SCHEMA,
+    applyExchange, applyBatches, originOf, providerKeysSchema, createGpuSettings, createBatchesSettings, createSettings,
 };

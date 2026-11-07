@@ -98,6 +98,40 @@ function retailOf(rate) {
     return { version, nano_usd_per_m: perM, per_request_nano_usd: String(rate.per_request_nano_usd == null ? '0' : rate.per_request_nano_usd) };
 }
 
+/**
+ * The discounts a request may be charged at. A batch is charged at half the retail rate: every
+ * component of the card is halved, and the card says so in its version.
+ */
+const DISCOUNTS = {
+    half: { name: 'batch-half', num: 1n, den: 2n },
+};
+
+/**
+ * The card a discount is charged on: the retail card with every rate halved (rounded down to the nano,
+ * so the customer is never charged more than half), under a version that names the discount. Billing is
+ * given this card at the hold and at the settle, so the ledger records the price actually charged.
+ */
+function applyDiscount(retail, discount) {
+    if (!retail) return null;
+    const d = DISCOUNTS[String(discount || '').toLowerCase()];
+    if (!d) return retail;
+    const half = (v) => {
+        const n = BigInt(String(v == null ? '0' : v));
+        return ((n * d.num) / d.den).toString();
+    };
+    const perM = retail.nano_usd_per_m || {};
+    return {
+        version: `${retail.version}:${d.name}`.slice(0, 200),
+        nano_usd_per_m: {
+            input: half(perM.input),
+            cached_read: half(perM.cached_read),
+            cache_write: half(perM.cache_write),
+            output: half(perM.output),
+        },
+        per_request_nano_usd: half(retail.per_request_nano_usd),
+    };
+}
+
 /** The retail charge for some usage, the same arithmetic Billing applies (used for the hold and the extension). */
 function retailChargeNano(retail, { input = 0, cached = 0, cacheWrite = 0, output = 0 } = {}) {
     const perM = (retail && retail.nano_usd_per_m) || {};
@@ -204,10 +238,12 @@ function createBillingClient({ billingUrl, audience, tokens, fetchImpl = globalT
  *   settle({...})          once, after the answer (or after the partial usage of an abort/failure)
  *   release()              once, when no token was produced at all
  */
-function createSession({ manager, requestId, payer, projectId, credentialId = null, inputTokens, maxCostNano = null, startedAt }) {
+function createSession({ manager, requestId, payer, projectId, credentialId = null, inputTokens, maxCostNano = null, startedAt, discount = null, costCheck = null }) {
     const s = {
         requestId: String(requestId),
         payer, projectId, credentialId,
+        // A batch's settle is refused when the route really cost more than the customer was charged.
+        costCheck: typeof costCheck === 'function' ? costCheck : null,
         subject: payer,
         inputTokens: Math.max(0, Math.trunc(inputTokens)),
         maxCostNano,
@@ -231,7 +267,14 @@ function createSession({ manager, requestId, payer, projectId, credentialId = nu
     async function onRoute(facts, meta) {
         if (s.settled || s.released) return null;
         if (!meta) return null;                                                   // a person's own key or machine
-        const card = retailOf(meta.retail);
+        // The card this request is charged on: the retail card, halved when the request is a batch.
+        const base = retailOf(meta.retail);
+        const card = applyDiscount(base, discount);
+        // The answering offer's own price before the batch discount, and which offer answered: a batch's
+        // settle check needs both to know what the route really cost.
+        s.retailBase = base;
+        s.answeredProvider = meta && meta.provider;
+        s.answeredModel = meta && meta.model;
         // A prepaid offer (free, subscription, BYOK, the stub) never spends Balance. After an earlier managed
         // attempt it may still answer (a free fallback): the settle then uses its card, or zero.
         if (meta.paid === false) { if (s.holdId) s.retail = card || ZERO_RETAIL; return null; }
@@ -325,6 +368,18 @@ function createSession({ manager, requestId, payer, projectId, credentialId = nu
     async function settle({ usage = {}, supplyCostUsd = 0, attempts = [] } = {}) {
         if (!s.holdId || s.settled || s.released) return null;
         if (s.pending) await s.pending;
+        // A batch settles only when the route it really used costs at most what the customer was charged.
+        // When it does not, the hold is released, nothing is charged, and the caller keeps waiting.
+        if (s.costCheck) {
+            const check = await s.costCheck({ usage: usageOf(usage), retail: s.retail, retailBase: s.retailBase, provider: s.answeredProvider, model: s.answeredModel, supplyCostUsd });
+            if (check && check.ok === false) {
+                await release();
+                const err = new Error(check.reason || 'the route cost more than the customer was charged');
+                err.code = 'batch.cost_exceeded';
+                err.status = 409;
+                throw err;
+            }
+        }
         // The provider's own cost comes as a float from the rate cards; turn it into integer nano-USD through a
         // decimal string (never a nano conversion by float multiplication).
         let supply = 0n;
@@ -450,7 +505,7 @@ function createCredits({ config, db = null, registry = null, env = process.env, 
             if (ctx.maxCostNano != null) {
                 try { maxCostNano = BigInt(String(ctx.maxCostNano)); } catch { throw new AiError(422, 'input.invalid', 'max_cost_usd is invalid'); }
             } else if (ctx.maxCostUsd != null) maxCostNano = parseCostUsd(ctx.maxCostUsd);
-            return createSession({ manager, requestId: requestKey, payer, projectId, credentialId, inputTokens, maxCostNano, startedAt: iso(clock.now()) });
+            return createSession({ manager, requestId: requestKey, payer, projectId, credentialId, inputTokens, maxCostNano, startedAt: iso(clock.now()), discount: ctx.discount || null, costCheck: ctx.costCheck || null });
         },
     };
     return manager;
@@ -462,6 +517,6 @@ function accessOfProvider(provider) {
 }
 
 module.exports = {
-    createCredits, createBillingClient, createSession, retailOf, retailChargeNano, affordable, parseCostUsd,
+    createCredits, createBillingClient, createSession, retailOf, applyDiscount, retailChargeNano, affordable, parseCostUsd,
     deltaText, payerOf, projectOf, accessOfProvider, CAPABILITIES, MANAGED_ACCESS,
 };

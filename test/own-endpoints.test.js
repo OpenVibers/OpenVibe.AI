@@ -103,14 +103,14 @@ async function setGpus(h, { key = 'vast-test-key', cap = '50000000000', idle = n
 
 const billingEnv = (billing) => ({ AI_CREDITS: '1', OV_BILLING_INTERNAL_URL: billing.url, OV_NETWORK_INTERNAL_URL: billing.url, OV_OAUTH_CLIENT_SECRET: 'test-secret' });
 
-t.test('the two owner inputs are marked for Setup: key and cap, group GPUs, needed for own endpoints', async () => {
+t.test('the two owner inputs are marked for Setup: key and cap, group gpus, needed for own endpoints', async () => {
     const h = await boot({ clock: { now: () => T0 } });
     try {
         const sum = await h.settings.gpus.store.summary();
         for (const key of ['vast.key', 'runpod.key', 'monthly_cap']) {
             const field = sum.schema.properties[key];
-            assert.strictEqual(field['x-owner-input'].group, 'gpus', key + ' is grouped under gpus');
-            assert.strictEqual(field['x-required-for'], 'own endpoints', key + ' is needed for own endpoints');
+            assert.strictEqual(field['x-owner-input'].group, 'gpus', key + ' is grouped under GPUs (the group id)');
+            assert.match(String(field['x-required-for']), /own endpoints/, key + ' is needed for own endpoints');
             assert.ok(String(field.title || '').length > 2, key + ' has a plain title');
             assert.ok(String(field.description || '').length >= 30, key + ' has a description');
             assert.match(String(field['x-owner-input'].get_it_at), /^https:\/\//, key + ' says where to get it');

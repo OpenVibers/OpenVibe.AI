@@ -9,7 +9,7 @@
  * 'active'. Lifecycle changes (deprecate, archive, disable) are status updates on one version,
  * audited, and never change its content.
  */
-const { sha256, parseJson, iso, AiError, secretRefValid, resolveSecret } = require('./util');
+const { sha256, parseJson, iso, AiError, secretRefValid, providerSecret } = require('./util');
 const schemas = require('./schemas');
 const { provenance } = require('./providers/rate-cards');
 
@@ -61,7 +61,7 @@ function createRegistry(db, { clock = { now: () => Date.now() }, env = process.e
     /** Public view: the secret reference name and whether it resolves — never the value. */
     function publicProvider(p, health) {
         if (!p) return null;
-        const hasSecret = p.auth_mode === 'none' ? null : Boolean(resolveSecret(p.secret_ref, env));
+        const hasSecret = p.auth_mode === 'none' ? null : Boolean(providerSecret(p, env));
         return { ...p, credentials: hasSecret === null ? 'not_required' : hasSecret ? 'configured' : 'missing', health: health || null };
     }
 
