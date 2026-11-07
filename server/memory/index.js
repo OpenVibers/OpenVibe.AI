@@ -27,6 +27,15 @@
  *   POST   /api/v1/memory/import/preview   parse and redact an export into a sealed two-hour draft (M3)
  *   POST   /api/v1/memory/import/:id/commit  keep the ticked candidates and delete the draft (M3)
  *   DELETE /api/v1/memory/import/:id       throw the draft away (M3)
+ *   GET    /api/v1/memory/services         the connected memory services, without any key (M5)
+ *   PUT    /api/v1/memory/services/:provider  store or replace mem0/Letta/Zep's key, sealed, then test it (M5)
+ *   DELETE /api/v1/memory/services/:provider  forget the key (M5)
+ *   POST   /api/v1/memory/services/:provider/sync  read the service and put its notes in the store (M5)
+ *   GET    /api/v1/memory/export           the one portable file (ai.memory-export@1), decrypted for its owner (M5)
+ *   POST   /api/v1/memory/import           import that same file, redacted and deduped again (M5)
+ *   GET    /api/v1/memory/shared           the stores other people shared with this person (M5)
+ *   GET    /api/v1/memory/stores/:owner    one shared store's active notes, after canView (M5)
+ *   *      /api/v1/memory-store/:id/share  the uniform openvibe-sdk/share routes (M5, server/memory/sharing.js)
  *
  * Every SQL query that reads or changes a memory table is scoped by `owner = $…` (test/memory.test.js greps for it).
  * The account export decrypts the person's own items for their own export; deletion removes the rows.
@@ -49,7 +58,7 @@
  */
 const crypto = require('crypto');
 const express = require('express');
-const { ids, http, capabilities } = require('openvibe-contracts');
+const { ids, http, capabilities, validate } = require('openvibe-contracts');
 const { verifyUserToken } = require('openvibe-sdk/auth');
 const { redact, onlySecret } = require('openvibe-sdk/redact');
 const { AiError, iso, sha256 } = require('../util');
@@ -878,6 +887,94 @@ function createMemory({ db, config, clock = { now: () => Date.now() }, log = con
         return { reads: list, count: list.length };
     }
 
+    /* ── Memory M5: the portable file and a shared store ──────────────────────────────────────────────── */
+
+    const PORTABLE_FORMAT = 'openvibe.memory-export@1';
+    const PORTABLE_ITEMS = 10000;
+
+    /** The one portable file: every item the person has, with no id, owner, merge or conflict link. */
+    async function portableExport(req, owner) {
+        assertConfigured();
+        const scope = req.query.scope ? validateScope(req.query.scope) : null;
+        const args = [owner];
+        let sql = 'SELECT * FROM memory_items WHERE owner = $1';
+        if (scope) { args.push(scope); sql += ` AND scope = $${args.length}`; }
+        sql += ' ORDER BY created_at DESC LIMIT ' + PORTABLE_ITEMS;
+        const items = [];
+        for (const row of await q(sql).all(...args)) {
+            const v = itemView(row);
+            items.push({
+                text: v.text, kind: v.kind, scope: v.scope, source: String(v.source || 'person').split(',')[0],
+                ...(v.source_ref ? { source_ref: v.source_ref } : {}),
+                status: v.status, confidence: v.confidence,
+                ...(v.machine ? { machine: v.machine } : {}),
+                ...(v.seen_at ? { seen_at: v.seen_at } : {}),
+                ...(v.created_at ? { created_at: v.created_at } : {}),
+            });
+        }
+        return { format: PORTABLE_FORMAT, version: 1, exported_at: iso(clock.now()), items };
+    }
+
+    /**
+     * Import the same document. The items go through the store's own batch in chunks, so every one is redacted,
+     * deduped by its text MAC and sealed under the importing person. A conflict cannot come alone (its pair did not
+     * travel), so it is imported as a suggestion.
+     */
+    async function importPortable(req, owner) {
+        assertConfigured();
+        const body = req.body && typeof req.body === 'object' ? req.body : {};
+        if (body.format !== PORTABLE_FORMAT || Number(body.version) !== 1) throw new AiError(422, 'input.invalid', `the file must be ${PORTABLE_FORMAT}, version 1`);
+        // The contract is the rule, not this function: ai.memory-export@1 (Contracts 0.308.0).
+        const check = validate('ai.memory-export@1', body);
+        if (!check.valid) throw new AiError(422, 'input.invalid', 'that JSON is not an ai.memory-export@1 file', { errors: check.errors.slice(0, 5) });
+        const raw = body.items;
+        if (!Array.isArray(raw)) throw new AiError(422, 'input.invalid', 'items must be an array');
+        if (raw.length > PORTABLE_ITEMS) throw new AiError(422, 'input.invalid', `a portable file holds at most ${PORTABLE_ITEMS} items`);
+        let skipped = 0;
+        let created = 0;
+        let deduped = 0;
+        const prepared = [];
+        for (const item of raw) {
+            if (!item || typeof item !== 'object') { skipped++; continue; }
+            const text = String(item.text == null ? '' : item.text);
+            if (!text.trim()) { skipped++; continue; }
+            const clean = redact(text).text;
+            if (!clean.trim() || onlySecret(clean)) { skipped++; continue; }
+            prepared.push({
+                text: clean.slice(0, 8000),
+                kind: validateKind(item.kind),
+                scope: validateScope(item.scope, 'user'),
+                source: validateSource(item.source || 'portable'),
+                ...(item.source_ref != null ? { source_ref: validateSourceRef(item.source_ref) } : {}),
+                status: item.status === 'conflict' ? 'suggested' : validateStatus(item.status, 'active'),
+                confidence: item.confidence == null ? 1 : Math.max(0, Math.min(1, Number(item.confidence) || 0)),
+                ...(item.machine != null ? { machine: String(item.machine).slice(0, 100) } : {}),
+                ...(item.seen_at != null ? { seen_at: validateTime(item.seen_at, null) } : {}),
+            });
+        }
+        for (let i = 0; i < prepared.length; i += MAX_BATCH) {
+            const out = await batch({
+                principal: { kind: 'user', subject: { type: 'user', id: owner.slice('user:'.length) }, claims: {} },
+                body: { items: prepared.slice(i, i + MAX_BATCH) },
+            }, owner);
+            created += Number(out.created) || 0;
+            deduped += Number(out.deduped) || 0;
+        }
+        return { format: PORTABLE_FORMAT, version: 1, imported: created + deduped, created, deduped, skipped };
+    }
+
+    /** Active items of a store another person shared with the viewer. The caller has already checked canView. */
+    async function sharedList(owner, { scope = null } = {}) {
+        assertConfigured();
+        if (!/^user:usr_[0-9A-HJKMNP-TV-Z]{26}$/.test(String(owner))) throw new AiError(404, 'memory.not_found', 'no such shared store');
+        const args = [owner];
+        let sql = "SELECT * FROM memory_items WHERE owner = $1 AND status = 'active'";
+        if (scope) { validateScope(scope); args.push(scope); sql += ` AND scope = $${args.length}`; }
+        sql += ' ORDER BY updated_at DESC LIMIT 200';
+        const items = (await q(sql).all(...args)).map(itemView);
+        return { items, count: items.length };
+    }
+
     /** The person's own export only: decrypted items, profiles and read ids (never another person's rows). */
     async function exportFor(subject) {
         assertConfigured();
@@ -896,6 +993,8 @@ function createMemory({ db, config, clock = { now: () => Date.now() }, log = con
     return {
         assertConfigured, batch, list, get, patch, remove, removeBySource, profile, search, exportFor, reads,
         split, settle, aadFor, macOf, seal, open,
+        // M5: the one portable file, its import, and the read of a store somebody shared.
+        portableExport, importPortable, sharedList,
         // The store's own maintenance (server/memory/jobs.js) drives the store through these.
         ownersForJobs, scopesFor, embedMissing, reconcileScope, refreshProfile, profileFor,
     };
@@ -906,7 +1005,7 @@ function createMemory({ db, config, clock = { now: () => Date.now() }, log = con
  * names the person with `on_behalf_of`, but it may only search and read the profile of a granted scope (both
  * audited) and import suggestions. Every other route is person-only: a service gets 403 `capability.denied`.
  */
-function memoryRouter({ memory, memoryImport = null, auth, config, clock = { now: () => Date.now() }, log = console, sendError }) {
+function memoryRouter({ memory, memoryImport = null, services = null, sharing = null, auth, config, clock = { now: () => Date.now() }, log = console, sendError }) {
     const r = express.Router();
     // Memory M3: an export zip is raw bytes (or one multipart form) and can be a few MB. The same route also takes
     // pasted text as JSON, which the app-level JSON parser has already read.
@@ -984,6 +1083,48 @@ function memoryRouter({ memory, memoryImport = null, auth, config, clock = { now
     // M2c: undo a merge, and settle a conflict. Both are the person's own: a service may only search and suggest.
     r.post('/api/v1/memory/items/:id/split', guard(WRITE_CAP), personOnly, run(async (req) => await memory.split(req, ownerOf(req), req.params.id)));
     r.post('/api/v1/memory/items/:id/settle', guard(WRITE_CAP), personOnly, run(async (req) => await memory.settle(req, ownerOf(req), req.params.id)));
+
+    /* ── Memory M5: the memory services, the portable file and team sharing ───────────────────────────── */
+
+    const unavailable = (what) => { throw new AiError(503, 'memory.services_unavailable', `${what} is not configured on this service`); };
+    const subjectOf = (req) => req.principal.subject.id;
+
+    r.get('/api/v1/memory/services', guard(READ_CAP), personOnly, run(async (req) => {
+        if (!services) unavailable('the memory-service connections');
+        return await services.list(subjectOf(req));
+    }));
+    r.put('/api/v1/memory/services/:provider', guard(WRITE_CAP), personOnly, run(async (req) => {
+        if (!services) unavailable('the memory-service connections');
+        return await services.put(subjectOf(req), String(req.params.provider), req.body);
+    }));
+    r.delete('/api/v1/memory/services/:provider', guard(WRITE_CAP), personOnly, run(async (req) => {
+        if (!services) unavailable('the memory-service connections');
+        return await services.remove(subjectOf(req), String(req.params.provider));
+    }));
+    r.post('/api/v1/memory/services/:provider/sync', guard(WRITE_CAP), personOnly, run(async (req) => {
+        if (!services) unavailable('the memory-service connections');
+        return await services.sync(subjectOf(req), String(req.params.provider));
+    }));
+
+    // The one portable file. Person-only: it is the person's own plaintext, decrypted for their own export.
+    r.get('/api/v1/memory/export', guard(READ_CAP), personOnly, run(async (req) => await memory.portableExport(req, ownerOf(req))));
+    r.post('/api/v1/memory/import', guard(WRITE_CAP), personOnly, run(async (req) => await memory.importPortable(req, ownerOf(req))));
+
+    // Team sharing: what is shared with the person, and one shared store's active notes (never through a search).
+    const shareViewer = (req) => (req.principal.kind === 'user' ? { subject: { type: 'user', id: subjectOf(req) }, staff: false } : null);
+    r.get('/api/v1/memory/shared', guard(READ_CAP), personOnly, run(async (req) => {
+        if (!sharing) unavailable('memory sharing');
+        return { stores: await sharing.sharedStores(shareViewer(req)) };
+    }));
+    r.get('/api/v1/memory/stores/:owner', guard(READ_CAP), personOnly, run(async (req) => {
+        if (!sharing) unavailable('memory sharing');
+        const owner = String(req.params.owner || '');
+        if (!SUBJECT_RE.test(owner)) throw new AiError(404, 'memory.not_found', 'no such shared store');
+        if (!await sharing.canView(shareViewer(req), owner)) throw new AiError(404, 'memory.not_found', 'no such shared store');
+        const out = await memory.sharedList(`user:${owner}`, { scope: req.query.scope ? String(req.query.scope) : null });
+        return { owner, ...out };
+    }));
+
     // The owner is resolved after the guard has set the principal.
     function ownerOf(req) {
         const body = req.body && typeof req.body === 'object' ? req.body : {};

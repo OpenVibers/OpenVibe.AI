@@ -12,7 +12,7 @@ const path = require('path');
 const { uncovered } = require('openvibe-sdk/account-data');
 const { signDeliveryHeaders } = require('openvibe-sdk/events');
 const { boot, request, suite, token, privateKey, ISSUER } = require('./helpers');
-const { TABLES } = require('../server/account-data');
+const { TABLES, EXEMPT } = require('../server/account-data');
 const { createMemory } = require('../server/memory');
 
 const t = suite('memory');
@@ -409,7 +409,7 @@ t.test('account data: the table guard passes, the export is decrypted, and a del
     const stub = await startNetworkStub();
     const h = await boot({ env: { AI_MEMORY_KEY: KEY, AI_EVENTS_SECRET: SECRET, AI_EVENTS_SUBSCRIBE: '0', OV_NETWORK_INTERNAL_URL: stub.url, OV_OAUTH_CLIENT_SECRET: 'ai-secret' } });
     try {
-        const missing = await uncovered(h.db, { tables: TABLES, exempt: { account_data_events: 'the ledger of requests itself: which export and deletion AI applied' } });
+        const missing = await uncovered(h.db, { tables: TABLES, exempt: { ...EXEMPT, account_data_events: 'the ledger of requests itself: which export and deletion AI applied' } });
         assert.deepStrictEqual(missing, []);
         await request(h.base, 'POST', '/api/v1/memory/items:batch', { tok: userToken(A), body: { items: [item('Ada exports this note')] } });
         await request(h.base, 'POST', '/api/v1/memory/items:batch', { tok: userToken(B), body: { items: [item('Bo keeps this note')] } });

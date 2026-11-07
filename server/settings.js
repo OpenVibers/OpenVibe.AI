@@ -25,6 +25,7 @@ const GPU_NAMESPACE = 'ai.gpus';
 const SERVICE = 'ai';
 const SELF = Object.freeze({ type: 'service', id: SERVICE });
 const GROUP = 'AI Exchange';
+const BATCHES_NAMESPACE = 'ai.batches';
 const PROVIDER_GROUP = 'Provider keys';
 const GPU_GROUP = 'OpenVibe GPUs';
 // The marketplaces the GPU provisioner rents from. AI owns these origins and writes them into the
@@ -98,6 +99,44 @@ const EXCHANGE_SCHEMA = Object.freeze({
     },
 });
 
+/**
+ * The ai.batches store: the owner's batch settings.
+ *
+ *   loss_budget_usd_per_day  how much the network may lose per UTC day by answering a batch on ordinary
+ *                            capacity after its deadline. Zero (the default) means it never does: a batch
+ *                            that finds no spare low-cost capacity expires, and the customer is charged
+ *                            nothing.
+ */
+const BATCH_SCHEMA = Object.freeze({
+    $schema: 'https://json-schema.org/draft/2020-12/schema',
+    title: 'AI batches',
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+        loss_budget_usd_per_day: {
+            type: 'number', title: 'Batch loss budget (per day)', 'x-group': 'money', 'x-owner-input': true,
+            'x-env': 'AI_BATCH_LOSS_BUDGET_USD_PER_DAY', minimum: 0,
+            description: 'How much the network may lose per day by answering a batch on ordinary capacity after its deadline. Zero means a batch that finds no spare low-cost capacity expires and the customer is charged nothing.',
+        },
+    },
+});
+
+/** The store's effective values put into the live config object (undefined keys keep the code/env default). */
+function applyBatches(config, values = {}) {
+    if (!config.batches) return;
+    if (Object.prototype.hasOwnProperty.call(values, 'loss_budget_usd_per_day') && values.loss_budget_usd_per_day !== undefined) {
+        config.batches.lossBudgetUsdPerDay = Math.max(0, Number(values.loss_budget_usd_per_day) || 0);
+    }
+}
+
+/** The ai.batches store: the owner's batch settings. */
+async function createBatchesSettings({ db, env, log, onChange }) {
+    const store = await createConfigStore({
+        db, service: SERVICE, namespace: BATCHES_NAMESPACE, schema: BATCH_SCHEMA, env, log, onChange,
+    });
+    return { store, proxy: store, namespace: BATCHES_NAMESPACE, values: () => store.get() || {} };
+}
+
 /** The store's effective values put into the live config object (undefined keys keep the code/env default). */
 function applyExchange(config, values = {}) {
     const has = (k) => Object.prototype.hasOwnProperty.call(values, k) && values[k] !== undefined;
@@ -150,11 +189,12 @@ const GPU_SCHEMA = Object.freeze({
             'x-example': 'a1b2c3…',
             'x-owner-input': {
                 group: 'gpus',
-                unlocks: 'Lets AI rent Vast.ai GPUs to run open models when they are needed. Without a GPU key and a monthly cap nothing is rented.',
+                unlocks: 'Lets AI rent Vast.ai GPUs to run open models when they are needed, and for a person’s own endpoint. Without a GPU key and a monthly cap nothing is rented.',
                 get_it_at: 'https://cloud.vast.ai/manage-keys/',
                 get_it_how: 'Create an API key with the Instance read and write permissions, for the account whose credit pays for the GPUs.',
                 test: true,
             },
+            'x-required-for': 'Renting GPUs and own endpoints',
         },
         'runpod.origin': {
             type: 'string', title: 'Address the RunPod key is locked to', 'x-group': GPU_GROUP, 'x-advanced': true,
@@ -166,11 +206,12 @@ const GPU_SCHEMA = Object.freeze({
             'x-example': 'rpa_…',
             'x-owner-input': {
                 group: 'gpus',
-                unlocks: 'Lets AI rent RunPod GPUs to run open models when they are needed. Without a GPU key and a monthly cap nothing is rented.',
+                unlocks: 'Lets AI rent RunPod GPUs to run open models when they are needed, and for a person’s own endpoint. Without a GPU key and a monthly cap nothing is rented.',
                 get_it_at: 'https://www.runpod.io/console/user/settings',
                 get_it_how: 'Under API Keys create a key with Read/Write access, for the account whose balance pays for the GPUs.',
                 test: true,
             },
+            'x-required-for': 'Renting GPUs and own endpoints',
         },
         monthly_cap: {
             type: 'integer', title: 'Most the GPUs may cost in a month', 'x-group': GPU_GROUP, 'x-unit': 'nano_usd', 'x-danger': true,
@@ -183,7 +224,7 @@ const GPU_SCHEMA = Object.freeze({
                 get_it_how: 'Pick the most you are happy to spend on GPUs in a month; the GPU page shows what this month has cost so far.',
                 test: false,
             },
-            'x-required-for': 'Renting GPUs',
+            'x-required-for': 'Renting GPUs and own endpoints',
         },
         idle_minutes: {
             type: 'integer', title: 'Minutes a GPU may sit unused (minutes)', 'x-group': GPU_GROUP,
@@ -446,13 +487,15 @@ async function createSettings({ db, config, registry, clock = { now: () => Date.
     applyExchange(config, exchange.get());
     const providerKeys = createProviderKeys({ db, registry, env, log, onChange, imageModel: (config.image && config.image.model) || '' });
     await providerKeys.refresh();
+    const batches = await createBatchesSettings({ db, env, log, onChange });
+    applyBatches(config, batches.values());
     const gpus = await createGpuSettings({ db, env, log, onChange });
     if (exchange.sealed) await exchange.reseal().catch((err) => log.warn(`[config] ${EXCHANGE_NAMESPACE}: reseal failed: ${err.message}`));
     if (providerKeys.sealed) await providerKeys.store.reseal().catch((err) => log.warn(`[config] ${PROVIDER_KEYS_NAMESPACE}: reseal failed: ${err.message}`));
-    return { exchange, providerKeys, gpus, onChange };
+    return { exchange, providerKeys, gpus, batches, onChange };
 }
 
 module.exports = {
-    EXCHANGE_NAMESPACE, PROVIDER_KEYS_NAMESPACE, GPU_NAMESPACE, SERVICE, SELF, EXCHANGE_SCHEMA, GPU_SCHEMA, GPU_ORIGINS,
-    applyExchange, originOf, providerKeysSchema, createGpuSettings, createSettings,
+    EXCHANGE_NAMESPACE, PROVIDER_KEYS_NAMESPACE, GPU_NAMESPACE, BATCHES_NAMESPACE, SERVICE, SELF, EXCHANGE_SCHEMA, GPU_SCHEMA, GPU_ORIGINS, BATCH_SCHEMA,
+    applyExchange, applyBatches, originOf, providerKeysSchema, createGpuSettings, createBatchesSettings, createSettings,
 };

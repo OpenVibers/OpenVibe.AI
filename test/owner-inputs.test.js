@@ -97,7 +97,7 @@ t.test('the GPU keys and the monthly cap are owner inputs in the GPUs group', as
     assert.strictEqual(p['vast.key']['x-owner-input'].get_it_at, 'https://cloud.vast.ai/manage-keys/');
     assert.deepStrictEqual([p['runpod.key']['x-owner-input'].group, p['runpod.key']['x-owner-input'].test], ['gpus', true]);
     assert.strictEqual(p.monthly_cap['x-owner-input'].group, 'gpus');
-    assert.strictEqual(p.monthly_cap['x-required-for'], 'Renting GPUs');
+    assert.strictEqual(p.monthly_cap['x-required-for'], 'Renting GPUs and own endpoints');
     assert.strictEqual(p.monthly_cap['x-unit'], 'nano_usd');
 });
 

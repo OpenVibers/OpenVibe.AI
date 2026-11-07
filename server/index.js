@@ -32,7 +32,7 @@ const { AiError } = require('./util');
 const { gracefulStop, telemetry } = require('openvibe-sdk/service');
 const { createPgTelemetrySink, startTelemetryRetention } = require('openvibe-sdk/telemetry');
 
-async function start({ config, db: givenDb = null, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, listen = true, credentialFetch = null, valkey = null, research = null, machineModels = null, variantEvidence = null, community: givenCommunity = null, communityEndpoints: givenEndpoints = null, webhooks: givenWebhooks = null, abuse: givenAbuse = null } = {}) {
+async function start({ config, db: givenDb = null, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, listen = true, credentialFetch = null, valkey = null, research = null, machineModels = null, variantEvidence = null, community: givenCommunity = null, communityEndpoints: givenEndpoints = null, webhooks: givenWebhooks = null, abuse: givenAbuse = null, memoryTransport = null, memoryLookup = null } = {}) {
     config = config || load(env);
     schemas.configure(config.schemaCache);
     // PostgreSQL (ADR-035): opened and migrated here unless the caller (a test) hands in a migrated handle.
@@ -131,6 +131,11 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         startSettlements() { return credits ? credits.startSettlements() : null; },
         stopSettlements() { return credits ? credits.stopSettlements() : undefined; },
     };
+    // A person's own endpoint (the design's product line 6): a private rent on the same GPU provisioner, with a
+    // Billing hold before it starts and the exact seconds settled when it stops. It is off until the owner has
+    // a GPU key and a monthly cap AND Balance billing is on; the public status says which one is missing.
+    const ownEndpoints = require('./gpu/endpoints').createOwnEndpoints({ db, gpus, credits: creditsRef, config, clock, fetchImpl, log });
+    gpus.attachEndpoints(ownEndpoints);
     const runs = createRuns({ db, registry, engine, cache, quotas, config, clock, log, userModules, credentials, preferences, tiers, projectSecrets, pool, runBudgets, credits: creditsRef, community, presets, receipts, abuse, webhooks });
     await seed({ registry, quotas, config, env, db });
     // The seed creates or moves providers from the environment: publish their origins (the schema and every key's
@@ -153,10 +158,21 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     // The store's own maintenance (Memory M2c/M3): owner by owner, with a per-run cap, and the expired import
     // drafts. It is off in test mode and off while a provider is in a drill (server/memory/jobs.js).
     const memoryJobs = require('./memory/jobs').createMemoryJobs({ memory, memoryImport, config, clock, log, registry });
+    // Memory M5: the memory services with the person's own key (mem0, Letta, Zep), and the store's team sharing.
+    // Sharing is null when this deployment has no Network client secret or Events URL; its routes answer 503.
+    const memoryServices = require('./memory/services').createMemoryServices({ db, config, clock, log, memory, transport: memoryTransport, lookup: memoryLookup });
+    const memorySharing = require('./memory/sharing').createMemorySharing({ db, config, env, clock, log, fetchImpl });
     // The living price book (plan E1): the weekly job that reads every catalogued provider's own price listing and
     // keeps the price the router charges in step with it. A change of more than 20% waits for the owner on the
     // operator console. Off in test mode (the tests replay the recorded listings) and off under a drill.
-    const priceBook = require('./pricebook').createPriceBook({ db, registry, config, clock, log });
+    // The price book's off-peak windows: what a provider's own price is inside a window it publishes.
+    const offPeak = require('./pricebook/offpeak').createOffPeak({ db, clock });
+    const priceBook = require('./pricebook').createPriceBook({ db, registry, config, clock, log, offPeak });
+    // The measured refusal rates (server/refusal/): the weekly job that asks every offer the same published,
+    // harmless questions and publishes how often it refused them. Due-based, like the price book.
+    const refusal = require('./refusal/job').createRefusalJob({ db, registry, pool, config, env, clock, log });
+    // The half-price batches (server/batch/): many prompts, answered later, billed through Billing.
+    const batches = require('./batch/service').createBatchService({ db, runs, registry, community, priceBook: offPeak, config, clock, log });
     // The Events consumer side: a signed bench.rating.changed webhook, subscribed at boot (server/bench/events.js).
     const accountData = accountDataLib.create({ db, log, memory });
     const accountSend = env.OV_OAUTH_CLIENT_SECRET ? createNetworkSender({
@@ -164,7 +180,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         clientSecret: env.OV_OAUTH_CLIENT_SECRET, fetch: fetchImpl,
     }) : null;
     const benchEvents = createBenchEvents({ bench, accountData, accountSend, config, log, fetchImpl, clientSecret: env.OV_OAUTH_CLIENT_SECRET });
-    const app = createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, grants, vault, settings, benchEvents, runBudgets, memory, memoryImport, community, endpoints, webhooks, presets, receipts, balance, gpus, abuse, priceBook });
+    const app = createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, grants, vault, settings, benchEvents, runBudgets, memory, memoryImport, memoryServices, memorySharing, community, endpoints, webhooks, presets, receipts, balance, gpus, abuse, priceBook, ownEndpoints, refusal, batches });
     let jwks = null;
     let keyLoaded = Promise.resolve(null);
     if (!keys.pinned && config.nodeEnv !== 'test') {
@@ -192,7 +208,9 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     let gpuReconciler = null;
     if (listen && config.nodeEnv !== 'test') {
         gpuReconciler = setInterval(() => {
-            gpus.tick().catch((err) => log.warn('[gpu] the reconciler failed: ' + err.message));
+            ownEndpoints.tick()
+                .then(() => gpus.tick())
+                .catch((err) => log.warn('[gpu] the reconciler failed: ' + err.message));
         }, 60 * 1000);
         gpuReconciler.unref?.();
     }
@@ -205,8 +223,15 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     if (listen && config.nodeEnv !== 'test') webhooks.start();
     if (listen) balance.start();
     if (listen && config.memoryJobs && config.memoryJobs.enabled) memoryJobs.start();
+    // Team sharing's expiry sweep and delivery queue: production only, so a test's database has no background writers.
+    if (listen && config.nodeEnv !== 'test' && memorySharing) memorySharing.start();
     // The price book reads the providers' listings once a week; it never starts in test mode or under a drill.
     if (listen && config.priceBook && config.priceBook.enabled) priceBook.start();
+    // The refusal job asks the offers the same questions once a week; it never starts in test mode (the
+    // tests drive it by hand) and never under a restore drill.
+    if (listen && config.refusal && config.refusal.enabled) refusal.start();
+    // The batch worker picks up the queued batches. The queue is in the database, so a restart keeps it.
+    if (listen && config.batches && config.batches.enabled && config.nodeEnv !== 'test') batches.start();
     // Durable Credit settles: the same jobs rule as Memory (never in test mode, never under a provider drill; the
     // queue's runOnce checks the drill itself).
     if (listen && credits && config.nodeEnv !== 'test') credits.startSettlements();
@@ -242,7 +267,10 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         if (accountSubscription) accountSubscription.stop();
         userModules.stop();
         memoryJobs.stop();
+        if (memorySharing) memorySharing.stop();
         priceBook.stop();
+        refusal.stop();
+        batches.stop();
         webhooks.stop();
         if (credits) credits.stopSettlements();
         if (jwks) jwks.stop();
@@ -259,7 +287,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         if (!givenDb) await db.close();
     }
 
-    return { config, db, registry, pool, quotas, tiers, cache, fetcher, engine, runs, keys, keyLoaded, auth, app, server, bench, benchEvents, memory, memoryJobs, priceBook, credits: creditsRef, settings, vault, community, endpoints, webhooks, gpus, abuse, close };
+    return { config, db, registry, pool, quotas, tiers, cache, fetcher, engine, runs, keys, keyLoaded, auth, app, server, bench, benchEvents, memory, memoryJobs, memoryServices, memorySharing, priceBook, refusal, batches, credits: creditsRef, settings, vault, community, endpoints, webhooks, gpus, abuse, ownEndpoints, close };
 }
 
 if (require.main === module) {

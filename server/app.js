@@ -25,7 +25,7 @@ const pkg = require('../package.json');
 const { adminRoutes } = require('openvibe-shared/config');
 const ownerInputs = require('./owner-inputs');
 
-function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, credentials = null, preferences = null, grants = null, vault = null, settings = null, benchEvents = null, runBudgets = null, memory = null, memoryImport = null, community = null, endpoints = null, webhooks = null, presets = null, receipts = null, balance = null, gpus = null, abuse = null, priceBook = null }) {
+function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, credentials = null, preferences = null, grants = null, vault = null, settings = null, benchEvents = null, runBudgets = null, memory = null, memoryImport = null, memoryServices = null, memorySharing = null, community = null, endpoints = null, webhooks = null, presets = null, receipts = null, balance = null, gpus = null, abuse = null, priceBook = null, ownEndpoints = null, refusal = null, batches = null }) {
     const app = express();
     // /.well-known/agent.json (openvibe-shared/agent-layer, SEO-2): what this site serves, for agents.
     require('openvibe-shared/agent-layer').mount(app, { descriptor: require('./agent-descriptor') });
@@ -117,13 +117,18 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
     openapi.mount(app);
     // OpenVibe.Exchange's read API (server/api/exchange.js): the public catalog and aggregate usage. Public on
     // purpose — the site and anyone comparing prices reads the same numbers the router ranks on.
-    app.use(require('./api/exchange').exchangeRouter({ config, db, registry, pool, quotas, env, clock, presets, receipts, auth, log }));
+    app.use(require('./api/exchange').exchangeRouter({ config, db, registry, pool, quotas, env, clock, presets, receipts, auth, log, ownEndpoints }));
+    // A person's own endpoint (the Exchange remake, product line 6): the private rent's person API and its
+    // OpenAI-compatible proxy. Only the owner's own Network user token reaches it; a service token never does.
+    if (ownEndpoints) app.use(require('./api/own-endpoints').createOwnEndpointsRouter({ endpoints: ownEndpoints, auth, config, clock, log }));
     // The public seller API: a standalone OpenAI-compatible server registered by its own https address with the
     // seller's developer key (the design's SDK gap). Its offers join the community router's trust and ledger.
     if (endpoints) app.use(require('./api/seller').sellerRouter({ endpoints, community, webhooks, auth, log }));
     // Exchange webhooks (the plan's "For builders", item 7): a developer registers an https receiver and reads its
     // delivery log. The signature is the one openvibe-sdk/exchange verifies; the receiver URL goes through the guard.
     if (webhooks) app.use(require('./api/webhooks').webhooksRouter({ webhooks, auth, log }));
+    // The half-price batches: many prompts submitted at once, answered later (server/batch/).
+    if (batches) app.use(require('./api/batches').batchesRouter({ batches, auth, config, clock, log }));
     // GET /release.json (ADR-016) and POST /release-metrics (open tabs' update reports into /metrics).
     release.mount(app, { registry: metrics.registry });
 
@@ -192,7 +197,9 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
     // The Anthropic-compatible endpoint (POST /v1/messages, GET /v1/models): runs of ai.messages (Codes C3).
     app.use(require('./api/messages').messagesRouter({ runs, auth, config, registry, presets, receipts, log }));
     app.use(require('./api/attribution-quotas').attributionQuotasRouter({ db, quotas, auth, clock, sendError: (res, err, ctx) => sendError(res, err, ctx, log) }));
-    if (memory) app.use(require('./memory').memoryRouter({ memory, memoryImport, auth, config, clock, log, sendError: (res, err, ctx) => sendError(res, err, ctx, log) }));
+    if (memory) app.use(require('./memory').memoryRouter({ memory, memoryImport, services: memoryServices, sharing: memorySharing, auth, config, clock, log, sendError: (res, err, ctx) => sendError(res, err, ctx, log) }));
+    // Memory M5: the uniform share routes for kind memory-store (and /api/v1/share/people, /api/v1/shared-with-me).
+    if (memorySharing) app.use(memorySharing.router());
     if (credentials) app.use(require('./credentials').credentialsRouter({ credentials, auth, registry, sendError: (res, err, ctx) => sendError(res, err, ctx, log) }));
     // The budget of a Codes run token (Codes C3): Codes registers it when it mints the token.
     if (runBudgets) app.use(require('./api/run-budgets').runBudgetsRouter({ runBudgets, auth, log, sendError: (res, err, ctx) => sendError(res, err, ctx, log) }));

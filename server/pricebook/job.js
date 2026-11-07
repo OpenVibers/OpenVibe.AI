@@ -69,7 +69,7 @@ const numeric = (v) => {
     return Number.isFinite(n) ? n : null;
 };
 
-function createPriceBook({ db, registry, config = {}, clock = { now: () => Date.now() }, log = console, transport = null, lookup = null, sources = SOURCES, threshold = null }) {
+function createPriceBook({ db, registry, config = {}, clock = { now: () => Date.now() }, log = console, transport = null, lookup = null, sources = SOURCES, threshold = null, offPeak = null }) {
     const settings = {
         threshold: DEFAULT_THRESHOLD,
         timeoutMs: 20000,
@@ -136,6 +136,31 @@ function createPriceBook({ db, registry, config = {}, clock = { now: () => Date.
     /** The metadata that says the price book owns this price, so the catalogue does not write over it. */
     function metadataWith(row, { source, checkedAt }) {
         return { ...(row.metadata || {}), price_book: { checked_at: checkedAt, source } };
+    }
+
+    /**
+     * Record the off-peak window a provider's listing publishes: the provider's own price inside the
+     * hours it applies. A provider whose listing publishes no window keeps none, and a paid route it
+     * names is not eligible for a batch (server/batch/capacity.js).
+     */
+    async function offPeakWindow(source, off, report, checkedAt) {
+        report.off_peak = report.off_peak || [];
+        if (!off || !off.window || !Object.keys(off.prices || {}).length) return;
+        const rows = await registry.listModels({ provider: source.provider });
+        for (const row of rows) {
+            const found = findPrice(off.prices, row.model_key);
+            if (!found) continue;
+            for (const field of FIELDS) {
+                const value = found.price[FIELD_NAMES[field]];
+                if (value === null || value === undefined) continue;
+                await offPeak.record({
+                    provider_key: row.provider_key, model_key: row.model_key, field, price: value,
+                    start_hour: off.window.start_hour, end_hour: off.window.end_hour,
+                    source: source.url, checked_at: checkedAt,
+                });
+                report.off_peak.push({ model: row.model_key, field, price: value, window: off.window });
+            }
+        }
     }
 
     /**
@@ -293,6 +318,14 @@ function createPriceBook({ db, registry, config = {}, clock = { now: () => Date.
                     } catch {
                         report.unreadable.push({ source: source.key, url: source.url, error: 'the listing could not be read' });
                         continue;
+                    }
+                    // The off-peak window a listing publishes (DeepSeek's is the case today): what the
+                    // provider's own price is inside the window, so a half-price batch knows what a route
+                    // really costs. A listing that publishes no window leaves the provider ineligible.
+                    if (source.offPeak && offPeak) {
+                        try {
+                            await offPeakWindow(source, source.offPeak(source.kind === 'json' ? JSON.parse(res.body) : res.body), report, checkedAt);
+                        } catch { /* a listing that cannot be read for a window simply has none */ }
                     }
                     report.sources.push({ source: source.key, url: source.url, role: source.role, listed: Object.keys(prices).length });
                     if (source.role === 'cross-reference') { await crossCheck(prices, readings, report); continue; }

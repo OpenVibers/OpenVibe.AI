@@ -162,6 +162,10 @@ function createCatalog({ db, registry, pool, env = process.env, clock = { now: (
         for (const p of providers) upstreamByKey.set(p.key, upstream.upstreamOf(p));
         // What the price book recorded: the day a price was read and changed (server/pricebook/).
         const logged = await loggedChecks();
+        // The measured refusal rates (server/refusal/): what each offer refused, and the day it was
+        // measured. An offer nobody measured has no rate: null, never zero.
+        const refusalRows = await db.prepare('SELECT provider_key, model_key, refusal_rate, prompt_set, measured_at, measured_on FROM refusal_rates').all().catch(() => []);
+        const refusalBy = new Map((refusalRows || []).map((r) => [`${r.provider_key}/${r.model_key}`, r]));
 
         const groups = new Map();
         const drafts = [];
@@ -188,6 +192,8 @@ function createCatalog({ db, registry, pool, env = process.env, clock = { now: (
             const price = cards ? rates.pricesOf(cards) : null;
             // The day this price was checked: what the price book logged, or the day the rate card carries.
             const checkedAt = laterOf(logged.get(`${row.provider_key}/${row.model_key}`), cards ? cards.out.verified_at : null);
+            // The refusal rate of this offer, as the refusal job measured it.
+            const refusal = refusalBy.get(`${row.provider_key}/${row.model_key}`) || null;
             const offer = {
                 provider: up.key,
                 provider_name: up.name,
@@ -216,6 +222,11 @@ function createCatalog({ db, registry, pool, env = process.env, clock = { now: (
                 // The privacy label of this offer, from the same facts the router uses (server/exchange/privacy.js):
                 // Private (zero retention, no training, or the host's own deployment), Anonymized, Community.
                 privacy: privacy.view(privacy.labelFor({ record: provider })),
+                // The measured refusal rate: a fraction between 0 and 1 (0.75 is three probes out of
+                // four refused), with the day it was measured. null when nobody measured this offer.
+                refusal_rate: refusal && refusal.refusal_rate != null ? Number(refusal.refusal_rate) : null,
+                refusal_measured_on: refusal ? (String(refusal.measured_on || '').slice(0, 10) || null) : null,
+                refusal_prompt_set: refusal ? (refusal.prompt_set || null) : null,
                 updated_at: row.updated_at || provider.updated_at || null,
             };
             if (!groups.has(slug)) {
