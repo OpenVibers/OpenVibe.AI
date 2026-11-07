@@ -20,8 +20,10 @@ the same redaction on both ends.
 
 The endpoints are documented by the services: [mem0](https://docs.mem0.ai/api-reference/memory/get-memories),
 [Letta](https://docs.letta.com/api-reference/agents) and [Zep](https://help.getzep.com/api-reference). A self-hosted
-Letta or Zep names its own `base_url`; production requires https, and only a test may use a loopback `http://`
-address.
+Letta or Zep names its own `base_url`. It is judged on save and again at every sync: https only, port 443 or 8443,
+no credentials in the URL, no IP literal, no internal name, and its DNS answer must be public. The transport uses
+`openvibe-shared/egress`'s safe lookup inside the connection (`server/memory/services/transport.js`), follows no
+redirect, caps an answer at 1 MB and times out at 15 s. A refused base never sees the person's key.
 
 ### The key
 

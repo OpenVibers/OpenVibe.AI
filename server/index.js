@@ -32,7 +32,7 @@ const { AiError } = require('./util');
 const { gracefulStop, telemetry } = require('openvibe-sdk/service');
 const { createPgTelemetrySink, startTelemetryRetention } = require('openvibe-sdk/telemetry');
 
-async function start({ config, db: givenDb = null, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, listen = true, credentialFetch = null, valkey = null, research = null, machineModels = null, variantEvidence = null, community: givenCommunity = null, communityEndpoints: givenEndpoints = null, abuse: givenAbuse = null } = {}) {
+async function start({ config, db: givenDb = null, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, listen = true, credentialFetch = null, valkey = null, research = null, machineModels = null, variantEvidence = null, community: givenCommunity = null, communityEndpoints: givenEndpoints = null, abuse: givenAbuse = null, memoryTransport = null, memoryLookup = null } = {}) {
     config = config || load(env);
     schemas.configure(config.schemaCache);
     // PostgreSQL (ADR-035): opened and migrated here unless the caller (a test) hands in a migrated handle.
@@ -152,7 +152,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     const memoryJobs = require('./memory/jobs').createMemoryJobs({ memory, memoryImport, config, clock, log, registry });
     // Memory M5: the memory services with the person's own key (mem0, Letta, Zep), and the store's team sharing.
     // Sharing is null when this deployment has no Network client secret or Events URL; its routes answer 503.
-    const memoryServices = require('./memory/services').createMemoryServices({ db, config, clock, log, fetchImpl, memory });
+    const memoryServices = require('./memory/services').createMemoryServices({ db, config, clock, log, memory, transport: memoryTransport, lookup: memoryLookup });
     const memorySharing = require('./memory/sharing').createMemorySharing({ db, config, env, clock, log, fetchImpl });
     // The living price book (plan E1): the weekly job that reads every catalogued provider's own price listing and
     // keeps the price the router charges in step with it. A change of more than 20% waits for the owner on the

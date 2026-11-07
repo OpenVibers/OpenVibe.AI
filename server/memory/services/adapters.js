@@ -32,40 +32,14 @@ const MAX_ITEMS = 1000;
 const MAX_PAGES = 10;
 const PAGE = 100;
 const MAX_CHARS = 2000;
-const TIMEOUT_MS = 15000;
+
+const { ServiceError } = require('./transport');
 
 const NAMES = { mem0: 'mem0', letta: 'Letta', zep: 'Zep' };
 const DEFAULT_BASE = { mem0: 'https://api.mem0.ai', letta: 'https://api.letta.com', zep: 'https://api.getzep.com/api/v2' };
 
-class ServiceError extends Error {
-    constructor(status, code, message) {
-        super(message);
-        this.status = status;
-        this.code = code;
-    }
-}
-
 function baseOf(id, baseUrl) {
     return String(baseUrl || DEFAULT_BASE[id]).replace(/\/+$/, '');
-}
-
-async function getJson(fetchImpl, url, headers) {
-    let res;
-    try {
-        res = await fetchImpl(url, { method: 'GET', headers: { Accept: 'application/json', ...headers }, signal: AbortSignal.timeout(TIMEOUT_MS) });
-    } catch (err) {
-        // A network error's message may carry a URL but never the key: it is in a header, not the URL.
-        throw new ServiceError(502, 'memory.service_unreachable', `${NAMES_OF_URL(url)} did not answer`);
-    }
-    if (res.status === 401 || res.status === 403) throw new ServiceError(401, 'memory.service_key_refused', 'the service refused the key');
-    if (res.status === 429) throw new ServiceError(429, 'memory.service_rate_limited', 'the service is rate-limiting the key; try again later');
-    if (!res.ok) throw new ServiceError(502, 'memory.service_failed', `the service answered ${res.status}`);
-    try { return await res.json(); } catch { throw new ServiceError(502, 'memory.service_failed', 'the service answered with a body that is not JSON'); }
-}
-
-/** Only the host of the service, for an error sentence a person may see. Never the key or a query. */
-function NAMES_OF_URL(url) {
-    try { return new URL(url).host; } catch { return 'the memory service'; }
 }
 
 /** One record → one item. Text is cut to the store's own per-item bound; the store redacts and dedupes. */
@@ -84,12 +58,12 @@ function itemOf(text, { kind = 'fact', created_at, path } = {}) {
 const arrayOf = (json, key) => Array.isArray(json) ? json : (json && Array.isArray(json[key]) ? json[key] : []);
 
 /* ── mem0 ─────────────────────────────────────────────────────────────────── */
-async function mem0List({ key, baseUrl, fetchImpl, limit = MAX_ITEMS }) {
+async function mem0List({ key, baseUrl, request, limit = MAX_ITEMS }) {
     const base = baseOf('mem0', baseUrl);
     const out = [];
     for (let page = 1; page <= MAX_PAGES && out.length < limit; page++) {
         const url = `${base}/v1/memories/?page=${page}&page_size=${PAGE}`;
-        const json = await getJson(fetchImpl, url, { Authorization: `Token ${key}` });
+        const json = await request(url, { Accept: 'application/json', Authorization: `Token ${key}` });
         const rows = arrayOf(json, 'results');
         for (const row of rows) {
             const it = itemOf(row && row.memory, { created_at: row && row.created_at, path: row && row.id ? `mem0:${row.id}` : 'mem0' });
@@ -103,16 +77,16 @@ async function mem0List({ key, baseUrl, fetchImpl, limit = MAX_ITEMS }) {
 }
 
 /* ── Letta ────────────────────────────────────────────────────────────────── */
-async function lettaList({ key, baseUrl, fetchImpl, limit = MAX_ITEMS }) {
+async function lettaList({ key, baseUrl, request, limit = MAX_ITEMS }) {
     const base = baseOf('letta', baseUrl);
-    const headers = { Authorization: `Bearer ${key}` };
-    const agents = arrayOf(await getJson(fetchImpl, `${base}/v1/agents/`, headers), 'agents');
+    const headers = { Accept: 'application/json', Authorization: `Bearer ${key}` };
+    const agents = arrayOf(await request(`${base}/v1/agents/`, headers), 'agents');
     const out = [];
     for (const agent of agents) {
         if (!agent || !agent.id || out.length >= limit) continue;
         const id = encodeURIComponent(String(agent.id));
         let blocks = [];
-        try { blocks = arrayOf(await getJson(fetchImpl, `${base}/v1/agents/${id}/core-memory/blocks`, headers), 'blocks'); }
+        try { blocks = arrayOf(await request(`${base}/v1/agents/${id}/core-memory/blocks`, headers), 'blocks'); }
         catch (err) { if (err.status === 401 || err.status === 403 || err.status === 429) throw err; /* one agent's blocks */ }
         for (const block of blocks) {
             // `persona` is what the agent is; `human` and the rest are what it knows about the person.
@@ -123,7 +97,7 @@ async function lettaList({ key, baseUrl, fetchImpl, limit = MAX_ITEMS }) {
         }
         if (out.length >= limit) break;
         let passages = [];
-        try { passages = arrayOf(await getJson(fetchImpl, `${base}/v1/agents/${id}/archival-memory?limit=${PAGE}`, headers), 'passages'); }
+        try { passages = arrayOf(await request(`${base}/v1/agents/${id}/archival-memory?limit=${PAGE}`, headers), 'passages'); }
         catch (err) { if (err.status === 401 || err.status === 403 || err.status === 429) throw err; /* no archival memory */ }
         for (const passage of passages) {
             const it = itemOf(passage && passage.text, { created_at: passage && passage.created_at, path: passage && passage.id ? `letta:${passage.id}` : `letta:${agent.id}` });
@@ -147,22 +121,22 @@ function zepMemories(json) {
     return out;
 }
 
-async function zepList({ key, baseUrl, fetchImpl, limit = MAX_ITEMS }) {
+async function zepList({ key, baseUrl, request, limit = MAX_ITEMS }) {
     const base = baseOf('zep', baseUrl);
-    const headers = { Authorization: `Api-Key ${key}` };
-    const users = arrayOf(await getJson(fetchImpl, `${base}/users`, headers), 'users');
+    const headers = { Accept: 'application/json', Authorization: `Api-Key ${key}` };
+    const users = arrayOf(await request(`${base}/users`, headers), 'users');
     const out = [];
     for (const user of users) {
         const uid = user && (user.user_id || user.id);
         if (!uid || out.length >= limit) continue;
         let sessions = [];
-        try { sessions = arrayOf(await getJson(fetchImpl, `${base}/users/${encodeURIComponent(String(uid))}/sessions`, headers), 'sessions'); }
+        try { sessions = arrayOf(await request(`${base}/users/${encodeURIComponent(String(uid))}/sessions`, headers), 'sessions'); }
         catch (err) { if (err.status === 401 || err.status === 403 || err.status === 429) throw err; continue; }
         for (const session of sessions) {
             const sid = session && (session.session_id || session.id);
             if (!sid || out.length >= limit) continue;
             let json;
-            try { json = await getJson(fetchImpl, `${base}/users/${encodeURIComponent(String(uid))}/sessions/${encodeURIComponent(String(sid))}/memory`, headers); }
+            try { json = await request(`${base}/users/${encodeURIComponent(String(uid))}/sessions/${encodeURIComponent(String(sid))}/memory`, headers); }
             catch (err) { if (err.status === 401 || err.status === 403 || err.status === 429) throw err; continue; }
             for (const memory of zepMemories(json)) {
                 const text = memory && (memory.fact || memory.content || memory.text);

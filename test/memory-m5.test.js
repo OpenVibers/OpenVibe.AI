@@ -32,6 +32,47 @@ const ZEP = 'zep-key-0123456789';
 // A secret-shaped fixture, built from parts so a source scanner does not read it as a real Stripe key.
 const FAKE_STRIPE = ['sk_live', 'abcdef0123456789'].join('_');
 
+const PUBLIC = '93.184.216.34';
+
+/**
+ * The test seam the guarded transport exposes: a scripted answer instead of a socket. It records the exact request
+ * (URL, headers, timeout and cap) so a test can prove a refused host never saw the key.
+ */
+function fakeServiceTransport(handler) {
+    const calls = [];
+    const transport = async (send) => {
+        const call = { method: send.method, url: send.url, headers: { ...send.headers }, timeoutMs: send.timeoutMs, maxBytes: send.maxBytes };
+        calls.push(call);
+        const u = new URL(send.url);
+        const res = await handler(u, call);
+        return res || { status: 404, headers: {}, body: '{"detail":"no route"}' };
+    };
+    transport.calls = calls;
+    return transport;
+}
+
+const jsonRes = (status, obj) => ({ status, headers: { 'content-type': 'application/json' }, body: JSON.stringify(obj) });
+
+/** The happy answers of the three services: enough for a probe and a sync. */
+function happyService(u) {
+    if (u.pathname === '/v1/memories/') {
+        return jsonRes(200, { results: [
+            { id: 'm1', memory: 'Prefers small pull requests.', created_at: '2026-11-01T10:00:00Z' },
+            { id: 'm2', memory: 'The API key is ' + FAKE_STRIPE + ' and it must not survive redaction.', created_at: '2026-11-02T10:00:00Z' },
+        ], next: null });
+    }
+    if (u.pathname === '/v1/agents/') return jsonRes(200, [{ id: 'agent_1', name: 'Ada' }]);
+    if (u.pathname === '/v1/agents/agent_1/core-memory/blocks') {
+        return jsonRes(200, [{ label: 'human', value: 'Ada works in UTC+1.' }, { label: 'persona', value: 'A careful assistant.' }]);
+    }
+    if (u.pathname === '/v1/agents/agent_1/archival-memory') return jsonRes(200, [{ id: 'passage_1', text: 'Ships on Fridays only with the owner’s Go.', created_at: '2026-10-30T08:00:00Z' }]);
+    if (u.pathname === '/users') return jsonRes(200, [{ user_id: 'zep_user' }]);
+    if (u.pathname === '/users/zep_user/sessions') return jsonRes(200, [{ session_id: 's1' }]);
+    if (u.pathname === '/users/zep_user/sessions/s1/memory') return jsonRes(200, { memory: { facts: [{ uuid: 'f1', fact: 'Prefers TypeScript for new services.', created_at: '2026-11-03T09:00:00Z' }] } });
+    return jsonRes(404, { detail: 'no route' });
+}
+
+/** The Network and Events stub the sharing test needs; service traffic never reaches it (it is the injected transport). */
 async function startStub() {
     const calls = [];
     const people = {
@@ -61,28 +102,6 @@ async function startStub() {
             }
             if (req.url === '/internal/notifications/push') return json(201, {});
             if (req.url === '/events') return json(202, {});
-            if (req.url.startsWith('/mem0/v1/memories/')) {
-                if (req.headers.authorization !== `Token ${MEM0}`) return json(401, { detail: `bad key ${MEM0}` });
-                return json(200, { results: [
-                    { id: 'm1', memory: 'Prefers small pull requests.', created_at: '2026-11-01T10:00:00Z' },
-                    { id: 'm2', memory: 'The API key is ' + FAKE_STRIPE + ' and it must not survive redaction.', created_at: '2026-11-02T10:00:00Z' },
-                ], next: null });
-            }
-            if (req.url === '/letta/v1/agents/') return json(200, [{ id: 'agent_1', name: 'Ada' }]);
-            if (req.url === '/letta/v1/agents/agent_1/core-memory/blocks') {
-                return json(200, [{ label: 'human', value: 'Ada works in UTC+1.' }, { label: 'persona', value: 'A careful assistant.' }]);
-            }
-            if (req.url.startsWith('/letta/v1/agents/agent_1/archival-memory')) {
-                return json(200, [{ id: 'passage_1', text: 'Ships on Fridays only with the owner’s Go.', created_at: '2026-10-30T08:00:00Z' }]);
-            }
-            if (req.url === '/zep/users') {
-                if (req.headers.authorization !== `Api-Key ${ZEP}`) return json(401, { detail: 'bad key' });
-                return json(200, [{ user_id: 'zep_user' }]);
-            }
-            if (req.url === '/zep/users/zep_user/sessions') return json(200, [{ session_id: 's1' }]);
-            if (req.url === '/zep/users/zep_user/sessions/s1/memory') {
-                return json(200, { memory: { facts: [{ uuid: 'f1', fact: 'Prefers TypeScript for new services.', created_at: '2026-11-03T09:00:00Z' }] } });
-            }
             return json(404, { detail: 'no route' });
         });
     });
@@ -91,12 +110,15 @@ async function startStub() {
 }
 
 t.test('mem0, Letta and Zep: each adapter reads its stub API, and the key never leaves the sealed row', async () => {
-    const stub = await startStub();
     const logs = [];
     const capture = (...args) => logs.push(args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' '));
+    const transport = fakeServiceTransport(async (u) => happyService(u));
+    const lookup = (host, opts, cb) => cb(null, [{ address: PUBLIC, family: 4 }]);
     const h = await boot({
-        env: { AI_MEMORY_KEY: KEY, AI_CREDENTIALS_KEY: CRED, OV_OAUTH_CLIENT_SECRET: 'ai-secret', OV_NETWORK_INTERNAL_URL: stub.url, AI_EVENTS_URL: `${stub.url}/events`, AI_EVENTS_SUBSCRIBE: '0' },
+        env: { AI_MEMORY_KEY: KEY, AI_CREDENTIALS_KEY: CRED },
         log: { log: capture, warn: capture, error: capture },
+        memoryTransport: transport,
+        memoryLookup: lookup,
     });
     try {
         const put = async (provider, key, base) => {
@@ -104,18 +126,21 @@ t.test('mem0, Letta and Zep: each adapter reads its stub API, and the key never 
             assert.strictEqual(r.status, 200, r.text);
             assert.ok(!r.text.includes(key), `the ${provider} answer carries the key`);
             assert.strictEqual(r.body.service.hint, key.slice(-4));
-            assert.ok(['ok', 'failing'].includes(r.body.service.status), r.text);
+            assert.strictEqual(r.body.service.status, 'ok', r.text);
             const row = await h.db.maybe('SELECT key_enc, key_hint FROM memory_service_connections WHERE subject = $1 AND provider = $2', [A, provider]);
             assert.ok(row && row.key_enc.startsWith('v1:'), `${provider} key is sealed`);
             assert.ok(!row.key_enc.includes(key), `${provider} key is not in the ciphertext`);
             return r;
         };
-        await put('mem0', MEM0, `${stub.url}/mem0`);
-        await put('letta', LETTA, `${stub.url}/letta`);
-        await put('zep', ZEP, `${stub.url}/zep`);
-        assert.ok(stub.calls.some((c) => c.url.startsWith('/mem0/v1/memories/') && c.auth === `Token ${MEM0}`), 'mem0 was called with its documented header');
-        assert.ok(stub.calls.some((c) => c.url === '/letta/v1/agents/' && c.auth === `Bearer ${LETTA}`), 'Letta was called with its bearer');
-        assert.ok(stub.calls.some((c) => c.url === '/zep/users' && c.auth === `Api-Key ${ZEP}`), 'Zep was called with its Api-Key header');
+        await put('mem0', MEM0, 'https://mem0.example');
+        await put('letta', LETTA, 'https://letta.example');
+        await put('zep', ZEP, 'https://zep.example');
+        const call = (host, header) => transport.calls.find((c) => new URL(c.url).hostname === host && c.headers.Authorization === header);
+        assert.ok(call('mem0.example', `Token ${MEM0}`), 'mem0 was called with its documented header');
+        assert.ok(call('letta.example', `Bearer ${LETTA}`), 'Letta was called with its bearer');
+        assert.ok(call('zep.example', `Api-Key ${ZEP}`), 'Zep was called with its Api-Key header');
+        assert.ok(transport.calls.every((c) => c.url.startsWith('https://')), 'every adapter call is https');
+        assert.ok(transport.calls.every((c) => c.timeoutMs === 15000 && c.maxBytes === 1024 * 1024), 'every call has the 15 s timeout and the 1 MB cap');
 
         const list = await request(h.base, 'GET', '/api/v1/memory/services', { tok: userToken(A) });
         assert.strictEqual(list.status, 200);
@@ -137,11 +162,89 @@ t.test('mem0, Letta and Zep: each adapter reads its stub API, and the key never 
         assert.ok(texts.includes('Ada works in UTC+1.'), texts);
         assert.ok(texts.includes('Prefers TypeScript for new services.'), texts);
         assert.ok(!texts.includes(FAKE_STRIPE), 'a secret from a service was redacted before it was stored');
-        // The only source names the person can see are the adapter ids.
         assert.ok(items.body.items.some((i) => i.source === 'mem0') && items.body.items.some((i) => i.source === 'letta') && items.body.items.some((i) => i.source === 'zep'));
         assert.ok(!logs.join('\n').includes(MEM0) && !logs.join('\n').includes(LETTA) && !logs.join('\n').includes(ZEP), 'a key reached the log');
         assert.ok(!logs.join('\n').includes(FAKE_STRIPE), 'a secret reached the log');
-    } finally { await h.stop(); await stub.close(); }
+    } finally { await h.stop(); }
+});
+
+t.test('a private or malformed base_url is refused at save and at sync, and the key is never sent there', async () => {
+    const { createServiceKeys } = require('../server/memory/services/keys');
+    const state = { address: PUBLIC, redirect: false };
+    const transport = fakeServiceTransport(async (u) => {
+        if (u.hostname === 'redirect.example' || (state.redirect && u.hostname === 'redir.example')) {
+            return { status: 302, headers: { location: 'https://10.0.0.5/steal' }, body: '' };
+        }
+        return happyService(u);
+    });
+    const lookup = (host, opts, cb) => cb(null, [{ address: state.address, family: 4 }]);
+    const h = await boot({
+        env: { AI_MEMORY_KEY: KEY, AI_CREDENTIALS_KEY: CRED },
+        memoryTransport: transport,
+        memoryLookup: lookup,
+    });
+    try {
+        const refusedSave = async (url) => {
+            const before = transport.calls.length;
+            const r = await request(h.base, 'PUT', '/api/v1/memory/services/mem0', { tok: userToken(A), body: { key: MEM0, base_url: url } });
+            assert.strictEqual(r.status, 422, `${url}: ${r.text}`);
+            assert.strictEqual(transport.calls.length, before, `${url} reached the transport`);
+            assert.ok(!JSON.stringify(transport.calls).includes(MEM0), `${url} sent the key`);
+        };
+        state.address = PUBLIC;
+        await refusedSave('https://127.0.0.1');
+        await refusedSave('https://10.0.0.5');
+        await refusedSave('http://mem0.example');
+        await refusedSave('https://localhost');
+        await refusedSave('https://example.com:3000');
+        await refusedSave('https://user:pass@mem0.example');
+        state.address = '192.168.1.2';
+        await refusedSave('https://private.example');
+        state.address = PUBLIC;
+        const rows = await h.db.maybe("SELECT COUNT(*)::int AS n FROM memory_service_connections WHERE subject = $1", [A]);
+        assert.strictEqual(Number(rows.n), 0, 'no refused host left a key row');
+
+        // At sync: a row that exists (a legacy row, or one written before this guard) is refused before its key is opened.
+        const keys = createServiceKeys({ db: h.db, config: h.config });
+        const refusedSync = async (base) => {
+            await keys.put(A, 'zep', { key: ZEP, base_url: base });
+            const before = transport.calls.length;
+            const r = await request(h.base, 'POST', '/api/v1/memory/services/zep/sync', { tok: userToken(A) });
+            assert.strictEqual(r.status, 422, `${base}: ${r.text}`);
+            assert.strictEqual(transport.calls.length, before, `${base} reached the transport at sync`);
+            assert.ok(!JSON.stringify(transport.calls).includes('zep-key-0123456789'), `${base} sent the key at sync`);
+        };
+        state.address = PUBLIC;
+        await refusedSync('https://127.0.0.1');
+        await refusedSync('https://10.0.0.5');
+        await refusedSync('http://mem0.example');
+        await refusedSync('https://localhost');
+        await refusedSync('https://example.com:3000');
+        await refusedSync('https://user:pass@mem0.example');
+        state.address = '192.168.1.2';
+        await refusedSync('https://private.example');
+
+        // A redirect is never followed. At save it refuses the connection; at sync it refuses the read.
+        state.address = PUBLIC;
+        const beforeRedirect = transport.calls.length;
+        const redirectSave = await request(h.base, 'PUT', '/api/v1/memory/services/letta', { tok: userToken(A), body: { key: LETTA, base_url: 'https://redirect.example' } });
+        assert.strictEqual(redirectSave.status, 422, redirectSave.text);
+        assert.ok(redirectSave.text.includes('the service answered with a redirect'), redirectSave.text);
+        const afterRedirect = transport.calls.slice(beforeRedirect);
+        assert.ok(afterRedirect.length >= 1 && afterRedirect.every((c) => new URL(c.url).hostname === 'redirect.example'), 'only the allowed host was tried');
+        assert.ok(!afterRedirect.some((c) => c.url.includes('10.0.0.5')), 'the redirect target was never fetched');
+
+        await keys.put(A, 'mem0', { key: MEM0, base_url: 'https://redir.example' });
+        state.redirect = true;
+        const beforeSyncRedirect = transport.calls.length;
+        const syncRedirect = await request(h.base, 'POST', '/api/v1/memory/services/mem0/sync', { tok: userToken(A) });
+        assert.strictEqual(syncRedirect.status, 502, syncRedirect.text);
+        assert.strictEqual(syncRedirect.body.code, 'memory.service_redirect');
+        assert.ok(String(syncRedirect.body.detail).includes('the service answered with a redirect'), syncRedirect.text);
+        const syncCalls = transport.calls.slice(beforeSyncRedirect);
+        assert.ok(syncCalls.length >= 1 && syncCalls.every((c) => new URL(c.url).hostname === 'redir.example'), 'the sync tried only the allowed host');
+        assert.ok(!syncCalls.some((c) => c.url.includes('10.0.0.5')), 'the sync followed the redirect');
+    } finally { await h.stop(); }
 });
 
 t.test('the portable file exports decrypted items, imports into another account, and round-trips', async () => {
@@ -218,6 +321,25 @@ t.test('a shared store is readable only by its members, and the answer is never 
         const after = await request(h.base, 'GET', `/api/v1/memory/stores/${A}`, { tok: userToken(B) });
         assert.deepStrictEqual([after.status, after.body.code], [404, 'memory.not_found']);
     } finally { await h.stop(); await stub.close(); }
+});
+
+t.test('the transport itself refuses a private DNS answer, and the URL rules are the ones the route uses', async () => {
+    const { createServiceTransport, judgeBaseUrl, judgeRequestUrl } = require('../server/memory/services/transport');
+    const bad = (url) => assert.throws(() => judgeBaseUrl(url), (e) => e.status === 422, url);
+    bad('https://127.0.0.1');
+    bad('https://10.0.0.5');
+    bad('http://mem0.example');
+    bad('https://localhost');
+    bad('https://example.com:3000');
+    bad('https://user:pass@mem0.example');
+    bad('https://example.com/?x=1');
+    assert.strictEqual(judgeBaseUrl('https://api.getzep.com/api/v2').toString(), 'https://api.getzep.com/api/v2');
+    assert.strictEqual(judgeRequestUrl('https://api.mem0.ai/v1/memories/?page=1').toString(), 'https://api.mem0.ai/v1/memories/?page=1');
+    const guarded = createServiceTransport({ lookup: (host, opts, cb) => cb(null, [{ address: '192.168.1.2', family: 4 }]) });
+    await assert.rejects(
+        guarded.get('https://private.example/v1/memories/', { Authorization: 'Token a-key-that-must-not-leave' }),
+        (e) => e.code === 'memory.service_blocked' && e.status === 502,
+    );
 });
 
 t.run();

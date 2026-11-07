@@ -149,7 +149,7 @@ const memoryServicePut = {
     type: 'object',
     properties: {
         key: str({ minLength: 8, maxLength: 400, description: 'The person’s own key. It is sealed and never returned.' }),
-        base_url: str({ maxLength: 500, description: 'A self-hosted endpoint (https; a test may use a loopback http URL).' }),
+        base_url: str({ maxLength: 500, description: 'A self-hosted endpoint: https, port 443 or 8443, a public host name that resolves to a public address, no credentials or query.' }),
         account: str({ maxLength: 200, description: 'An optional user or agent id the service needs.' }),
     },
 };

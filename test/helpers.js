@@ -45,7 +45,7 @@ function tmpDir() {
 // A boot on a dir used before is a restart on the same database: its database stays open.
 const restartable = new Map();
 
-async function boot({ env = {}, dir, clock, fetchImpl, credentialFetch, research, machineModels, log, variantEvidence, community, communityEndpoints } = {}) {
+async function boot({ env = {}, dir, clock, fetchImpl, credentialFetch, research, machineModels, log, variantEvidence, community, communityEndpoints, memoryTransport, memoryLookup } = {}) {
     const reuse = dir !== undefined;
     if (dir === undefined) dir = tmpDir();
     const fullEnv = {
@@ -61,7 +61,7 @@ async function boot({ env = {}, dir, clock, fetchImpl, credentialFetch, research
     const researcher = research || require('../server/research').createResearch({ config: config.research, env: {}, fetchImpl: require('./fixtures/research-fetch').createResearchFetch().fetchImpl, log: silent });
     // An injected endpoint store needs the migrated database, so a factory is called with it before the app boots.
     const endpointStore = typeof communityEndpoints === 'function' ? communityEndpoints(testdb.db) : communityEndpoints;
-    const h = await start({ config, db: testdb.db, env: fullEnv, log: log || silent, clock, fetchImpl, credentialFetch, research: researcher, machineModels, variantEvidence, community, communityEndpoints: endpointStore });
+    const h = await start({ config, db: testdb.db, env: fullEnv, log: log || silent, clock, fetchImpl, credentialFetch, research: researcher, machineModels, variantEvidence, community, communityEndpoints: endpointStore, memoryTransport, memoryLookup });
     const base = `http://127.0.0.1:${h.server.address().port}`;
     return { ...h, base, dir, env: fullEnv, testdb, stop: async () => { await h.close(); if (!reuse) await testdb.close(); } };
 }
