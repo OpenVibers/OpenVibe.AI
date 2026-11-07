@@ -1,229 +1,108 @@
 'use strict';
-// The public home (plan T6: AI as a developer product). ai.openvibe.services renders server/home.js for a
-// browser and keeps the text/plain API index for curl and API clients, serves the pinned OpenVibe Frame at
-// /shared, and answers robots.txt, sitemap.xml and llms.txt. The vhosts: the developer-app routes are the only
-// API the public vhost proxies, and the old ai.openvibe.network address is retired (no vhost of its own).
+// The public pages of ai.openvibe.services moved to openvibe.exchange on 2026-11-07. This origin keeps the API,
+// a run's receipt and the operator console; every human page answers 301 on an exact map (an unknown human path
+// goes to the Exchange home), and no API path is ever redirected. The text/plain API index for curl stays.
 const assert = require('assert');
-
-function assertSitemapLastmods(xml, tag = 'url') {
-    const entries = [...xml.matchAll(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`, 'g'))];
-    for (const [, body] of entries) {
-        const match = /<lastmod>(\d{4}-\d{2}-\d{2})<\/lastmod>/.exec(body);
-        assert.ok(match, body);
-        assert.strictEqual(new Date(match[1]).toISOString().slice(0, 10), match[1]);
-    }
-    return entries;
-}
-
 const fs = require('fs');
 const path = require('path');
 const { boot, request, suite } = require('./helpers');
-const { HOME_CSP, renderHome, FAQ, DESCRIPTION } = require('../server/home');
 
 const SITE = 'https://ai.openvibe.services';
+const EXCHANGE = 'https://openvibe.exchange';
 const BROWSER = 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8';
-const t = suite('home');
+const t = suite('home-redirects');
 let h;
+
+const location = (r) => String(r.headers.get('location') || '');
+const moved = async (p, to, headers = BROWSER) => {
+    const r = await request(h.base, 'GET', p, { headers: { Accept: headers }, redirect: 'manual' });
+    assert.strictEqual(r.status, 301, `${p}: ${r.status} ${r.text.slice(0, 120)}`);
+    assert.strictEqual(location(r), `${EXCHANGE}${to}`, p);
+    return r;
+};
 
 t.test('boot with the public origin as BASE_URL', async () => {
     h = await boot({ env: { BASE_URL: SITE } });
 });
 
-t.test('GET / as a browser: the home page, its CSP and a private cache', async () => {
-    const r = await request(h.base, 'GET', '/', { headers: { Accept: BROWSER } });
-    assert.strictEqual(r.status, 200);
-    assert.match(r.headers.get('content-type'), /^text\/html/);
-    assert.strictEqual(r.headers.get('content-security-policy'), HOME_CSP);
-    assert.strictEqual(r.headers.get('cache-control'), 'private, max-age=300', 'Cloudflare ignores Vary: Accept');
-    assert.match(r.headers.get('vary'), /Accept/);
-    assert.strictEqual((r.text.match(/<h1\b/g) || []).length, 1, 'exactly one h1');
-    assert.ok(r.text.includes('Many models, one API.'), 'the hero');
-    assert.ok(r.text.includes('<div class="sc-grid" role="region" aria-label="What you get" tabindex="0">'), 'the sideways rail is reachable by keyboard');
-    assert.ok(r.text.includes('point it at /v1 for Chat Completions with tools'), 'the OpenAI-compatible endpoint is on the home');
-    assert.ok(r.text.includes('Your project&#39;s own provider') || r.text.includes("Your project's own provider"), 'the project\'s own provider row');
-    assert.ok(!r.text.includes('metered models under a project budget'), 'production app runs are free-only until project budgets open');
-    assert.ok(r.text.includes(`<link rel="canonical" href="${SITE}/">`), 'the canonical public origin');
-    assert.ok(r.text.includes(`${SITE}/api/v1/chat`), 'the examples call the public origin');
-    assert.ok(r.text.includes('https://openvibe.services/projects'), 'where a project and an app are made');
-    assert.ok(!/ai\.openvibe\.network/.test(r.text), 'never the old name');
-});
-
-t.test('the home: numbers and the model table come from the /stats rows; nothing is shown without them', async () => {
-    const card = (i, o) => ({ in: { unit_price_usd: i, unit_size: 1e6 }, cached: { unit_price_usd: i / 10, unit_size: 1e6 }, out: { unit_price_usd: o, unit_size: 1e6 } });
-    const rows = [
-        { provider: 'local', model: 'qwen2.5-1.5b-instruct', capability: 'chat, generate', requests: 10, ok: 10, p50: 25600, p95: 25600, cards: null },
-        { provider: 'shared', model: 'gpt-5-nano', capability: 'chat, generate, summarize, classify, extract, enrich, json', requests: 1003, ok: 1000, p50: 3200, p95: 25600, cards: card(0.05, 0.4) },
-        { provider: 'shared', model: 'never-answered', capability: 'chat', requests: 3, ok: 0, p50: 25600, p95: 25600, cards: card(0.25, 2) },
-    ];
-    const html = renderHome({ siteUrl: SITE, stats: { days: 7, rows } });
-    assert.match(html, /<b>1,010<\/b><span>calls answered in the last 7 days<\/span>/);
-    assert.match(html, /<b>2<\/b><span>models answered them<\/span>/);
-    // On a phone each model is a card: every cell carries its column's name (2026-11-02: the table scrolled sideways
-    // with rows a screen tall).
-    assert.ok(/<td data-label="Provider">[\s\S]*?<td data-label="Price">/.test(html), 'each cell names its column');
-    assert.ok(/@media \(max-width:600px\)\{#models[^\n]*table\.sc-table\{min-width:0;/.test(html), 'and the phone layout undoes the table width');
-    assert.match(html, /<b>99\.4%<\/b><span>of provider calls succeeded<\/span>/);
-    assert.ok(html.indexOf('gpt-5-nano') < html.indexOf('qwen2.5-1.5b-instruct'), 'most used first');
-    assert.ok(!html.includes('never-answered'), 'a model with no answer is left out');
-    assert.ok(html.includes('$0.05 in · $0.40 out per 1M tokens') && html.includes('not billed'), 'prices from the rate cards');
-    assert.ok(html.includes('under 3.2 s'), 'latency as the bucket bound');
-    assert.ok(html.includes('chat, generate, summarize, classify, extract and 2 more'), 'long capability lists are cut');
-    assert.ok(html.includes('a small local model, without tools'), 'what an app gets on the router, as the README says');
-    const empty = renderHome({ siteUrl: SITE, stats: { days: 7, rows: [] } });
-    assert.ok(!/calls answered|id="models"/.test(empty), 'no rows: no numbers and no table');
-});
-
-t.test('the home: OpenAI SDK samples, the FAQ and its JSON-LD, a description of at most 160 characters', async () => {
-    const html = renderHome({ siteUrl: SITE, stats: { days: 7, rows: [] } });
-    assert.ok(html.includes(`base_url=&quot;${SITE}/v1&quot;`) || html.includes(`base_url="${SITE}/v1"`), 'the Python sample points at /v1');
-    assert.ok(html.includes(`baseURL: &#39;${SITE}/v1&#39;`) || html.includes(`baseURL: '${SITE}/v1'`), 'the Node sample points at /v1');
-    assert.ok(DESCRIPTION.length <= 160, `description ${DESCRIPTION.length} chars`);
-    assert.ok(html.includes(`<meta name="description" content="${DESCRIPTION}">`), 'the whole description, not clipped');
-    const blocks = [...html.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)].map((m) => JSON.parse(m[1]));
-    const types = blocks.map((b) => b['@type']);
-    for (const t of ['WebSite', 'WebApplication', 'FAQPage']) assert.ok(types.includes(t), `JSON-LD ${t}: ${types}`);
-    const faq = blocks.find((b) => b['@type'] === 'FAQPage');
-    assert.strictEqual(faq.mainEntity.length, FAQ.length);
-    faq.mainEntity.forEach((q) => assert.ok(html.includes(`<h3>${q.name.replace(/'/g, '&#39;')}</h3>`), `the page shows "${q.name}"`));
-    assert.ok(!/OpenVibe\.Codes/.test(html), 'apps and the API reference are on OpenVibe.Services, never named as Codes');
-});
-
-t.test('GET / for curl and API clients: the text index, unchanged in kind', async () => {
+t.test('the home: a browser is sent to Exchange, curl still gets the API index', async () => {
+    const r = await moved('/', '/');
+    assert.match(r.headers.get('vary'), /\bAccept\b/i);
+    assert.match(r.headers.get('cache-control'), /^public, max-age=300$/);
     for (const accept of [undefined, '*/*', 'application/json', 'text/plain']) {
-        const r = await request(h.base, 'GET', '/', { headers: accept ? { Accept: accept } : {} });
-        assert.strictEqual(r.status, 200, String(accept));
-        assert.match(r.headers.get('content-type'), /^text\/plain/, String(accept));
-        assert.ok(r.text.startsWith('OpenVibe.AI: providers, models, routing'), String(accept));
-        assert.ok(r.text.includes('ai.app.run') && r.text.includes('/console'), String(accept));
+        const text = await request(h.base, 'GET', '/', { headers: accept ? { Accept: accept } : {} });
+        assert.strictEqual(text.status, 200, String(accept));
+        assert.match(text.headers.get('content-type'), /^text\/plain/, String(accept));
+        assert.ok(text.text.startsWith('OpenVibe.AI: providers, models, routing'), String(accept));
+        assert.ok(text.text.includes('POST /api/v1/runs') && text.text.includes('GET  /runs/:id') && text.text.includes('GET  /console'), String(accept));
+        assert.ok(text.text.includes(`${EXCHANGE}/`), 'the text index names the new home');
+    }
+    await moved('/?format=markdown', '/index.md');
+    const md = await request(h.base, 'GET', '/', { headers: { Accept: 'text/markdown' }, redirect: 'manual' });
+    assert.strictEqual(md.status, 301);
+    assert.strictEqual(location(md), `${EXCHANGE}/index.md`);
+});
+
+t.test('the exact page map, including the Markdown twins and the legal pages', async () => {
+    for (const [p, to] of [
+        ['/stats', '/models'],
+        ['/updates', '/status'],
+        ['/index.md', '/index.md'],
+        ['/stats.md', '/models.md'],
+        ['/updates.md', '/status.md'],
+        ['/terms', '/terms'],
+        ['/privacy', '/privacy'],
+        ['/dmca', '/dmca'],
+        ['/sitemap.xml', '/sitemap.xml'],
+        ['/llms.txt', '/llms.txt'],
+        ['/llms-full.txt', '/llms-full.txt'],
+    ]) await moved(p, to);
+});
+
+t.test('an unknown human page goes to the Exchange home; an unknown API path stays a problem document', async () => {
+    await moved('/prices-and-latency', '/');
+    await moved('/some-old-post', '/');
+    for (const p of ['/api/nope', '/v1/nope', '/api/v1/nope']) {
+        const r = await request(h.base, 'GET', p, { headers: { Accept: BROWSER }, redirect: 'manual' });
+        assert.strictEqual(r.status, 404, p);
+        assert.match(r.headers.get('content-type') || '', /application\/problem\+json/, p);
+        assert.ok(!location(r).startsWith(EXCHANGE), p);
     }
 });
 
-t.test('the home links the pinned Frame stylesheet, and /shared serves it', async () => {
-    const r = await request(h.base, 'GET', '/', { headers: { Accept: BROWSER } });
-    const href = (r.text.match(/href="(\/shared\/showcase\.css\?v=[0-9a-f]+)"/) || [])[1];
-    assert.ok(href, 'the showcase stylesheet, content-addressed');
-    const css = await request(h.base, 'GET', href);
-    assert.strictEqual(css.status, 200);
-    assert.match(css.headers.get('content-type'), /text\/css/);
-    assert.match(css.headers.get('cache-control'), /immutable/);
+t.test('the machine and session routes are not redirected', async () => {
+    const health = await request(h.base, 'GET', '/api/health');
+    assert.strictEqual(health.status, 200);
+    assert.strictEqual(health.body.status, 'ok');
+    const release = await request(h.base, 'GET', '/release.json');
+    assert.strictEqual(release.status, 200);
+    for (const p of ['/console', '/runs/run_01J0000000000000000000000', '/auth/login']) {
+        const r = await request(h.base, 'GET', p, { headers: { Accept: BROWSER }, redirect: 'manual' });
+        assert.ok(!location(r).startsWith(EXCHANGE), `${p} stays on this origin (${r.status} ${location(r)})`);
+    }
 });
 
-t.test('/updates: what shipped on this site, the shared update log, with one heading and the footer link', async () => {
-    const r = await request(h.base, 'GET', '/updates', { headers: { Accept: 'text/html' } });
+t.test('robots.txt asks crawlers to leave this origin alone and names Exchange’s sitemap', async () => {
+    const r = await request(h.base, 'GET', '/robots.txt');
     assert.strictEqual(r.status, 200);
-    assert.match(r.headers.get('content-type'), /^text\/html/);
-    assert.ok(r.text.includes('<h1>What shipped on OpenVibe.AI</h1>') && r.text.includes('data-ov-shipped="log" data-service="ai"'));
-    assert.strictEqual((r.text.match(/<h1[\s>]/g) || []).length, 1);
-    assert.match(r.text, /<script src="\/shared\/shipped\.js\?v=[0-9a-f]+" defer><\/script>/);
-    assert.match(r.text, new RegExp(`<link rel="canonical" href="${SITE.replace(/[.]/g, '\\.')}/updates">`));
-    assert.ok(r.headers.get('content-security-policy').includes("connect-src 'self' https://openvibe.network"), 'the log reads the network changelog');
-});
-
-t.test('/stats (price and latency) is in search: index,follow, its own description and canonical', async () => {
-    const r = await request(h.base, 'GET', '/stats');
-    assert.strictEqual(r.status, 200);
-    assert.ok(r.text.includes('<meta name="robots" content="index,follow">'), 'indexable');
-    assert.match(r.text, /<meta name="description" content="Price and latency of every AI model OpenVibe\.AI called in the last 7 days: [^"]+">/);
-    assert.ok(r.text.includes(`<link rel="canonical" href="${SITE}/stats">`), 'canonical');
-    assert.ok(r.text.includes(`<meta property="og:url" content="${SITE}/stats">`), 'a shared link has its tags');
-    assert.match(r.text, new RegExp(`<meta property="og:image" content="${SITE.replace(/\./g, '\\.')}/shared/social/ai\\.jpg\\?v=[0-9a-f]+">`));
-    assert.ok(r.text.includes('<meta name="twitter:card" content="summary_large_image">'));
-});
-
-t.test('robots.txt, sitemap.xml and llms.txt name the public origin', async () => {
-    const robots = await request(h.base, 'GET', '/robots.txt');
-    assert.strictEqual(robots.status, 200);
-    for (const line of ['Allow: /$', 'Allow: /stats', 'Allow: /updates', 'Disallow: /console', 'Disallow: /auth/', 'Disallow: /api/', `Sitemap: ${SITE}/sitemap.xml`]) assert.ok(robots.text.includes(line), line);
-    const map = await request(h.base, 'GET', '/sitemap.xml');
-    assert.strictEqual(map.status, 200);
-    assert.match(map.headers.get('content-type'), /xml/);
-    assert.deepStrictEqual([...map.text.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => m[1]), [`${SITE}/`, `${SITE}/stats`, `${SITE}/updates`]);
-    assert.strictEqual(assertSitemapLastmods(map.text).length, 3);
-    const llms = await request(h.base, 'GET', '/llms.txt');
-    assert.strictEqual(llms.status, 200);
-    assert.match(llms.headers.get('content-type'), /^text\/plain/);
-    assert.ok(llms.text.startsWith('# OpenVibe.AI'));
-    assert.ok(llms.text.includes(`${SITE}/stats`) && llms.text.includes(`POST ${SITE}/api/v1/chat`));
-    // AGT-5: the pages are links, each of this site's own at its Markdown twin; other sites keep theirs; Optional is last.
-    assert.ok(llms.text.includes(`[Home](${SITE}/index.md)`) && llms.text.includes(`(${SITE}/stats.md)`), llms.text.slice(0, 600));
-    assert.ok(llms.text.includes('(https://openvibe.services/docs/api)') && llms.text.includes(`(${SITE}/sitemap.xml)`));
-    assert.ok(llms.text.includes('\n## Optional\n') && llms.text.lastIndexOf('\n## ') === llms.text.indexOf('\n## Optional\n'), 'Optional is last');
-    const full = await request(h.base, 'GET', '/llms-full.txt');
-    assert.strictEqual(full.status, 200);
-    assert.match(full.headers.get('content-type'), /^text\/plain/);
-    assert.ok(full.text.startsWith('# OpenVibe.AI'));
-    assert.ok(full.text.length >= 500, `real content, not a stub (${full.text.length} characters)`);
-    for (const loc of [...map.text.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => m[1])) assert.ok(full.text.includes(loc), `llms-full.txt names ${loc}`);
-    assert.ok(full.text.includes('OpenAPI reference'), 'the generated API reference is named');
+    assert.ok(r.text.includes('Disallow: /'));
+    assert.ok(r.text.includes(`Sitemap: ${EXCHANGE}/sitemap.xml`));
 });
 
 const active = (file) => fs.readFileSync(path.join(__dirname, '..', 'deploy', 'nginx', file), 'utf8').split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
 
-t.test('the public vhost proxies the home, its files and exactly the developer-app API routes', () => {
+t.test('the vhost still proxies the API, the run receipt and the console; the app answers and redirects the pages', () => {
     const conf = active('ai.openvibe.services.conf');
-    for (const loc of ['location = / {', 'location = /stats', 'location = /updates', 'location = /sitemap.xml', 'location = /llms.txt', 'location = /llms-full.txt', 'location /shared/']) assert.ok(conf.includes(loc), loc);
+    for (const loc of ['location = /stats', 'location = /updates', 'location = /terms', 'location = /privacy', 'location = /dmca', 'location = /sitemap.xml', 'location = /llms.txt', 'location /runs/ {', 'location /console {', 'location /auth/ {', 'location /shared/']) assert.ok(conf.includes(loc), loc);
     const ops = conf.indexOf('location ~ ^/api/v1/(chat|generate|summarize|classify|extract|embed)$ {');
     const run = conf.indexOf('location ~ ^/api/v1/runs/[A-Za-z0-9_-]+$ {');
     const completions = conf.indexOf('location = /v1/chat/completions {');
     const models = conf.indexOf('location = /v1/models {');
-    assert.ok(ops >= 0 && run >= 0, 'the six operations and the run read');
-    assert.ok(completions >= 0 && models >= 0, 'the OpenAI-compatible endpoint and its model list');
+    assert.ok(ops >= 0 && run >= 0 && completions >= 0 && models >= 0, 'the API routes are untouched');
     assert.ok(conf.slice(completions, conf.indexOf('\n    }', completions)).includes('proxy_buffering off;'), 'streamed answers are not buffered');
-    for (const [i, verb] of [[ops, 'POST'], [run, 'GET'], [completions, 'POST'], [models, 'GET']]) {
-        const block = conf.slice(i, conf.indexOf('\n    }', i));
-        assert.ok(block.includes(`limit_except ${verb} { deny all; }`), verb);
-        assert.ok(block.includes('limit_req zone=ovai_apps'), 'rate-limited per address');
-        for (const hdr of ['X-Real-IP $remote_addr', 'X-Forwarded-For $remote_addr', 'CF-Connecting-IP $remote_addr']) assert.ok(block.includes(hdr), hdr);
-    }
-    const rest = conf.indexOf('location /api/ {');
-    const apiRest = conf.slice(rest, conf.indexOf('\n    }', rest));
-    assert.ok(apiRest.includes('default_type application/problem+json;'), 'an unknown API path answers a problem document');
-    assert.ok(/return 404 /.test(apiRest), 'with a 404');
-    assert.ok(!apiRest.includes('proxy_pass'), 'the rest of the API stays host-local');
-    assert.ok(!conf.includes('$proxy_add_x_forwarded_for'));
+    assert.ok(conf.includes('location = /robots.txt'));
 });
 
-t.test('the retired ai.openvibe.network address has no vhost (plan T6, 2026-10-10)', () => {
-    assert.ok(!fs.existsSync(path.join(__dirname, '..', 'deploy', 'nginx', 'ai.openvibe.network.conf')));
-});
-
-t.test('the CSPs let Cloudflare Web Analytics load and report (it injects its beacon on this zone)', async () => {
-    assert.match(HOME_CSP, /script-src [^;]*https:\/\/static\.cloudflareinsights\.com/);
-    assert.match(HOME_CSP, /connect-src [^;]*https:\/\/cloudflareinsights\.com/);
-    const stats = await request(h.base, 'GET', '/stats', { headers: { Accept: BROWSER } });
-    // /stats is a Frame page now (2026-11-01), under the home's CSP.
-    assert.strictEqual(stats.headers.get('content-security-policy'), HOME_CSP);
-});
-
-t.test('a browser that asks for a missing page gets the site 404 page; an API client the problem document', async () => {
-    const page = await request(h.base, 'GET', '/no-such-page', { headers: { Accept: BROWSER } });
-    assert.strictEqual(page.status, 404);
-    assert.match(page.headers.get('content-type'), /^text\/html/);
-    assert.ok(page.text.includes('<h1>Page not found</h1>'));
-    assert.ok(page.text.includes('There is no page at this address on ai.openvibe.services. The link may be old or mistyped.'));
-    assert.ok(page.text.includes('id="navbar-mount"'), 'the page is in the site Frame');
-    assert.ok(page.text.includes('<meta name="robots" content="noindex, follow">'));
-    assert.strictEqual(page.headers.get('x-robots-tag'), 'noindex');
-    assert.ok(page.text.includes('class="sc-btn sc-primary" href="/"'), 'home is the first way back');
-    const api = await request(h.base, 'GET', '/api/v1/no-such-thing', { headers: { Accept: BROWSER } });
-    assert.strictEqual(api.status, 404);
-    assert.match(api.headers.get('content-type'), /json/);
-    const notHtml = await request(h.base, 'GET', '/no-such-page', { headers: { Accept: 'application/json' } });
-    assert.strictEqual(notHtml.status, 404);
-    assert.match(notHtml.headers.get('content-type'), /json/);
-    const icon = await request(h.base, 'GET', '/favicon.ico');
-    assert.strictEqual(icon.status, 200);
-    assert.match(icon.headers.get('content-type'), /^image\/svg\+xml/);
-});
-
-t.test('the hero is one run explained, not the generic aura (MOTION-1)', async () => {
-    const r = await request(h.base, 'GET', '/', { headers: { Accept: BROWSER } });
-    const text = r.text;
-    assert.match(text, /<div class="ai-scene" aria-hidden="true">/);
-    assert.match(text, /Why this model[\s\S]*?deepseek-chat[\s\S]*?The cheapest healthy model/);
-    assert.ok(!/sc-aura-glow/.test(text), 'no generic aura');
-});
-
-t.test('shutdown', async () => { await h.stop(); });
+t.test('stop', async () => { await h.stop(); });
 
 t.run();

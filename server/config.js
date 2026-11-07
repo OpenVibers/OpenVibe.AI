@@ -48,6 +48,9 @@ function load(env = process.env) {
         nodeEnv,
         isProduction,
         baseUrl,
+        // The human pages that used to live here are OpenVibe.Exchange now (2026-11-07). This is where a
+        // browser is sent, page by page; the API, a run's receipt and the operator console stay here.
+        exchangeUrl: trimUrl(env.OV_EXCHANGE_URL || 'https://openvibe.exchange'),
         // Browser reads of the public stats and release endpoints only. Values are exact origins;
         // CORS never allows credentials, and token/console routes do not use this list.
         cors: { origins: list(env.AI_CORS_ORIGINS, ['https://ai.openvibe.services', 'https://openvibe.services']) },

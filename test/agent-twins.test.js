@@ -1,41 +1,40 @@
 'use strict';
-// SEO-1: the public pages' Markdown twins. A twin is the page's own render (the same for everyone: nothing on these
-// pages is per person), and the page names it in its head and in the Link: header.
+// SEO-1 moved with the public pages: ai.openvibe.services serves no Markdown twins any more. Each old twin path
+// answers 301 to its Exchange twin, and an Accept: text/markdown request for the home does the same. The API,
+// the console and the run receipt are not answered as Markdown.
 const assert = require('assert');
 const { boot, request, suite } = require('./helpers');
 
-const t = suite('agent-twins');
+const t = suite('agent-twins-moved');
 let h;
-const HTML = { accept: 'text/html' };
+const EXCHANGE = 'https://openvibe.exchange';
+const location = (r) => String(r.headers.get('location') || '');
 
 t.test('boot', async () => {
     h = await boot({ env: { AI_STUB_FALLBACK: 'false' } });
 });
 
-t.test('each public page names its twin in the head and the Link header, and the twin is the page', async () => {
-    for (const [p, twinPath, words] of [['/', '/index.md', 'OpenVibe.AI'], ['/stats', '/stats.md', 'no provider calls in the last 7 days'], ['/updates', '/updates.md', 'OpenVibe.AI']]) {
-        const page = await request(h.base, 'GET', p, { headers: HTML });
-        assert.strictEqual(page.status, 200, p);
-        const head = page.text.match(/<link rel="alternate" type="text\/markdown" href="([^"]+)">/);
-        assert.ok(head && head[1].endsWith(twinPath), `${p} names ${twinPath} in the head`);
-        assert.ok(page.text.includes('<link rel="describedby" href="/llms.txt">'), `${p} names llms.txt`);
-        const link = String(page.headers.get('link') || '');
-        assert.ok(link.includes(`<${head[1]}>; rel="alternate"; type="text/markdown"`) && link.includes('</llms.txt>; rel="describedby"'), `${p}: the Link header says what the head says (${link})`);
-        const twin = await request(h.base, 'GET', twinPath);
-        assert.strictEqual(twin.status, 200, twinPath);
-        assert.match(String(twin.headers.get('content-type')), /^text\/markdown/, `${twinPath} is Markdown`);
-        assert.ok(twin.text.startsWith('---\ntitle:') && twin.text.includes(words), `${twinPath} is the page's words`);
-        assert.ok(!/<(?:script|style)\b/i.test(twin.text.replace(/~~~~[\s\S]*?~~~~/g, '')), `${twinPath} carries no markup`);
-        const asked = await request(h.base, 'GET', p, { headers: { accept: 'text/markdown' } });
-        assert.match(String(asked.headers.get('content-type')), /^text\/markdown/, `${p} with Accept: text/markdown is the twin`);
+t.test('every old twin path is a 301 to its Exchange twin', async () => {
+    for (const [p, to] of [['/index.md', '/index.md'], ['/stats.md', '/models.md'], ['/updates.md', '/status.md']]) {
+        const r = await request(h.base, 'GET', p, { redirect: 'manual' });
+        assert.strictEqual(r.status, 301, p);
+        assert.strictEqual(location(r), `${EXCHANGE}${to}`, p);
+        assert.ok(!/^text\/markdown/.test(String(r.headers.get('content-type') || '')), p);
     }
 });
 
-t.test('nothing else is a twin: the console, the API, and the API index for curl are as they were', async () => {
-    const console_ = await request(h.base, 'GET', '/console.md');
-    assert.ok(!/^text\/markdown/.test(String(console_.headers.get('content-type'))), 'the console has no twin');
-    const api = await request(h.base, 'GET', '/api/v1/workflows', { headers: { accept: 'text/markdown' } });
-    assert.ok(!/^text\/markdown/.test(String(api.headers.get('content-type'))), 'the API is not answered as a twin');
+t.test('the home with Accept: text/markdown goes to the Exchange twin', async () => {
+    const r = await request(h.base, 'GET', '/', { headers: { accept: 'text/markdown' }, redirect: 'manual' });
+    assert.strictEqual(r.status, 301);
+    assert.strictEqual(location(r), `${EXCHANGE}/index.md`);
+});
+
+t.test('nothing else is a twin now: the console, the API and the curl index are as they were', async () => {
+    const console_ = await request(h.base, 'GET', '/console.md', { redirect: 'manual' });
+    assert.notStrictEqual(location(console_), `${EXCHANGE}/console.md`, 'the console is not moved as a twin');
+    const api = await request(h.base, 'GET', '/api/v1/workflows', { headers: { accept: 'text/markdown' }, redirect: 'manual' });
+    assert.ok(!/^text\/markdown/.test(String(api.headers.get('content-type') || '')), 'the API is not answered as a twin');
+    assert.ok(!location(api).startsWith(EXCHANGE), 'an API path is never redirected');
     const index = await request(h.base, 'GET', '/');
     assert.match(String(index.headers.get('content-type')), /^text\/plain/, 'curl still gets the API index');
 });
