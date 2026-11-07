@@ -91,7 +91,7 @@ the reconciler (one implementation, the same one the service runs) does the work
 ## Your own endpoint (the private rent)
 
 The Exchange's product line 6, "your own endpoint", is the same provisioner with a private rent on top
-(`server/gpu/endpoints.js`, migration `0039_own_endpoints.sql`):
+(`server/gpu/endpoints.js`, migration `0042_own_endpoints.sql`):
 
 - a person picks one of the models above, or brings their own Hugging Face `.gguf` (and an optional
   LoRA), from OpenVibe.Exchange's `/own` page or the person API (`/api/v1/own-endpoints`);
