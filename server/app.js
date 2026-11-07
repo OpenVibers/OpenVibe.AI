@@ -16,10 +16,7 @@ const { createOps } = require('./ops');
 const { consoleRouter } = require('./console');
 const { createPersonSessions } = require('./person-session');
 const { runPageRouter } = require('./run-pages');
-const views = require('./console/views');
-const cachePolicy = require('openvibe-shared/cache-policy');
 const ovServe = require('openvibe-shared/serve');
-const home = require('./home');
 const pkg = require('../package.json');
 
 const { adminRoutes } = require('openvibe-shared/config');
@@ -86,22 +83,8 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
     // The product home's browser files (the OpenVibe Frame, openvibe-shared/serve) under content-addressed
     // /shared/* URLs from this repo's pinned openvibe-shared; each answer sets its own asset cache policy.
     app.use('/shared', ovServe.handler());
-    // Terms, Privacy and DMCA in this site's own words (openvibe-shared/legal, profile 'service'; 11-03: the footer's
-    // legal links answered 404 here). The facts must match the code: change both together.
-    const legal = require('openvibe-shared/legal');
-    app.get(legal.PATHS, legal.handler({
-        "host": "ai.openvibe.services",
-        "name": "AI.OpenVibe.Services",
-        "id": "ai",
-        "service": "ai",
-        "profile": "service",
-        "what": "One API for chat, generation, summaries, classification, extraction and embeddings across many models; every run says which model answered, why it was chosen and what it cost.",
-        "makes": [
-                "your runs: the model that answered, why it was chosen, its tokens and its cost",
-                "the API keys you make, and the provider keys you bring, which are stored encrypted"
-        ],
-        "ai": true
-    }));
+    // Terms, Privacy and DMCA moved with the human site: /terms, /privacy and /dmca answer 301 to
+    // OpenVibe.Exchange's own legal pages (see the page map below).
     // Inline images arrive as data URLs; the per-run input cap is enforced again in runs.create.
     app.use(['/api', '/v1'], express.json({ limit: Math.ceil(config.runs.maxInputBytes * 1.5), type: ['application/json', 'application/*+json'] }));
 
@@ -220,125 +203,37 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
     app.use(consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, env, clock, fetchImpl, log, vault, settings, personSessions, abuse, priceBook }));
     app.use(runPageRouter({ runs, personSessions, log }));
 
-    // Public price and latency (no sign-in, no scripts): provider_stats_daily totals and the rate cards,
-    // nothing per caller. Only registered providers are listed: a person's own key records its runs as
-    // byo:<owner>:<subject>, which must never reach a public page.
-    const STATS_DAYS = 7;
-    async function statsRows() {
-        const rows = [];
-        for (const s of await quotas.statsFor({ days: STATS_DAYS })) {
-            const p = await registry.getProvider(s.provider);
-            if (!p) continue;
-            const m = s.model ? await registry.getModel(s.provider, s.model) : null;
-            rows.push({
-                provider: s.provider, model: s.model, capability: (m && m.type) || p.capabilities.join(', '),
-                requests: Number(s.requests) || 0, ok: Number(s.ok) || 0, p50: s.latency_p50_ms, p95: s.latency_p95_ms,
-                cards: await pool.rateCardsFor(s.provider, s.model || null),
-            });
-        }
-        return rows;
-    }
-    // The home's numbers and model table are the same rows, read at most once a minute (the home is cached for five).
-    let homeStats = { at: 0, rows: null };
-    async function homeRows() {
-        if (homeStats.rows && clock.now() - homeStats.at < 60_000) return homeStats.rows;
-        try { homeStats = { at: clock.now(), rows: await statsRows() }; } catch (e) { log.warn(`[home] price and latency rows unavailable: ${e.message}`); }
-        return homeStats.rows || [];
-    }
-    // The public pages, one render each: the page and its Markdown twin (SEO-1) are the same render, and the same for
-    // everyone (nothing on them is per person).
-    const publicPages = {
-        '/': async () => home.renderHome({ siteUrl: config.baseUrl, stats: { days: STATS_DAYS, rows: await homeRows() } }),
-        '/stats': async () => {
-            const now = clock.now();
-            return home.renderStats({ siteUrl: config.baseUrl, days: STATS_DAYS, rows: await statsRows(),
-                from: new Date(now - STATS_DAYS * 86400000).toISOString().slice(0, 10), to: new Date(now).toISOString().slice(0, 10) });
-        },
-        '/updates': async () => home.renderUpdates({ siteUrl: config.baseUrl }),
-    };
-    const agentLayer = require('openvibe-shared/agent-layer');
-    // The Link: header that names a public page's twin, as its head does.
-    const twinLink = (p) => agentLayer.linkHeaderTags(`${config.baseUrl}${p}`, '/llms.txt').header;
-    {
-        // A twin request (`/stats.md`, `/index.md`, ?format=markdown, Accept: text/markdown) for a public page.
-        const twins = express.Router();
-        agentLayer.mount(twins, { descriptor: require('./agent-descriptor'), render: async (p) => (publicPages[p] ? { html: await publicPages[p](), title: null, updated: null } : null) });
-        app.use((req, res, next) => {
-            const p = String(req.path || '');
-            const page = p === '/index.md' ? '/' : p.replace(/\.md$/, '');
-            const asked = p.endsWith('.md') || req.query.format === 'markdown' || req.accepts(['html', 'text/markdown']) === 'text/markdown';
-            return asked && publicPages[page] && (req.method === 'GET' || req.method === 'HEAD') ? twins(req, res, next) : next();
-        });
-    }
-    app.get('/stats', async (req, res, next) => {
-        try {
-            const html = await publicPages['/stats']();
-            res.setHeader('Cache-Control', cachePolicy.htmlHeaders());
-            res.setHeader('Content-Security-Policy', home.HOME_CSP);
-            res.setHeader('Link', twinLink('/stats'));
-            res.type('html').send(html);
-        } catch (e) { next(e); }
-    });
-
-    // Discovery for the public home (ai.openvibe.services): the home and the price page are for search engines
-    // and assistants; the console, its sign-in and the API are not.
-    app.get('/robots.txt', (_req, res) => {
-        res.type('text/plain').send(`User-agent: *\nAllow: /$\nAllow: /stats\nAllow: /updates\nDisallow: /console\nDisallow: /runs\nDisallow: /auth/\nDisallow: /api/\n\nSitemap: ${config.baseUrl}/sitemap.xml\n`);
-    });
-    app.get('/sitemap.xml', async (_req, res, next) => {
-        try {
-            const from = new Date(clock.now() - STATS_DAYS * 86400000).toISOString().slice(0, 10);
-            const stats = await db.prepare('SELECT MAX(day) AS lastmod FROM provider_stats_daily WHERE day >= ?').get(from);
-            const statsLastmod = [stats && stats.lastmod ? new Date(stats.lastmod).toISOString() : null, releaseLastmod].filter(Boolean).sort().pop();
-            // The paths come from home.PUBLIC_PAGES, the same catalogue /llms-full.txt describes.
-            const lastmods = { '/': releaseLastmod, '/stats': statsLastmod, '/updates': releaseLastmod };
-            const entries = home.PUBLIC_PAGES.map((p) => [p.path, lastmods[p.path]]);
-            res.type('application/xml').send(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${entries.map(([p, lastmod]) => `  <url><loc>${config.baseUrl}${p}</loc>${lastmod ? `<lastmod>${lastmod.slice(0, 10)}</lastmod>` : ''}</url>`).join('\n')}\n</urlset>\n`);
-        } catch (e) { next(e); }
-    });
-    app.get('/llms.txt', (_req, res) => {
-        res.setHeader('Cache-Control', 'public, max-age=3600');
-        res.type('text/plain').send(home.llmsTxt({ siteUrl: config.baseUrl }));
-    });
-    // The full AI map: the same page catalogue as the sitemap plus the developer API, in plain text.
-    app.get('/llms-full.txt', (_req, res) => {
-        res.setHeader('Cache-Control', 'public, max-age=3600');
-        res.type('text/plain').send(home.llmsFullTxt({ siteUrl: config.baseUrl }));
-    });
-
-    // GET /: the home page for a browser (server/home.js), the API index for curl and API clients (`*/*`, no
-    // Accept, or any non-HTML Accept). Vary: Accept so a shared cache never serves one to the other; the home is
-    // private because Cloudflare caches by URL and ignores Vary: Accept. The home carries its own CSP.
-    // GET /updates: what shipped on this site (the shared update log).
-    app.get('/updates', (req, res) => {
-        res.type('html').set('Content-Security-Policy', home.HOME_CSP).set('Cache-Control', 'public, max-age=300')
-            .set('Link', twinLink('/updates')).send(home.renderUpdates({ siteUrl: config.baseUrl }));
-    });
-
-    app.get('/', async (req, res) => {
+    // ── The public pages moved to OpenVibe.Exchange (2026-11-07) ────
+    // ai.openvibe.services keeps the API, a run's receipt and the operator console. Every human page it used
+    // to serve answers 301 to its Exchange home: the page map is exact, an unknown human path goes to the home,
+    // and no API path is ever redirected. The site's page list, price page, update log, legal pages and
+    // crawl artifacts moved with it.
+    const EXCHANGE = config.exchangeUrl;
+    const moved = (to) => (_req, res) => res.redirect(301, `${EXCHANGE}${to}`);
+    app.get('/', (req, res) => {
         res.vary('Accept');
-        if (req.accepts(['text/plain', 'text/html']) === 'text/html') {
-            const html = await publicPages['/']();
-            return res.type('html')
-                .set('Content-Security-Policy', home.HOME_CSP)
-                .set('Cache-Control', 'private, max-age=300')
-                .set('Link', twinLink('/'))
-                .send(html);
+        const html = req.accepts(['text/plain', 'text/html']) === 'text/html';
+        const markdown = req.query.format === 'markdown' || /text\/markdown/i.test(String(req.get('accept') || ''));
+        if (html || markdown) {
+            res.set('Cache-Control', 'public, max-age=300');
+            return res.redirect(301, markdown ? `${EXCHANGE}/index.md` : `${EXCHANGE}/`);
         }
         res.type('text/plain').send([
             'OpenVibe.AI: providers, models, routing, versioned prompt templates and workflows, runs, citations, scoped cache, quotas and audit.',
+            '',
+            'The public pages (home, prices and latency, the changelog, the FAQ) are OpenVibe.Exchange now:',
+            `${EXCHANGE}/`,
             '',
             'POST /api/v1/runs {workflow, input, target?, idempotency_key}   run a workflow (?wait=ms)',
             'GET  /api/v1/runs/:id    POST /api/v1/runs/:id/cancel|retry',
             'POST /api/v1/{chat,generate,summarize,classify,extract,enrich,embed}',
             'GET  /api/v1/workflows | templates | routes | providers | models | quotas | usage | audit',
             'GET  /api/health, /api/ready, /release.json',
-            'GET  /stats      price and latency per provider and model (public)',
             'GET  /runs/:id  your run receipt (OpenVibe.Network sign-in; your own runs only)',
-            'GET  /console    the operator console (OpenVibe.Network staff sign-in)',
+            'GET  /console     the operator console (OpenVibe.Network staff sign-in)',
             '',
             'Callers authenticate with OpenVibe.Network tokens (audience openvibe.ai): first-party service tokens, or a',
-            'developer app\'s token (ai.app.run) on the six direct operations and GET /api/v1/runs/:id.',
+            "developer app's token (ai.app.run) on the six direct operations and GET /api/v1/runs/:id.",
             'Developer apps: https://openvibe.services/projects',
             'AI output is a draft/evidence package attributed to a workflow, model and run, never to a person.',
             '',
@@ -346,15 +241,26 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
             '',
         ].join('\n'));
     });
+    // The exact page map. A Markdown twin points at its Exchange twin, not at the HTML page.
+    app.get('/stats', moved('/models'));
+    app.get('/updates', moved('/status'));
+    app.get('/index.md', moved('/index.md'));
+    app.get('/stats.md', moved('/models.md'));
+    app.get('/updates.md', moved('/status.md'));
+    for (const p of ['/terms', '/privacy', '/dmca', '/sitemap.xml', '/llms.txt', '/llms-full.txt']) app.get(p, moved(p));
 
-    // Browsers ask for /favicon.ico on their own: the app icon, as SVG.
-    app.get('/favicon.ico', (req, res) => res.type('image/svg+xml').set('Cache-Control', 'public, max-age=86400').send(require('openvibe-shared/app-icon').favicon({ site: 'ai' })));
+    // Discovery: the human site is Exchange, so this origin asks crawlers to leave it alone and names the map
+    // that matters. Machine routes (the API, release.json, a run's receipt) are not crawled anyway.
+    app.get('/robots.txt', (_req, res) => {
+        res.type('text/plain').send(`User-agent: *\nDisallow: /\nDisallow: /runs\nDisallow: /console\nDisallow: /auth/\nDisallow: /api/\n\n# The human site is OpenVibe.Exchange; the API stays here.\nSitemap: ${EXCHANGE}/sitemap.xml\n`);
+    });
 
-    // A browser asking for a page that is not here gets a page; an API client the problem document.
+    // A browser asking for a page that is not here goes to the Exchange home: the human site moved, and a
+    // stale link should land on the product, not a 404. An API or session path still answers as it did.
+    const MACHINE_PATH = /^\/(?:api|v1|internal|metrics|shared|release\.json|release-metrics|auth|console|runs|favicon\.ico|robots\.txt)(?:\/|$)/;
     app.use((req, res) => {
-        if (req.method === 'GET' && !req.path.startsWith('/api/') && !req.path.startsWith('/v1/') && req.accepts(['application/json', 'text/html']) === 'text/html') {
-            return res.status(404).type('html').set('Content-Security-Policy', home.HOME_CSP).set('Cache-Control', 'no-store')
-                .set('X-Robots-Tag', 'noindex').send(home.renderNotFound({ siteUrl: config.baseUrl }));
+        if (req.method === 'GET' && !MACHINE_PATH.test(req.path) && req.accepts(['application/json', 'text/html']) === 'text/html') {
+            return res.redirect(301, `${EXCHANGE}/`);
         }
         return http.sendProblem(res, 404, 'ai.not_found', { detail: `no route ${req.method} ${req.path}`, ctx: req.ov });
     });

@@ -67,11 +67,11 @@ async function boot({ env = {}, dir, clock, fetchImpl, credentialFetch, research
     return { ...h, base, dir, env: fullEnv, testdb, stop: async () => { await h.close(); if (!reuse) await testdb.close(); } };
 }
 
-async function request(base, method, p, { tok, body, headers = {} } = {}) {
+async function request(base, method, p, { tok, body, headers = {}, redirect = 'follow' } = {}) {
     const h = { ...headers };
     if (tok) h.Authorization = `Bearer ${tok}`;
     if (body !== undefined) h['Content-Type'] = 'application/json';
-    const res = await fetch(base + p, { method, headers: h, body: body !== undefined ? JSON.stringify(body) : undefined });
+    const res = await fetch(base + p, { method, headers: h, body: body !== undefined ? JSON.stringify(body) : undefined, redirect });
     const text = await res.text();
     let json = null;
     try { json = text ? JSON.parse(text) : null; } catch { json = null; }

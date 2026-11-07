@@ -22,9 +22,9 @@ t.test('config has exact public origins and accepts an override', () => {
 t.test('boot', async () => { h = await boot(); });
 
 t.test('listed origins can read only the two public GETs without credentials', async () => {
-    for (const [path, origin] of [['/stats', allowed], ['/release.json', otherAllowed]]) {
-        const r = await request(h.base, 'GET', path, { headers: { Origin: origin } });
-        assert.strictEqual(r.status, 200, r.text);
+    for (const [path, origin, status] of [['/stats', allowed, 301], ['/release.json', otherAllowed, 200]]) {
+        const r = await request(h.base, 'GET', path, { headers: { Origin: origin }, redirect: 'manual' });
+        assert.strictEqual(r.status, status, r.text);
         assert.strictEqual(r.headers.get('access-control-allow-origin'), origin);
         assert.match(r.headers.get('vary'), /\bOrigin\b/i);
         assert.strictEqual(r.headers.get('access-control-allow-credentials'), null);
@@ -33,8 +33,8 @@ t.test('listed origins can read only the two public GETs without credentials', a
 
 t.test('unlisted and merely similar origins receive no CORS permission', async () => {
     for (const origin of [rejected, `${allowed}:443`, 'null']) {
-        const r = await request(h.base, 'GET', '/stats', { headers: { Origin: origin } });
-        assert.strictEqual(r.status, 200, r.text);
+        const r = await request(h.base, 'GET', '/stats', { headers: { Origin: origin }, redirect: 'manual' });
+        assert.strictEqual(r.status, 301, r.text);
         assertNoCors(r.headers);
     }
     const r = await request(h.base, 'GET', '/release.json', { headers: { Origin: rejected } });

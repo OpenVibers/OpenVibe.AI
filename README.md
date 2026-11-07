@@ -5,7 +5,12 @@
 **Status:** alpha (roadmap Wave 13). Deployed on the host since 2026-09-23 on `127.0.0.1:4700` and in
 production use: OpenVibe.Live runs with `AI_SERVICE=remote` and Network's footer copy runs
 `network.site_copy` here. Public since 2026-10-07 at [ai.openvibe.services](https://ai.openvibe.services):
-the home (`server/home.js`), `/stats` and the developer-app API (`ai.app.run`).
+the API (`ai.app.run`, the OpenAI-compatible `/v1`), a run's receipt (`/runs/:id`), a person's own provider
+keys (`/you`) and the operator console.
+**The public site moved to [openvibe.exchange](https://openvibe.exchange) on 2026-11-07:** the home, prices
+and latency, the changelog, the legal pages and the discovery files answer 301 there on an exact page map
+(`server/app.js`), while every API route on this origin is unchanged. The content and the map are in
+`/home/workstation/openvibe/plan-state-2026-10-22/ai-site-inventory-2026-11-07.md`.
 **Domain:** `ai.openvibe.services` · **Port:** 4700 · **Unit:** `openvibe-ai.service`
 **Plan:** OpenVibe End-to-End Realignment & Implementation Plan, revision 3 (20 Sep 2026), §12.1, §12.13, §15.14, §33, §34.
 **License:** AGPL-3.0 (same as every OpenVibe service).
