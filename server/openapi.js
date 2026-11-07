@@ -290,6 +290,51 @@ route('get', '/run-budgets/{jti}', {
     responses: { 200: json('The budget and the spend', { type: 'object', required: ['jti'], properties: { jti: str(), budget_usd: nullable('number'), budget_tokens: nullable('integer'), spent_usd: nullable('number'), spent_tokens: nullable('integer'), expires_at: nullable('integer'), reached: { type: 'boolean' } } }), ...errors([401, 403, 422]) },
 });
 
+// ── The half-price batches (server/batch/) ────────────────────────────────────────────────────
+const batchItem = {
+    type: 'object', required: ['idx', 'status'],
+    properties: {
+        idx: integer({ minimum: 0 }),
+        status: str({ enum: ['queued', 'running', 'succeeded', 'failed'] }),
+        model: nullable('string'),
+        run_id: nullable('string', { description: 'The run that answered this prompt' }),
+        answer: nullable('string'),
+        error_code: nullable('string'),
+        error_detail: nullable('string'),
+    },
+};
+const batch = {
+    type: 'object', required: ['id', 'status', 'items'],
+    properties: {
+        id: str(), owner_type: str({ enum: ['user', 'app'] }), owner_id: str(), project_id: nullable('string'),
+        status: str({ enum: ['queued', 'running', 'succeeded', 'failed'] }),
+        item_count: integer({ minimum: 1, description: 'How many prompts the batch carries' }),
+        items: arrayOf(batchItem),
+        discount: str({ description: 'The price the batch is charged at: half the retail rate, through Billing like every other request.' }),
+        created_at: str({ format: 'date-time' }), updated_at: str({ format: 'date-time' }), finished_at: nullable('string', { format: 'date-time' }),
+    },
+};
+route('post', '/batches', {
+    operationId: 'createBatch', summary: 'Submit a batch of prompts to be answered later, at half the retail price', tags: ['batches'], security: SERVICE_OR_APP,
+    description: 'ai.run.create (or a developer app\'s ai.app.run). The batch is queued and its prompts are answered later; GET /batches/{id} says where it stands. It is billed through Billing like every other request, at half the retail rate, against the account that submits it (a person\'s Balance, or an app\'s project). A batch carries at most the configured number of prompts; a bigger one is refused with batch.too_large.',
+    requestBody: body({ type: 'object', required: ['items'], properties: {
+        items: { type: 'array', minItems: 1, items: { oneOf: [str(), { type: 'object', required: ['prompt'], properties: { prompt: str() } }] } },
+        model: str({ description: 'The model the prompts are asked of, when the caller names one' }),
+    } }),
+    responses: { 201: json('The queued batch', batch), 403: problem, 422: problem, ...errors([401, 422]) },
+});
+route('get', '/batches', {
+    operationId: 'listBatches', summary: 'The caller\'s own batches', tags: ['batches'], security: SERVICE_OR_APP,
+    description: 'ai.run.read. The batches the caller submitted, newest first.',
+    responses: { 200: json('The batches', { type: 'object', required: ['batches'], properties: { batches: { type: 'array', items: { type: 'object' } } } }), ...errors([401, 403]) },
+});
+route('get', '/batches/{id}', {
+    operationId: 'getBatch', summary: 'One batch and its prompts', tags: ['batches'], security: SERVICE_OR_APP,
+    description: 'ai.run.read. Where the batch stands (queued, running, succeeded, failed) and what each of its prompts was answered with.',
+    parameters: [path('id', str())],
+    responses: { 200: json('The batch', { type: 'object', required: ['batch'], properties: { batch: batch } }), 404: problem, ...errors([401, 403]) },
+});
+
 // ── Exchange read API (OpenVibe.Exchange) ───────────────────────────────────────────────────
 const exchangeOffer = {
     type: 'object', required: ['provider', 'provider_name', 'model', 'kind', 'trust', 'free', 'free_tier', 'price'],
@@ -310,6 +355,9 @@ const exchangeOffer = {
         cached_7d: integer({ minimum: 0, description: 'Cached answers (no provider call) in the window, counted apart from requests_7d' }),
         cached_today: integer({ minimum: 0 }),
         data_policy: nullable('object', { properties: { trains: nullable('boolean'), retention_days: nullable('integer'), region: nullable('string'), anonymized: nullable('boolean', { description: 'The provider says the request is anonymised before the model sees it' }) } }),
+        refusal_rate: nullable('number', { minimum: 0, maximum: 1, description: 'The share of the published probe set this offer refused (0.75 is three probes out of four). null when nobody measured this offer, never 0.' }),
+        refusal_measured_on: nullable('string', { description: 'The day the refusal rate was measured' }),
+        refusal_prompt_set: nullable('string', { description: 'The version of the published probe set the rate was measured with' }),
         updated_at: nullable('string'),
     },
 };

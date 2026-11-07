@@ -154,6 +154,11 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     // keeps the price the router charges in step with it. A change of more than 20% waits for the owner on the
     // operator console. Off in test mode (the tests replay the recorded listings) and off under a drill.
     const priceBook = require('./pricebook').createPriceBook({ db, registry, config, clock, log });
+    // The measured refusal rates (server/refusal/): the weekly job that asks every offer the same published,
+    // harmless questions and publishes how often it refused them. Due-based, like the price book.
+    const refusal = require('./refusal/job').createRefusalJob({ db, registry, pool, config, env, clock, log });
+    // The half-price batches (server/batch/): many prompts, answered later, billed through Billing.
+    const batches = require('./batch/service').createBatchService({ db, runs, config, clock, log });
     // The Events consumer side: a signed bench.rating.changed webhook, subscribed at boot (server/bench/events.js).
     const accountData = accountDataLib.create({ db, log, memory });
     const accountSend = env.OV_OAUTH_CLIENT_SECRET ? createNetworkSender({
@@ -161,7 +166,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         clientSecret: env.OV_OAUTH_CLIENT_SECRET, fetch: fetchImpl,
     }) : null;
     const benchEvents = createBenchEvents({ bench, accountData, accountSend, config, log, fetchImpl, clientSecret: env.OV_OAUTH_CLIENT_SECRET });
-    const app = createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, grants, vault, settings, benchEvents, runBudgets, memory, memoryImport, community, endpoints, presets, receipts, balance, gpus, abuse, priceBook });
+    const app = createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, grants, vault, settings, benchEvents, runBudgets, memory, memoryImport, community, endpoints, presets, receipts, balance, gpus, abuse, priceBook, refusal, batches });
     let jwks = null;
     let keyLoaded = Promise.resolve(null);
     if (!keys.pinned && config.nodeEnv !== 'test') {
@@ -202,6 +207,11 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     if (listen && config.memoryJobs && config.memoryJobs.enabled) memoryJobs.start();
     // The price book reads the providers' listings once a week; it never starts in test mode or under a drill.
     if (listen && config.priceBook && config.priceBook.enabled) priceBook.start();
+    // The refusal job asks the offers the same questions once a week; it never starts in test mode (the
+    // tests drive it by hand) and never under a restore drill.
+    if (listen && config.refusal && config.refusal.enabled) refusal.start();
+    // The batch worker picks up the queued batches. The queue is in the database, so a restart keeps it.
+    if (listen && config.batches && config.batches.enabled && config.nodeEnv !== 'test') batches.start();
     // Durable Credit settles: the same jobs rule as Memory (never in test mode, never under a provider drill; the
     // queue's runOnce checks the drill itself).
     if (listen && credits && config.nodeEnv !== 'test') credits.startSettlements();
@@ -238,6 +248,8 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         userModules.stop();
         memoryJobs.stop();
         priceBook.stop();
+        refusal.stop();
+        batches.stop();
         if (credits) credits.stopSettlements();
         if (jwks) jwks.stop();
         if (server) {
@@ -253,7 +265,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         if (!givenDb) await db.close();
     }
 
-    return { config, db, registry, pool, quotas, tiers, cache, fetcher, engine, runs, keys, keyLoaded, auth, app, server, bench, benchEvents, memory, memoryJobs, priceBook, credits: creditsRef, settings, vault, community, endpoints, gpus, abuse, close };
+    return { config, db, registry, pool, quotas, tiers, cache, fetcher, engine, runs, keys, keyLoaded, auth, app, server, bench, benchEvents, memory, memoryJobs, priceBook, refusal, batches, credits: creditsRef, settings, vault, community, endpoints, gpus, abuse, close };
 }
 
 if (require.main === module) {

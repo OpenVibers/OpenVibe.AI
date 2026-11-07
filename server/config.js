@@ -357,6 +357,29 @@ function load(env = process.env) {
         providerRetries: Math.max(0, int(env.AI_PROVIDER_RETRIES, 1)),
         retryDelayMs: Math.max(0, int(env.AI_PROVIDER_RETRY_DELAY_MS, 800)),
 
+        // ── The measured refusal rates (server/refusal/) ──
+        // The weekly job that asks every offer the same published, harmless questions and publishes how
+        // often it refused them. Due-based, like the price book: the last finished run is a row in the
+        // database, because AI is deployed several times a day and a timer in the process never comes round.
+        refusal: {
+            enabled: bool(env.AI_REFUSAL_JOB, !bool(env.AI_DRILL, false) && nodeEnv !== 'test'),
+            intervalMs: Math.max(3600000, int(env.AI_REFUSAL_INTERVAL_MS, 7 * 24 * 60 * 60 * 1000)),
+            tickMs: Math.max(60000, int(env.AI_REFUSAL_TICK_MS, 60 * 60 * 1000)),
+            firstTickMs: Math.max(1000, int(env.AI_REFUSAL_FIRST_TICK_MS, 5 * 60 * 1000)),
+            claimTtlMs: Math.max(60000, int(env.AI_REFUSAL_CLAIM_TTL_MS, 15 * 60 * 1000)),
+            // How many of the published probes one offer is asked (the attempts the rate is based on).
+            probesPerOffer: Math.max(1, int(env.AI_REFUSAL_PROBES, 4)),
+            maxOffers: Math.max(1, int(env.AI_REFUSAL_MAX_OFFERS, 500)),
+        },
+        // ── The half-price batches (server/batch/) ──
+        // Many prompts submitted at once, answered later, at half the retail price, billed through Billing.
+        batches: {
+            enabled: bool(env.AI_BATCHES, true),
+            // The cap: how many prompts one batch may carry.
+            maxItems: Math.max(1, int(env.AI_BATCH_MAX_ITEMS, 1000)),
+            tickMs: Math.max(5000, int(env.AI_BATCH_TICK_MS, 60 * 1000)),
+            claimTtlMs: Math.max(60000, int(env.AI_BATCH_CLAIM_TTL_MS, 15 * 60 * 1000)),
+        },
         // ── The living price book (server/pricebook/) ──
         // The weekly job that reads every catalogued provider's own price listing and keeps the price the router
         // charges in step with it (plan E1). A change of more than the threshold waits for the owner on the
