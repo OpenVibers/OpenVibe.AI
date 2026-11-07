@@ -139,3 +139,5 @@ t.test('an invalid tool argument is refused, not sent', async () => {
 });
 
 t.test('stop', async () => { await fake.close(); });
+
+t.run();

@@ -77,9 +77,9 @@ t.test('signature round-trip with the SDK verifier, and a delivery log a develop
     assert.strictEqual(sent.url, 'https://hooks.example.com/exchange');
     assert.strictEqual(sent.headers['X-OpenVibe-Event'], 'usage');
     assert.match(sent.headers['X-OpenVibe-Signature-V2'], /^t=\d+,v2=[0-9a-f]{64}$/);
-    assert.strictEqual(verifyWebhook(sent.body, sent.headers['X-OpenVibe-Signature-V2'], sub.secret), true);
-    assert.strictEqual(verifyWebhook(`${sent.body} `, sent.headers['X-OpenVibe-Signature-V2'], sub.secret), false, 'the raw bytes are signed');
-    assert.strictEqual(verifyWebhook(sent.body, sent.headers['X-OpenVibe-Signature-V2'], 'whsec_wrong'), false);
+    assert.strictEqual(verifyWebhook(sent.body, sent.headers['X-OpenVibe-Signature-V2'], sub.secret, { now: ms }), true);
+    assert.strictEqual(verifyWebhook(`${sent.body} `, sent.headers['X-OpenVibe-Signature-V2'], sub.secret, { now: ms }), false, 'the raw bytes are signed');
+    assert.strictEqual(verifyWebhook(sent.body, sent.headers['X-OpenVibe-Signature-V2'], 'whsec_wrong', { now: ms }), false);
     const payload = JSON.parse(sent.body);
     assert.strictEqual(payload.type, 'usage');
     assert.strictEqual(payload.data.run_id, 'run_1');
@@ -156,12 +156,12 @@ let rec;
 
 t.test('boot with a webhook store on a socket the tests drive', async () => {
     rec = recorder();
-    h = await boot({ webhooks: (db) => createWebhooks({ db, config: cfg, clock, log: silent, transport: rec.transport }) });
+    h = await boot({ webhooks: (db) => createWebhooks({ db, config: cfg, log: silent, transport: rec.transport }) });
 });
 
 t.test('a completed run queues a signed usage event for the person', async () => {
     const person = token('dana', ALL, { sub: OWNER, actorType: 'user' });
-    const created = await request(h.base, 'POST', '/api/v1/exchange/webhooks', { tok: person, body: { url: 'https://hooks.example.com/exchange', events: ['usage'] } });
+    const created = await request(h.base, 'POST', '/api/v1/exchange/webhooks', { tok: person, body: { url: 'https://hooks.example.com/exchange', events: ['usage', 'offer.down'] } });
     assert.strictEqual(created.status, 201, created.text);
     const secret = created.body.webhook.secret;
     const chat = await request(h.base, 'POST', '/v1/chat/completions', { tok: person, body: { model: 'openvibe', messages: [{ role: 'user', content: 'say hi' }] } });
@@ -228,3 +228,5 @@ t.test('the private receiver is refused by the API', async () => {
 });
 
 t.test('stop', async () => { await h.stop(); });
+
+t.run();

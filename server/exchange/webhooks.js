@@ -73,7 +73,7 @@ function deliveryView(row) {
         attempts: Number(row.attempts) || 0, last_status: row.last_status == null ? null : Number(row.last_status),
         last_error: row.last_error || null, last_attempt_at: row.last_attempt_at || null,
         next_attempt_at: row.next_attempt_at || null, delivered_at: row.delivered_at || null,
-        created_at: row.created_at, payload: parseJson(row.payload, null),
+        created_at: row.created_at, payload: row.payload && typeof row.payload === 'object' ? row.payload : parseJson(row.payload, null),
     };
 }
 
@@ -196,7 +196,9 @@ function createWebhooks({ db, config = null, clock = { now: () => Date.now() }, 
         let headers = null;
         try {
             const target = judgeUrl(row.url);
-            const payload = Buffer.isBuffer(row.payload) ? row.payload.toString('utf8') : String(row.payload);
+            // jsonb hands back a parsed object in PostgreSQL; sign the exact string this delivery sends.
+            const payload = Buffer.isBuffer(row.payload) ? row.payload.toString('utf8')
+                : (typeof row.payload === 'string' ? row.payload : JSON.stringify(row.payload));
             const t = nowSec(clock.now());
             const signature = crypto.createHmac('sha256', String(row.secret)).update(`${t}.`).update(payload).digest('hex');
             headers = {
