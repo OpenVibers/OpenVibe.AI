@@ -203,7 +203,7 @@ t.test("AI text may describe people: no looks ban in the public prose prompts", 
 t.test('The Rundown: the segment prompt lists the lines and known topics; its output is clamped, kept to the lines and stripped of empty segments', () => {
     const tp = (k) => live.templates.find((x) => x.key === k);
     const seg = tp('live.rundown.segment');
-    assert.strictEqual(seg.default_route, 'live.creative');
+    assert.strictEqual(seg.default_route, 'background.creative', 'BA1: nobody watches a rundown arrive, so it runs in the background');
     assert.match(seg.system_prompt, /announcer or character lines/);
     assert.match(seg.system_prompt, /never guess a pronoun/);
     assert.match(seg.system_prompt, /never a sentence they read out from an article/, 'a line read aloud is not theirs');

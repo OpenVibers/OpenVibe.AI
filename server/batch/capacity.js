@@ -25,6 +25,7 @@
  * Every route's cost is per million tokens in nano-USD, the same unit the retail card uses.
  */
 const { retailRate } = require('../providers/model-catalog');
+const { insideWindow } = require('../pricebook/offpeak');
 
 /** Half of a nano price, rounded down: the customer is never charged more than half. */
 const halfOf = (v) => (v == null ? null : (BigInt(v) / 2n).toString());
@@ -68,7 +69,7 @@ function within(cost, charge) {
 }
 
 /** Is `at` inside a UTC window? A window that wraps the midnight (23-02) is handled. */
-function insideWindow(window, at) {
+function insideWindowLegacy(window, at) {
     if (!window) return false;
     const hour = new Date(at).getUTCHours();
     const start = Number(window.start_hour);
@@ -140,8 +141,10 @@ async function batchCapacity(model, at, { registry = null, community = null, pri
     }
 
     // (c) A paid provider inside a window where its own price is at least half lower than the retail card.
+    // The windows are the price book's: the old single daily window and the weekday blocks (BA1), so a
+    // rule like DeepSeek's (peak 01:00-04:00 and 06:00-10:00 UTC, Monday to Friday) is read as it is.
     if (priceBook && typeof priceBook.offPeakRows === 'function') {
-        const rows = await priceBook.offPeakRows();
+        const rows = typeof priceBook.windows === 'function' ? await priceBook.windows() : await priceBook.offPeakRows();
         for (const row of rows || []) {
             if (String(row.model_key) !== String(model.model_key)) continue;
             if (!insideWindow(row, at)) continue;
@@ -157,7 +160,7 @@ async function batchCapacity(model, at, { registry = null, community = null, pri
                 model: row.model_key,
                 source: 'discount-window',
                 cost,
-                window: { start_hour: Number(row.start_hour), end_hour: Number(row.end_hour) },
+                window: { start_hour: Number(row.start_hour), end_hour: Number(row.end_hour), weekdays: row.weekdays || [] },
             });
         }
     }
@@ -165,4 +168,4 @@ async function batchCapacity(model, at, { registry = null, community = null, pri
     return { charge, routes };
 }
 
-module.exports = { batchCapacity, chargeOf, within, insideWindow, halfOf };
+module.exports = { batchCapacity, chargeOf, within, insideWindow: insideWindowLegacy, halfOf };

@@ -277,6 +277,101 @@ function deepseekOffPeak(text) {
 }
 
 /**
+ * The peak hours a listing publishes, as (weekdays, hours).
+ *
+ * DeepSeek's pricing page says, under the price table:
+ *
+ *   "Peak hours are 01:00 - 04:00 and 06:00 - 10:00 UTC, Monday through Friday, excluding Chinese
+ *    public holidays. All other hours are off-peak, including weekends and Chinese public holidays in full."
+ *
+ * → { weekdays: [1,2,3,4,5], hours: [[1,4],[6,10]] } (the ISO weekdays, 1 = Monday).
+ *
+ * A listing that publishes no peak hours has none: the network never guesses when a provider is cheaper.
+ * Chinese public holidays are off-peak in full; the blocks below cannot know which days those are, so the
+ * price book records the rule the page states and the operator reads the note on the holiday exception.
+ */
+function peakHours(text) {
+    const body = String(text || '');
+    const sentence = /peak hours? are([^.]*)\./i.exec(body);
+    if (!sentence) return null;
+    const part = sentence[1];
+    const hours = [];
+    for (const m of part.matchAll(/(\d{1,2}):(\d{2})\s*(?:-|–|—|to|until)\s*(\d{1,2}):(\d{2})/g)) {
+        const start = Number(m[1]) % 24;
+        const end = Number(m[3]) % 24;
+        if (!Number.isFinite(start) || !Number.isFinite(end)) continue;
+        hours.push([start, end]);
+    }
+    if (!hours.length) return null;
+    const weekdays = weekdaySet(part);
+    if (!weekdays) return null;
+    return { weekdays, hours };
+}
+
+/** The weekdays a phrase names: 'Monday through Friday', 'Monday to Friday', 'weekdays', 'every day'. */
+function weekdaySet(text) {
+    const t = String(text || '').toLowerCase();
+    const names = { monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6, sunday: 7 };
+    const range = /(\w+day)\s*(?:through|to|-|–|—)\s*(\w+day)/.exec(t);
+    if (range && names[range[1]] && names[range[2]]) {
+        const from = names[range[1]];
+        const to = names[range[2]];
+        const out = [];
+        for (let d = from; d <= to; d++) out.push(d);
+        if (out.length) return out;
+    }
+    if (/weekdays|monday through friday|monday to friday/.test(t)) return [1, 2, 3, 4, 5];
+    if (/every day|all days|daily/.test(t)) return [1, 2, 3, 4, 5, 6, 7];
+    const one = Object.entries(names).find(([name]) => new RegExp(`\\b${name}\\b`).test(t));
+    return one ? [one[1]] : null;
+}
+
+/** The hours of a day that no peak window covers, as [start, end) blocks over 0..24. */
+function complementHours(hours) {
+    const covered = [...hours].sort((a, b) => a[0] - b[0]);
+    const out = [];
+    let cursor = 0;
+    for (const [start, end] of covered) {
+        const s = Math.max(0, Math.min(24, start));
+        const e = Math.max(0, Math.min(24, end));
+        if (e <= s) continue;                       // a window that wraps the midnight is read as the hours it names
+        if (s > cursor) out.push([cursor, s]);
+        cursor = Math.max(cursor, e);
+    }
+    if (cursor < 24) out.push([cursor, 24]);
+    return out;
+}
+
+/**
+ * The off-peak blocks a listing publishes: the hours that are not peak, per weekday set.
+ * → [{ weekdays: [1,2,3,4,5], start_hour: 0, end_hour: 1 }, ...]
+ */
+function offPeakBlocks(text) {
+    const peak = peakHours(text);
+    if (!peak) return [];
+    const all = [1, 2, 3, 4, 5, 6, 7];
+    const out = [];
+    for (const [start, end] of complementHours(peak.hours)) {
+        out.push({ weekdays: peak.weekdays, start_hour: start, end_hour: end });
+    }
+    // The days that are not peak days are off-peak in full.
+    const rest = all.filter((d) => !peak.weekdays.includes(d));
+    if (rest.length) out.push({ weekdays: rest, start_hour: 0, end_hour: 24 });
+    return out;
+}
+
+/**
+ * The off-peak blocks and the prices inside them, as the listing publishes them. DeepSeek's page carries an
+ * OFF-PEAK row for every model beside the PEAK one, and the peak hours the off-peak price applies outside.
+ */
+function deepseekOffPeakBlocks(text) {
+    const prices = deepseekBand(text, 'OFF-PEAK');
+    const blocks = offPeakBlocks(text);
+    if (!blocks.length || !Object.keys(prices).length) return { blocks: [], prices: {} };
+    return { blocks, prices };
+}
+
+/**
  * Alibaba Model Studio's pricing page (HTML): a table per deployment, with the model id, the deployment scope,
  * the token tier and the input and output price. The catalogue holds the international deployment, so a row
  * without that scope is another deployment and is left alone.
@@ -427,4 +522,5 @@ function refuseless(text) {
 module.exports = {
     leaf, num, money, price, markdownTables, htmlText, columnOf, normHead, leadingId, trailingId,
     glm, abliteration, minimax, deepseek, qwen, kimi, deepinfra, novita, featherless, openrouter, refuseless,
+    peakHours, weekdaySet, complementHours, offPeakBlocks, deepseekOffPeakBlocks,
 };

@@ -123,6 +123,30 @@ function buildCards({ providerKey, model, row = null, pricing = {}, flat = true 
 /** Per-million-token prices read off the cards. */
 const pricesOf = (cards) => ({ in: cards.in.unit_price_usd, out: cards.out.unit_price_usd, cached: cards.cached.unit_price_usd });
 
+/**
+ * The same cards at a tier's price: the list price times the tier's multiplier (server/providers/tiers.js).
+ * A multiplier of 1 (or none) leaves the cards alone. The card's own shape is kept exactly as the contract
+ * wants it; only the price moves, and the version says which tier priced it.
+ */
+function applyMultiplier(cards, multiplier, tier = null) {
+    const m = Number(multiplier);
+    if (!Number.isFinite(m) || m === 1 || !cards) return cards;
+    const scale = (c) => (c ? { ...c, unit_price_usd: Number((Number(c.unit_price_usd) * m).toFixed(12)), ...(tier ? { version: `${c.version || 'list'}:${tier}` } : {}) } : c);
+    return { in: scale(cards.in), cached: scale(cards.cached), out: scale(cards.out), cache_write: scale(cards.cache_write) };
+}
+
+/**
+ * The cards of one provider + model at a tier's price: the list price for 'standard', the list price times
+ * the provider's own multiplier for a tier it publishes ('flex', 'batch'), and the list price for a tier
+ * the provider does not publish (the network never prices a run on a tier it cannot price).
+ */
+function cardsForTier(cards, { multiplier = null, tier = 'standard' } = {}) {
+    if (!cards) return null;
+    if (tier === 'standard' || tier === 'local') return cards;
+    if (multiplier == null) return cards;
+    return applyMultiplier(cards, multiplier, tier);
+}
+
 /** USD for one call's usage, priced on its cards (input excludes the cached part, as providers bill). */
 function costOfUsage(cards, usage = {}) {
     const cached = usage.cached || 0;
@@ -209,4 +233,4 @@ function providerState({ provider, cards, usageRows = [], breaker = 'closed', re
     return state;
 }
 
-module.exports = { UNKNOWN_DATE, unverified, metricFor, provenance, tableEntry, buildCards, pricesOf, costOfUsage, periodOf, usageSince, providerState, NONE_LOOKBACK_DAYS, BREAKER_HEALTH };
+module.exports = { UNKNOWN_DATE, unverified, metricFor, provenance, tableEntry, buildCards, pricesOf, applyMultiplier, cardsForTier, costOfUsage, periodOf, usageSince, providerState, NONE_LOOKBACK_DAYS, BREAKER_HEALTH };

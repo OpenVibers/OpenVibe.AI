@@ -103,6 +103,10 @@ const PROVIDERS = [
         capabilities: ['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich', 'json', 'tools'],
         provider_access: 'UNVERIFIED',
         priority: 40,
+        // DashScope's own batch price: half the price of a normal call, on the Singapore deployment
+        // (https://www.alibabacloud.com/help/en/model-studio/model-pricing, read 2026-11-07). The batch
+        // API itself is BA2; the multiplier is what a batch run would be priced on.
+        tier_rates: { batch: 0.5 },
         privacy: privacy({
             label: 'anonymized',
             terms_url: 'https://www.alibabacloud.com/help/en/model-studio/model-pricing',
@@ -150,6 +154,9 @@ const PROVIDERS = [
         capabilities: ['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich', 'json', 'tools'],
         provider_access: 'UNVERIFIED',
         priority: 40,
+        // Moonshot's own batch price: 60% of the price of a normal call, answered within 12 hours to 7 days
+        // (https://platform.kimi.ai/docs/pricing/chat, read 2026-11-07). The batch API itself is BA2.
+        tier_rates: { batch: 0.6 },
         privacy: privacy({
             label: 'anonymized',
             terms_url: 'https://platform.kimi.ai/docs/pricing/chat',
@@ -295,6 +302,10 @@ const PROVIDERS = [
         capabilities: ['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich', 'json', 'tools'],
         provider_access: 'RESTRICTED',
         priority: 30,
+        // DeepInfra's own tier prices: a Flex tier at 0.8x and a batch at 0.8x of the standard price
+        // (https://deepinfra.com/pricing, read 2026-11-07). The Flex tier is synchronous and is what a
+        // background run asks for; the batch API itself is BA2.
+        tier_rates: { flex: 0.8, batch: 0.8 },
         privacy: privacy({
             label: 'private',
             terms_url: 'https://deepinfra.com/privacy',

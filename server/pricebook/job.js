@@ -164,6 +164,42 @@ function createPriceBook({ db, registry, config = {}, clock = { now: () => Date.
     }
 
     /**
+     * Record the off-peak blocks a provider's listing publishes (BA1): the provider's own price inside the
+     * hours it applies, on the days it applies. DeepSeek's rule is "peak 01:00-04:00 and 06:00-10:00 UTC,
+     * Monday through Friday", which one daily window cannot say.
+     *
+     * A model the listing no longer names loses its blocks: the price book forgets a window the provider's
+     * listing no longer publishes.
+     */
+    async function offPeakBlockWindows(source, off, report, checkedAt) {
+        report.off_peak_blocks = report.off_peak_blocks || [];
+        if (!off || !Array.isArray(off.blocks) || !off.blocks.length || !Object.keys(off.prices || {}).length) return;
+        const rows = await registry.listModels({ provider: source.provider });
+        const written = new Set();
+        for (const row of rows) {
+            const found = findPrice(off.prices, row.model_key);
+            if (!found) continue;
+            for (const field of FIELDS) {
+                const value = found.price[FIELD_NAMES[field]];
+                if (value === null || value === undefined) continue;
+                for (const block of off.blocks) {
+                    await offPeak.recordBlock({
+                        provider_key: row.provider_key, model_key: row.model_key, field, price: value,
+                        weekdays: block.weekdays, start_hour: block.start_hour, end_hour: block.end_hour,
+                        source: source.url, checked_at: checkedAt,
+                    });
+                    report.off_peak_blocks.push({ model: row.model_key, field, price: value, block });
+                }
+            }
+            written.add(row.model_key);
+        }
+        for (const row of rows) {
+            if (written.has(row.model_key)) continue;
+            await offPeak.clearBlocks(row.provider_key, row.model_key);
+        }
+    }
+
+    /**
      * Compare one provider's listing with the prices that are live, and record what changed.
      */
     async function priceProvider(source, prices, report, checkedAt) {
@@ -326,6 +362,12 @@ function createPriceBook({ db, registry, config = {}, clock = { now: () => Date.
                         try {
                             await offPeakWindow(source, source.offPeak(source.kind === 'json' ? JSON.parse(res.body) : res.body), report, checkedAt);
                         } catch { /* a listing that cannot be read for a window simply has none */ }
+                    }
+                    // The weekday blocks of the same listing (BA1): the off-peak hours per day of the week.
+                    if (source.offPeakBlocks && offPeak) {
+                        try {
+                            await offPeakBlockWindows(source, source.offPeakBlocks(source.kind === 'json' ? JSON.parse(res.body) : res.body), report, checkedAt);
+                        } catch { /* a listing that cannot be read for blocks simply has none */ }
                     }
                     report.sources.push({ source: source.key, url: source.url, role: source.role, listed: Object.keys(prices).length });
                     if (source.role === 'cross-reference') { await crossCheck(prices, readings, report); continue; }

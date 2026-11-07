@@ -34,7 +34,7 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
     // GET /metrics answers direct loopback callers only (Track O).
     const metrics = instrument(app, { service: 'ai', release: release.release });
     app.use(require('openvibe-sdk/service').telemetryMiddleware);   // request telemetry: a no-op until server/index.js calls telemetry.init()
-    registerAiGauges(metrics.registry, { runs, registry, pool, balance, gpus, abuse });
+    registerAiGauges(metrics.registry, { runs, registry, pool, balance, gpus, abuse, db });
     app.use(http.middleware());
     // Plan E5: the signed HttpOnly device id and the request's trust metadata on the model and Exchange APIs.
     // The address/device stay in the request: only keyed hashes reach the database (server/abuse/).
