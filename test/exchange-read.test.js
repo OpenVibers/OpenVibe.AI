@@ -62,11 +62,11 @@ t.test('catalog groups the same model across providers, with prices, speed, upti
     await h.registry.upsertModel({ provider_key: 'deepinfra', model_key: 'deepseek-chat', type: 'chat', context_window: 131072,
         cost: { in_per_mtok: 0.20, out_per_mtok: 0.30 } });
     // Real runs name the id the upstream resolved ("deepseek-chat-2026-01-01"); the registry row names the
-    // model ("deepseek-chat"). 8 answers, 2 failures attributed through their last attempt, 3 cache hits
-    // whose provider is the run they reused. One answer recorded a TTFT (streamed); the rest have only the
-    // attempt's total latency.
+    // model ("deepseek-chat"). 18 answered attempts, 2 failed attempts, 3 cache hits whose provider is the
+    // run they reused. One answer recorded a TTFT (streamed); the rest have only the attempt's total
+    // latency. 20 real attempts is the floor at which uptime and speed are shown.
     const answered = [];
-    for (let i = 0; i < 8; i++) {
+    for (let i = 0; i < 18; i++) {
         const id = await insertRun({ provider: 'deepseek', model: 'deepseek-chat-2026-01-01' });
         answered.push(id);
         await insertRequest({ runId: id, provider: 'deepseek', model: 'deepseek-chat-2026-01-01', latency: (i + 1) * 100 });
@@ -89,18 +89,18 @@ t.test('catalog groups the same model across providers, with prices, speed, upti
     const [cheap, dear] = m.offers;
     assert.strictEqual(cheap.provider, 'deepinfra', 'sorted by price');
     assert.deepStrictEqual(cheap.price, { in: 0.2, out: 0.3, cached: 0.02, per: '1M tokens', currency: 'USD' });
-    // The deepseek offer: p50/p95 over [100,200,300,400,500,600,700,800] with 400 replaced by the recorded TTFT 50.
-    assert.strictEqual(dear.uptime, 0.8, '8 succeeded / (8 + 2 failed), from runs');
-    assert.strictEqual(dear.requests_7d, 10, 'real runs only; the 3 cached answers are counted apart');
+    // The deepseek offer: p50/p95 over [100..1800] with 400 replaced by the recorded TTFT 50.
+    assert.strictEqual(dear.uptime, 0.9, '18 answered / (18 + 2 failed), from attempts');
+    assert.strictEqual(dear.requests_7d, 20, 'real attempts only; the 3 cached answers are counted apart');
     assert.strictEqual(dear.cached_7d, 3);
-    assert.deepStrictEqual(dear.speed, { p50_ms: 400, p95_ms: 765 }, 'TTFT where recorded, else total');
-    assert.strictEqual(dear.requests_today, 10);
+    assert.deepStrictEqual(dear.speed, { p50_ms: 950, p95_ms: 1715 }, 'TTFT where recorded, else total');
+    assert.strictEqual(dear.requests_today, 20);
     assert.strictEqual(cheap.uptime, null, 'no data is unknown, not 0');
     assert.strictEqual(cheap.requests_7d, 0);
     assert.deepStrictEqual(cheap.speed, { p50_ms: null, p95_ms: null });
     assert.deepStrictEqual(dear.data_policy, { trains: false, retention_days: 0, region: 'cn', anonymized: null });
     assert.strictEqual(cheap.data_policy && cheap.data_policy.trains, false, 'DeepInfra carries its published policy (seeded by AI #307): no training');
-    assert.strictEqual(m.requests_7d, 10);
+    assert.strictEqual(m.requests_7d, 20);
     assert.strictEqual(m.cached_7d, 3);
 });
 
