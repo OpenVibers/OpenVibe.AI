@@ -387,6 +387,15 @@ function load(env = process.env) {
             lossBudgetUsdPerDay: Math.max(0, Number(env.AI_BATCH_LOSS_BUDGET_USD_PER_DAY || 0) || 0),
             tickMs: Math.max(5000, int(env.AI_BATCH_TICK_MS, 60 * 1000)),
             claimTtlMs: Math.max(60000, int(env.AI_BATCH_CLAIM_TTL_MS, 15 * 60 * 1000)),
+            // The native batcher (BA2): the providers' own batch APIs.
+            native: {
+                // How many requests one provider batch carries.
+                maxItemsPerGroup: Math.max(1, int(env.AI_BATCH_NATIVE_MAX_ITEMS, 1000)),
+                // How long a group waits before it is submitted anyway (milliseconds).
+                maxAgeMs: Math.max(1000, int(env.AI_BATCH_NATIVE_MAX_AGE_MS, 5 * 60 * 1000)),
+                pollMs: Math.max(5000, int(env.AI_BATCH_NATIVE_POLL_MS, 60 * 1000)),
+                claimTtlMs: Math.max(60000, int(env.AI_BATCH_NATIVE_CLAIM_TTL_MS, 5 * 60 * 1000)),
+            },
         },
         // ── The living price book (server/pricebook/) ──
         // The weekly job that reads every catalogued provider's own price listing and keeps the price the router

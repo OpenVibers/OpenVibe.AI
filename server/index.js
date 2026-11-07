@@ -172,8 +172,11 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     // The measured refusal rates (server/refusal/): the weekly job that asks every offer the same published,
     // harmless questions and publishes how often it refused them. Due-based, like the price book.
     const refusal = require('./refusal/job').createRefusalJob({ db, registry, pool, config, env, clock, log });
+    // The native batcher (BA2): the providers' own batch APIs, behind one queue.
+    const batcher = require('./batch/batcher').createBatcher({ db, runs, registry, config, clock, log, env, fetchImpl });
     // The half-price batches (server/batch/): many prompts, answered later, billed through Billing.
-    const batches = require('./batch/service').createBatchService({ db, runs, registry, community, priceBook: offPeak, config, clock, log });
+    const batches = require('./batch/service').createBatchService({ db, runs, registry, community, priceBook: offPeak, batcher, config, clock, log });
+    batcher.attach(batches);
     // The Events consumer side: a signed bench.rating.changed webhook, subscribed at boot (server/bench/events.js).
     const accountData = accountDataLib.create({ db, log, memory });
     const accountSend = env.OV_OAUTH_CLIENT_SECRET ? createNetworkSender({
@@ -233,6 +236,9 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     if (listen && config.refusal && config.refusal.enabled) refusal.start();
     // The batch worker picks up the queued batches. The queue is in the database, so a restart keeps it.
     if (listen && config.batches && config.batches.enabled && config.nodeEnv !== 'test') batches.start();
+    // The native batcher submits the queued groups and settles the answers. It is in the database, so a
+    // restart keeps its queue.
+    if (listen && config.batches && config.batches.enabled && config.nodeEnv !== 'test') batcher.start();
     // Durable Credit settles: the same jobs rule as Memory (never in test mode, never under a provider drill; the
     // queue's runOnce checks the drill itself).
     if (listen && credits && config.nodeEnv !== 'test') credits.startSettlements();
@@ -272,6 +278,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         priceBook.stop();
         refusal.stop();
         batches.stop();
+        batcher.stop();
         webhooks.stop();
         if (credits) credits.stopSettlements();
         if (jwks) jwks.stop();
@@ -288,7 +295,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         if (!givenDb) await db.close();
     }
 
-    return { config, db, registry, pool, quotas, tiers, cache, fetcher, engine, runs, keys, keyLoaded, auth, app, server, bench, benchEvents, memory, memoryJobs, memoryServices, memorySharing, priceBook, refusal, batches, credits: creditsRef, settings, vault, community, endpoints, webhooks, gpus, abuse, ownEndpoints, close };
+    return { config, db, registry, pool, quotas, tiers, cache, fetcher, engine, runs, keys, keyLoaded, auth, app, server, bench, benchEvents, memory, memoryJobs, memoryServices, memorySharing, priceBook, refusal, batches, batcher, credits: creditsRef, settings, vault, community, endpoints, webhooks, gpus, abuse, ownEndpoints, close };
 }
 
 if (require.main === module) {

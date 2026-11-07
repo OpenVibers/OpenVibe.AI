@@ -109,6 +109,8 @@ function routePinRequest(value, principal, wf) {
 
 function createRuns({ db, registry, engine, cache, quotas, config, clock = { now: () => Date.now() }, log = console, userModules = null, credentials = null, preferences: personPreferences = null, tiers = null, projectSecrets = null, pool = null, runBudgets = null, credits = null, community = null, presets = null, receipts = null, abuse = null, webhooks = null }) {
     const inflight = new Map();     // run id -> { controller, promise, release, caller }
+    // BA2: the runs that wait for a provider's own batch API: they are created at once and finish later.
+    const deferred = new Map();     // run id -> { controller, scope, ctx, input, hold, resolveDone }
     const queue = [];               // run ids waiting for the worker
     let active = 0;
     let shuttingDown = false;
@@ -480,7 +482,8 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         const hold = credentialSubject !== null || projectProvider || selfKeys || !tiers ? null : await tiers.admit(ctx, id);
         let reserved;
         try {
-            reserved = credentialSubject !== null || selfKeys ? null : await quotas.reserve(ctx);
+            // BA2: a batch run reserves its quota when the answer is here, not while it waits.
+            reserved = credentialSubject !== null || selfKeys || (principal && principal.deferBatch) ? null : await quotas.reserve(ctx);
         } catch (err) { if (hold) await tiers.release(hold); throw err; }
 
         try {
@@ -501,6 +504,18 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             if (consent) {
                 await registry.audit(principal.sub, 'credential.self.use', 'credential', `${consent.service}:${consent.subject}:${consent.provider}`, { trace, metadata: { service: consent.service, subject: consent.subject, provider: consent.provider, run_id: id } });
             }
+        }
+
+        // BA2: a batch run waits for the provider's own batch API. It is created now (the customer sees
+        // it, and its latency class says 'batch'), but it takes no execution slot and no quota until the
+        // answer is here; then it finishes on the ordinary path, with the ordinary settle and receipt.
+        if (principal && principal.deferBatch) {
+            const controller = new AbortController();
+            let resolveDone;
+            const done = new Promise((r) => { resolveDone = r; });
+            deferred.set(id, { controller, scope, ctx, input, hold, resolveDone });
+            inflight.set(id, { controller, promise: done, release: () => {}, caller, priority });
+            return { run: await get(id), created: true, promise: done };
         }
 
         const controller = new AbortController();
@@ -809,7 +824,20 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             // With Credits off there is no Balance payer at all, so every run is the free tier for a new community machine;
             // with it on only a run that could not hold a paid offer is.
             const communityFree = !(credits && credits.enabled) || Boolean(ctx.creditsRequired);
-            const r = await engine.execute(wf, row, input, { signal: controller.signal, logRequest, debugRaw: Boolean(config.debugRawLog && opts.debug), inputHash: row.input_hash, preferences,
+            // BA2: a batch run's answer is the provider's own batch answer, not a provider call. The hold
+            // for the customer's money is taken here, on the card the ordinary path would have used.
+            const batchAnswer = ctx.batchAnswer ? await ctx.batchAnswer : null;
+            if (batchAnswer && batchAnswer.ok === false) {
+                throw new AiError(502, String((batchAnswer.error && batchAnswer.error.code) || 'batch.item_failed'), String((batchAnswer.error && batchAnswer.error.detail) || 'the provider did not answer this request'));
+            }
+            if (batchAnswer && batchAnswer.ok && credit && typeof credit.holdRoute === 'function') {
+                await credit.holdRoute({ card: batchAnswer.holdRetail || null, provider: batchAnswer.provider || null, model: batchAnswer.model || null, access: batchAnswer.access || null, maxTokens: batchAnswer.maxTokens || 4096 });
+            }
+            let r = null;
+            if (batchAnswer && batchAnswer.ok) {
+                r = { output: batchAnswer.output || { text: '' }, usage: batchAnswer.usage || { input: 0, output: 0, cached: 0, cache_write: 0 }, cost: Number(batchAnswer.cost) || 0, provider: batchAnswer.provider || null, model: batchAnswer.model || null, citations: [], explain: batchAnswer.explain || null, grounding: null, synthetic: false, fallbackUsed: false };
+            }
+            if (!r) r = await engine.execute(wf, row, input, { signal: controller.signal, logRequest, debugRaw: Boolean(config.debugRawLog && opts.debug), inputHash: row.input_hash, preferences,
                 // A developer app's run (ADR-014): the provider pool excludes a person's byok key, and the run is
                 // limited to free and local capacity when it is a sandbox run or when no tier budget governs its
                 // project (AI_GOVERN_TIERS off): metered capacity is only ever spent under a project budget.
@@ -1076,14 +1104,40 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
     /** Shutdown: in-flight runs end as failed/run.interrupted (retryable), never as a silent loss. */
     async function drain() {
         shuttingDown = true;
+        // BA2: the runs that wait for a batch answer are released too, so the shutdown is not held by them.
+        for (const d of deferred.values()) { d.controller.abort(); d.resolveDone(); }
+        deferred.clear();
         for (const h of inflight.values()) { h.controller.abort(); h.release(); }
         await Promise.allSettled([...inflight.values()].map(h => h.promise));
+    }
+
+    /**
+     * BA2: finish a batch run. The answer is the provider's own batch answer; the run then finishes on the
+     * ordinary path, so the settle, the receipt, the usage record and the events are the ordinary ones and
+     * a customer watching the run sees nothing new.
+     *
+     * A run that is already finished (or was never a batch run) is left alone: two pollers can never
+     * finish the same run twice.
+     */
+    async function completeBatch(id, answer) {
+        const d = deferred.get(String(id));
+        if (!d) return null;
+        deferred.delete(String(id));
+        const ctx = { ...d.ctx, batchAnswer: Promise.resolve(answer) };
+        try {
+            const reserved = await quotas.reserve(ctx).catch(() => null);
+            await execute(String(id), { controller: d.controller, reserved, scope: d.scope, ctx, input: d.input, hold: d.hold });
+        } finally {
+            if (d.hold && tiers && tiers.release) await tiers.release(d.hold).catch(() => {});
+            d.resolveDone();
+        }
+        return get(String(id));
     }
 
     /** Queue depth for /metrics and /api/ready: runs waiting for a slot, and runs holding one. */
     function stats() { return { queued: queue.length, running: active, inflight: inflight.size, max_concurrent: config.runs.maxConcurrent, max_queued: config.runs.maxQueued }; }
 
-    return { create, wait, get, getReceipt, list, listOnBehalfOf, cancel, retry, citations, addCitations, requestsFor, explained, recoverInterrupted, prune, drain, stats, inflight, TERMINAL, decode };
+    return { create, wait, get, getReceipt, list, listOnBehalfOf, cancel, retry, citations, addCitations, requestsFor, explained, recoverInterrupted, prune, drain, stats, inflight, TERMINAL, decode, completeBatch, deferred };
 }
 
 module.exports = { createRuns, entityKey, subjectKey };

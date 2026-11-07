@@ -32,13 +32,23 @@
  */
 const crypto = require('crypto');
 const { AiError } = require('../util');
+const { hasCap } = require('../auth');
+const { retailRate } = require('../providers/model-catalog');
+const { toCard } = require('./batcher');
 const { batchCapacity, chargeOf } = require('./capacity');
 const { retailChargeNano } = require('../credits');
 
 const DEFAULT_MAX_ITEMS = 1000;
 const EXPIRED_REASON = 'No low-cost capacity came free before your deadline. You were not charged.';
 
-function createBatchService({ db, runs, registry = null, community = null, priceBook = null, config = {}, clock = { now: () => Date.now() }, log = console, waitMs = 120000 }) {
+/**
+ * The grant a first-party service needs to open a batch of the network's own (BA2). It is checked here,
+ * not by the contracts: the capability entry comes later (BA3), and a pinned contracts build refuses an
+ * id it does not know. The grant is a local rule: the token must carry it, exactly or through its family.
+ */
+const BATCH_CAP = 'ai.batches.create';
+
+function createBatchService({ db, runs, registry = null, community = null, priceBook = null, batcher = null, config = {}, clock = { now: () => Date.now() }, log = console, waitMs = 120000 }) {
     const settings = {
         enabled: true,
         // The cap: how many prompts one batch may carry.
@@ -79,6 +89,17 @@ function createBatchService({ db, runs, registry = null, community = null, price
             if (!id) throw new AiError(403, 'batch.no_payer', 'a batch is billed to an account; this token names none');
             return { type: 'app', id: String(id), projectId: project ? String(project) : null };
         }
+        // A service token's principal carries no 'kind': its subject names the type (svc:<id>).
+        if ((p.kind || (p.subject && p.subject.type)) === 'service') {
+            // A first-party service with the ai.batches.create grant may open a batch of the network's own:
+            // it is billed to the network's account, and the run's attribution names the service.
+            if (!hasCap(p.claims || { cap: p.cap }, BATCH_CAP)) {
+                throw new AiError(403, 'batch.no_grant', `a service may only open a batch with the ${BATCH_CAP} grant`);
+            }
+            const id = p.subject && p.subject.id;
+            if (!id) throw new AiError(403, 'batch.no_payer', 'a batch is billed to an account; this token names none');
+            return { type: 'service', id: String(id), projectId: null };
+        }
         throw new AiError(403, 'batch.no_payer', 'a batch is billed to an account; a service token with no account of its own may not open one');
     }
 
@@ -86,6 +107,14 @@ function createBatchService({ db, runs, registry = null, community = null, price
     function principalFor(batch) {
         if (batch.owner_type === 'user') {
             return { kind: 'user', sub: `usr:${batch.owner_id}`, subject: { type: 'user', id: batch.owner_id }, onBehalfOf: null };
+        }
+        if (batch.owner_type === 'service') {
+            // A service's batch is billed to the network's own account: there is no Balance session, and the
+            // run's attribution names the service that asked.
+            return {
+                kind: 'service', sub: `svc:${batch.owner_id}`, subject: { type: 'service', id: batch.owner_id },
+                onBehalfOf: null, service: true,
+            };
         }
         return {
             kind: 'app', sub: `app:${batch.owner_id}`, subject: { type: 'app', id: batch.owner_id },
@@ -108,11 +137,15 @@ function createBatchService({ db, runs, registry = null, community = null, price
         return null;
     }
 
-    /** The registry row of the model a batch asks for; the default chat route's model when it names none. */
-    async function resolveModel(batch) {
+    /**
+     * The registry row of the model a batch item asks for; the default chat route's model when it names none.
+     * The model is the item's own (batch_items.model): a batch carries many prompts and each of them may name
+     * its own model.
+     */
+    async function resolveModel(batch, item = null) {
         if (!registry) return null;
         const rows = await registry.listModels();
-        const wanted = String(batch.model || '').trim();
+        const wanted = String((item && item.model) || batch.model || '').trim();
         if (wanted) {
             const found = (rows || []).find((r) => String(r.model_key) === wanted
                 || `${r.provider_key}/${r.model_key}` === wanted
@@ -285,6 +318,41 @@ function createBatchService({ db, runs, registry = null, community = null, price
         };
     }
 
+    /**
+     * Put one prompt of the batch on the provider's own batch API. The run is created at once (the customer
+     * sees it) and waits for the answer; the batcher settles it when the provider answers.
+     */
+    async function enqueueNative(batch, item, route, charge, model) {
+        try {
+            const principal = principalFor(batch);
+            const check = settleCheck({ item, route, charge, batch });
+            // The card the customer is charged: the retail card of the model they asked for. The hold takes
+            // the half of it, exactly as the ordinary path does.
+            const retail = model ? toCard(retailRate(model)) : null;
+            await batcher.enqueue({
+                principal,
+                provider: route.provider,
+                model: route.model,
+                prompt: item.prompt,
+                kind: 'customer',
+                customer: { batchId: batch.id, idx: item.idx },
+                deadlineHours: Math.max(1, Math.round((new Date(item.deadline_at).getTime() - clock.now()) / 3600000)) || Number(settings.deadlineHours) || 24,
+                discount: String(settings.discount),
+                prefer: { provider: route.provider, model: route.model },
+                costCheck: check,
+                requestId: `batch-${batch.id}-${item.idx}`,
+                holdCard: retail,
+            });
+            await db.prepare(`UPDATE batch_items SET status = 'running', route_provider = ?, route_model = ?, claimed_until = NULL, claimed_by = NULL, updated_at = ?
+                WHERE batch_id = ? AND idx = ?`)
+                .run(route.provider, route.model, iso(), batch.id, item.idx);
+            return { ok: true };
+        } catch (err) {
+            log.warn('[batch] an item could not be queued for the provider\'s batch API: ' + String((err && err.message) || err));
+            return { ok: false, code: String((err && err.code) || 'batch.queue_failed') };
+        }
+    }
+
     /** Run one prompt of the batch: an ordinary run, billed with the half-price card. */
     async function runItem(batch, item, route, charge, regular = false) {
         const principal = principalFor(batch);
@@ -362,7 +430,7 @@ function createBatchService({ db, runs, registry = null, community = null, price
             if (!item) return { skipped: 'no item' };
             const batch = await db.prepare('SELECT * FROM batches WHERE id = ?').get(item.batch_id);
             if (!batch) { await release(item, 'failed'); return { skipped: 'no batch' }; }
-            const model = await resolveModel(batch);
+            const model = await resolveModel(batch, item);
             const charge = model ? chargeOf(model) : null;
             const deadlinePassed = new Date(item.deadline_at).getTime() <= clock.now();
             const capacity = model && charge
@@ -375,6 +443,12 @@ function createBatchService({ db, runs, registry = null, community = null, price
             });
             if (routes.length) {
                 const route = routes[0];
+                // (d) A provider's own batch API: the item waits for the provider's answer instead of being
+                // answered now. The batcher writes the answer onto the run and the run finishes as usual.
+                if (route.source === 'native-batch' && batcher) {
+                    const res = await enqueueNative(batch, item, route, capacity.charge, model);
+                    return { batch: batch.id, item: item.idx, route: route.source, queued: res.ok, error: res.code };
+                }
                 const res = await runItem(batch, item, route, capacity.charge);
                 if (res.ok) await finishBatch(batch);
                 else await release(item, 'waiting');
@@ -430,7 +504,7 @@ function createBatchService({ db, runs, registry = null, community = null, price
         if (timer) { clearInterval(timer); timer = null; }
     }
 
-    return { submit, get, list, runOnce, start, stop, settings, maxItems, EXPIRED_REASON, resolveModel };
+    return { submit, get, list, runOnce, start, stop, settings, maxItems, EXPIRED_REASON, resolveModel, finishBatch };
 }
 
 module.exports = { createBatchService, DEFAULT_MAX_ITEMS, EXPIRED_REASON };

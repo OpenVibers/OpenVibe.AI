@@ -321,6 +321,42 @@ function createSession({ manager, requestId, payer, projectId, credentialId = nu
         return { maxTokens: plan.maxTokens };
     }
 
+    /**
+     * BA2: the hold of a batch run. The provider's batch API answers later, so no provider attempt
+     * happens before the answer and there is nothing for onRoute to hold on. The hold is taken here
+     * instead, on the same card the ordinary path would have used: the retail card, halved when the
+     * request is a batch. A provider the network has no managed access to is not held for (fail closed:
+     * nobody is charged and the network carries the cost).
+     */
+    async function holdRoute({ card = null, provider = null, model = null, access = null, maxTokens = 4096 } = {}) {
+        if (s.settled || s.released) return null;
+        if (!card || !card.nano_usd_per_m) return null;
+        const base = card;
+        const retail = applyDiscount(base, discount);
+        s.retailBase = base;
+        s.answeredProvider = provider;
+        s.answeredModel = model;
+        if (!MANAGED_ACCESS.has(String(access || ''))) return null;    // not a managed paid offer: nobody is charged
+        if (!retail) return null;
+        const plan = affordable(retail, { inputTokens: s.inputTokens, maxTokens });
+        s.retail = retail;
+        if (!s.holdId) {
+            s.heldNano = plan.amount;
+            const fingerprint = sha256({
+                resolved_model: model || null, revision: null,
+                input_tokens: s.inputTokens, output_tokens: plan.maxTokens, max_cost_usd: s.maxCostNano == null ? null : String(s.maxCostNano),
+                rate_version: retail.version, subject: s.subject, project_id: s.projectId,
+            });
+            const created = await manager.hold({
+                idempotency_key: holdKey, subject: s.subject, ...(s.projectId ? { project_id: s.projectId } : {}), ...(s.credentialId ? { credential_id: s.credentialId } : {}),
+                max_nano_usd: String(plan.amount), rate_version: retail.version, request_fingerprint: fingerprint, service: 'ai',
+            }, s.requestId);
+            s.holdId = created.hold_id;
+            s.heldNano = BigInt(String(created.held_nano_usd == null ? plan.amount : created.held_nano_usd));
+        }
+        return { maxTokens: plan.maxTokens };
+    }
+
     /** The projected output charge of what has streamed so far. */
     function projectedNano() {
         const output = Math.ceil(s.streamedChars / 4);
@@ -421,7 +457,7 @@ function createSession({ manager, requestId, payer, projectId, credentialId = nu
     }
 
     return {
-        onRoute, observe, settle, release, projectedNano, usageOf, requestId: s.requestId,
+        onRoute, holdRoute, observe, settle, release, projectedNano, usageOf, requestId: s.requestId,
         get holdId() { return s.holdId; }, get heldNano() { return s.heldNano; }, get retail() { return s.retail; },
         get streamedChars() { return s.streamedChars; }, get settled() { return s.settled; }, get released() { return s.released; },
         get inputTokens() { return s.inputTokens; }, get payer() { return s.payer; },
