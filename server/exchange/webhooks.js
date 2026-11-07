@@ -233,22 +233,32 @@ function createWebhooks({ db, config = null, clock = { now: () => Date.now() }, 
         return { delivered: false, attempts: attemptNo, status: outcome.status, error: outcome.error };
     }
 
-    /** Deliver every due row once. Serial: one worker, so two attempts of one delivery never race. */
+    /**
+     * Deliver every due row once. A row is claimed by pushing next_attempt_at a lease ahead, an atomic UPDATE, so
+     * several workers of this service never send the same delivery twice; a worker that dies leaves the lease to
+     * expire, and the next tick tries again.
+     */
     async function deliverDue({ limit = 25 } = {}) {
         if (!enabled) return { sent: 0, delivered: 0, failed: 0 };
         const due = iso(clock.now());
+        const lease = iso(clock.now() + Math.max(30000, timeoutMs + 30000));
         const rows = await db.prepare(`SELECT d.*, e.url, e.secret FROM exchange_webhook_deliveries d
             JOIN exchange_webhook_endpoints e ON e.id = d.endpoint_id
             WHERE d.status = 'pending' AND (d.next_attempt_at IS NULL OR d.next_attempt_at <= ?)
             ORDER BY d.next_attempt_at NULLS FIRST, d.created_at LIMIT ?`).all(due, Math.max(1, Math.min(100, Number(limit) || 25)));
+        let sent = 0;
         let delivered = 0;
         let failed = 0;
         for (const row of rows) {
+            const claimed = await db.prepare(`UPDATE exchange_webhook_deliveries SET next_attempt_at = ?
+                WHERE id = ? AND status = 'pending' AND (next_attempt_at IS NULL OR next_attempt_at <= ?)`).run(lease, row.id, due);
+            if (!claimed || !claimed.changes) continue;
+            sent++;
             const out = await attempt(row);
             if (out.delivered) delivered++;
             else if (out.next_attempt_at == null) failed++;
         }
-        return { sent: rows.length, delivered, failed };
+        return { sent, delivered, failed };
     }
 
     /** Wake the worker after a write; a no-op before start() and inside tests that call deliverDue themselves. */
