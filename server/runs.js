@@ -191,7 +191,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
      * principal: { sub, subject: {type, id} }
      * Returns { run, created, promise? }.
      */
-    async function create(body, principal, { trace = null, requestId = null, retryOf = null, onDelta = null, onRoute = null, abuse: requestAbuse = null, discount = null, exact = null, costCheck = null, communityOfferId = null } = {}) {
+    async function create(body, principal, { trace = null, requestId = null, retryOf = null, onDelta = null, onRoute = null, abuse: requestAbuse = null, discount = null, exact = null, costCheck = null, communityOfferId = null, callerWaitMs = 0 } = {}) {
         if (!body || typeof body !== 'object') throw new AiError(400, 'input.invalid', 'JSON body required');
         const wfKey = String(body.workflow || '');
         const wf = body.version ? await registry.getWorkflow(wfKey, Number(body.version)) : await registry.activeWorkflow(wfKey);
@@ -264,6 +264,8 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         const resolvedLatency = latency.resolve(workflowClass, askedLatency);
         if (resolvedLatency.error) throw new AiError(422, 'input.invalid', resolvedLatency.error, { latency_class: workflowClass });
         const latencyClass = resolvedLatency.class;
+        // A faster class than the workflow allows was asked for: it runs in its own class, and the run's options say so.
+        if (resolvedLatency.clamped) options.latency_clamped = resolvedLatency.clamped;
         // Community capacity is opt-in per request: a person's machine sees the prompt, so only a caller that says so
         // may be placed there. The OpenAI and Messages routes set body.community from x-openvibe-community.
         let communityOptIn = body.community === true || options.community === true;
@@ -380,6 +382,9 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             ...(preset ? { presetPolicy, presetName } : {}),
             // BA1: the class this run may wait in. The router reads it to pick the tier.
             latencyClass,
+            // BA1: a caller that waits (?wait=) gets its answer inside the wait: a Flex attempt may use the wait
+            // minus the 25 s a standard retry needs (at least 10 s); a caller that polls gives the tier all its room.
+            ...(latencyClass === 'background' && Number(callerWaitMs) > 0 ? { flexBudgetMs: Math.max(10000, Number(callerWaitMs) - 25000) } : {}),
             // POST /v1/chat/completions with stream: true: the upstream's deltas, as they arrive (kept in memory only).
             ...(typeof onDelta === 'function' ? { onDelta } : {}),
             // The offer the router picked, before the first token: the SSE disclosure's first comment (D3).
@@ -835,7 +840,8 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                 ...(billingDelta ? { onDelta: billingDelta } : {}),
                 ...(onRoute ? { onRoute } : {}),
                 // BA1: the class this run may wait in: the router picks the tier from it.
-                latencyClass: ctx.latencyClass || latency.DEFAULT });
+                latencyClass: ctx.latencyClass || latency.DEFAULT,
+                ...(ctx.flexBudgetMs ? { flexBudgetMs: ctx.flexBudgetMs } : {}) });
             // The Exchange remake: an uncensored answer is labelled in the run's own output, whatever its shape, so
             // every surface that reads it (the API routes, the console, a product) shows what produced it.
             if (r.output && r.label) {

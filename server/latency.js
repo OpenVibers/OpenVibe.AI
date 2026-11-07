@@ -46,9 +46,9 @@ function resolve(workflowClass, asked) {
     const base = isClass(workflowClass) ? workflowClass : DEFAULT;
     if (asked == null || asked === '') return { class: base };
     if (!isClass(asked)) return { error: `latency must be one of ${CLASSES.join(', ')}` };
-    if (!slowerOrEqual(asked, base)) {
-        return { error: `this workflow runs in the ${base} class: ${asked} would make it faster than it may be` };
-    }
+    // Faster than the workflow allows: the run still happens, in the workflow's own class, and says so. A caller that
+    // passes 'interactive' to a background workflow gets its answer, never an error and nothing done (Opus, 11-07).
+    if (!slowerOrEqual(asked, base)) return { class: base, clamped: { asked, used: base } };
     return { class: asked };
 }
 

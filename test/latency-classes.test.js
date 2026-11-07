@@ -48,8 +48,8 @@ t.test('the class order: a caller may ask for a slower class and never for a fas
     assert.deepStrictEqual(latency.resolve('interactive', null), { class: 'interactive' }, 'no question, the workflow\'s own class');
     assert.deepStrictEqual(latency.resolve('background', 'batch'), { class: 'batch' }, 'a caller may ask for a slower class');
     assert.deepStrictEqual(latency.resolve('interactive', 'background'), { class: 'background' });
-    assert.ok(latency.resolve('background', 'interactive').error, 'a background workflow cannot be made interactive');
-    assert.ok(latency.resolve('background', 'interactive').error.includes('background'), 'the refusal names the class it is');
+    assert.deepStrictEqual(latency.resolve('background', 'interactive'), { class: 'background', clamped: { asked: 'interactive', used: 'background' } },
+        'a background workflow is never made interactive, and the run is not refused: it runs in its own class and says so');
     assert.ok(latency.resolve('interactive', 'nonsense').error, 'a class nobody knows is refused');
     assert.strictEqual(latency.timeoutMs('background') > latency.timeoutMs('interactive'), true, 'a background run gets more room');
 });
@@ -166,14 +166,18 @@ t.test('a model that does not serve the tier falls back to the standard tier', a
     } finally { await h.stop(); await up.close(); }
 });
 
-t.test('the host\'s own idle model answers a background run first, and a route that names a model keeps it', async () => {
+t.test('the host\'s own idle model answers first only on a route that opts in, and a route that names a model keeps it', async () => {
     const local = await seamServer(() => answer('from the host'));
     const network = await seamServer(() => answer('from the network'));
     const h = await boot({ env: { ...ENV, AI_BASE_URL: `${network.url}/v1`, AI_LOCAL_LLM_URL: `${local.url}/v1`, AI_LOCAL_LLM_MODEL: 'local-model', AI_CREATIVE_MODEL: 'gpt-5-mini' } });
     try {
-        const route = await h.registry.resolveRoute('background.legacy');
+        const plain = await h.registry.resolveRoute('background.legacy');
+        // No route opts in today (Opus, 11-07): the text is what people read, so the network's choice answers.
+        const kept = await h.pool.execute(plain, 'chat', { messages: [{ role: 'user', content: 'when you have time' }], maxTokens: 50 }, { routeKey: plain.key, latencyClass: 'background' });
+        assert.strictEqual(kept.provider, 'shared', 'without allow_local the small local model never answers first');
+        const route = { ...plain, constraints: { ...plain.constraints, allow_local: true } };
         const out = await h.pool.execute(route, 'chat', { messages: [{ role: 'user', content: 'when you have time' }], maxTokens: 50 }, { routeKey: route.key, latencyClass: 'background' });
-        assert.strictEqual(out.provider, 'local', 'the host\'s own idle model answers first');
+        assert.strictEqual(out.provider, 'local', 'a route that opts in: the host\'s own idle model answers first');
         assert.strictEqual(out.serviceTier, 'local', 'the tier is local: capacity the network already pays for');
         assert.strictEqual(out.cost, 0, 'capacity the network already pays for costs nothing');
         // An interactive run keeps the network's choice: the authority serves it.
@@ -200,9 +204,31 @@ t.test('an interactive run asks for no tier at all', async () => {
     } finally { await h.stop(); await up.close(); }
 });
 
+t.test('a caller that waits gets its answer inside the wait: a Flex tier slower than the wait gives way to standard', async () => {
+    const seen = [];
+    const up = await seamServer(async (body) => {
+        seen.push(body.service_tier || null);
+        if (body.service_tier === 'flex') await new Promise((r) => setTimeout(r, 13000));   // slower than the Flex budget
+        return body.messages ? { choices: [{ message: { role: 'assistant', content: '{"title":"Konami","code":["up","down","left","right","a"],"clues":["one","two","three"]}' }, finish_reason: 'stop' }], usage: { prompt_tokens: 100, completion_tokens: 100 } } : {};
+    });
+    const h = await boot({ env: { ...ENV, AI_BASE_URL: `${up.url}/v1` } });
+    try {
+        await withFlex(h);
+        const all = token('all', ALL);
+        const started = Date.now();
+        // The caller waits 30 s: the Flex attempt may use 10 s (the wait minus the 25 s a standard retry needs, at least 10 s).
+        const run = await request(h.base, 'POST', '/api/v1/runs?wait=30000', { tok: all, body: { workflow: 'live.easter_egg', input: {}, options: { cache: false } } });
+        const took = Date.now() - started;
+        assert.strictEqual(run.status, 201, `answered inside the wait (${run.status}, ${took} ms): ${run.text}`);
+        assert.strictEqual(run.body.run.service_tier, 'standard', 'the standard tier answered');
+        assert.deepStrictEqual(seen.slice(0, 2), ['flex', null], 'Flex first, then the same run on standard');
+        assert.ok(took < 25000, `well inside the caller's wait (${took} ms)`);
+    } finally { await h.stop(); await up.close(); }
+});
+
 // ── The class of a run, from the caller's side ─────────────────────────────────
 
-t.test('a caller cannot make a background workflow interactive, and the run records its class and tier', async () => {
+t.test('a caller cannot make a background workflow interactive (it still runs, in its own class), and the run records its class and tier', async () => {
     const up = await seamServer((body) => {
         up.last = body;
         return { choices: [{ message: { role: 'assistant', content: '{"title":"Konami","code":["up","down","left","right","a"],"clues":["where the sun rises","where the sky is","where the water falls","the other way","the letter that starts goose"],"effect":"confetti","reward":"well done"}' }, finish_reason: 'stop' }], usage: { prompt_tokens: 1000, completion_tokens: 1000 }, service_tier: 'flex' };
@@ -211,10 +237,11 @@ t.test('a caller cannot make a background workflow interactive, and the run reco
     try {
         await withFlex(h);
         const all = token('all', ALL);
-        // A caller may not make the work faster than the workflow's own class.
-        const fast = await request(h.base, 'POST', '/api/v1/runs', { tok: all, body: { workflow: 'live.easter_egg', input: {}, options: { latency: 'interactive' } } });
-        assert.strictEqual(fast.status, 422, 'a background workflow stays in the background');
-        assert.strictEqual(fast.body.code, 'input.invalid');
+        // A caller may not make the work faster than the workflow's own class: the run still happens, in the
+        // background, and says it was asked for more (never an error and nothing done).
+        const fast = await request(h.base, 'POST', '/api/v1/runs?wait=5000', { tok: all, body: { workflow: 'live.easter_egg', input: {}, options: { latency: 'interactive', cache: false } } });
+        assert.strictEqual(fast.status, 201, `the run happens (${fast.text})`);
+        assert.strictEqual(fast.body.run.latency_class, 'background', 'a background workflow stays in the background');
         // A slower class is allowed.
         const slower = await request(h.base, 'POST', '/api/v1/runs?wait=5000', { tok: all, body: { workflow: 'live.easter_egg', input: {}, options: { latency: 'batch', cache: false } } });
         assert.strictEqual(slower.status, 201, `a slower class is allowed (${slower.text})`);

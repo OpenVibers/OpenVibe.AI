@@ -231,9 +231,10 @@ async function seed({ registry, quotas, config, env = process.env, db }) {
     // its class, so a workflow that uses one of these routes runs in the background.
     //
     // These routes name NO model: the whole point of a background run is that the cheapest offer that can do
-    // the work may answer it. The authority is still the shared provider (the network's choice), but the host's
-    // own idle model may answer first (server/providers/index.js). A route that names its model (the creative one
-    // below) keeps that model: a small local model never writes The Rundown.
+    // the work may answer it. The authority is still the shared provider (the network's choice). The host's own
+    // idle model answers first only on a route with constraints.allow_local: true, and none of these sets it yet
+    // (Opus, 11-07): their text is what people read on Trade, Live and the Rundown, and a 1.5B model is not measured
+    // for it. A route that names its model (the creative one below) keeps that model.
     const backgroundPool = (timeoutMs, extra = {}) => ({ 'capability': 'chat', constraints: { objective: 'correctness', latency_class: 'background', ...(authority ? { authority } : {}) }, pinned: [], fallbacks: [], options: {}, max_output_tokens: null, response_format: 'text', timeout_ms: timeoutMs, alias_of: null, ...extra });
     // Each one carries the Live role it serves (legacy, summary, vision, director), so a person who gave their
     // own key a model for that role still gets it (server/providers/index.js roleOfRoute).

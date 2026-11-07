@@ -351,6 +351,9 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
     async function orderForWaiting(list, { route, operation, req }) {
         const c = (route && route.constraints) || {};
         if (c.model) return list;
+        // Opt-in per route (Opus, 11-07): the host's small model writes only where a route says its output may come
+        // from one. Without the flag the router's own order stands, so no visible text changes quality.
+        if (c.allow_local !== true) return list;
         if (!localCanServe(route, operation, req)) return list;
         const local = [];
         const rest = [];
@@ -1526,7 +1529,11 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                     const fn = a[operation];
                     if (typeof fn !== 'function') throw new ProviderError(`${operation} not implemented`, { code: 'provider.unsupported' });
                     statFor(c.provider).calls += p.kind === 'stub' ? 0 : 1;   // stub counts its own calls
-                    const result = await fn({ ...callReq, ...(onDelta ? { onDelta } : {}), model, signal: ctx.signal, timeoutMs });
+                    // BA1: a Flex attempt for a caller that waits gets only the part of the wait it may use, so a
+                    // too-slow tier gives way to the standard one in time (ctx.flexBudgetMs, server/runs.js).
+                    const flexCapped = askedTier === 'flex' && Number(ctx.flexBudgetMs) > 0;
+                    const attemptTimeout = flexCapped ? Math.max(1000, Math.min(timeoutMs, Number(ctx.flexBudgetMs))) : timeoutMs;
+                    const result = await fn({ ...callReq, ...(onDelta ? { onDelta } : {}), model, signal: ctx.signal, timeoutMs: attemptTimeout });
                     if (operation === 'embed' && (!Array.isArray(result.vectors) || result.vectors.length !== req.input.length
                         || result.vectors.some(v => !Array.isArray(v) || !v.length || v.some(n => typeof n !== 'number' || !Number.isFinite(n)))))
                         throw new ProviderError('embedding response has invalid vectors', { code: 'provider.output' });
@@ -1605,10 +1612,12 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                     // model that does not serve it). The same run goes once more on the standard tier: the
                     // refusal is counted and logged above, and it produced no tokens, so nothing is billed
                     // for it. The retry does not spend one of the provider's own retries.
-                    if (askedTier === 'flex' && tiers.isTierRefusal(err, 'flex')) {
+                    const flexTooSlow = askedTier === 'flex' && Number(ctx.flexBudgetMs) > 0 && err && err.code === 'provider.timeout' && !(ctx.signal && ctx.signal.aborted);
+                    if (askedTier === 'flex' && (tiers.isTierRefusal(err, 'flex') || flexTooSlow)) {
                         askedTier = 'standard';
-                        attempts.push({ key: 'openvibe', provider: c.provider, model, why: chosen || 'the router chose it', status: 'failed', error: 'the provider refused the flex tier' });
-                        log.warn(`[ai] ${c.provider} refused the flex tier; the same run goes again on the standard tier`);
+                        const why = flexTooSlow ? 'the flex tier was slower than the caller waits' : 'the provider refused the flex tier';
+                        attempts.push({ key: 'openvibe', provider: c.provider, model, why: chosen || 'the router chose it', status: 'failed', error: why });
+                        log.warn(`[ai] ${c.provider}: ${why}; the same run goes again on the standard tier`);
                         continue;
                     }
                     if (attempt < retries && !insufficientBalance(err) && retryable(err) && !(operation === 'image' && err.code === 'provider.timeout')) { attempt += 1; await sleep(config.retryDelayMs + Math.floor(Math.random() * Math.min(700, config.retryDelayMs)), ctx.signal).catch(() => {}); continue; }
