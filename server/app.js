@@ -230,6 +230,7 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
             'GET  /api/v1/workflows | templates | routes | providers | models | quotas | usage | audit',
             'GET  /api/health, /api/ready, /release.json',
             'GET  /runs/:id  your run receipt (OpenVibe.Network sign-in; your own runs only)',
+            'GET  /you        your own provider keys and how your AI is paid (OpenVibe.Network sign-in)',
             'GET  /console     the operator console (OpenVibe.Network staff sign-in)',
             '',
             'Callers authenticate with OpenVibe.Network tokens (audience openvibe.ai): first-party service tokens, or a',
