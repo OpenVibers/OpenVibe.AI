@@ -1044,7 +1044,7 @@ ai.openvibe.network notice from OpenVibe.Sites.
 Part of the [OpenVibe network](https://openvibe.network). Built in the open by [OpenVibers](https://github.com/OpenVibers).
 
 <!-- versions:start -->
-- openvibe-contracts: v0.289.1
+- openvibe-contracts: v0.312.0
 - openvibe-sdk: v0.93.0
 - openvibe-shared: v4.124.0
 <!-- versions:end -->
