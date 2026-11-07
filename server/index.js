@@ -32,7 +32,7 @@ const { AiError } = require('./util');
 const { gracefulStop, telemetry } = require('openvibe-sdk/service');
 const { createPgTelemetrySink, startTelemetryRetention } = require('openvibe-sdk/telemetry');
 
-async function start({ config, db: givenDb = null, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, listen = true, credentialFetch = null, valkey = null, research = null, machineModels = null, variantEvidence = null, community: givenCommunity = null, communityEndpoints: givenEndpoints = null, abuse: givenAbuse = null } = {}) {
+async function start({ config, db: givenDb = null, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, listen = true, credentialFetch = null, valkey = null, research = null, machineModels = null, variantEvidence = null, community: givenCommunity = null, communityEndpoints: givenEndpoints = null, webhooks: givenWebhooks = null, abuse: givenAbuse = null } = {}) {
     config = config || load(env);
     schemas.configure(config.schemaCache);
     // PostgreSQL (ADR-035): opened and migrated here unless the caller (a test) hands in a migrated handle.
@@ -70,6 +70,9 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     const endpoints = givenEndpoints || (config.community.endpoints && config.community.endpoints.enabled === false
         ? null
         : require('./community/endpoints').createEndpointOffers({ db, config, env, clock, fetchImpl, log }));
+    // Exchange webhooks (the plan's "For builders", item 7): the receivers a developer registers, the signed
+    // deliveries of usage/earnings/offer.down, and the retry worker. A row per delivery; the worker is off in tests.
+    const webhooks = givenWebhooks || require('./exchange/webhooks').createWebhooks({ db, config, clock, log });
     const community = givenCommunity || require('./community').createCommunity({ db, config, env, machines, endpoints, clock, fetchImpl, log });
     // Plan E5: the free tier's allowance by trust, device and network signals, proof of work and anomaly throttling.
     const abuse = givenAbuse || require('./abuse').createAbuse({ db, config, env, clock, fetchImpl, log, registry, community });
@@ -128,7 +131,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         startSettlements() { return credits ? credits.startSettlements() : null; },
         stopSettlements() { return credits ? credits.stopSettlements() : undefined; },
     };
-    const runs = createRuns({ db, registry, engine, cache, quotas, config, clock, log, userModules, credentials, preferences, tiers, projectSecrets, pool, runBudgets, credits: creditsRef, community, presets, receipts, abuse });
+    const runs = createRuns({ db, registry, engine, cache, quotas, config, clock, log, userModules, credentials, preferences, tiers, projectSecrets, pool, runBudgets, credits: creditsRef, community, presets, receipts, abuse, webhooks });
     await seed({ registry, quotas, config, env, db });
     // The seed creates or moves providers from the environment: publish their origins (the schema and every key's
     // bind follow), so a key is bound to the host it is for from the first boot.
@@ -168,7 +171,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         clientSecret: env.OV_OAUTH_CLIENT_SECRET, fetch: fetchImpl,
     }) : null;
     const benchEvents = createBenchEvents({ bench, accountData, accountSend, config, log, fetchImpl, clientSecret: env.OV_OAUTH_CLIENT_SECRET });
-    const app = createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, grants, vault, settings, benchEvents, runBudgets, memory, memoryImport, community, endpoints, presets, receipts, balance, gpus, abuse, priceBook, refusal, batches });
+    const app = createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, grants, vault, settings, benchEvents, runBudgets, memory, memoryImport, community, endpoints, webhooks, presets, receipts, balance, gpus, abuse, priceBook, refusal, batches });
     let jwks = null;
     let keyLoaded = Promise.resolve(null);
     if (!keys.pinned && config.nodeEnv !== 'test') {
@@ -205,6 +208,8 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     let benchSubscription = null;
     let accountSubscription = null;
     if (listen) userModules.start();
+    // The signed webhook retry worker: never in test mode (tests call deliverDue with their own clock).
+    if (listen && config.nodeEnv !== 'test') webhooks.start();
     if (listen) balance.start();
     if (listen && config.memoryJobs && config.memoryJobs.enabled) memoryJobs.start();
     // The price book reads the providers' listings once a week; it never starts in test mode or under a drill.
@@ -252,6 +257,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         priceBook.stop();
         refusal.stop();
         batches.stop();
+        webhooks.stop();
         if (credits) credits.stopSettlements();
         if (jwks) jwks.stop();
         if (server) {
@@ -267,7 +273,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         if (!givenDb) await db.close();
     }
 
-    return { config, db, registry, pool, quotas, tiers, cache, fetcher, engine, runs, keys, keyLoaded, auth, app, server, bench, benchEvents, memory, memoryJobs, priceBook, refusal, batches, credits: creditsRef, settings, vault, community, endpoints, gpus, abuse, close };
+    return { config, db, registry, pool, quotas, tiers, cache, fetcher, engine, runs, keys, keyLoaded, auth, app, server, bench, benchEvents, memory, memoryJobs, priceBook, refusal, batches, credits: creditsRef, settings, vault, community, endpoints, webhooks, gpus, abuse, close };
 }
 
 if (require.main === module) {
