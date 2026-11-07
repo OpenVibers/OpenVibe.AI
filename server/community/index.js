@@ -585,7 +585,9 @@ function createCommunity({ db, config, env = process.env, machines = null, endpo
         const facts = {
             resolved_model: `community/${chosen.model}`, revision: null, deployment: source,
             provider_access: isEndpoint ? 'COMMUNITY_ENDPOINT' : 'COMMUNITY', rate_version: 'community', policy: 'community',
-            community: { label: pools.label(chosen.offer.pool), ...(chosen.offer.pool ? { pool: chosen.offer.pool } : {}), kind: chosen.offer.pool ? 'pool' : isEndpoint ? 'endpoint' : 'machine', machine_id: chosen.offer.machine_id, owner: chosen.offer.owner, model: chosen.model, price: chosen.offer.price,
+            community: { label: pools.label(chosen.offer.pool), ...(chosen.offer.pool ? { pool: chosen.offer.pool } : {}), kind: chosen.offer.pool ? 'pool' : isEndpoint ? 'endpoint' : 'machine',
+                machine_id: chosen.offer.machine_id, offer_id: chosen.offer.offer_id, project_id: chosen.offer.projectId || null,
+                owner: chosen.offer.owner, model: chosen.model, price: chosen.offer.price,
                 verification: chosen.status, reputation: chosen.reputation, free_tier: freeTier(ctx), self_served: selfServed },
         };
         if (typeof ctx.onRoute === 'function') {
