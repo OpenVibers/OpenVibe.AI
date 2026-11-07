@@ -106,7 +106,7 @@ function routePinRequest(value, principal, wf) {
     return { provider, model };
 }
 
-function createRuns({ db, registry, engine, cache, quotas, config, clock = { now: () => Date.now() }, log = console, userModules = null, credentials = null, preferences: personPreferences = null, tiers = null, projectSecrets = null, pool = null, runBudgets = null, credits = null, community = null, presets = null, receipts = null, abuse = null }) {
+function createRuns({ db, registry, engine, cache, quotas, config, clock = { now: () => Date.now() }, log = console, userModules = null, credentials = null, preferences: personPreferences = null, tiers = null, projectSecrets = null, pool = null, runBudgets = null, credits = null, community = null, presets = null, receipts = null, abuse = null, webhooks = null }) {
     const inflight = new Map();     // run id -> { controller, promise, release, caller }
     const queue = [];               // run ids waiting for the worker
     let active = 0;
@@ -563,6 +563,12 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             });
             // The event (ai.call.recorded) is queued in its own transaction, like every other event here.
             await db.tx(async () => { await events.callRecorded(rec); });
+            // Exchange webhooks (server/exchange/webhooks.js): the usage event, and the earnings event when a
+            // community offer served the run. They are rows delivered after this write, never a reason to fail it.
+            if (webhooks && typeof webhooks.usage === 'function') {
+                try { await webhooks.usage({ row, record: rec, outcome }); }
+                catch (err) { log.warn(`[runs] ${row.id}: the exchange webhook was not queued: ${err && err.message}`); }
+            }
             return { payer, prices, money, tokens };
         } catch (err) {
             log.warn(`[runs] ${row.id}: the usage record was not written: ${err && err.message}`);

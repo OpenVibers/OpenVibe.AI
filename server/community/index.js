@@ -12,8 +12,14 @@
  *   - spot re-runs: about 1% of answers are re-run on a trusted machine serving the same model and compared;
  *   - reputation: canaries, spot runs and observed uptime, 0-100.
  * A new machine serves only the free tier (a run with no Balance payer, ctx.creditsRequired) until verified. The answer
- * always carries `openvibe.community`, so a caller can see it came from a person's machine. The prompt is visible to
- * that machine, which is why only opted-in requests ever go there.
+ * always carries `openvibe.community`, so a caller can see it came from a person's machine (its `label` is "Community", or
+ * "Community pool (N machines)" for a pool). The prompt is visible to that machine, which is why only opted-in requests
+ * ever go there.
+ *
+ * Pools (ai.offer-pool@1, server/community/pools.js): several of one owner's machines on one local network serving one
+ * model through llama.cpp RPC. Network names the pool on the head's offer; requests go to the head (which sees the
+ * prompt; the others see tensors), and the same checks as one machine run on the pool's answers, keyed on its exact
+ * membership. A new pool, and one that failed verification, serves the free tier only and earns nothing there.
  *
  * Money: a self-served run (the requester is the owner, or merged into it) earns 0. Verified credits are `pending`
  * until the requester's own Balance charge exists in the same request (`spendable`), so none are spendable yet. A
@@ -32,6 +38,7 @@
  */
 const { createServiceTokenClient } = require('openvibe-sdk/auth');
 const { AiError, sha256 } = require('../util');
+const pools = require('./pools');
 
 const TEXT_OPS = new Set(['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich', 'complete', 'messages']);
 const USR = /^usr_[0-9A-HJKMNP-TV-Z]{26}$/;
@@ -145,7 +152,7 @@ function createCommunity({ db, config, env = process.env, machines = null, endpo
     const followersCache = new Map();
     const aliasCache = new Map();       // subject -> survivor subject (account merges, 5 minutes)
 
-    const keyOf = (offer, model) => `${offer.offer_id}|${model}`;
+    const keyOf = (offer, model) => `${offer.offer_id}|${model}${pools.identity(offer.pool)}`;
 
     /** One Network offer doc as this module uses it. Null for anything that is not a complete AI offer. */
     function normalize(doc) {
@@ -157,9 +164,12 @@ function createCommunity({ db, config, env = process.env, machines = null, endpo
         const owner = doc.owner || d.owner;
         if (typeof d.machine_id !== 'string' || typeof owner !== 'string' || !USR.test(owner)) return null;
         if (!Array.isArray(d.models) || !d.models.length || !d.hours || !d.price) return null;
+        const pool = d.pool === undefined ? null : pools.poolOf(d.pool, d.machine_id);
+        if (d.pool !== undefined && !pool) return null;
         const price = d.price;
         return {
             offer_id: String(doc.offer_id || d.offer_id), machine_id: d.machine_id, owner,
+            ...(pool ? { pool } : {}),
             models: d.models.filter((m) => typeof m === 'string' && m).slice(0, 40),
             hours: { start: String(d.hours.start || ''), end: String(d.hours.end || ''), tz: String(d.hours.tz || 'UTC') },
             concurrency: Number(d.concurrency) || 1,
@@ -431,7 +441,7 @@ function createCommunity({ db, config, env = process.env, machines = null, endpo
             for (const model of offer.models) {
                 const key = keyOf(offer, model);
                 const s = await stateOf(key);
-                if (s && s.status === 'failed') continue;
+                if (s && s.status === 'failed' && !(offer.pool && freeTier(ctx))) continue;
                 if ((!s || s.status === 'new') && !freeTier(ctx)) continue;
                 if (ctx.communityModel && String(ctx.communityModel) !== model) continue;
                 if (!(await audienceAllows(offer, ctx))) continue;
@@ -549,7 +559,16 @@ function createCommunity({ db, config, env = process.env, machines = null, endpo
     async function execute({ route = null, operation = 'chat', req = {}, ctx = {} } = {}) {
         const chosen = await choose({ ctx, operation, route });
         if (!chosen) return null;
-        await ensure(chosen.offer, chosen.model);
+        try {
+            // The same checks as one machine: a canary round when there is no recent one, keyed on the pool's exact
+            // membership (pools.identity), so another member or head starts unverified.
+            await ensure(chosen.offer, chosen.model);
+        } catch (err) {
+            // A pool that failed verification is free tier only (the pooled machines design): it may still answer a
+            // free-tier request, earns nothing for it, and says `verification: failed`. A single machine that fails
+            // is not used at all, as before.
+            if (!(chosen.offer.pool && freeTier(ctx) && err && err.code === 'community.verification_failed')) throw err;
+        }
         // The canary round may just have verified it: this first answer already earns and is no longer free-tier only.
         const fresh = await stateOf(chosen.key);
         if (fresh) { chosen.status = fresh.status; chosen.reputation = Number(fresh.reputation) || 0; }
@@ -566,7 +585,9 @@ function createCommunity({ db, config, env = process.env, machines = null, endpo
         const facts = {
             resolved_model: `community/${chosen.model}`, revision: null, deployment: source,
             provider_access: isEndpoint ? 'COMMUNITY_ENDPOINT' : 'COMMUNITY', rate_version: 'community', policy: 'community',
-            community: { kind: isEndpoint ? 'endpoint' : 'machine', machine_id: chosen.offer.machine_id, owner: chosen.offer.owner, model: chosen.model, price: chosen.offer.price,
+            community: { label: pools.label(chosen.offer.pool), ...(chosen.offer.pool ? { pool: chosen.offer.pool } : {}), kind: chosen.offer.pool ? 'pool' : isEndpoint ? 'endpoint' : 'machine',
+                machine_id: chosen.offer.machine_id, offer_id: chosen.offer.offer_id, project_id: chosen.offer.projectId || null,
+                owner: chosen.offer.owner, model: chosen.model, price: chosen.offer.price,
                 verification: chosen.status, reputation: chosen.reputation, free_tier: freeTier(ctx), self_served: selfServed },
         };
         if (typeof ctx.onRoute === 'function') {
@@ -588,9 +609,11 @@ function createCommunity({ db, config, env = process.env, machines = null, endpo
             throw err;
         }
         const usage = answer.usage || { input: 0, output: 0, cached: 0 };
+        // A spot re-run that disagrees drops this answer (the router falls back to the network) and fails the offer,
+        // for a pool as for one machine; a failed pool then serves the free tier only.
         await spotCheck(chosen, messages, answer);
         const latencyMs = clock.now() - t0;
-        const recorded = await recordUsage(chosen, { requestId, usage, verified: chosen.status !== 'new', requester, projectId: ctx.projectId || null, latencyMs,
+        const recorded = await recordUsage(chosen, { requestId, usage, verified: chosen.status === 'verified', requester, projectId: ctx.projectId || null, latencyMs,
             chargeId: ctx.requesterChargeId || null });
         const text = answer.text || '';
         const message = answer.message || { role: 'assistant', content: text };
@@ -604,9 +627,11 @@ function createCommunity({ db, config, env = process.env, machines = null, endpo
         const explain = {
             objective: 'community', reasons: [recorded.self_served
                 ? 'self-served: the requester owns this offer, so the answer earns no credits'
-                : `${isEndpoint ? 'a community endpoint' : 'a community machine'} offered ${chosen.model}${chosen.offer.price.in_per_million || chosen.offer.price.out_per_million ? ` at ${chosen.offer.price.in_per_million}/${chosen.offer.price.out_per_million} credits per million` : ' for free'}`],
+                : `${isEndpoint ? 'a community endpoint' : chosen.offer.pool ? `a community pool of ${chosen.offer.pool.machines.length} machines` : 'a community machine'} offered ${chosen.model}${chosen.offer.price.in_per_million || chosen.offer.price.out_per_million ? ` at ${chosen.offer.price.in_per_million}/${chosen.offer.price.out_per_million} credits per million` : ' for free'}`],
             selected: `${source}/${chosen.model}`, paid_by: 'community', candidates: [],
-            attempts: [{ key: 'community', provider: source, model: chosen.model, why: isEndpoint ? 'an opted-in request placed on a verified community endpoint' : 'an opted-in request placed on a verified community machine', status: 'ok', error: null }],
+            attempts: [{ key: 'community', provider: source, model: chosen.model, why: isEndpoint ? 'an opted-in request placed on a verified community endpoint'
+                : chosen.offer.pool ? `an opted-in request placed on a community pool through its head (${chosen.status === 'verified' ? 'verified' : 'free tier only'})`
+                    : 'an opted-in request placed on a verified community machine', status: 'ok', error: null }],
             community, openvibe: facts,
         };
         return {
@@ -675,11 +700,11 @@ function createCommunity({ db, config, env = process.env, machines = null, endpo
         const kudos = Math.max(0, Number(kudosRow.balance) || 0);
         const offerViews = await Promise.all(list.map(async (o) => {
             const openNow = o.hours ? withinHours(o, clock.now()) : null;
-            const out = { offer_id: o.offer_id, kind: o.kind || 'machine', machine_id: o.machine_id, models: o.models, hours: o.hours, concurrency: o.concurrency,
+            const out = { offer_id: o.offer_id, kind: o.pool ? 'pool' : o.kind || 'machine', label: pools.label(o.pool), ...(o.pool ? { pool: o.pool } : {}), machine_id: o.machine_id, models: o.models, hours: o.hours, concurrency: o.concurrency,
                 price: o.price, audience: o.audience, group: o.group, health: o.health, open_now: openNow, ready: o.ready && openNow !== false,
                 verification: null, reputation: 0, free_only: true, verified: false,
                 tokens_per_s: Math.max(0, ...served.filter((x) => x.offer_key.startsWith(`${o.offer_id}|`)).map((x) => x.tokens_per_s || 0)) || null };
-            const verified = o.models.map((m) => byKey.get(`${o.offer_id}|${m}`)).filter(Boolean);
+            const verified = o.models.map((m) => byKey.get(keyOf(o, m))).filter(Boolean);
             if (verified.length) {
                 const s = verified.find((x) => x.status === 'verified') || verified[0];
                 const canaries = verified.reduce((n, x) => n + Number(x.canary_passes), 0);
@@ -725,14 +750,19 @@ function createCommunity({ db, config, env = process.env, machines = null, endpo
     /** What Exchange may show about community capacity: no owner subject, no machine id, no prompt. */
     async function publicOffers() {
         const list = await offers();
-        return list.map((o) => {
+        return Promise.all(list.map(async (o) => {
             const openNow = withinHours(o, clock.now());
+            const states = o.pool ? await Promise.all(o.models.map((model) => stateOf(keyOf(o, model)))) : [];
             return {
                 // The public id is a stable hash: Exchange can list and link an offer without publishing which machine it is.
-                offer_id: `community_${sha256(o.offer_id).slice(0, 16)}`, kind: o.kind || 'machine', models: o.models, hours: o.hours, concurrency: o.concurrency,
+                offer_id: `community_${sha256(o.offer_id).slice(0, 16)}`, kind: o.pool ? 'pool' : o.kind || 'machine', label: pools.label(o.pool), models: o.models,
+                // A pool's members as stable pseudonyms (Exchange shows the pool's card with its members), and whether
+                // every model on it is verified: a new or failed pool is free tier only.
+                ...(o.pool ? { pool: pools.publicPool(o.pool), free_only: !states.every((s) => s && s.status === 'verified'), verified: states.every((s) => s && s.status === 'verified') } : {}),
+                hours: o.hours, concurrency: o.concurrency,
                 price: o.price, audience: o.audience, health: o.health, open_now: openNow, ready: o.ready && openNow,
             };
-        });
+        }));
     }
 
     return { enabled, offers, choose, execute, verify, sell, publicOffers, kudosBenefits, kudosBonus, queuePriority, _test: { normalize, withinHours, refreshReputation, fingerprintMatches, similar, messagesOf, freeTier } };

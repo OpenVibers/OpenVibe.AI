@@ -374,6 +374,61 @@ route('get', '/exchange/price-changes', {
     } }) },
 });
 
+// ── Webhooks: usage, earnings and offer.down (the design's "For builders", item 7) ─────────────
+const exchangeWebhook = {
+    type: 'object', required: ['id', 'url', 'events', 'created_at'], properties: {
+        id: str({ pattern: '^whk_[0-9A-HJKMNP-TV-Z]{26}$' }),
+        url: str({ description: 'The https receiver the signed deliveries go to' }),
+        events: arrayOf(str({ enum: ['usage', 'earnings', 'offer.down'] })),
+        description: nullable('string'),
+        created_at: str({ format: 'date-time' }), updated_at: str({ format: 'date-time' }),
+        secret: str({ description: 'The HMAC signing secret (whsec_…), in the create answer only. Keep it; it is never shown again.' }),
+    },
+};
+const exchangeWebhookDelivery = {
+    type: 'object', required: ['id', 'event_id', 'event_type', 'status', 'attempts'], properties: {
+        id: str({ pattern: '^whd_[0-9A-HJKMNP-TV-Z]{26}$' }), event_id: str(), event_type: str({ enum: ['usage', 'earnings', 'offer.down'] }),
+        status: str({ enum: ['pending', 'delivered', 'failed'] }), attempts: integer({ minimum: 0 }),
+        last_status: nullable('integer'), last_error: nullable('string'),
+        last_attempt_at: nullable('string', { format: 'date-time' }), next_attempt_at: nullable('string', { format: 'date-time' }),
+        delivered_at: nullable('string', { format: 'date-time' }), created_at: str({ format: 'date-time' }),
+        payload: { type: 'object', description: 'The exact event body that was signed and sent; no prompt, answer or secret' },
+    },
+};
+route('post', '/exchange/webhooks', {
+    operationId: 'createExchangeWebhook', summary: 'Register an https webhook receiver', tags: ['exchange'], security: SERVICE_OR_APP,
+    description: 'ai.app.run (a developer key) or a person\'s own token; a first-party service token is refused. The body is {url, events?, description?}. The receiver URL is judged at registration by the egress guard: https, a public DNS answer, never an IP literal, port 443 or 8443, no query or fragment. The signing secret (whsec_…) is in this answer only. Every delivery carries X-OpenVibe-Signature-V2: t=<unix seconds>, v2=<hex HMAC-SHA256 of "<t>.<raw body>">, exactly the header openvibe-sdk/exchange verifyWebhook checks.',
+    requestBody: body({ type: 'object', required: ['url'], properties: {
+        url: str({ description: 'https receiver, a public host name' }),
+        events: arrayOf(str({ enum: ['usage', 'earnings', 'offer.down'] }), { minItems: 1, maxItems: 3 }),
+        description: str({ maxLength: 200 }),
+    } }),
+    responses: { 201: json('The receiver, with its secret once', { type: 'object', required: ['webhook'], properties: { webhook: exchangeWebhook } }), 409: problem, 422: problem, ...errors([401, 403]) },
+});
+route('get', '/exchange/webhooks', {
+    operationId: 'listExchangeWebhooks', summary: "The caller's webhook receivers (never a secret)", tags: ['exchange'], security: SERVICE_OR_APP,
+    description: 'The receivers of the person the token acts for, or of the developer app\'s project.',
+    responses: { 200: json('The receivers', { type: 'object', required: ['owner', 'webhooks'], properties: { owner: str(), webhooks: arrayOf(exchangeWebhook) } }), ...errors([401, 403]) },
+});
+route('delete', '/exchange/webhooks/{id}', {
+    operationId: 'deleteExchangeWebhook', summary: 'Remove one of the caller\'s webhook receivers', tags: ['exchange'], security: SERVICE_OR_APP,
+    description: 'The receiver and its delivery history are removed. The secret is never shown again after creation.',
+    parameters: [path('id', str({ pattern: '^whk_[0-9A-HJKMNP-TV-Z]{26}$' }))],
+    responses: { 200: json('The removal', { type: 'object', properties: { id: str(), removed: { type: 'boolean' } } }), 404: problem, ...errors([401, 403]) },
+});
+route('get', '/exchange/webhooks/{id}/deliveries', {
+    operationId: 'listExchangeWebhookDeliveries', summary: 'The delivery log: what was sent, how often and what the receiver answered', tags: ['exchange'], security: SERVICE_OR_APP,
+    description: 'Newest first. A delivery is retried with an exponential backoff on a 408, 425, 429 or 5xx and on a network failure; any other non-2xx status fails it at once. The payload is the exact event body that was signed.',
+    parameters: [path('id', str({ pattern: '^whk_[0-9A-HJKMNP-TV-Z]{26}$' })), query('limit', integer({ minimum: 1, maximum: 200 }), 'Default 50')],
+    responses: { 200: json('The deliveries', { type: 'object', required: ['id', 'deliveries'], properties: { id: str(), deliveries: arrayOf(exchangeWebhookDelivery) } }), 404: problem, ...errors([401, 403]) },
+});
+route('get', '/exchange/me/usage', {
+    operationId: 'exchangeMyUsage', summary: 'The caller\'s own requests, tokens and spend by day and model', tags: ['exchange'], security: SERVICE_OR_APP,
+    description: 'A person\'s own usage, or a developer app\'s project usage. Never anyone else\'s: the caller is the owner, read from the token. Use from/to as YYYY-MM-DD; the rows are the same usage_daily roll-ups the platform keeps.',
+    parameters: [query('from', str({ format: 'date' }), 'First day, YYYY-MM-DD'), query('to', str({ format: 'date' }), 'Last day, YYYY-MM-DD')],
+    responses: { 200: json('The usage rows', { type: 'object', properties: { requester: str(), usage: arrayOf({ type: 'object' }) } }), ...errors([401, 403, 422]) },
+});
+
 // ── The seller API: a standalone OpenAI-compatible endpoint (the design's SDK gap) ───────────
 const sellerEndpointOffer = {
     type: 'object', required: ['id', 'offer_id', 'base_url', 'models', 'hours', 'concurrency', 'price', 'audience'],

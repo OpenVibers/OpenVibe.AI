@@ -19,7 +19,7 @@ const express = require('express');
 const { CAPS } = require('../auth');
 const { sendError } = require('../util');
 
-function sellerRouter({ endpoints, community = null, auth, log = console }) {
+function sellerRouter({ endpoints, community = null, webhooks = null, auth, log = console }) {
     const r = express.Router();
     const allow = auth.appOrCap(CAPS.appRun, CAPS.runCreate);
     const body = (req) => (req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {});
@@ -60,7 +60,16 @@ function sellerRouter({ endpoints, community = null, auth, log = console }) {
     r.delete('/api/v1/exchange/seller/offers/:id', allow, wrap(async (req, res) => {
         const who = await endpoints.ownerFor(req.principal);
         res.set('Cache-Control', 'no-store');
-        return await endpoints.remove({ id: req.params.id, owner: who.owner });
+        const mine = await endpoints.list(who.owner);
+        const offer = mine.find((o) => o.id === req.params.id) || { id: req.params.id };
+        const removed = await endpoints.remove({ id: req.params.id, owner: who.owner });
+        // The offer.down webhook: its owner (and the developer project that registered it) hears once, after the
+        // offer is gone. A notification never turns a successful removal into an error.
+        if (webhooks && typeof webhooks.offerDown === 'function') {
+            try { await webhooks.offerDown({ owner: who.owner, projectId: who.projectId, offer }); }
+            catch (err) { log.warn(`[ai] offer.down webhook for ${req.params.id}: ${err.message}`); }
+        }
+        return removed;
     }));
 
     return r;
