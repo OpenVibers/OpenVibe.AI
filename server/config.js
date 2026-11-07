@@ -463,6 +463,22 @@ function load(env = process.env) {
             },
         },
 
+        // ── Exchange webhooks (the plan's "For builders", item 7): a developer registers an https receiver and AI
+        // signs usage, earnings and offer.down deliveries with the header openvibe-sdk/exchange verifies. A delivery
+        // is a row retried with a backoff, so a receiver that is down loses nothing. The receiver URL is judged by
+        // the same egress guard as a community endpoint; a private address is refused at registration.
+        webhooks: {
+            enabled: bool(env.AI_WEBHOOKS, true),
+            timeoutMs: Math.max(1000, Math.min(120000, int(env.AI_WEBHOOK_TIMEOUT_MS, 10000))),
+            maxBytes: Math.max(4096, Math.min(1024 * 1024, int(env.AI_WEBHOOK_MAX_BYTES, 65536))),
+            maxAttempts: Math.max(1, Math.min(12, int(env.AI_WEBHOOK_MAX_ATTEMPTS, 6))),
+            maxPerOwner: Math.max(1, Math.min(50, int(env.AI_WEBHOOK_MAX_PER_OWNER, 10))),
+            // The first retry waits this long; each further attempt doubles it, up to maxDelayMs.
+            baseDelayMs: Math.max(100, Math.min(3600000, int(env.AI_WEBHOOK_BASE_DELAY_MS, 10000))),
+            maxDelayMs: Math.max(1000, Math.min(86400000, int(env.AI_WEBHOOK_MAX_DELAY_MS, 3600000))),
+            tickMs: Math.max(250, Math.min(60000, int(env.AI_WEBHOOK_TICK_MS, 1000))),
+        },
+
         // ── Tier budgets (T6 step 8, server/govern.js): openvibe-sdk/govern in Valkey, off unless AI_GOVERN_TIERS=1.
         govern: loadGovern(env, { bool, int, num: float }),
     };

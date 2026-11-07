@@ -55,7 +55,9 @@
     "platform.usage-sample@1 readings to Billing with a per-subject provider free allowance; each run's reading state in explain and the free allowance on the staff console",
     "tier budgets (free, paid, staff) per subject and per project on openvibe-sdk/govern in Valkey, behind AI_GOVERN_TIERS (off by default); readings from govern's onUsage",
     "image generation (POST /api/v1/image, workflow ai.image, app op ai.image, route default.image over the OpenAI Images API), off unless AI_IMAGE_MODEL is set; metered per image (one platform.usage-sample@1 per attempt, resource output-images:<model>, unit image)",
-    "the Exchange's routing presets (five built-ins plus one per account and per Network project, named '@preset/<name>' or as the request's preset, with floor, ceiling, max_price, quantization, region, data policy and community on or off), a hard max_price refused before the call with a problem document, the receipt of every answered request (offer, price, tokens, cache hits, latency, why the router chose it, the fallbacks it would have used, who paid and the privacy label) in the x-openvibe-receipt header and at GET /v1/receipts/{id}, BYOK at 0 % and the private/anonymized/community label on every answer"
+    "the Exchange's routing presets (five built-ins plus one per account and per Network project, named '@preset/<name>' or as the request's preset, with floor, ceiling, max_price, quantization, region, data policy and community on or off), a hard max_price refused before the call with a problem document, the receipt of every answered request (offer, price, tokens, cache hits, latency, why the router chose it, the fallbacks it would have used, who paid and the privacy label) in the x-openvibe-receipt header and at GET /v1/receipts/{id}, BYOK at 0 % and the private/anonymized/community label on every answer",
+    "Exchange webhooks (server/exchange/webhooks.js, migration 0038): usage, earnings and offer.down delivered with X-OpenVibe-Signature-V2 (<t>.<raw body>, the header openvibe-sdk/exchange verifies), retried with an exponential backoff, with a delivery log at GET /api/v1/exchange/webhooks/{id}/deliveries; a receiver URL goes through the egress guard (https, a public host, 443/8443), and the subscription secret is shown once",
+    "the Exchange MCP server (bin/openvibe-exchange-mcp.js): stdio MCP tools exchange_models, exchange_chat (the person's allowance or their own stored provider key) and exchange_usage (GET /api/v1/exchange/me/usage), authenticated with the person's Network token and refusing a call without one"
   ],
   "todo": [
     "owner: a provider key that serves the OpenAI Images API, then AI_IMAGE_MODEL (and AI_IMAGE_SIZE) in /etc/openvibe/ai.env — image generation stays off until then",
@@ -63,5 +65,5 @@
     "owner/T5: Billing unitFits() to accept unit image (OpenVibe.Billing server/ops/rating.js) — until then Billing stores image readings unrated (billing.no_card / billing.unit_mismatch)",
     "Contracts: list POST /api/v1/image under ai.run.create and ai.app.run implementedBy (manifests/capabilities); add image to provider.v1 and provider-manage-request.v1 capabilities, model.v1 and provider-manage-request.v1 model type, definition-version-request.v1 step kind (media_analysis lags the same way)"
   ],
-  "updated": "2026-11-06"
+  "updated": "2026-11-07"
 }
