@@ -377,6 +377,11 @@ function load(env = process.env) {
             enabled: bool(env.AI_BATCHES, true),
             // The cap: how many prompts one batch may carry.
             maxItems: Math.max(1, int(env.AI_BATCH_MAX_ITEMS, 1000)),
+            // How long a batch waits for low-cost capacity when the customer names no deadline (hours).
+            deadlineHours: Math.max(1, Math.min(72, int(env.AI_BATCH_DEADLINE_HOURS, 24))),
+            // The owner's loss budget (ai.batches.loss_budget_usd_per_day): what the network may absorb
+            // per UTC day by running a batch item on ordinary capacity at its deadline. Zero never.
+            lossBudgetUsdPerDay: Math.max(0, Number(env.AI_BATCH_LOSS_BUDGET_USD_PER_DAY || 0) || 0),
             tickMs: Math.max(5000, int(env.AI_BATCH_TICK_MS, 60 * 1000)),
             claimTtlMs: Math.max(60000, int(env.AI_BATCH_CLAIM_TTL_MS, 15 * 60 * 1000)),
         },

@@ -238,10 +238,12 @@ function createBillingClient({ billingUrl, audience, tokens, fetchImpl = globalT
  *   settle({...})          once, after the answer (or after the partial usage of an abort/failure)
  *   release()              once, when no token was produced at all
  */
-function createSession({ manager, requestId, payer, projectId, credentialId = null, inputTokens, maxCostNano = null, startedAt, discount = null }) {
+function createSession({ manager, requestId, payer, projectId, credentialId = null, inputTokens, maxCostNano = null, startedAt, discount = null, costCheck = null }) {
     const s = {
         requestId: String(requestId),
         payer, projectId, credentialId,
+        // A batch's settle is refused when the route really cost more than the customer was charged.
+        costCheck: typeof costCheck === 'function' ? costCheck : null,
         subject: payer,
         inputTokens: Math.max(0, Math.trunc(inputTokens)),
         maxCostNano,
@@ -266,7 +268,13 @@ function createSession({ manager, requestId, payer, projectId, credentialId = nu
         if (s.settled || s.released) return null;
         if (!meta) return null;                                                   // a person's own key or machine
         // The card this request is charged on: the retail card, halved when the request is a batch.
-        const card = applyDiscount(retailOf(meta.retail), discount);
+        const base = retailOf(meta.retail);
+        const card = applyDiscount(base, discount);
+        // The answering offer's own price before the batch discount, and which offer answered: a batch's
+        // settle check needs both to know what the route really cost.
+        s.retailBase = base;
+        s.answeredProvider = meta && meta.provider;
+        s.answeredModel = meta && meta.model;
         // A prepaid offer (free, subscription, BYOK, the stub) never spends Balance. After an earlier managed
         // attempt it may still answer (a free fallback): the settle then uses its card, or zero.
         if (meta.paid === false) { if (s.holdId) s.retail = card || ZERO_RETAIL; return null; }
@@ -360,6 +368,18 @@ function createSession({ manager, requestId, payer, projectId, credentialId = nu
     async function settle({ usage = {}, supplyCostUsd = 0, attempts = [] } = {}) {
         if (!s.holdId || s.settled || s.released) return null;
         if (s.pending) await s.pending;
+        // A batch settles only when the route it really used costs at most what the customer was charged.
+        // When it does not, the hold is released, nothing is charged, and the caller keeps waiting.
+        if (s.costCheck) {
+            const check = await s.costCheck({ usage: usageOf(usage), retail: s.retail, retailBase: s.retailBase, provider: s.answeredProvider, model: s.answeredModel, supplyCostUsd });
+            if (check && check.ok === false) {
+                await release();
+                const err = new Error(check.reason || 'the route cost more than the customer was charged');
+                err.code = 'batch.cost_exceeded';
+                err.status = 409;
+                throw err;
+            }
+        }
         // The provider's own cost comes as a float from the rate cards; turn it into integer nano-USD through a
         // decimal string (never a nano conversion by float multiplication).
         let supply = 0n;
@@ -485,7 +505,7 @@ function createCredits({ config, db = null, registry = null, env = process.env, 
             if (ctx.maxCostNano != null) {
                 try { maxCostNano = BigInt(String(ctx.maxCostNano)); } catch { throw new AiError(422, 'input.invalid', 'max_cost_usd is invalid'); }
             } else if (ctx.maxCostUsd != null) maxCostNano = parseCostUsd(ctx.maxCostUsd);
-            return createSession({ manager, requestId: requestKey, payer, projectId, credentialId, inputTokens, maxCostNano, startedAt: iso(clock.now()), discount: ctx.discount || null });
+            return createSession({ manager, requestId: requestKey, payer, projectId, credentialId, inputTokens, maxCostNano, startedAt: iso(clock.now()), discount: ctx.discount || null, costCheck: ctx.costCheck || null });
         },
     };
     return manager;

@@ -433,11 +433,15 @@ function createCommunity({ db, config, env = process.env, machines = null, endpo
         if (!TEXT_OPS.has(operation)) return [];
         if (ctx.exact) return [];
         const list = await offers();
+        // A batch's item runs on one chosen community offer (server/batch/capacity.js): the offer the
+        // capacity rules named, not whichever one happens to be cheapest today.
+        const wanted = ctx.communityOfferId ? String(ctx.communityOfferId) : null;
         const out = [];
         for (const offer of list) {
             // The Node's own ready flag may be a few minutes stale (status is sent on changes); the hours are read here
             // too, so a request outside the owner's window never reaches the machine.
             if (offer.health === 'down' || offer.ready !== true || !withinHours(offer, clock.now())) continue;
+            if (wanted && String(offer.offer_id) !== wanted) continue;
             for (const model of offer.models) {
                 const key = keyOf(offer, model);
                 const s = await stateOf(key);

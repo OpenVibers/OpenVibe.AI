@@ -34,6 +34,7 @@ function batchesRouter({ batches, auth, config, clock = { now: () => Date.now() 
             principal: req.principal,
             items,
             model: b.model ? String(b.model) : null,
+            deadlineHours: b.deadline_hours != null ? b.deadline_hours : null,
         });
         res.status(201);
         return { batch };

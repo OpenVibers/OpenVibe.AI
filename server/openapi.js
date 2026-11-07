@@ -320,6 +320,7 @@ route('post', '/batches', {
     requestBody: body({ type: 'object', required: ['items'], properties: {
         items: { type: 'array', minItems: 1, items: { oneOf: [str(), { type: 'object', required: ['prompt'], properties: { prompt: str() } }] } },
         model: str({ description: 'The model the prompts are asked of, when the caller names one' }),
+        deadline_hours: integer({ minimum: 1, maximum: 72, description: 'How long the batch may wait for spare low-cost capacity (the default is 24). At the deadline a prompt that found no low-cost capacity expires, and the customer is charged nothing.' }),
     } }),
     responses: { 201: json('The queued batch', batch), 403: problem, 422: problem, ...errors([401, 422]) },
 });

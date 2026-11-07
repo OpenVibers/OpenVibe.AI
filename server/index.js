@@ -153,12 +153,14 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     // The living price book (plan E1): the weekly job that reads every catalogued provider's own price listing and
     // keeps the price the router charges in step with it. A change of more than 20% waits for the owner on the
     // operator console. Off in test mode (the tests replay the recorded listings) and off under a drill.
-    const priceBook = require('./pricebook').createPriceBook({ db, registry, config, clock, log });
+    // The price book's off-peak windows: what a provider's own price is inside a window it publishes.
+    const offPeak = require('./pricebook/offpeak').createOffPeak({ db, clock });
+    const priceBook = require('./pricebook').createPriceBook({ db, registry, config, clock, log, offPeak });
     // The measured refusal rates (server/refusal/): the weekly job that asks every offer the same published,
     // harmless questions and publishes how often it refused them. Due-based, like the price book.
     const refusal = require('./refusal/job').createRefusalJob({ db, registry, pool, config, env, clock, log });
     // The half-price batches (server/batch/): many prompts, answered later, billed through Billing.
-    const batches = require('./batch/service').createBatchService({ db, runs, config, clock, log });
+    const batches = require('./batch/service').createBatchService({ db, runs, registry, community, priceBook: offPeak, config, clock, log });
     // The Events consumer side: a signed bench.rating.changed webhook, subscribed at boot (server/bench/events.js).
     const accountData = accountDataLib.create({ db, log, memory });
     const accountSend = env.OV_OAUTH_CLIENT_SECRET ? createNetworkSender({

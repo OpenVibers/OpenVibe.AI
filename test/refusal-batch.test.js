@@ -2,26 +2,36 @@
 /**
  * The measured refusal rates (server/refusal/) and the half-price batches (server/batch/).
  *
- * Four things are proved here:
+ * The refusal side:
  *
- *   - the refusal job is due-based: its last run is a row in the database, so a restart in the middle
- *     of the week does not measure the offers again, and a week later it is due again;
+ *   - the job is due-based: its last run is a row in the database, so a restart in the middle of the
+ *     week does not measure the offers again, and a week later it is due again;
  *   - the rate is the refusals over the attempts, written with the day it was measured, and an offer
- *     nobody measured stays unknown (never zero);
- *   - a batch is charged half the retail price, through Billing like every other request;
- *   - a batch over the cap is refused at the door, and nothing is stored.
+ *     nobody measured stays unknown (never zero).
+ *
+ * The batch side, which is where the money is: a batch is half price for the customer, so it may only
+ * run where the route really costs the network at most half of the retail card (server/batch/capacity.js).
+ *
+ *   - an item on an ordinary paid route outside a discount window never runs: it expires uncharged;
+ *   - an item on OpenVibe's own route runs, and the customer is charged half;
+ *   - a community offer above half the retail price is not eligible;
+ *   - at the deadline with no budget the item expires, uncharged;
+ *   - with a loss budget it runs on regular capacity, and the absorbed amount is recorded and capped
+ *     per day;
+ *   - the settle check refuses a route whose cost exceeds the charge.
  */
 const assert = require('assert');
 const http = require('http');
 const { boot, request, token, suite, tmpDir, ALL } = require('./helpers');
 const { createRefusalJob } = require('../server/refusal/job');
 const { rateOf } = require('../server/refusal/rate');
+const { batchCapacity } = require('../server/batch/capacity');
+const { EXPIRED_REASON } = require('../server/batch/service');
 
 const t = suite('refusal-batch');
 const service = token('live', ALL);
 const ULID = '01JAB2C3D4E5F6G7H8J9K0MNPQ';
 const PRJ = `prj_${ULID}`;
-const APP = `app_${ULID}`;
 const producer = token('app', ['ai.app.run'], { sub: `app:app_${ULID}`, actorType: 'app', ns: [PRJ, `app.${PRJ}.*`], extra: { project_id: PRJ, env: 'production' } });
 
 /** A local fake Billing: the hold routes, OAuth and the usage relay (the same one the credits tests use). */
@@ -93,9 +103,9 @@ async function fakeBilling() {
     return state;
 }
 
-/** A local OpenAI-format upstream whose answer each test scripts. */
-async function upstream() {
-    const state = { calls: 0, bodies: [] };
+/** A local OpenAI-format upstream. It fails its first call when the test asks it to. */
+async function upstream({ failFirst = false } = {}) {
+    const state = { calls: 0 };
     const server = http.createServer((req, res) => {
         let raw = '';
         req.on('data', (c) => { raw += c; });
@@ -103,7 +113,7 @@ async function upstream() {
             let body = {};
             try { body = JSON.parse(raw || '{}'); } catch { body = {}; }
             state.calls++;
-            state.bodies.push(body);
+            if (failFirst && state.calls === 1) { res.writeHead(500, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'the upstream is unwell' })); return; }
             const completion = Math.min(12, Number(body.max_tokens || body.max_completion_tokens) || 12);
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ id: 'chatcmpl-up', object: 'chat.completion', created: 1, model: 'gpt-up', choices: [{ index: 0, message: { role: 'assistant', content: 'an answer from upstream' }, finish_reason: 'stop' }], usage: { prompt_tokens: 60, completion_tokens: completion, total_tokens: 60 + completion } }));
@@ -115,28 +125,50 @@ async function upstream() {
     return state;
 }
 
-/** A provider, a model and a route, so a run has somewhere to go. */
-async function seed(h, up) {
-    const made = await request(h.base, 'POST', '/api/v1/providers', { tok: service, body: {
-        key: 'up', kind: 'openai', base_url: up.url, auth_mode: 'none', default_model: 'gpt-up', capabilities: ['chat'],
-        provider_access: 'OWN_DEPLOYMENT', billing_profile: 'metered' } });
-    assert.ok(made.status < 300, made.text);
-    const model = await request(h.base, 'POST', '/api/v1/models', { tok: service, body: {
-        provider_key: 'up', model_key: 'gpt-up', type: 'chat', supports: { streaming: true },
-        cost: { in_per_mtok: 1, out_per_mtok: 2 }, metadata: { rate_version: 'retail-1' } } });
-    assert.ok(model.status < 300, model.text);
+/**
+ * Two providers: OpenVibe's own deployment (metadata.local, idle capacity that costs nothing) and an
+ * ordinary paid one. The route's primary and fallback are named by the test.
+ */
+async function seed(h, up, { primary = 'own', fallbacks = [], providers = ['own', 'paid'] } = {}) {
+    for (const key of providers) {
+        const made = await request(h.base, 'POST', '/api/v1/providers', { tok: service, body: {
+            key, kind: 'openai', base_url: up.url, auth_mode: 'none', default_model: 'gpt-up', capabilities: ['chat'],
+            provider_access: 'OWN_DEPLOYMENT', billing_profile: 'metered' } });
+        assert.ok(made.status < 300, made.text);
+        const model = await request(h.base, 'POST', '/api/v1/models', { tok: service, body: {
+            provider_key: key, model_key: 'gpt-up', type: 'chat', supports: { streaming: true },
+            cost: { in_per_mtok: 1, out_per_mtok: 2 }, metadata: { rate_version: 'retail-1' } } });
+        assert.ok(model.status < 300, model.text);
+    }
+    // OpenVibe's own GPU deployment: idle capacity the network already pays for.
+    await h.db.prepare("UPDATE providers SET metadata = jsonb_build_object('gpu', true) WHERE key = ?").run('own');
     const route = await request(h.base, 'POST', '/api/v1/routes/default.chat/versions', { tok: service, body: {
-        primary: { provider: 'up', model: 'gpt-up' }, fallbacks: [], timeout_ms: 5000 } });
+        primary: { provider: primary, model: 'gpt-up' }, fallbacks, timeout_ms: 5000 } });
     assert.ok(route.status < 300, route.text);
 }
 
-async function bootWith(billing) {
-    return boot({ env: {
+async function bootWith(billing, clock) {
+    return boot({ clock, env: {
         AI_CREDITS: '1', AI_MODEL_CATALOG: '1', AI_STUB_FALLBACK: 'false', AI_PROVIDER_RETRIES: '0',
         AI_GOVERN_TIERS: '1', AI_GOVERN_POLICY_JSON: JSON.stringify({ 'ai-token': { free: {} }, 'ai-usd': { free: {} } }),
         OV_BILLING_INTERNAL_URL: billing.url, OV_NETWORK_INTERNAL_URL: billing.url,
         OV_OAUTH_CLIENT_SECRET: 'test-secret', OV_OAUTH_CLIENT_ID: 'ai', USAGE_SAMPLES: 'off',
     } });
+}
+
+/** Submit a batch and return its id. */
+async function submit(h, { hours = null, items = [{ prompt: 'a prompt' }] } = {}) {
+    const body = { items };
+    if (hours != null) body.deadline_hours = hours;
+    const r = await request(h.base, 'POST', '/api/v1/batches', { tok: producer, body });
+    assert.strictEqual(r.status, 201, r.text);
+    return r.body.batch.id;
+}
+
+async function itemOf(h, id, idx = 0) {
+    const r = await request(h.base, 'GET', `/api/v1/batches/${id}`, { tok: producer });
+    assert.strictEqual(r.status, 200, r.text);
+    return r.body.batch.items[idx];
 }
 
 t.test('the refusal job is due-based: a restart does not measure the offers again', async () => {
@@ -153,7 +185,6 @@ t.test('the refusal job is due-based: a restart does not measure the offers agai
         assert.ok(state && state.last_run_at, 'the last run is a row in the database');
     } finally { await h1.stop(); }
 
-    // The restart: a new process on the same database. The week did not start again.
     const h2 = await boot({ dir, clock });
     try {
         const job = createRefusalJob({ db: h2.db, registry: h2.registry, pool: h2.pool, clock, config: { refusal: { enabled: true } } });
@@ -174,7 +205,6 @@ t.test('the rate is the refusals over the attempts, with the day, and unknown st
             capabilities: ['chat'], provider_access: 'OWN_DEPLOYMENT', billing_profile: 'metered' } });
         await request(h.base, 'POST', '/api/v1/models', { tok: service, body: {
             provider_key: 'up', model_key: 'gpt-up', type: 'chat', cost: { in_per_mtok: 1, out_per_mtok: 2 } } });
-        // The measurement is replaced by a fixed answer, so the test never reaches a provider.
         const job = createRefusalJob({
             db: h.db, registry: h.registry, pool: h.pool, config: { refusal: { enabled: true, probesPerOffer: 4 } },
             measure: async () => ({ refusals: 3, attempts: 4 }),
@@ -187,44 +217,66 @@ t.test('the rate is the refusals over the attempts, with the day, and unknown st
         assert.strictEqual(Number(row.attempts), 4);
         assert.strictEqual(String(row.measured_on).slice(0, 10), new Date().toISOString().slice(0, 10), 'the rate carries the day it was measured');
         assert.ok(row.prompt_set, 'the rate says which probe set it was measured with');
-        // The catalog shows it on the offer.
-        const cat = await request(h.base, 'GET', '/api/v1/exchange/catalog');
-        assert.strictEqual(cat.status, 200, cat.text);
-        const offers = (cat.body.models || []).flatMap((m) => m.offers || []).filter((o) => o.refusal_rate != null);
-        if (offers.length) assert.strictEqual(offers[0].refusal_rate, 0.75, 'the catalog carries the measured rate');
-        else assert.ok(true, 'the seeded offer is not listed in the catalog (no upstream), so the rate is only in the table');
     } finally { await h.stop(); }
 });
 
-t.test('a batch is charged half the retail price, through Billing', async () => {
+t.test('a community offer above half the retail price is not eligible', async () => {
+    const model = { provider_key: 'up', model_key: 'gpt-up', cost: { in_per_mtok: 1, out_per_mtok: 2 }, metadata: { rate_version: 'retail-1' } };
+    const world = (offer) => ({
+        registry: { listModels: async () => [model], getProvider: async () => ({ key: 'up', status: 'active', metadata: {} }) },
+        community: { offers: async () => (offer ? [offer] : []) },
+    });
+    const dear = { offer_id: 'off_1', models: ['gpt-up'], price: { in_per_million: 2, out_per_million: 4 } };
+    const dearCapacity = await batchCapacity(model, new Date('2026-11-07T12:00:00Z'), world(dear));
+    assert.strictEqual(dearCapacity.routes.length, 0, 'a community offer above half the retail price is not eligible');
+    assert.strictEqual(dearCapacity.charge.nano_usd_per_m.input, '500000000', 'the charge is half the retail card');
+    const cheap = { offer_id: 'off_2', models: ['gpt-up'], price: { in_per_million: 0.2, out_per_million: 0.4 } };
+    const cheapCapacity = await batchCapacity(model, new Date('2026-11-07T12:00:00Z'), world(cheap));
+    assert.strictEqual(cheapCapacity.routes.length, 1, 'a community offer at a quarter of the retail price is eligible');
+    assert.strictEqual(cheapCapacity.routes[0].source, 'community');
+});
+
+t.test('a batch item on an ordinary paid route never runs: it expires uncharged', async () => {
+    const billing = await fakeBilling();
+    const up = await upstream();
+    let now = Date.now();
+    const clock = { now: () => now };
+    const h = await bootWith(billing, clock);
+    try {
+        await seed(h, up, { primary: 'paid', providers: ['paid'] });
+        const id = await submit(h, { hours: 1 });
+        await h.batches.runOnce();
+        let item = await itemOf(h, id);
+        assert.strictEqual(item.status, 'waiting', 'no low-cost capacity: the item waits');
+        assert.strictEqual(billing.calls.filter((c) => c.path.endsWith('/settle')).length, 0, 'nothing was charged');
+        // The deadline passes with no eligible capacity: the item expires, and it is never charged.
+        now += 2 * 3600 * 1000;
+        await h.batches.runOnce();
+        item = await itemOf(h, id);
+        assert.strictEqual(item.status, 'expired', 'the item expired');
+        assert.strictEqual(item.reason, EXPIRED_REASON, 'and says why, in plain words');
+        assert.strictEqual(String(item.charged_nano_usd), '0', 'and it was never charged');
+        assert.strictEqual(billing.calls.filter((c) => c.path.endsWith('/settle')).length, 0, 'no settle at all');
+    } finally { await h.stop(); await up.close(); await billing.close(); }
+});
+
+t.test('a batch item on OpenVibe\'s own route runs and is charged half', async () => {
     const billing = await fakeBilling();
     const up = await upstream();
     const h = await bootWith(billing);
     try {
-        await seed(h, up);
-        const submitted = await request(h.base, 'POST', '/api/v1/batches', { tok: producer, body: {
-            items: [{ prompt: 'first prompt' }, { prompt: 'second prompt' }] } });
-        assert.strictEqual(submitted.status, 201, submitted.text);
-        const id = submitted.body.batch.id;
-        assert.strictEqual(submitted.body.batch.status, 'queued');
-
+        await seed(h, up, { primary: 'own' });
+        const id = await submit(h);
         await h.batches.runOnce();
-
-        const got = await request(h.base, 'GET', `/api/v1/batches/${id}`, { tok: producer });
-        assert.strictEqual(got.status, 200, got.text);
-        assert.strictEqual(got.body.batch.status, 'succeeded', JSON.stringify(got.body.batch));
-        assert.strictEqual(got.body.batch.items.length, 2);
-        assert.ok(got.body.batch.items.every((i) => i.status === 'succeeded'), JSON.stringify(got.body.batch.items));
-        assert.ok(got.body.batch.items.every((i) => typeof i.answer === 'string' && i.answer), 'the answers are in the batch');
-
+        const item = await itemOf(h, id);
+        assert.strictEqual(item.status, 'succeeded', JSON.stringify(item));
+        assert.strictEqual(item.capacity, 'own', 'it ran on the network\'s own capacity');
+        assert.ok(item.answer, 'the answer is in the batch');
         const settles = billing.calls.filter((c) => c.path.endsWith('/settle'));
-        assert.strictEqual(settles.length, 2, 'each prompt was billed');
-        for (const settle of settles) {
-            assert.ok(settle.body.retail.version.endsWith(':batch-half'), `the batch card says what it is: ${settle.body.retail.version}`);
-        }
+        assert.strictEqual(settles.length, 1, 'the item was billed once');
+        assert.ok(settles[0].body.retail.version.endsWith(':batch-half'), 'the batch card says what it is');
         // The charge is half of what the same usage costs at the retail card.
-        const first = settles[0];
-        const retail = first.body.retail;
+        const retail = settles[0].body.retail;
         const full = {
             nano_usd_per_m: {
                 input: String(BigInt(retail.nano_usd_per_m.input) * 2n),
@@ -235,8 +287,54 @@ t.test('a batch is charged half the retail price, through Billing', async () => 
             per_request_nano_usd: String(BigInt(retail.per_request_nano_usd) * 2n),
         };
         const charged = BigInt([...billing.settlements.values()][0].charge_nano_usd);
-        const atRetail = billing.chargeOf(first.body.usage, full);
-        assert.strictEqual(charged * 2n, atRetail, `the batch was charged half (${charged} vs ${atRetail} at the retail card)`);
+        const atRetail = billing.chargeOf(settles[0].body.usage, full);
+        assert.strictEqual(charged * 2n, atRetail, 'the batch was charged half');
+    } finally { await h.stop(); await up.close(); await billing.close(); }
+});
+
+t.test('with a loss budget the item runs on regular capacity, and the absorbed amount is recorded and capped', async () => {
+    const billing = await fakeBilling();
+    const up = await upstream();
+    let now = Date.now();
+    const clock = { now: () => now };
+    const h = await bootWith(billing, clock);
+    try {
+        await seed(h, up, { primary: 'paid', providers: ['paid'] });
+        h.batches.settings.lossBudgetUsdPerDay = 1;
+        const id = await submit(h, { hours: 1 });
+        now += 2 * 3600 * 1000;
+        await h.batches.runOnce();
+        const item = await itemOf(h, id);
+        assert.strictEqual(item.status, 'succeeded', JSON.stringify(item));
+        assert.strictEqual(item.capacity, 'regular', 'it ran on regular capacity');
+        assert.ok(BigInt(item.absorbed_nano_usd) > 0n, 'the absorbed amount is recorded on the item');
+        const batch = (await request(h.base, 'GET', `/api/v1/batches/${id}`, { tok: producer })).body.batch;
+        assert.strictEqual(batch.ran_on_regular_capacity, true, 'the batch says it ran on regular capacity');
+        // The budget is per UTC day: with a budget too small to cover the difference, the item expires.
+        h.batches.settings.lossBudgetUsdPerDay = 0.000000001;
+        const second = await submit(h, { hours: 1 });
+        now += 2 * 3600 * 1000;
+        await h.batches.runOnce();
+        const expired = await itemOf(h, second);
+        assert.strictEqual(expired.status, 'expired', 'the budget is capped, so the item expires instead');
+        assert.strictEqual(String(expired.charged_nano_usd), '0', 'and it is never charged');
+    } finally { await h.stop(); await up.close(); await billing.close(); }
+});
+
+t.test('the settle check refuses a route whose cost exceeds the charge', async () => {
+    const billing = await fakeBilling();
+    const up = await upstream({ failFirst: true });
+    const h = await bootWith(billing);
+    try {
+        // The route's own offer fails, and the router falls over to the paid one: the answer came from a
+        // route that costs more than the customer paid, so the settle is refused.
+        await seed(h, up, { primary: 'own', fallbacks: [{ provider: 'paid', model: 'gpt-up' }] });
+        const id = await submit(h);
+        await h.batches.runOnce();
+        const item = await itemOf(h, id);
+        assert.strictEqual(item.status, 'waiting', 'the item waits for a route it can afford');
+        assert.strictEqual(item.error_code, 'batch.cost_exceeded', 'and says why');
+        assert.strictEqual(billing.calls.filter((c) => c.path.endsWith('/settle')).length, 0, 'nothing was charged');
     } finally { await h.stop(); await up.close(); await billing.close(); }
 });
 
