@@ -26,7 +26,7 @@
  */
 const placement = require('openvibe-sdk/placement');
 const contracts = require('openvibe-contracts');
-const { AiError, resolveSecret, sha256 } = require('../util');
+const { AiError, providerSecret, sha256 } = require('../util');
 const { retryable, sleep, ProviderError, schemaInstruction, insufficientBalance } = require('./common');
 const { sourcesOf, ceilingOf, allowsProvider, allowsCommunity } = require('../free-tier');
 const { createStubProvider } = require('./stub');
@@ -250,7 +250,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
     function statFor(key) { return stats[key] || (stats[key] = { calls: 0, ok: 0, failures: 0, skipped: 0 }); }
 
     function build(p) {
-        const apiKey = resolveSecret(p.secret_ref, env);
+        const apiKey = providerSecret(p, env);
         switch (p.kind) {
             case 'stub': return createStubProvider(p, { stats: statFor(p.key) });
             case 'openai': return createOpenAiProvider(p, { apiKey, fetchImpl });
@@ -266,7 +266,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
     async function adapter(key) {
         const p = await registry.getProvider(key);
         if (!p) return null;
-        const stamp = `${p.updated_at}|${p.secret_ref}|${resolveSecret(p.secret_ref, env) ? 1 : 0}`;
+        const stamp = `${p.updated_at}|${p.secret_ref}|${providerSecret(p, env) ? 1 : 0}`;
         const hit = await cache.get(key);
         if (hit && hit.stamp === stamp) return { record: p, adapter: hit.adapter };
         const a = build(p);
@@ -456,7 +456,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             // request, and the adult tier has no other offer to run on.
             if (!(await policyAllows(registry, p, model, ctx.contentPolicy || 'standard'))) return;
             seen.add(id);
-            const creds = p.auth_mode === 'none' || credentialNotRequired(p) || Boolean(resolveSecret(p.secret_ref, env));
+            const creds = p.auth_mode === 'none' || credentialNotRequired(p) || Boolean(providerSecret(p, env));
             const h = await health(p.key);
             const st = stats.get(p.key) || { p95: null, requests: 0, errors: 0 };
             const errorRate = st.requests ? st.errors / st.requests : 0;
@@ -746,7 +746,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
     async function skipReason(p, a, features) {
         if (!p || !a) return 'unknown_provider';
         if (p.status !== 'active') return 'disabled';
-        if (p.auth_mode !== 'none' && !credentialNotRequired(p) && !resolveSecret(p.secret_ref, env)) return 'no_credentials';
+        if (p.auth_mode !== 'none' && !credentialNotRequired(p) && !providerSecret(p, env)) return 'no_credentials';
         if (features.some(f => !a.supports(f))) return 'unsupported';
         const h = await health(p.key);
         if (h.state === 'open') return h.exhausted_at ? 'exhausted' : 'circuit_open';

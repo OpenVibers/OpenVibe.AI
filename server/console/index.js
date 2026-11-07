@@ -44,7 +44,7 @@
  */
 const crypto = require('crypto');
 const express = require('express');
-const { AiError, resolveSecret, iso } = require('../util');
+const { AiError, resolveSecret, providerSecret, iso } = require('../util');
 const usageSamples = require('../usage-samples');
 const { CAPS } = require('../auth');
 const { staff: staffMap } = require('openvibe-contracts');
@@ -53,7 +53,7 @@ const sso = require('./sso');
 const q = require('./queries');
 const catalog = require('../providers/catalog');
 const poolSeed = require('../providers/pool-seed');
-const { CSP, esc, pages } = require('./views');
+const { CSP, esc, pages, healthText } = require('./views');
 
 /** Network staff capability -> AI capability held by a console session (documented in README "Operator console"). */
 const STAFF_TO_AI = Object.freeze([
@@ -147,7 +147,7 @@ function consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, e
     /** Every secret value this process can resolve, so that no page can ever carry one (belt and braces). */
     async function secretValues() {
         const vals = new Set([clientSecret(), secret]);
-        for (const p of await registry.listProviders()) vals.add(resolveSecret(p.secret_ref, env));
+        for (const p of await registry.listProviders()) vals.add(providerSecret(p, env));
         return [...vals].filter((v) => v && v.length >= 8);
     }
     async function scrub(text) {
@@ -317,8 +317,11 @@ function consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, e
         const problems = [];
         for (const p of (await registry.listProviders()).filter((x) => x.status === 'active' && x.kind !== 'stub')) {
             const v = await ops.providerView(p);
-            if (v.credentials === 'missing') problems.push({ key: p.key, kind: p.kind, problem: `credentials missing (${p.secret_ref || 'no reference'})` });
-            if (v.health && v.health.state !== 'closed') problems.push({ key: p.key, kind: p.kind, problem: `circuit ${v.health.state}` });
+            if (v.credentials === 'missing') {
+                const ref = /^env:([A-Z][A-Z0-9_]*)$/.exec(String(p.secret_ref || ''));
+                problems.push({ key: p.key, kind: p.kind, problem: ref ? `No key: the server's settings file has no ${ref[1]}, and none was entered here. Enter one in the admin panel's Setup tab.` : 'No key: enter one in the admin panel\'s Setup tab or on the AI providers page.' });
+            }
+            if (v.health && v.health.state !== 'closed') problems.push({ key: p.key, kind: p.kind, problem: healthText(v.health, { breaker: config.breaker, now: clock.now() }).text });
         }
         const stats = await cache.stats();
         const frac = (c) => {
@@ -336,7 +339,9 @@ function consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, e
     r.get('/console/providers', read, wrap(async (req, res) => await send(res, 200, pages.providers({
         ...common(req), rows: (await Promise.all((await registry.listProviders()).map(ops.providerView))), models: await registry.listModels(), stubFallback: config.stubFallback,
         canManage: req.staff.caps.includes(CAPS.providerManage), notice: notice(req), keyHints: vault ? await vault.hints() : new Map(),
+        breaker: config.breaker, now: clock.now(),
     }))));
+    r.get('/console/glossary', read, wrap(async (req, res) => await send(res, 200, pages.glossary({ ...common(req) }))));
     r.post('/console/providers/:key/status', needs(CAPS.providerManage), wrap(async (req, res) => {
         await ops.setProviderStatus(req.params.key, String(req.body.status || ''), who(req));
         res.redirect(303, '/console/providers?done=provider_status');
@@ -373,7 +378,7 @@ function consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, e
         await vault.put(key, b.api_key, who(req));
         // Its model list, read right away (best effort: a provider whose list cannot be read is still added).
         const added = await registry.getProvider(key);
-        await catalog.sync({ registry, provider: added, apiKey: resolveSecret(added.secret_ref, env), fetchImpl, actor: who(req).actor }).catch(() => null);
+        await catalog.sync({ registry, provider: added, apiKey: providerSecret(added, env), fetchImpl, actor: who(req).actor }).catch(() => null);
         // The provider's own model ids get the price the catalogue recorded for them, matched by name (pool-seed).
         await poolSeed.applyCatalogPrices({ registry, provider: added, actor: who(req).actor }).catch(() => null);
         res.redirect(303, '/console/providers?done=provider_added');
@@ -392,7 +397,7 @@ function consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, e
     r.post('/console/providers/:key/sync', needs(CAPS.providerManage), wrap(async (req, res) => {
         const p = await registry.getProvider(req.params.key);
         if (!p) throw new AiError(404, 'ai.not_found', 'no such provider');
-        const apiKey = resolveSecret(p.secret_ref, env);
+        const apiKey = providerSecret(p, env);
         if (!apiKey && p.auth_mode !== 'none') throw new AiError(422, 'ai.invalid', `${p.key} has no key to read its model list with`);
         const out = await catalog.sync({ registry, provider: p, apiKey, fetchImpl, actor: who(req).actor });
         const priced = await poolSeed.applyCatalogPrices({ registry, provider: p, actor: who(req).actor }).catch(() => ({ priced: [], retired: [] }));
