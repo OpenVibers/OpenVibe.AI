@@ -195,11 +195,20 @@ function credentialCanServe(provider, operation, req) {
     return false;
 }
 /** The model a self key should use for this run: the person's default for the kind, else their stored model. */
+/**
+ * The Live role a route names, so a person's own key answers with the model they stored for that role.
+ *
+ * The background routes (BA1) carry the role too: the AI viewers director plan runs in the background, but a
+ * person who gave their key a director model still wants that model to write it.
+ */
+const ROLE_ROUTE = /^(?:live|background)\.(chat|vision|director|summary|legacy)$/;
+const roleOfRoute = (routeKey) => (ROLE_ROUTE.exec(String(routeKey || '')) || [])[1] || null;
+
 function selfModelFor(cred, operation, req, ctx, prefs) {
     const kind = workKind(operation, req, ctx);
     const choice = prefs && prefs.defaults ? prefs.defaults[kind] : 'auto';
     const stored = cred.models || {};
-    const role = ctx.role || ((/^live\.(chat|vision|director|summary|legacy)$/.exec(ctx.routeKey || '') || [])[1]) || null;
+    const role = ctx.role || roleOfRoute(ctx.routeKey);
     const model = (choice && choice !== 'auto') ? choice
         : (req.image && stored.vision) || (role && stored[role]) || stored[kind] || stored.chat
             || CREDENTIAL_DEFAULT_MODEL[cred.provider] || 'gpt-4o-mini';
@@ -850,7 +859,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         const completing = operation === 'complete';
         if (!completing && !['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich'].includes(operation)) throw new AiError(422, 'credential.unsupported', `a person's own machine answers text only, not ${operation}`);
         if (req.image) throw new AiError(422, 'credential.unsupported', 'a person\'s own machine reads no pictures yet');
-        const wanted = ctx.role || ((/^live\.(chat|vision|director|summary|legacy)$/.exec(ctx.routeKey || '') || [])[1]) || null;
+        const wanted = ctx.role || roleOfRoute(ctx.routeKey);
         const model = (wanted && cred.models[wanted]) || cred.models.chat;
         if (!model) throw new AiError(422, 'credential.no_model', 'the person\'s own machine credential names no model (models.chat)');
         const sysText = [...(req.system || []).map((x) => x.text), req.json ? schemaInstruction(req.json) : ''].filter(Boolean).join('\n\n');
@@ -904,7 +913,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         if (!messaging && !completing && !['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich'].includes(operation)) throw new AiError(422, 'credential.unsupported', `a person's own key is used for text only, not ${operation}`);
         const guardedFetch = credentialFetch || require('./guarded-fetch').guardedFetch;
         // The person's model for this role: the run's input.role, else the Live role its route names (live.director).
-        const wanted = ctx.role || ((/^live\.(chat|vision|director|summary|legacy)$/.exec(ctx.routeKey || '') || [])[1]) || null;
+        const wanted = ctx.role || roleOfRoute(ctx.routeKey);
         const role = wanted && cred.models[wanted] ? wanted : null;
         // On the person's Anthropic key the model the caller asked for is theirs to choose; elsewhere the model they stored
         // is the one their provider serves (a Claude Code model name does not exist at DeepSeek).
@@ -1456,7 +1465,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             const outlast = operation === 'image' || Boolean(route.options && route.options.outlast_provider_timeout);
             const own = await providerTimeout(p, model);
             const room = waiting ? Math.max(latency.timeoutMs(latencyClass), Number(route.timeout_ms) || 0) : 0;
-            const cap = (outlast || waiting) ? Math.max(own, room, operation === 'image' ? 600000 : 0) : (own || 600000);
+            const cap = (outlast || waiting) ? Math.max(own, Number(route.timeout_ms) || 0, room, operation === 'image' ? 600000 : 0) : (own || 600000);
             const timeoutMs = Math.max(1000, Math.min(req.timeoutMs || route.timeout_ms || own || DEFAULT_PROVIDER_TIMEOUT_MS, cap));
             const retries = config.providerRetries;
             // BA1: the tier this candidate runs on. A background run asks for the cheaper tier the

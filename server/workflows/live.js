@@ -45,7 +45,7 @@ const templates = [
         input_schema: { type: 'object' }, output_schema: { type: 'object' },
         system_prompt: '',
         user_prompt: 'Summarize what this pasted text is about in one short sentence (max 200 chars), plainly. Title: "{{title}}".\n\n---\n{{snippet}}',
-        default_route: 'background.text', owner: 'live',
+        default_route: 'background.legacy', owner: 'live',
     },
     {
         key: 'live.stream.describe_frame', name: 'Live: describe a live-stream frame',
@@ -61,7 +61,7 @@ const templates = [
         input_schema: { type: 'object' }, output_schema: { type: 'object' },
         system_prompt: '',
         user_prompt: 'These are timestamped observations from a live stream, in order since it started. Write about the activities, topics and vibe, people included; call a person "the streamer". Reply ONLY with compact JSON: {"overview":"a thorough overview (2-6 sentences) of what this stream has been about overall — the main activities, topics, and vibe across the whole session (not just the latest moment)","category":"<exactly one of: {{categories}} — what this stream mostly IS, judged from the observations; desktop = screen/software/coding, gaming = playing games, irl = camera on a person talking/doing things indoors, outdoors/travel = out in the world>","tags":["3-6","short","lowercase","tags"]}\n{{lines}}{{audio_block}}',
-        default_route: 'background.text', owner: 'live',
+        default_route: 'background.legacy', owner: 'live',
     },
     {
         key: 'live.streamer.overview', name: 'Live: public channel description',
@@ -69,7 +69,7 @@ const templates = [
         input_schema: { type: 'object' }, output_schema: { type: 'object' },
         system_prompt: '',
         user_prompt: 'You are writing the public description of a livestreamer\'s channel. It is shown on their channel page, in search results and on the home page\'s cards, so the first sentence must stand alone as a one-line summary of what they stream. Using only the signals below (aggregated across their streams, VODs and pastes), write 2-4 sentences of plain prose: what they stream (games, topics, activities), what keeps coming back, and the tone of the streams. Start with the streamer\'s name, and after that refer to them by name or as "they"; never guess pronouns.\n\nRules:\n- Plain text only: no lists, bullets, headings, markdown, labels ("Handle:", "Overview:") or @handles.\n- Never guess at their private life, health or location.\n- No moderation notes, warnings or ratings.\n- Do not invent specifics the signals do not support; when the signals are thin, one or two short sentences are enough.\n\n{{ctx}}',
-        default_route: 'background.text', owner: 'live',
+        default_route: 'background.legacy', owner: 'live',
     },
     {
         key: 'live.media.overview', name: 'Live: VOD/clip overview from frames + transcript',
@@ -77,7 +77,7 @@ const templates = [
         input_schema: { type: 'object' }, output_schema: { type: 'object' },
         system_prompt: '',
         user_prompt: 'You are writing an AI overview of a recorded video. Using ONLY the signals below (be concrete, don\'t invent), summarize what the video is about in 2-5 sentences — the main activities, topics, and vibe. Plain prose, no lists or markdown.\n\n{{parts}}',
-        default_route: 'background.text', owner: 'live',
+        default_route: 'background.legacy', owner: 'live',
     },
     {
         key: 'live.viewers.plan', name: "Live: AI viewers director",
@@ -86,7 +86,7 @@ const templates = [
         output_schema: {"type": "object", "additionalProperties": false, "properties": {"skip": {"type": "boolean", "description": "true when nothing worth saying right now"}, "notes": {"type": "string", "description": "one short line of director reasoning (logged only)"}, "lines": {"type": "array", "items": {"type": "object", "additionalProperties": false, "properties": {"bot": {"type": "string", "description": "username of the AI viewer that speaks"}, "target": {"type": "string", "enum": ["viewer", "bot", "streamer", "ambient"]}, "reply_to": {"type": ["string", "null"], "description": "username being replied to (viewer or bot), else null"}, "thread": {"type": ["string", "null"], "description": "existing thread id as a string, \"new\" to start one, or null"}, "topic": {"type": ["string", "null"], "description": "topic label when thread is \"new\""}, "delay_ms": {"type": "integer", "minimum": 0, "maximum": 45000}, "text": {"type": "string", "description": "the chat line, in character"}, "reason": {"type": "string", "description": "why this bot says this now (<= 80 chars)"}}, "required": ["bot", "target", "reply_to", "thread", "topic", "delay_ms", "text", "reason"]}}, "threads_close": {"type": "array", "items": {"type": "string"}, "description": "thread ids that reached a natural end"}}, "required": ["skip", "notes", "lines", "threads_close"]},
         system_prompt: "You are the DIRECTOR of a cast of AI viewers in a live stream's chat. Each pass you decide which of them speak next, to whom, and what they say — like an improv coach cueing actors. You never speak yourself.\n\nHard rules:\n- Every line must sound like a real, casual chat message from that specific viewer, fully in character and in their typing style. Short. No quotation marks, no stage directions, no meta commentary, never mention being an AI, bot, model, or \"director\".\n- If the streamer addressed chat or named an AI viewer, that MUST be answered first (target \"streamer\"), naturally and specifically about what they said/are doing.\n- Reply to real viewers when it makes sense (target \"viewer\", reply_to = their username). Prefer people flagged first-time / follower / subscriber. Never reply to yourself.\n- Bots may talk to each other (target \"bot\", reply_to = the other bot) to continue an open thread or start one when chat is quiet — keep the bot-to-bot share at or under the target given, and keep each thread moving (a question, a joke callback, a disagreement), then let it end.\n- \"ambient\" lines react to what is happening on stream (heard / seen) — not filler like \"nice stream\".\n- Use the transcript and screen description as the source of truth for what is happening; the timestamps tell you what is recent.\n- Vary who speaks; the same viewer never posts two lines in a row; spread delay_ms so lines arrive over the pass, streamer replies first (small delay).\n- Respect the channel rules, tone, language, blocklist and the word limit. Plain text only; emoji only per the emote policy.\n- Do not repeat anything already said in chat, by anyone. If there is genuinely nothing to add, return skip=true with an empty lines array.\n\n{{stable}}",
         user_prompt: "{{volatile}}\n\nPlan the next pass now (at most {{max_lines}} lines). Return JSON only.",
-        default_route: 'background.text', owner: 'live', metadata: { json_name: 'plan' },
+        default_route: 'background.director', owner: 'live', metadata: { json_name: 'plan' },
     },
     {
         key: 'live.viewers.reply', name: "Live: AI viewer fast reply to the streamer",
@@ -104,7 +104,7 @@ const templates = [
         output_schema: {"type": "object", "additionalProperties": false, "properties": {"memories": {"type": "array", "items": {"type": "object", "additionalProperties": false, "properties": {"bot": {"type": "string"}, "memory": {"type": "string"}}, "required": ["bot", "memory"]}}, "channel_memory": {"type": "string", "description": "running jokes / recurring topics for the whole channel, <= 90 words"}}, "required": ["memories", "channel_memory"]},
         system_prompt: "",
         user_prompt: "You maintain the memories of AI chat personas for one streaming channel.{{#channel_memory}}\n\nCurrent channel memory (running bits): {{channel_memory}}{{/channel_memory}}\n\n{{personas}}\n\nFor each persona, write an updated memory: a tight paragraph (max 90 words) of durable facts — running jokes, who they talk to, opinions they formed, recurring topics. Keep the useful old stuff, drop the trivial. Also update the channel memory (running bits everyone shares).",
-        default_route: 'background.text', owner: 'live', metadata: { json_name: 'fold' },
+        default_route: 'background.summary', owner: 'live', metadata: { json_name: 'fold' },
     },
     {
         key: 'live.viewers.clone', name: "Live: AI viewer cloned from a real chatter",
@@ -176,7 +176,7 @@ const templates = [
         output_schema: {"type": "object", "additionalProperties": false, "required": ["overview"], "properties": {"overview": {"type": "string"}}},
         system_prompt: "",
         user_prompt: "You are describing a person on a streaming site by fusing two AI summaries about them into ONE cohesive 2-4 sentence overview of who they are overall — both as a STREAMER and as a CHATTER. Be natural, specific, and not repetitive. Use their name or \"they\", never a guessed pronoun. Output ONLY the overview prose with no label or prefix.\n\nAS A STREAMER:\n{{as_streamer}}\n\nAS A CHATTER:\n{{as_chatter}}",
-        default_route: 'background.text', owner: 'live', metadata: { json_name: 'person_overview' },
+        default_route: 'background.legacy', owner: 'live', metadata: { json_name: 'person_overview' },
     },
     {
         key: 'live.stream.titles', name: "Live: short titles for past sessions",
@@ -194,7 +194,7 @@ const templates = [
         output_schema: {"type": "object", "additionalProperties": false, "required": ["ranked"], "properties": {"ranked": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["index", "score", "why"], "properties": {"index": {"type": "integer"}, "score": {"type": "integer"}, "why": {"type": "string"}}}}}},
         system_prompt: "",
         user_prompt: "These are livestream VODs with their AI summaries and popularity stats. Rank the MOST interesting/entertaining/memorable ones for a highlights showcase — favor funny, dramatic, surprising, high-energy, or unusual content over routine \"just chatting / sitting at a desk\" streams. Clips taken and peak viewers are strong signals that something notable happened.\n\n{{list}}\n\nReturn STRICT JSON only, nothing else: {\"ranked\": [{\"index\": <n>, \"score\": <1-100>, \"why\": \"<3-8 words>\"}]} for the top {{top}}, best first.",
-        default_route: 'background.text', owner: 'live', metadata: { json_name: 'moment_vod_rank' },
+        default_route: 'background.legacy', owner: 'live', metadata: { json_name: 'moment_vod_rank' },
     },
     {
         key: 'live.hero.slogans', name: 'Live: home hero audiences and quips',
@@ -203,7 +203,7 @@ const templates = [
         output_schema: {"type": "object", "additionalProperties": false, "required": ["audiences", "quips"], "properties": {"audiences": {"type": "array", "items": {"type": "string"}}, "quips": {"type": "array", "items": {"type": "string"}}}},
         system_prompt: '',
         user_prompt: "You write the rotating hero copy for OpenVibe.Live — a scrappy, open-source, community-run live-streaming site at the heart of the OpenVibe network (\"Open Live Streaming\" — good vibes, no suits). Never call anything \"free\", \"$0\" or \"no cost\". Voice: witty, warm, self-aware, anti-corporate, meme-literate, a little unhinged — but ALWAYS kind, never punching down.\n\nEverything below is REAL data about THIS community right now. Lean into it hard: reference the actual people, running jokes, recurring topics, and memes so the copy feels like an inside joke the community is in on. Reference usernames by name in good fun (no @), and NEVER mock or embarrass anyone. Talk about what they stream and say. This is the first line of the front page: nothing crude or sexual, even when chat jokes that way, and skip usernames that look like keyboard mashes (\"qweqwe\").\n\n=== GLOBAL CHAT VIBE (overview + memory + timeline) ===\n{{global}}\n\n=== PER-USER CHAT ANALYSIS (running jokes / personalities) ===\n{{users}}\n\n=== STREAMERS (what they stream) ===\n{{streamers}}\n\n=== RECENT VODS (what's been on) ===\n{{vods}}\n\n=== ACTIVE USERNAMES you may reference kindly ===\n{{usernames}}\n\n=== TASK ===\nProduce STRICT JSON, exactly this shape and nothing else:\n{\n  \"audiences\": [ {{target}} noun phrases naming WHO the site is for. The page prints the fixed headline \"Live streaming for {phrase}\" — you supply ONLY {phrase}. The words \"live\", \"streaming\", \"stream\", \"streamers\" and \"for\" must NOT appear anywhere in a phrase. Good: \"van-dwelling coders\", \"goosely's loyal 3 viewers\", \"crouton connoisseurs\". Bad: \"live streaming for coders\", \"coders live streaming\", \"for coders\". 1-5 words, lowercase (keep usernames' casing), plural people-nouns, no trailing punctuation. Mix on-theme audiences with community in-jokes drawn from the data. ],\n  \"quips\": [ {{target}} standalone one-liner taglines, punchy, <= 75 chars. Several should be clear references/memes about the real streamers, VODs, running jokes, or usernames above. ]\n}\nReturn ONLY the JSON object.",
-        default_route: 'background.text', owner: 'live', metadata: { json_name: 'hero_slogans' },
+        default_route: 'background.legacy', owner: 'live', metadata: { json_name: 'hero_slogans' },
     },
     {
         key: 'live.easter_egg', name: 'Live: the daily secret code',
@@ -212,7 +212,7 @@ const templates = [
         output_schema: {"type": "object", "additionalProperties": false, "required": ["title", "code", "clues", "effect", "reward"], "properties": {"title": {"type": "string"}, "code": {"type": "array", "items": {"type": "string"}}, "clues": {"type": "array", "items": {"type": "string"}}, "effect": {"type": "string", "enum": ["confetti", "fireworks", "matrix", "rainbow", "shake"]}, "reward": {"type": "string"}}},
         system_prompt: '',
         user_prompt: "Invent today's secret \"Konami-style\" code for OpenVibe.Live, a hobbyist live-streaming site.{{#vibe}}\nToday's community vibe (for flavour only): {{vibe}}{{/vibe}}\nReturn STRICT JSON only, nothing else:\n{\n  \"title\": \"<punchy name for today's secret, 2-5 words>\",\n  \"code\": [<5 to 7 tokens IN ORDER, each exactly one of: \"up\",\"down\",\"left\",\"right\", or a single lowercase letter a-z; use at least 2 arrows and at least 1 letter>],\n  \"clues\": [<EXACTLY one clue per token, same order, each ≤ 90 chars>],\n  \"effect\": \"<one of: confetti, fireworks, matrix, rainbow, shake>\",\n  \"reward\": \"<a short, fun congratulatory line shown when a user cracks it>\"\n}\nCLUE RULES (this is a game people must actually be able to win):\n- Clue i describes token i and ONLY token i. Never list the token literally, but make it fair: a normal person should get it in one or two guesses.\n- Arrow clues use direction imagery (\"where the sun rises\" = right, \"toward the sky\" = up, \"the way rain falls\" = down, \"the side your heart is on\" = left).\n- Letter clues MUST quote a common word that starts with that exact letter, in quotes: \"the letter that starts 'goose'\" = g, \"'vibe' begins with it\" = v. Double-check the first letter of the quoted word.\n- Keep the flavour playful and on-theme, but clarity beats cleverness.",
-        default_route: 'background.text', owner: 'live', metadata: { json_name: 'easter_egg' },
+        default_route: 'background.legacy', owner: 'live', metadata: { json_name: 'easter_egg' },
     },
     {
         key: 'live.home.star', name: 'Live: Star of OpenVibe',
@@ -221,7 +221,7 @@ const templates = [
         output_schema: {"type": "object", "additionalProperties": false, "required": ["username", "headline", "reason"], "properties": {"username": {"type": "string", "description": "exact username from the candidates"}, "headline": {"type": "string", "description": "≤ 60 chars"}, "reason": {"type": "string", "description": "≤ 170 chars, one sentence"}}},
         system_prompt: "You pick today's \"Star of OpenVibe\" — the one streamer OpenVibe.Live (a scrappy, open-source, community-run live-streaming site) rolls out the red carpet for on its home page for the next 24 hours.\nPick from the candidates ONLY (use the exact username). Spread the love: favour people who showed up and put in real hours, grew, got chat talking, or bring something different (a language, a niche, a robot, a vibe) — not just the biggest number. Small streamers who are consistent deserve their day. Never pick anyone in the \"recent stars\" list.\nWrite a \"headline\" (≤ 60 chars, punchy, warm, no quotes) and a \"reason\" (≤ 170 chars, one sentence, second person is fine, reference their real numbers or what they do — no emojis, no hashtags, no sarcasm, never mock). Output only JSON.",
         user_prompt: '{{json payload}}',
-        default_route: 'background.text', owner: 'live', metadata: { json_name: 'home_star' },
+        default_route: 'background.summary', owner: 'live', metadata: { json_name: 'home_star' },
     },
     {
         key: 'live.moments.pick', name: 'Live: pick one moment of a VOD',
@@ -239,7 +239,7 @@ const templates = [
         },
         system_prompt: '',
         user_prompt: 'Below is a single livestream VOD titled "{{title}}", described by its on-screen TIMELINE (visual scene notes) and its AUDIO TRANSCRIPT, each line timestamped [m:ss]. Titles and descriptions are about what happens.\n\nTIMELINE:\n{{timeline}}\n\nTRANSCRIPT:\n{{transcript}}\n\nSOUNDS HEARD (non-speech audio events):\n{{sounds}}\n\nViewers CLIPPED these timestamps (very strong "this was a highlight" signal): {{clipped}}\nChat activity SPIKED around: {{spikes}}\n\n{{flavor_hint}}\n{{#avoid}}ALREADY USED (a paste or clip exists there) — do NOT pick these or anything within 2 minutes of them: {{avoid}}. Find a DIFFERENT moment.{{/avoid}}\n\nFind the SINGLE most interesting/funny/dramatic/surprising/striking moment in this VOD with something clearly VISIBLE happening. Prefer moments backed by the clip/chat signals when they line up with something notable. NEVER pick a black/dark/loading/blank screen, an intro/BRB card, or a moment with no visible content or activity. {{abstain_hint}}Return STRICT JSON only, nothing else: {"at": "<the m:ss timestamp of the moment, exactly as written in the lines above>", "title": "<specific punchy 3-8 word title, not the stream name, funny, never generic>", "desc": "<one vivid sentence describing the moment>"}',
-        default_route: 'background.text', owner: 'live', metadata: { json_name: 'moment_pick' },
+        default_route: 'background.legacy', owner: 'live', metadata: { json_name: 'moment_pick' },
     },
     {
         key: 'live.moments.verify', name: 'Live: is a clip\'s title and description backed by what happened',
@@ -254,7 +254,7 @@ const templates = [
         },
         system_prompt: '',
         user_prompt: 'A clip is about to be published from the livestream "{{title}}". It is about the moment at [{{at}}].\n\nPROPOSED TITLE: {{clip_title}}\nPROPOSED DESCRIPTION: {{clip_desc}}\n\nEverything known about the minute around it, each line timestamped [m:ss]:\nSCENE NOTES:\n{{timeline}}\n\nSPEECH:\n{{transcript}}\n\nSOUNDS:\n{{sounds}}\n\nCHAT: {{chat}}\n\nCheck the title and the description against these lines only. Answer "supported" when everything they say happens in the lines. Answer "unsupported" when they name an event, an object, an action, a reaction or a person that the lines contradict or never mention, and list each such claim in "unsupported": a claim missing from the lines is unsupported, not unsure. Answer "unsure" only when there are too few lines to judge at all. A funny or punchy wording is fine; an invented event is not. Never guess. Return STRICT JSON only: {"verdict": "supported" | "unsupported" | "unsure", "unsupported": ["<each claim the lines do not back>"], "why": "<a few words>"}',
-        default_route: 'background.text', owner: 'live', metadata: { json_name: 'moment_verify' },
+        default_route: 'background.legacy', owner: 'live', metadata: { json_name: 'moment_verify' },
     },
     {
         key: 'live.stream.recap', name: 'Live: after-show report',

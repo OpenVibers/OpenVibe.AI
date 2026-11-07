@@ -112,7 +112,7 @@ t.test('a background run asks for the Flex tier and is priced at the Flex price'
     const h = await boot({ env: { ...ENV, AI_BASE_URL: `${up.url}/v1` } });
     try {
         await withFlex(h);
-        const route = await h.registry.resolveRoute('background.text');
+        const route = await h.registry.resolveRoute('background.legacy');
         assert.strictEqual(route.constraints.latency_class, 'background');
         const req = { messages: [{ role: 'user', content: 'take your time' }], maxTokens: 50 };
         const out = await h.pool.execute(route, 'chat', req, { routeKey: route.key, latencyClass: 'background' });
@@ -137,7 +137,7 @@ t.test('a Flex tier with no capacity: the same run goes again on the standard ti
     const h = await boot({ env: { ...ENV, AI_BASE_URL: `${up.url}/v1` } });
     try {
         await withFlex(h);
-        const route = await h.registry.resolveRoute('background.text');
+        const route = await h.registry.resolveRoute('background.legacy');
         const out = await h.pool.execute(route, 'chat', { messages: [{ role: 'user', content: 'take your time' }], maxTokens: 50 }, { routeKey: route.key, latencyClass: 'background' });
         assert.deepStrictEqual(seen, ['flex', null], 'the tier was asked for once, then the standard tier');
         assert.strictEqual(out.serviceTier, 'standard', 'the run ran on the standard tier');
@@ -158,7 +158,7 @@ t.test('a model that does not serve the tier falls back to the standard tier', a
     const h = await boot({ env: { ...ENV, AI_BASE_URL: `${up.url}/v1` } });
     try {
         await withFlex(h);
-        const route = await h.registry.resolveRoute('background.text');
+        const route = await h.registry.resolveRoute('background.legacy');
         const out = await h.pool.execute(route, 'chat', { messages: [{ role: 'user', content: 'take your time' }], maxTokens: 50 }, { routeKey: route.key, latencyClass: 'background' });
         assert.deepStrictEqual(seen, ['flex', null]);
         assert.strictEqual(out.serviceTier, 'standard');
@@ -171,7 +171,7 @@ t.test('the host\'s own idle model answers a background run first, and a route t
     const network = await seamServer(() => answer('from the network'));
     const h = await boot({ env: { ...ENV, AI_BASE_URL: `${network.url}/v1`, AI_LOCAL_LLM_URL: `${local.url}/v1`, AI_LOCAL_LLM_MODEL: 'local-model', AI_CREATIVE_MODEL: 'gpt-5-mini' } });
     try {
-        const route = await h.registry.resolveRoute('background.text');
+        const route = await h.registry.resolveRoute('background.legacy');
         const out = await h.pool.execute(route, 'chat', { messages: [{ role: 'user', content: 'when you have time' }], maxTokens: 50 }, { routeKey: route.key, latencyClass: 'background' });
         assert.strictEqual(out.provider, 'local', 'the host\'s own idle model answers first');
         assert.strictEqual(out.serviceTier, 'local', 'the tier is local: capacity the network already pays for');
@@ -350,7 +350,7 @@ t.test('the workflows that wait in the background are the ones the plan names', 
         }
         // The modules say the same thing: a template on a background route belongs to a background workflow, and
         // no other template moved.
-        const BACKGROUND_ROUTES = ['background.text', 'background.vision', 'background.json', 'background.creative', 'media.local', 'media.paid'];
+        const BACKGROUND_ROUTES = ['background.legacy', 'background.summary', 'background.vision', 'background.director', 'background.json', 'background.creative', 'media.local', 'media.paid'];
         for (const mod of [require('../server/workflows/live'), require('../server/workflows/products'), require('../server/workflows/media')]) {
             for (const tpl of mod.templates) {
                 const onBackground = BACKGROUND_ROUTES.includes(String(tpl.default_route || ''));

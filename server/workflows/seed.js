@@ -235,8 +235,12 @@ async function seed({ registry, quotas, config, env = process.env, db }) {
     // own idle model may answer first (server/providers/index.js). A route that names its model (the creative one
     // below) keeps that model: a small local model never writes The Rundown.
     const backgroundPool = (timeoutMs, extra = {}) => ({ 'capability': 'chat', constraints: { objective: 'correctness', latency_class: 'background', ...(authority ? { authority } : {}) }, pinned: [], fallbacks: [], options: {}, max_output_tokens: null, response_format: 'text', timeout_ms: timeoutMs, alias_of: null, ...extra });
-    await registry.seedVersioned('route', 'background.text', backgroundPool(BACKGROUND_TIMEOUT));
+    // Each one carries the Live role it serves (legacy, summary, vision, director), so a person who gave their
+    // own key a model for that role still gets it (server/providers/index.js roleOfRoute).
+    await registry.seedVersioned('route', 'background.legacy', backgroundPool(BACKGROUND_TIMEOUT));
+    await registry.seedVersioned('route', 'background.summary', backgroundPool(BACKGROUND_TIMEOUT));
     await registry.seedVersioned('route', 'background.vision', backgroundPool(BACKGROUND_TIMEOUT));
+    await registry.seedVersioned('route', 'background.director', backgroundPool(BACKGROUND_TIMEOUT));
     await registry.seedVersioned('route', 'background.json', backgroundPool(BACKGROUND_TIMEOUT, { options: { temperature: 0.3 }, max_output_tokens: 2400, response_format: 'json' }));
     await registry.seedVersioned('route', 'background.creative', backgroundPool(BACKGROUND_TIMEOUT, creativeModel ? { constraints: { objective: 'correctness', latency_class: 'background', model: creativeModel, authority: `shared:${creativeModel}` } } : {}));
     // Chat's AI members (server/workflows/chat.js): conversation text, so an alias of the chat pool.
