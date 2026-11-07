@@ -24,7 +24,7 @@ const pkg = require('../package.json');
 
 const { adminRoutes } = require('openvibe-shared/config');
 
-function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, credentials = null, preferences = null, grants = null, vault = null, settings = null, benchEvents = null, runBudgets = null, memory = null, memoryImport = null, memoryServices = null, memorySharing = null, community = null, endpoints = null, webhooks = null, presets = null, receipts = null, balance = null, gpus = null, abuse = null, priceBook = null }) {
+function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, credentials = null, preferences = null, grants = null, vault = null, settings = null, benchEvents = null, runBudgets = null, memory = null, memoryImport = null, memoryServices = null, memorySharing = null, community = null, endpoints = null, webhooks = null, presets = null, receipts = null, balance = null, gpus = null, abuse = null, priceBook = null, ownEndpoints = null }) {
     const app = express();
     // /.well-known/agent.json (openvibe-shared/agent-layer, SEO-2): what this site serves, for agents.
     require('openvibe-shared/agent-layer').mount(app, { descriptor: require('./agent-descriptor') });
@@ -116,7 +116,10 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
     openapi.mount(app);
     // OpenVibe.Exchange's read API (server/api/exchange.js): the public catalog and aggregate usage. Public on
     // purpose — the site and anyone comparing prices reads the same numbers the router ranks on.
-    app.use(require('./api/exchange').exchangeRouter({ config, db, registry, pool, quotas, env, clock, presets, receipts, auth, log }));
+    app.use(require('./api/exchange').exchangeRouter({ config, db, registry, pool, quotas, env, clock, presets, receipts, auth, log, ownEndpoints }));
+    // A person's own endpoint (the Exchange remake, product line 6): the private rent's person API and its
+    // OpenAI-compatible proxy. Only the owner's own Network user token reaches it; a service token never does.
+    if (ownEndpoints) app.use(require('./api/own-endpoints').createOwnEndpointsRouter({ endpoints: ownEndpoints, auth, config, clock, log }));
     // The public seller API: a standalone OpenAI-compatible server registered by its own https address with the
     // seller's developer key (the design's SDK gap). Its offers join the community router's trust and ledger.
     if (endpoints) app.use(require('./api/seller').sellerRouter({ endpoints, community, webhooks, auth, log }));

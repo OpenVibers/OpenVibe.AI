@@ -398,6 +398,47 @@ route('get', '/exchange/catalog', {
         models: arrayOf(exchangeModel),
     } }) },
 });
+route('get', '/exchange/endpoints', {
+    operationId: 'exchangeOwnEndpointStatus', summary: 'Your own endpoint: whether it is on, and the plain reason when it is not', tags: ['exchange'], security: [],
+    description: 'Public. Your own endpoint (the Exchange remake, product line 6) is a private GPU rent: a chosen model or your own Hugging Face weights, reached only by its owner, scaled to zero when idle, and paid for by the owner\'s Balance. It is off while the owner has no GPU provider key (ai.gpus vast.key or runpod.key), no monthly GPU cap (ai.gpus monthly_cap), or Balance billing is not on. `reason` is a plain sentence the Exchange page shows; `reasons` lists each missing piece. `models` is what a private endpoint may serve today.',
+    responses: { 200: json('The status', { type: 'object', required: ['enabled', 'reason'], properties: {
+        enabled: { type: 'boolean' },
+        reason: str(),
+        reasons: arrayOf(str()),
+        billing: { type: 'boolean' },
+        marketplace: nullable('string'),
+        idle_minutes: integer(), max_idle_minutes: integer(), max_runtime_minutes: integer(),
+        public_base: str(),
+        models: arrayOf({ type: 'object', properties: { key: str(), display_name: str(), context_window: integer(), vram_mb: integer(), gpu_names: arrayOf(str()) } }),
+    } }) },
+});
+route('get', '/own-endpoints', {
+    operationId: 'listOwnEndpoints', summary: 'The caller\'s private endpoints', tags: ['exchange'], security: [{ bearer: [] }],
+    description: 'Only the person themselves: a Network user token (audience openvibe.network or openvibe.ai) whose subject is usr_…. A service, app, module or node token is refused whatever capabilities it holds. A private endpoint is never registered as an offer, so no router and no catalogue sees it.',
+    responses: { 200: json('The endpoints and the public status', { type: 'object', required: ['endpoints'], properties: { endpoints: arrayOf({ type: 'object' }), status: { type: 'object' } } }), ...errors([401, 403]) },
+});
+route('post', '/own-endpoints', {
+    operationId: 'createOwnEndpoint', summary: 'Start a private endpoint on a chosen model or your own weights', tags: ['exchange'], security: [{ bearer: [] }],
+    description: 'Only a person. Name `model` (a key from GET /exchange/endpoints) or `weights` ({ repo, file, lora_repo?, lora_file? }: a Hugging Face .gguf and an optional LoRA, fetched by the rented container). The endpoint is started by the reconciler on the cheapest fit, after a Billing hold of its worst case; a start that would pass the owner\'s monthly cap is refused with a plain reason, and nothing is rented. 409 own_endpoint.off carries the same reason the public status does.',
+    requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: {
+        model: str(), idle_minutes: integer({ minimum: 1, maximum: 120 }),
+        weights: { type: 'object', required: ['repo', 'file'], properties: { repo: str(), file: str(), lora_repo: str(), lora_file: str() } },
+        display_name: str(),
+    } } } } },
+    responses: { 201: json('The endpoint', { type: 'object', required: ['endpoint'], properties: { endpoint: { type: 'object' } } }), 409: problem, 422: problem, ...errors([401, 403]) },
+});
+route('get', '/own-endpoints/{id}', {
+    operationId: 'getOwnEndpoint', summary: 'One of the caller\'s endpoints', tags: ['exchange'], security: [{ bearer: [] }],
+    description: 'Only its owner. The status, the price an hour, what it has charged, the public URL while it runs, and the plain reason it stopped.',
+    parameters: [path('id', str({ pattern: '^oep_[0-9A-HJKMNP-TV-Z]{26}$' }))],
+    responses: { 200: json('The endpoint', { type: 'object', required: ['endpoint'], properties: { endpoint: { type: 'object' } } }), 404: problem, ...errors([401, 403]) },
+});
+route('post', '/own-endpoints/{id}/stop', {
+    operationId: 'stopOwnEndpoint', summary: 'Give the private endpoint back', tags: ['exchange'], security: [{ bearer: [] }],
+    description: 'Only its owner. The reconciler gives the rent back; Billing settles the seconds it ran, and the price stops.',
+    parameters: [path('id', str({ pattern: '^oep_[0-9A-HJKMNP-TV-Z]{26}$' }))],
+    responses: { 200: json('The endpoint', { type: 'object', required: ['endpoint'], properties: { endpoint: { type: 'object' } } }), 404: problem, ...errors([401, 403]) },
+});
 route('get', '/exchange/models/{slug}', {
     operationId: 'exchangeModel', summary: 'One model and its offers', tags: ['exchange'], security: [],
     description: 'Public. The slug is "<org>/<model>", lowercased, e.g. deepseek/deepseek-flash.',

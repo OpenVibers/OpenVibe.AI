@@ -35,7 +35,7 @@ function memo(fn, ttlMs, clock) {
     };
 }
 
-function exchangeRouter({ db, registry, pool, quotas = null, env = process.env, clock = { now: () => Date.now() }, config = null, presets, receipts, auth, log = console }) {
+function exchangeRouter({ db, registry, pool, quotas = null, env = process.env, clock = { now: () => Date.now() }, config = null, presets, receipts, auth, log = console, ownEndpoints = null }) {
     const catalog = createCatalog({ db, registry, pool, env, clock, config });
     const usage = createUsage({ db, clock });
     // The price book's log: what a price was, what it became and when it was read.
@@ -156,6 +156,15 @@ function exchangeRouter({ db, registry, pool, quotas = null, env = process.env, 
             }
             res.json(await allFor(kind));
         } catch (err) { next(err); }
+    });
+
+    // Your own endpoint: whether it is on and, when it is off, the plain reason. Public: the Exchange page
+    // reads it before anyone signs in, and nothing here is per person.
+    r.get('/api/v1/exchange/endpoints', publicCache(30), (req, res) => {
+        res.json(ownEndpoints ? ownEndpoints.status() : {
+            enabled: false, reason: 'The GPU provider is not set up yet, so no endpoint can start.', reasons: ['The GPU provider is not set up yet, so no endpoint can start.'],
+            billing: false, models: [],
+        });
     });
 
     r.get('/api/v1/exchange/models/:slug', publicCache(30), async (req, res, next) => {

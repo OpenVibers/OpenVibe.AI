@@ -140,6 +140,14 @@ const GPU_SCHEMA = Object.freeze({
         'vast.key': {
             type: 'string', title: 'Vast.ai API key', 'x-group': GPU_GROUP, 'x-bind': 'vast.origin',
             description: "The owner's write-only Vast.ai API key, sealed to the origin above.",
+            'x-owner-input': {
+                group: 'GPUs',
+                unlocks: 'Lets OpenVibe rent a GPU on Vast.ai for OpenVibe GPUs and for a person’s own endpoint. Without it Vast.ai is never searched and nothing is rented there.',
+                get_it_at: 'https://console.vast.ai/account/',
+                get_it_how: 'Open Account → API Keys, create a key, and paste it here. It is stored locked and never shown again.',
+                test: false,
+            },
+            'x-required-for': 'own endpoints',
         },
         'runpod.origin': {
             type: 'string', title: 'RunPod origin', 'x-group': GPU_GROUP,
@@ -148,11 +156,27 @@ const GPU_SCHEMA = Object.freeze({
         'runpod.key': {
             type: 'string', title: 'RunPod API key', 'x-group': GPU_GROUP, 'x-bind': 'runpod.origin',
             description: "The owner's write-only RunPod API key, sealed to the origin above.",
+            'x-owner-input': {
+                group: 'GPUs',
+                unlocks: 'Lets OpenVibe rent a GPU on RunPod when RunPod is cheaper or Vast.ai has no fit. Without it RunPod is never searched and nothing is rented there.',
+                get_it_at: 'https://www.runpod.io/console/user/settings',
+                get_it_how: 'Open Settings → API Keys, create a key, and paste it here. It is stored locked and never shown again.',
+                test: false,
+            },
+            'x-required-for': 'own endpoints',
         },
         monthly_cap: {
             type: 'integer', title: 'Monthly GPU cap', 'x-group': GPU_GROUP, 'x-unit': 'nano_usd', 'x-danger': true,
             minimum: 0,
             description: 'The hard monthly cap for the rented GPUs, in nano-USD. The provisioner never spends past it: it refuses to start an instance and says why. Without a cap the provisioner stays off.',
+            'x-owner-input': {
+                group: 'GPUs',
+                unlocks: 'Sets the most the rented GPUs may cost you in a month. A new instance (including a person’s own endpoint) is refused before it starts when its time would pass this cap. Without it nothing is rented.',
+                get_it_at: 'https://openvibe.network/admin#ai',
+                get_it_how: 'Decide the most you are willing to spend on rented GPUs in a month, and enter it here. Lower is safer; higher lets more models and endpoints run.',
+                test: false,
+            },
+            'x-required-for': 'own endpoints',
         },
         idle_minutes: {
             type: 'integer', title: 'Idle minutes', 'x-group': GPU_GROUP,
