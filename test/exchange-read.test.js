@@ -21,9 +21,9 @@ async function insertRun({ id = uid('run'), status = 'succeeded', provider = nul
         .run(id, status, type, requester, provider, model, cachedFrom, tokensIn, tokensOut, cost, synthetic, created, created, created);
     return id;
 }
-async function insertRequest({ runId, provider, model, status = 'ok', latency = 100, created = at(0), seqNo = 0 }) {
-    await h.db.prepare(`INSERT INTO requests (run_id, seq, operation, provider_key, model_key, status, latency_ms, created_at)
-        VALUES (?, ?, 'chat', ?, ?, ?, ?, ?)`).run(runId, seqNo, provider, model, status, latency, created);
+async function insertRequest({ runId, provider, model, status = 'ok', tokensOut = 100, latency = 100, created = at(0), seqNo = 0 }) {
+    await h.db.prepare(`INSERT INTO requests (run_id, seq, operation, provider_key, model_key, status, tokens_out, latency_ms, created_at)
+        VALUES (?, ?, 'chat', ?, ?, ?, ?, ?, ?)`).run(runId, seqNo, provider, model, status, tokensOut, latency, created);
 }
 async function insertReceipt({ runId, body }) {
     await h.db.prepare(`INSERT INTO ai_receipts (id, run_id, body) VALUES (?, ?, ?::jsonb)`)

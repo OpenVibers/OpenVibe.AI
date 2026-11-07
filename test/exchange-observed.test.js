@@ -1,7 +1,7 @@
 'use strict';
-// The catalog's uptime is per real provider attempt, not per run status: a failed run counts against an
-// offer only when an attempt row names it, and an ok attempt is a success even when the run afterwards
-// failed validation (output.empty). Uptime and speed need 20 samples; below that they are null.
+// The catalog's uptime is per real provider attempt, not per run status. A failed run counts against an
+// offer only when an attempt row names it; an ok attempt is a success only when it produced output (not an
+// output.empty run, and not a text attempt that spent every token on reasoning). 20 samples before a number.
 const assert = require('assert');
 const { boot, request, suite } = require('./helpers');
 
@@ -15,16 +15,17 @@ const clock = { now: () => nowMs };
 const at = (n) => new Date(nowMs - n * 86400000).toISOString();
 const uid = (p) => `${p}_${Date.now()}_${seq++}`;
 
-async function insertRun({ id = uid('run'), status = 'succeeded', provider = null, model = null, created = at(0) } = {}) {
+async function insertRun({ id = uid('run'), status = 'succeeded', provider = null, model = null, errorCode = null, created = at(0) } = {}) {
     await h.db.prepare(`INSERT INTO runs (id, workflow_key, workflow_version, status, requester_type, requester_id, input, input_hash,
-            provider_key, model_key, created_at, started_at, finished_at)
-        VALUES (?, 'ai.complete', 1, ?, 'service', 'test', '{}', 'input-hash', ?, ?, ?, ?, ?)`)
-        .run(id, status, provider, model, created, created, created);
+            provider_key, model_key, error_code, created_at, started_at, finished_at)
+        VALUES (?, 'ai.complete', 1, ?, 'service', 'test', '{}', 'input-hash', ?, ?, ?, ?, ?, ?)`)
+        .run(id, status, provider, model, errorCode, created, created, created);
     return id;
 }
-async function insertRequest({ runId, provider = 'deepseek', model = 'deepseek-flash', status = 'ok', latency = 100, created = at(0), seqNo = 0 }) {
-    await h.db.prepare(`INSERT INTO requests (run_id, seq, operation, provider_key, model_key, status, latency_ms, created_at)
-        VALUES (?, ?, 'chat', ?, ?, ?, ?, ?)`).run(runId, seqNo, provider, model, status, latency, created);
+async function insertRequest({ runId, provider = 'deepseek', model = 'deepseek-flash', status = 'ok', operation = 'chat',
+    tokensOut = 7, latency = 100, created = at(0), seqNo = 0 }) {
+    await h.db.prepare(`INSERT INTO requests (run_id, seq, operation, provider_key, model_key, status, tokens_out, latency_ms, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(runId, seqNo, operation, provider, model, status, tokensOut, latency, created);
 }
 async function reset() {
     await h.db.prepare('DELETE FROM requests').run();
@@ -72,7 +73,7 @@ t.test('a failed run that reached no provider counts against no offer', async ()
 t.test('a failed run counts against the offer its failed attempt names', async () => {
     await reset();
     const failed = await insertRun({ status: 'failed' });
-    await insertRequest({ runId: failed, status: 'error', latency: 900 });
+    await insertRequest({ runId: failed, status: 'error', tokensOut: 0, latency: 900 });
     for (let i = 0; i < 19; i++) {
         const id = await insertRun();
         await insertRequest({ runId: id });
@@ -83,23 +84,29 @@ t.test('a failed run counts against the offer its failed attempt names', async (
     assert.strictEqual(offer.uptime, 0.95, '19 answered attempts and 1 failed attempt');
 });
 
-t.test('an ok attempt is a success even when its run failed validation', async () => {
+t.test('an ok attempt that produced no output is a failure, not a success', async () => {
     await reset();
-    // Every run failed with output.empty, but every provider attempt answered ok (production's 8 Flash runs).
-    for (let i = 0; i < 20; i++) {
-        const id = await insertRun({ status: 'failed' });
-        await insertRequest({ runId: id });
+    // 10 runs ended output.empty; their provider answered but produced nothing usable.
+    for (let i = 0; i < 10; i++) {
+        const id = await insertRun({ status: 'failed', errorCode: 'output.empty' });
+        await insertRequest({ runId: id, tokensOut: 0 });
+    }
+    // 10 more spent every output token on reasoning: tokens_out 0 with no content.
+    for (let i = 0; i < 10; i++) {
+        const id = await insertRun();
+        await insertRequest({ runId: id, operation: 'generate', tokensOut: 0 });
     }
 
     const offer = flash(await catalog());
     assert.strictEqual(offer.requests_7d, 20);
-    assert.strictEqual(offer.uptime, 1, '20 answered attempts, 0 failed attempts');
+    assert.strictEqual(offer.uptime, 0, '20 ok-but-empty Flash attempts are 20 failures');
+    assert.deepStrictEqual(offer.speed, { p50_ms: null, p95_ms: null }, 'an empty attempt is not a speed sample');
 });
 
 t.test('8 successes and 0 real failures are 100% only once 20 samples exist', async () => {
     await reset();
     for (let i = 0; i < 8; i++) {
-        const id = await insertRun({ status: 'failed' });
+        const id = await insertRun();
         await insertRequest({ runId: id });
     }
     let offer = flash(await catalog());

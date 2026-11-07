@@ -35,14 +35,14 @@ const DEEPSEEK_MODELS = [
         context_window: 1048576, max_output: 393216,
         supports: { json: true, tools: true, streaming: true, vision: true },
         cost: { in_per_mtok: 0.30, out_per_mtok: 1.20, cached_per_mtok: 0.006, source: 'https://api-docs.deepseek.com/quick_start/pricing', verified_at: '2026-11-06' },
-        metadata: { org: 'deepseek', model: 'deepseek-flash', family: 'DeepSeek', tier: 'fast', reasoning: true, configured_by: 'DEEPSEEK_API_KEY', pricing_note: 'Peak rates (01:00-04:00 and 06:00-10:00 UTC, Mon-Fri); off-peak is half: $0.15 in, $0.003 cached, $0.60 out per 1M.' },
+        metadata: { org: 'deepseek', model: 'deepseek-flash', family: 'DeepSeek', tier: 'fast', reasoning: true, reasoning_reserve_tokens: 1536, configured_by: 'DEEPSEEK_API_KEY', pricing_note: 'Peak rates (01:00-04:00 and 06:00-10:00 UTC, Mon-Fri); off-peak is half: $0.15 in, $0.003 cached, $0.60 out per 1M.' },
     },
     {
         model_key: 'deepseek-v4-pro', display_name: 'DeepSeek V4 Pro', type: 'chat',
         context_window: 1048576, max_output: 393216,
         supports: { json: true, tools: true, streaming: true, vision: false },
         cost: { in_per_mtok: 1.32, out_per_mtok: 3.96, cached_per_mtok: 0.044, source: 'https://api-docs.deepseek.com/quick_start/pricing', verified_at: '2026-11-06' },
-        metadata: { org: 'deepseek', model: 'deepseek-v4-pro', family: 'DeepSeek', tier: 'strong', reasoning: true, configured_by: 'DEEPSEEK_API_KEY', pricing_note: 'Peak rates (01:00-04:00 and 06:00-10:00 UTC, Mon-Fri); off-peak is half: $0.66 in, $0.022 cached, $1.98 out per 1M.' },
+        metadata: { org: 'deepseek', model: 'deepseek-v4-pro', family: 'DeepSeek', tier: 'strong', reasoning: true, reasoning_reserve_tokens: 1536, configured_by: 'DEEPSEEK_API_KEY', pricing_note: 'Peak rates (01:00-04:00 and 06:00-10:00 UTC, Mon-Fri); off-peak is half: $0.66 in, $0.022 cached, $1.98 out per 1M.' },
     },
 ];
 
