@@ -38,6 +38,17 @@ on (its own list price times its own batch discount), computed in nano-USD. The 
 half the retail card through Billing like every other request; this queue is a queue and a status,
 never a second ledger.
 
+**The balance is checked when the batch is submitted, and the money is taken when the answer
+arrives.** A run whose estimate does not fit the customer's Balance (or the project's budget) is
+refused before the provider is given the work, so the network never owes a provider for a run nobody
+can pay for; the item carries the reason. The hold itself is taken and settled when the answer comes
+back, so a batch that waits hours does not hold the customer's Balance in the meantime.
+
+**A waiting batch run is durable.** It waits in the database, not in the service's memory: the
+service is deployed several times a day, and a restart leaves the waiting runs queued (the provider
+is still working on them) instead of failing them. The batcher finishes them when the answer is
+there, with the ordinary settle, the ordinary receipt and the ordinary events.
+
 **Service batches.** A first-party service principal whose token carries the `ai.batches.create`
 grant may open a batch of the network's own: it is billed to the network's account (there is no
 Balance session for it) and the run's attribution names the service. The grant is checked locally by

@@ -282,6 +282,9 @@ function createBatchService({ db, runs, registry = null, community = null, price
         };
     }
 
+    /** The settle check of a batch item: the batcher rebuilds it after a restart (the plan carries the route and the charge). */
+    function settleCheckFor({ item, route, charge, batch }) { return settleCheck({ item, route, charge, batch }); }
+
     /**
      * The settle check: the run settles only if the route it really used costs at most what the customer
      * was charged. A route that costs more is refused, and the item keeps waiting.
@@ -329,7 +332,7 @@ function createBatchService({ db, runs, registry = null, community = null, price
             // The card the customer is charged: the retail card of the model they asked for. The hold takes
             // the half of it, exactly as the ordinary path does.
             const retail = model ? toCard(retailRate(model)) : null;
-            await batcher.enqueue({
+            const queued = await batcher.enqueue({
                 principal,
                 provider: route.provider,
                 model: route.model,
@@ -342,14 +345,24 @@ function createBatchService({ db, runs, registry = null, community = null, price
                 costCheck: check,
                 requestId: `batch-${batch.id}-${item.idx}`,
                 holdCard: retail,
+                route,
+                charge,
+                servicePaid: principal.kind === 'service',
             });
-            await db.prepare(`UPDATE batch_items SET status = 'running', route_provider = ?, route_model = ?, claimed_until = NULL, claimed_by = NULL, updated_at = ?
+            await db.prepare(`UPDATE batch_items SET status = 'running', run_id = ?, route_provider = ?, route_model = ?, claimed_until = NULL, claimed_by = NULL, updated_at = ?
                 WHERE batch_id = ? AND idx = ?`)
-                .run(route.provider, route.model, iso(), batch.id, item.idx);
+                .run(queued.runId || null, route.provider, route.model, iso(), batch.id, item.idx);
             return { ok: true };
         } catch (err) {
             log.warn('[batch] an item could not be queued for the provider\'s batch API: ' + String((err && err.message) || err));
-            return { ok: false, code: String((err && err.code) || 'batch.queue_failed') };
+            const code = String((err && err.code) || 'batch.queue_failed');
+            // BA2: a customer whose Balance cannot cover the run is refused here, before the provider is
+            // given the work: the item fails with the reason and the network owes nobody anything.
+            if (err && err.status === 402) {
+                await db.prepare("UPDATE batch_items SET status = 'failed', error_code = ?, error_detail = ?, claimed_until = NULL, claimed_by = NULL, updated_at = ? WHERE batch_id = ? AND idx = ?")
+                    .run(code, String((err && err.detail) || 'Not enough Balance').slice(0, 300), iso(), batch.id, item.idx);
+            }
+            return { ok: false, code };
         }
     }
 
@@ -504,7 +517,7 @@ function createBatchService({ db, runs, registry = null, community = null, price
         if (timer) { clearInterval(timer); timer = null; }
     }
 
-    return { submit, get, list, runOnce, start, stop, settings, maxItems, EXPIRED_REASON, resolveModel, finishBatch };
+    return { submit, get, list, runOnce, start, stop, settings, maxItems, EXPIRED_REASON, resolveModel, finishBatch, settleCheckFor };
 }
 
 module.exports = { createBatchService, DEFAULT_MAX_ITEMS, EXPIRED_REASON };

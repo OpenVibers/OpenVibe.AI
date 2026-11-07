@@ -9,6 +9,9 @@
  */
 const assert = require('assert');
 const http = require('http');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const { boot, request, token, suite, ALL } = require('./helpers');
 const { createOpenAiCompatibleAdapter } = require('../server/batch/providers/openai-compatible');
 
@@ -98,8 +101,8 @@ function stubProvider() {
 }
 
 /** A booted service whose shared provider is the stub, with a price card for the model. */
-async function bootWith(stub, env = {}) {
-    const h = await boot({ env: { AI_BATCH_NATIVE_MAX_ITEMS: '2', AI_BATCH_NATIVE_MAX_AGE_MS: '60000', ...env } });
+async function bootWith(stub, env = {}, dir = undefined) {
+    const h = await boot({ dir, env: { AI_BATCH_NATIVE_MAX_ITEMS: '2', AI_BATCH_NATIVE_MAX_AGE_MS: '60000', ...env } });
     await h.registry.upsertProvider({ key: 'shared', base_url: `${stub.url}/v1`, provider_access: 'OWN_DEPLOYMENT' }, { actor: 'test' });
     await h.registry.upsertModel({ provider_key: 'shared', model_key: MODEL, type: 'chat', cost: { in_per_mtok: 1, out_per_mtok: 2, source: 'urn:openvibe:ai:test', verified_at: '2026-01-01' } }, { actor: 'test' });
     return h;
@@ -281,8 +284,8 @@ t.test('a customer batch runs on the native route and is settled at half the pri
 });
 
 /** A small fake Billing: the hold and the settle, and what they were told. */
-async function fakeBilling() {
-    const state = { balance: 1000000000000n, held: 0n, holds: new Map(), settlements: [], seq: 0 };
+async function fakeBilling({ balance = 1000000000000n } = {}) {
+    const state = { balance: BigInt(balance), held: 0n, holds: new Map(), settlements: [], seq: 0 };
     const server = http.createServer((req, res) => {
         let raw = '';
         req.on('data', (c) => { raw += c; });
@@ -292,6 +295,10 @@ async function fakeBilling() {
             try { body = raw ? JSON.parse(raw) : {}; } catch { body = {}; }
             const send = (status, out) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(out)); };
             if (path === '/internal/credits/holds') {
+                const want = BigInt(String(body.max_nano_usd || '0'));
+                if (want > state.balance - state.held) {
+                    return send(402, { detail: 'not enough balance', title: 'Insufficient funds' });
+                }
                 const prev = state.holds.get(body.idempotency_key);
                 if (prev) return send(201, { hold_id: prev.hold_id, held_nano_usd: prev.held_nano_usd, available_nano_usd: String(state.balance - state.held), lease_expires_at: new Date(Date.now() + 300000).toISOString() });
                 const id = `hld_${++state.seq}`;
@@ -331,6 +338,87 @@ t.test('a first-party service with the ai.batches.create grant may open a batch 
         // A service without the grant may not open one.
         const plain = token('live', ['ai.run.create'], { sub: 'svc:live' });
         const refused = await request(h.base, 'POST', '/api/v1/batches', { tok: plain, body: { items: [{ prompt: 'a service prompt' }] } });
+        assert.strictEqual(refused.status, 403);
+        assert.strictEqual(refused.body.code, 'batch.no_grant');
+    } finally { await h.stop(); await stub.close(); }
+});
+
+t.test('a restart while the batch waits leaves the run queued, and the answer still finishes it', async () => {
+    const stub = await stubProvider();
+    const billing = await fakeBilling();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ov-batch-restart-'));
+    const env = {
+        AI_CREDITS: '1', USAGE_SAMPLES: 'off',
+        OV_BILLING_INTERNAL_URL: billing.url, OV_NETWORK_INTERNAL_URL: billing.url,
+        OV_OAUTH_CLIENT_SECRET: 'test-secret', OV_OAUTH_CLIENT_ID: 'ai',
+    };
+    const h1 = await bootWith(stub, env, dir);
+    try {
+        const ULID = '01JAB2C3D4E5F6G7H8J9K0MNPQ';
+        const PRJ = `prj_${ULID}`;
+        const appTok = token('app', ['ai.app.run'], { sub: `app:app_${ULID}`, actorType: 'app', ns: [PRJ, `app.${PRJ}.*`], extra: { project_id: PRJ, env: 'production' } });
+        const res = await request(h1.base, 'POST', '/api/v1/batches', { tok: appTok, body: { items: [{ prompt: 'a customer prompt' }], model: MODEL } });
+        assert.strictEqual(res.status, 201, res.text);
+        const run = await h1.batches.runOnce();
+        assert.strictEqual(run.route, 'native-batch');
+        assert.strictEqual(run.queued, true);
+        const item = await h1.db.prepare('SELECT * FROM batch_items WHERE batch_id = ?').get(res.body.batch.id);
+        // The group goes out to the provider.
+        await h1.db.prepare("UPDATE batch_queue SET created_at = ? WHERE status = 'queued'").run(new Date(Date.now() - 60000).toISOString());
+        await h1.batcher.submitOnce();
+        assert.strictEqual(stub.state.calls.filter((c) => c.path === '/v1/batches').length, 1);
+        // The service goes away with the run still waiting for the provider.
+        await h1.stop();
+
+        // A restart on the same database: the run is still waiting, so it is not interrupted.
+        const h2 = await bootWith(stub, env, dir);
+        try {
+            const row = await h2.db.prepare('SELECT status FROM runs WHERE id = ?').get(item.run_id);
+            assert.strictEqual(row.status, 'queued', 'the restart did not fail the waiting run');
+            // The provider answers, and the run finishes on the ordinary path.
+            const providerBatch = stub.state.batches.keys().next().value;
+            stub.answer(providerBatch, { text: {} });
+            await h2.batcher.pollOnce();
+            const done = await h2.db.prepare('SELECT * FROM runs WHERE id = ?').get(item.run_id);
+            assert.strictEqual(done.status, 'succeeded');
+            assert.ok(String(done.output).includes('answer for'), 'the run carries the provider\'s answer');
+            assert.ok(Number(done.cost_usd) > 0, 'the run carries the batch cost');
+            assert.ok(billing.state.settlements.length >= 1, 'the customer was charged the ordinary way');
+        } finally { await h2.stop(); }
+    } finally { await stub.close(); await billing.close(); }
+});
+
+t.test('a customer who cannot pay is refused before the provider is given the work', async () => {
+    const stub = await stubProvider();
+    const billing = await fakeBilling({ balance: 1n });
+    const h = await bootWith(stub, {
+        AI_CREDITS: '1', USAGE_SAMPLES: 'off',
+        OV_BILLING_INTERNAL_URL: billing.url, OV_NETWORK_INTERNAL_URL: billing.url,
+        OV_OAUTH_CLIENT_SECRET: 'test-secret', OV_OAUTH_CLIENT_ID: 'ai',
+    });
+    try {
+        const ULID = '01JAB2C3D4E5F6G7H8J9K0MNPQ';
+        const PRJ = `prj_${ULID}`;
+        const appTok = token('app', ['ai.app.run'], { sub: `app:app_${ULID}`, actorType: 'app', ns: [PRJ, `app.${PRJ}.*`], extra: { project_id: PRJ, env: 'production' } });
+        const res = await request(h.base, 'POST', '/api/v1/batches', { tok: appTok, body: { items: [{ prompt: 'a customer prompt' }], model: MODEL } });
+        assert.strictEqual(res.status, 201, res.text);
+        const run = await h.batches.runOnce();
+        assert.strictEqual(run.queued, false);
+        assert.strictEqual(run.error, 'billing.insufficient_funds');
+        // The provider was never asked to do the work: nobody owes it anything.
+        assert.strictEqual(stub.state.calls.filter((c) => c.path === '/v1/batches').length, 0);
+        const item = await h.db.prepare('SELECT * FROM batch_items WHERE batch_id = ?').get(res.body.batch.id);
+        assert.strictEqual(item.status, 'failed');
+        assert.strictEqual(item.error_code, 'billing.insufficient_funds');
+    } finally { await h.stop(); await stub.close(); await billing.close(); }
+});
+
+t.test('a token without ai.batches.create is refused even when it carries every other AI capability', async () => {
+    const stub = await stubProvider();
+    const h = await bootWith(stub);
+    try {
+        const every = token('live', ALL, { sub: 'svc:live' });
+        const refused = await request(h.base, 'POST', '/api/v1/batches', { tok: every, body: { items: [{ prompt: 'a service prompt' }], model: MODEL } });
         assert.strictEqual(refused.status, 403);
         assert.strictEqual(refused.body.code, 'batch.no_grant');
     } finally { await h.stop(); await stub.close(); }

@@ -521,6 +521,34 @@ function createCredits({ config, db = null, registry = null, env = process.env, 
         startSettlements: settlements ? () => settlements.start() : () => null,
         stopSettlements: settlements ? () => settlements.stop() : () => {},
         /**
+         * BA2: can this payer cover a run of this size at this card?
+         *
+         * The check is a real hold (Billing answers 402 when the Balance is short) that is released at
+         * once: nothing is reserved for a run that has not answered yet, and the money itself is taken
+         * when the answer arrives. A batch asks this before the provider is given the work, so a customer
+         * who cannot pay is refused before the network owes the provider anything.
+         *
+         * → { ok: true } when the payer can cover it, { ok: false, reason } when it cannot.
+         */
+        async probe({ requestId, ctx = {}, input = {}, card = null, provider = null, model = null, access = null, maxTokens = 4096 } = {}) {
+            if (!card) return { ok: true, skipped: 'no card' };
+            // The probe holds under its own key: the run's own hold (taken when the answer arrives) must
+            // not find the key taken.
+            const session = manager.begin({ requestId: `probe:${String(requestId || ctx.runId || '')}`, ctx, input, attribution: ctx.attribution || null, onBehalfOf: ctx.onBehalfOf || null, personPayer: ctx.personPays !== false });
+            if (!session) return { ok: true, skipped: 'no payer' };        // nobody pays: the network carries the run
+            try {
+                await session.holdRoute({ card, provider, model, access, maxTokens });
+            } catch (err) {
+                if (err && (err.status === 402 || err.code === 'billing.insufficient_funds')) {
+                    return { ok: false, reason: 'billing.insufficient_funds', detail: String((err && err.detail) || 'Not enough Balance') };
+                }
+                throw err;
+            }
+            await session.release().catch(() => null);
+            return { ok: true };
+        },
+
+        /**
          * Begin a request's Balance session, or null when there is no payer (the pool then refuses paid offers
          * that carry a versioned card), when an app names no project, or for a BYOK run (no managed route).
          */

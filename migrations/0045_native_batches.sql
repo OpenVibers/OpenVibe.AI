@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS batch_queue (
     prompt        text COLLATE "C" NOT NULL,
     request_body  text COLLATE "C" NOT NULL,             -- the provider's own request body (JSON)
     hold_card     text COLLATE "C",                       -- the retail card the customer is charged on (JSON)
+    plan          text COLLATE "C",                       -- what a restarted service needs to finish the run (JSON)
     status        text COLLATE "C" NOT NULL DEFAULT 'queued'
                   CHECK (status IN ('queued', 'submitted', 'settling', 'succeeded', 'failed', 'expired', 'rerouted')),
     job_id        text COLLATE "C" REFERENCES provider_batches (id) ON DELETE SET NULL,

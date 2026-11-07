@@ -107,7 +107,7 @@ function routePinRequest(value, principal, wf) {
     return { provider, model };
 }
 
-function createRuns({ db, registry, engine, cache, quotas, config, clock = { now: () => Date.now() }, log = console, userModules = null, credentials = null, preferences: personPreferences = null, tiers = null, projectSecrets = null, pool = null, runBudgets = null, credits = null, community = null, presets = null, receipts = null, abuse = null, webhooks = null }) {
+function createRuns({ db, registry, engine, cache, quotas, config, clock = { now: () => Date.now() }, log = console, userModules = null, credentials = null, preferences: personPreferences = null, tiers = null, projectSecrets = null, pool = null, runBudgets = null, credits = null, community = null, presets = null, receipts = null, abuse = null, webhooks = null, batchWaiting = null }) {
     const inflight = new Map();     // run id -> { controller, promise, release, caller }
     // BA2: the runs that wait for a provider's own batch API: they are created at once and finish later.
     const deferred = new Map();     // run id -> { controller, scope, ctx, input, hold, resolveDone }
@@ -333,7 +333,8 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         // The calling service's own budget (a run token's registered budget): with it, a run for a named person may
         // use paid capacity, counted against that budget; without it, only free capacity serves the run.
         const tokenBudget = runBudgets && principal.jti ? await runBudgets.spent(principal.jti) : null;
-        const serviceBudgeted = Boolean(tokenBudget && (tokenBudget.budget_usd != null || tokenBudget.budget_tokens != null));
+        // BA2: a batch of the network's own is paid by the network: the batcher says so on the principal.
+        const serviceBudgeted = Boolean(principal && principal.servicePaid) || Boolean(tokenBudget && (tokenBudget.budget_usd != null || tokenBudget.budget_tokens != null));
         // Spend safety (server/free-tier.js, server/providers/index.js): a run nobody pays for — the free
         // allowance (a service naming a person, without their own token) or the Exchange's anonymous Try it (its
         // service token, no person and no run-token budget, on ai.complete) — may use only offers from
@@ -1082,8 +1083,22 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
     async function recoverInterrupted() {
         return await db.tx(async () => {
             const open = await db.prepare("SELECT id FROM runs WHERE status IN ('queued', 'running')").all();
-            const r = await db.prepare("UPDATE runs SET status = 'failed', error_code = 'run.interrupted', error_detail = 'the service restarted while this run was in progress', finished_at = ? WHERE status IN ('queued', 'running')").run(iso(clock.now()));
-            for (const { id } of open) await events.runChanged(await getRow(id));
+            // BA2: a run that waits for a provider's batch answer is not interrupted. It waits in the queue
+            // (the database, not this process), the provider is still working on it, and the batcher finishes
+            // it when the answer is there - after this restart too. Failing it here would lose the answer
+            // the provider is already going to charge us for.
+            const waiting = new Set();
+            if (batchWaiting) {
+                for (const { id } of open) {
+                    if (await batchWaiting(id)) waiting.add(id);
+                }
+            }
+            const interrupted = open.filter(({ id }) => !waiting.has(id));
+            if (!interrupted.length) return 0;
+            const placeholders = interrupted.map(() => '?').join(',');
+            const r = await db.prepare(`UPDATE runs SET status = 'failed', error_code = 'run.interrupted', error_detail = 'the service restarted while this run was in progress', finished_at = ? WHERE status IN ('queued', 'running') AND id IN (${placeholders})`)
+                .run(iso(clock.now()), ...interrupted.map(({ id }) => id));
+            for (const { id } of interrupted) await events.runChanged(await getRow(id));
             return r.changes;
         });
     }
@@ -1104,8 +1119,13 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
     /** Shutdown: in-flight runs end as failed/run.interrupted (retryable), never as a silent loss. */
     async function drain() {
         shuttingDown = true;
-        // BA2: the runs that wait for a batch answer are released too, so the shutdown is not held by them.
-        for (const d of deferred.values()) { d.controller.abort(); d.resolveDone(); }
+        // BA2: a run that waits for a provider's batch answer is not interrupted by the shutdown: it stays
+        // queued, the provider keeps working on it, and the batcher finishes it after the restart. It is
+        // released here (its promise resolves, so the shutdown is not held by it) and never aborted.
+        for (const [id, d] of deferred) {
+            d.resolveDone();
+            inflight.delete(id);
+        }
         deferred.clear();
         for (const h of inflight.values()) { h.controller.abort(); h.release(); }
         await Promise.allSettled([...inflight.values()].map(h => h.promise));
@@ -1119,19 +1139,81 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
      * A run that is already finished (or was never a batch run) is left alone: two pollers can never
      * finish the same run twice.
      */
-    async function completeBatch(id, answer) {
-        const d = deferred.get(String(id));
-        if (!d) return null;
-        deferred.delete(String(id));
-        const ctx = { ...d.ctx, batchAnswer: Promise.resolve(answer) };
+    async function completeBatch(id, answer, { plan = null, costCheck = null } = {}) {
+        const key = String(id);
+        const d = deferred.get(key);
+        if (d) {
+            deferred.delete(key);
+            const ctx = { ...d.ctx, batchAnswer: Promise.resolve(answer), ...(costCheck ? { costCheck } : {}) };
+            try {
+                const reserved = await quotas.reserve(ctx).catch(() => null);
+                await execute(key, { controller: d.controller, reserved, scope: d.scope, ctx, input: d.input, hold: d.hold });
+            } finally {
+                if (d.hold && tiers && tiers.release) await tiers.release(d.hold).catch(() => {});
+                d.resolveDone();
+            }
+            return get(key);
+        }
+        // The service restarted while the run waited: everything execute() needs is rebuilt from the
+        // database - the run row, the run's input and the plan the batcher stored with the item.
+        const row = await getRow(key);
+        if (!row) return null;
+        if (TERMINAL.has(row.status)) return null;                 // it already finished, or it was cancelled
+        const data = plan || {};
+        // The answer is the provider's own batch answer, exactly as in the fast path.
+        const ctx = { ...(await rebuildCtx(row, data, costCheck)), batchAnswer: Promise.resolve(answer) };
+        const input = data.input && typeof data.input === 'object' ? data.input : parseJson(row.input, {});
+        const controller = new AbortController();
+        let hold = null;
+        if (tiers) {
+            try { hold = await tiers.admit(ctx, key); }
+            catch (err) { log.warn(`[runs] ${key}: the tier budget refused the finished batch run: ${(err && err.message) || err}`); }
+        }
         try {
             const reserved = await quotas.reserve(ctx).catch(() => null);
-            await execute(String(id), { controller: d.controller, reserved, scope: d.scope, ctx, input: d.input, hold: d.hold });
+            await execute(key, { controller, reserved, scope: null, ctx, input, hold });
         } finally {
-            if (d.hold && tiers && tiers.release) await tiers.release(d.hold).catch(() => {});
-            d.resolveDone();
+            if (hold && tiers && tiers.release) await tiers.release(hold).catch(() => {});
         }
-        return get(String(id));
+        return get(key);
+    }
+
+    /**
+     * BA2: the context a finished batch run needs, rebuilt from the run row and the plan the batcher
+     * stored with the item. Only the fields the run's completion reads are here; the plan's principal
+     * snapshot holds the fields create() reads, and never a token.
+     */
+    async function rebuildCtx(row, data, costCheck) {
+        const opts = parseJson(row.options, {});
+        const attribution = parseJson(row.attribution, null);
+        const onBehalfOf = parseJson(row.on_behalf_of, null);
+        const principal = data.principal || {};
+        // The person the run was made for: the row names them, and the options say whether they pay.
+        const personSubject = opts.person_pays !== undefined ? (onBehalfOf && onBehalfOf.id ? String(onBehalfOf.id) : null) : null;
+        const tokenBudget = runBudgets && principal.jti ? await runBudgets.spent(principal.jti).catch(() => null) : null;
+        const serviceBudgeted = Boolean(principal.servicePaid)
+            || Boolean(tokenBudget && (tokenBudget.budget_usd != null || tokenBudget.budget_tokens != null));
+        const isApp = principal.kind === 'app';
+        return {
+            requesterType: row.requester_type,
+            requesterId: row.requester_id,
+            ...(principal.jti ? { runJti: principal.jti } : {}),
+            actorKey: subjectKey(onBehalfOf),
+            targetKey: row.target_key,
+            attributionKey: entityKey(attribution),
+            workflowKey: row.workflow_key,
+            ...(isApp ? { appRun: true, projectId: principal.projectId, sandbox: principal.env === 'sandbox', appId: principal.appId } : {}),
+            onBehalfOf: personSubject || principal.onBehalfOf || null,
+            personSubject,
+            personPays: Boolean(opts.person_pays),
+            serviceBudgeted,
+            freeUse: false,                                        // a batch run is never the anonymous Try it
+            ...(data.discount ? { discount: String(data.discount) } : {}),
+            ...(data.maxCostNano != null ? { maxCostNano: String(data.maxCostNano) } : {}),
+            ...(costCheck ? { costCheck } : {}),
+            latencyClass: row.latency_class || 'batch',
+            runId: row.id,
+        };
     }
 
     /** Queue depth for /metrics and /api/ready: runs waiting for a slot, and runs holding one. */

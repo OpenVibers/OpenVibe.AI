@@ -80,7 +80,7 @@ function toCard(rate) {
     };
 }
 
-function createBatcher({ db, runs, registry, config = {}, clock = { now: () => Date.now() }, log = console, env = process.env, fetchImpl = globalThis.fetch, batches = null } = {}) {
+function createBatcher({ db, runs, registry, credits = null, config = {}, clock = { now: () => Date.now() }, log = console, env = process.env, fetchImpl = globalThis.fetch, batches = null } = {}) {
     // The batch service is attached after the batcher is built (the service needs the batcher too).
     const native = (config.batches && config.batches.native) || {};
     const settings = {
@@ -151,27 +151,91 @@ function createBatcher({ db, runs, registry, config = {}, clock = { now: () => D
     }
 
     /**
+     * The plan of a waiting run: what a restarted service needs to finish it. It holds the principal
+     * snapshot (only the fields create() reads, never a token), the run's input, the card the run is
+     * charged at, and the route it went to.
+     */
+    function planOf({ principal, input, card, maxTokens, discount, maxCostNano, requestId, route, charge, servicePaid }) {
+        return {
+            principal: {
+                kind: principal.kind || null,
+                sub: principal.sub || null,
+                subject: principal.subject || null,
+                onBehalfOf: principal.onBehalfOf || null,
+                jti: principal.jti || null,
+                appId: principal.appId || null,
+                projectId: principal.projectId || null,
+                projectKey: principal.projectKey || null,
+                env: principal.env || null,
+                cap: Array.isArray(principal.cap) ? principal.cap : null,
+                ns: Array.isArray(principal.ns) ? principal.ns : null,
+                servicePaid: Boolean(servicePaid),
+            },
+            input: input || null,
+            card: card || null,
+            maxTokens: Number(maxTokens) || 4096,
+            discount: discount || null,
+            maxCostNano: maxCostNano == null ? null : String(maxCostNano),
+            requestId: requestId || null,
+            route: route || null,
+            charge: charge || null,
+        };
+    }
+
+    /** Who pays for the run, and at what discount: the payer's own view of it. */
+    function payerCtx(principal, { discount, maxCostNano, requestId }) {
+        const app = principal.kind === 'app';
+        const person = !app && principal.subject && principal.subject.type === 'user' ? String(principal.subject.id) : null;
+        return {
+            ...(app ? { appId: principal.appId || null, projectId: principal.projectId || null } : {}),
+            onBehalfOf: person,
+            personPays: Boolean(person),
+            discount: discount || null,
+            maxCostNano: maxCostNano == null ? null : String(maxCostNano),
+            runId: requestId || null,
+        };
+    }
+
+    /**
      * Put one item in the queue. The run is created at once (so the customer sees it, and its latency
      * class says 'batch'), but it waits for the provider instead of running.
      */
-    async function enqueue({ principal, provider, model, prompt, kind = 'service', customer = null, deadlineHours = null, discount = null, prefer = null, costCheck = null, requestId = null, maxTokens = 4096, holdCard = null }) {
+    async function enqueue({ principal, provider, model, prompt, kind = 'service', customer = null, deadlineHours = null, discount = null, prefer = null, costCheck = null, requestId = null, maxTokens = 4096, holdCard = null, route = null, charge = null, servicePaid = false, maxCostNano = null }) {
         if (settings.enabled === false) throw new AiError(503, 'batch.disabled', 'native batches are not open on this service');
         const cfg = providerConfig(provider);
         if (!cfg || !cfg.enabled) throw new AiError(422, 'batch.no_native_api', 'this provider has no verified batch API');
         const cards = await cardsFor(provider, model);
         if (!cards) throw new AiError(422, 'batch.no_price_card', 'this provider has no price card for that model');
-        const body = { workflow: 'ai.complete', input: { messages: [{ role: 'user', content: prompt }] } };
+        const body = { workflow: 'ai.complete', options: { latency: 'batch' }, input: { messages: [{ role: 'user', content: prompt }] } };
+        const input = body.input;
+        // The money check, before the provider is given the work: a customer whose Balance cannot cover
+        // the run at the card it will be charged is refused here, so the network never owes a provider
+        // for a run nobody can pay for. The money itself is taken when the answer arrives.
+        if (credits && holdCard) {
+            const verdict = await credits.probe({
+                requestId,
+                ctx: payerCtx(principal, { discount, maxCostNano, requestId }),
+                input,
+                card: holdCard,
+                provider,
+                model,
+                access: cards.access,
+                maxTokens,
+            });
+            if (!verdict.ok) throw new AiError(402, String(verdict.reason || 'billing.insufficient_funds'), String(verdict.detail || 'Not enough Balance'));
+        }
         // The principal carries the flag: only the batcher sets it, so no caller can hold a run open.
-        const created = await runs.create(body, { ...principal, deferBatch: true }, { requestId, discount, prefer, costCheck });
+        const created = await runs.create(body, { ...principal, deferBatch: true, servicePaid: Boolean(servicePaid) }, { requestId, discount, prefer, costCheck });
         const id = `bni_${crypto.randomBytes(10).toString('hex')}`;
         const hours = Number(deadlineHours) > 0 ? Number(deadlineHours) : Number(settings.deadlineHours) || 24;
         const deadline = new Date(clock.now() + hours * 3600 * 1000).toISOString();
         const providerBody = { model, messages: [{ role: 'user', content: prompt }], max_tokens: maxTokens };
-        await db.prepare(`INSERT INTO batch_queue (id, run_id, kind, batch_id, idx, provider, model, prompt, request_body, hold_card, status, deadline_at, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)`)
+        const plan = planOf({ principal, input, card: holdCard, maxTokens, discount, maxCostNano, requestId, route, charge, servicePaid });
+        await db.prepare(`INSERT INTO batch_queue (id, run_id, kind, batch_id, idx, provider, model, prompt, request_body, hold_card, plan, status, deadline_at, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)`)
             .run(id, created.run.id, kind, customer ? customer.batchId : null, customer ? customer.idx : null,
                 provider, model, prompt, JSON.stringify(providerBody),
-                holdCard ? JSON.stringify(holdCard) : null, deadline, iso(), iso());
+                holdCard ? JSON.stringify(holdCard) : null, JSON.stringify(plan), deadline, iso(), iso());
         return { id, runId: created.run.id, cards };
     }
 
@@ -255,6 +319,10 @@ function createBatcher({ db, runs, registry, config = {}, clock = { now: () => D
         if (running) return { skipped: 'running' };
         running = true;
         try {
+            // An item that was being settled when the service stopped goes back into the queue: the
+            // provider's answer is still there, and the run must not wait for ever.
+            await db.prepare("UPDATE batch_queue SET status = 'submitted', updated_at = ? WHERE status = 'settling' AND updated_at <= ?")
+                .run(iso(), new Date(clock.now() - Math.max(1000, Number(settings.claimTtlMs) || 0)).toISOString());
             const job = await claimJob();
             if (!job) return { skipped: 'no batch' };
             const adapter = await adapterFor(job.provider);
@@ -336,6 +404,8 @@ function createBatcher({ db, runs, registry, config = {}, clock = { now: () => D
             .get(iso(), item.id).catch(() => null);
         if (!claimed) return false;
         const cards = await cardsFor(item.provider, item.model);
+        // The plan the item was queued with: what a restarted service needs to finish this run.
+        const plan = item.plan ? JSON.parse(item.plan) : {};
         const usage = (res && res.ok && res.usage) || { input: 0, output: 0, cached: 0, cache_write: 0 };
         const net = Math.max(0, Number(usage.input || 0) - Number(usage.cached || 0) - Number(usage.cache_write || 0));
         const nano = cards && cards.batch
@@ -354,12 +424,13 @@ function createBatcher({ db, runs, registry, config = {}, clock = { now: () => D
                 access: cards ? cards.access : 'UNVERIFIED',
                 explain: { objective: 'batch', reasons: [`answered by the provider's own batch API (${item.provider})`], selected: `batch:${item.provider}`, candidates: [], attempts: [] },
                 serviceTier: 'batch',
-            });
+                maxTokens: plan.maxTokens || 4096,
+            }, { plan, costCheck: await checkFor(item, plan) });
             await db.prepare(`UPDATE batch_queue SET status = 'succeeded', answer = ?, usage = ?, cost_nano_usd = ?, updated_at = ? WHERE id = ?`)
                 .run(String((res.output && res.output.text) || '').slice(0, 20000), JSON.stringify(usage), String(nano), iso(), item.id);
         } else {
             const err = (res && res.error) || { code: 'batch.no_answer', detail: 'the provider did not answer this request' };
-            await runs.completeBatch(item.run_id, { ok: false, error: { code: String(err.code || 'batch.item_failed').slice(0, 80), detail: String(err.detail || '').slice(0, 400) } });
+            await runs.completeBatch(item.run_id, { ok: false, error: { code: String(err.code || 'batch.item_failed').slice(0, 80), detail: String(err.detail || '').slice(0, 400) } }, { plan });
             await db.prepare(`UPDATE batch_queue SET status = 'failed', error_code = ?, error_detail = ?, updated_at = ? WHERE id = ?`)
                 .run(String(err.code || 'batch.item_failed').slice(0, 80), String(err.detail || '').slice(0, 400), iso(), item.id);
         }
@@ -377,13 +448,27 @@ function createBatcher({ db, runs, registry, config = {}, clock = { now: () => D
             const claimed = await db.prepare(`UPDATE batch_queue SET status = 'settling', updated_at = ? WHERE id = ? AND status = 'submitted' RETURNING id`)
                 .get(iso(), item.id).catch(() => null);
             if (!claimed) continue;
-            await runs.completeBatch(item.run_id, { reroute: true });
+            await runs.completeBatch(item.run_id, { reroute: true }, { plan: item.plan ? JSON.parse(item.plan) : {} });
             await db.prepare(`UPDATE batch_queue SET status = 'rerouted', error_code = 'batch.rerouted', error_detail = ?, updated_at = ? WHERE id = ?`)
                 .run(String(reason || '').slice(0, 300), iso(), item.id);
             await writeBack(item);
         }
         await db.prepare(`UPDATE provider_batches SET status = 'expired', error_code = 'batch.rerouted', error_detail = ?, finished_at = ?, updated_at = ?, claimed_until = NULL, claimed_by = NULL WHERE id = ?`)
             .run(String(reason || '').slice(0, 300), iso(), iso(), job.id);
+    }
+
+    /**
+     * The settle check of a customer item, rebuilt after a restart: the batch service knows the rule (the
+     * route's own price against what the customer paid, and the loss budget), and the item's row and the
+     * plan carry what the rule needs.
+     */
+    async function checkFor(item, plan) {
+        if (!service || !plan.route || !plan.charge || !item.batch_id) return null;
+        const batch = await db.prepare('SELECT * FROM batches WHERE id = ?').get(item.batch_id).catch(() => null);
+        if (!batch) return null;
+        const row = await db.prepare('SELECT * FROM batch_items WHERE batch_id = ? AND idx = ?').get(item.batch_id, item.idx).catch(() => null);
+        if (!row) return null;
+        return service.settleCheckFor({ item: row, route: plan.route, charge: plan.charge, batch });
     }
 
     /** Write the item's outcome back onto the customer's batch item, and close the batch when it is done. */

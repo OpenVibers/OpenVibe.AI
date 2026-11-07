@@ -129,6 +129,11 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
             if (!credits) throw new AiError(503, 'billing.unavailable', 'Billing Credits is not configured on this service');
             return credits.begin(o);
         },
+        // BA2: the balance check a batch asks before the provider is given the work.
+        async probe(o) {
+            if (!credits) return { ok: true, skipped: 'no credits' };
+            return credits.probe(o);
+        },
         pendingSettlements() { return credits ? credits.pendingSettlements() : Promise.resolve([]); },
         drainSettlements(o) { return credits ? credits.drainSettlements(o) : Promise.resolve({ skipped: 'disabled' }); },
         startSettlements() { return credits ? credits.startSettlements() : null; },
@@ -139,7 +144,13 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     // a GPU key and a monthly cap AND Balance billing is on; the public status says which one is missing.
     const ownEndpoints = require('./gpu/endpoints').createOwnEndpoints({ db, gpus, credits: creditsRef, config, clock, fetchImpl, log });
     gpus.attachEndpoints(ownEndpoints);
-    const runs = createRuns({ db, registry, engine, cache, quotas, config, clock, log, userModules, credentials, preferences, tiers, projectSecrets, pool, runBudgets, credits: creditsRef, community, presets, receipts, abuse, webhooks });
+    const runs = createRuns({ db, registry, engine, cache, quotas, config, clock, log, userModules, credentials, preferences, tiers, projectSecrets, pool, runBudgets, credits: creditsRef, community, presets, receipts, abuse, webhooks,
+        // BA2: a run that waits for a provider's batch answer is not interrupted by a restart: it stays
+        // queued until the batcher finishes it (the provider is still working on it).
+        batchWaiting: async (runId) => {
+            const row = await db.prepare("SELECT 1 AS one FROM batch_queue WHERE run_id = ? AND status IN ('queued', 'submitted', 'settling') LIMIT 1").get(runId).catch(() => null);
+            return Boolean(row);
+        } });
     await seed({ registry, quotas, config, env, db });
     // The seed creates or moves providers from the environment: publish their origins (the schema and every key's
     // bind follow), so a key is bound to the host it is for from the first boot.
@@ -173,7 +184,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     // harmless questions and publishes how often it refused them. Due-based, like the price book.
     const refusal = require('./refusal/job').createRefusalJob({ db, registry, pool, config, env, clock, log });
     // The native batcher (BA2): the providers' own batch APIs, behind one queue.
-    const batcher = require('./batch/batcher').createBatcher({ db, runs, registry, config, clock, log, env, fetchImpl });
+    const batcher = require('./batch/batcher').createBatcher({ db, runs, registry, credits: creditsRef, config, clock, log, env, fetchImpl });
     // The half-price batches (server/batch/): many prompts, answered later, billed through Billing.
     const batches = require('./batch/service').createBatchService({ db, runs, registry, community, priceBook: offPeak, batcher, config, clock, log });
     batcher.attach(batches);
