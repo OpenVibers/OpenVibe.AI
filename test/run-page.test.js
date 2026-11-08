@@ -198,8 +198,10 @@ t.test('a service token or an expired token starts no person session; a bad stat
     assert.strictEqual((await get(`/auth/callback?code=${code}&state=wrong`, flow)).status, 400);
 });
 
-t.test('a run receipt is personal: no console page and no API is opened by the person cookie', async () => {
-    assert.strictEqual((await get('/console', runIds.adaCookie)).status, 401);
+t.test('a run receipt is personal: operator pages move to Exchange and no API is opened by the person cookie', async () => {
+    const consolePage = await get('/console', runIds.adaCookie);
+    assert.strictEqual(consolePage.status, 301);
+    assert.strictEqual(consolePage.headers.get('location'), 'https://openvibe.exchange/console');
     assert.strictEqual((await get(`/api/v1/runs/${runIds.ok}`, runIds.adaCookie)).status, 401);
 });
 

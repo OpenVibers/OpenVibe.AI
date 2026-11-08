@@ -35,7 +35,11 @@ function adminRouter({ config = {}, db, registry, pool, quotas, cache, runs, aut
     const defWrite = auth.requireCap(CAPS.workflowManage);
     const usageRead = auth.requireCap(CAPS.usageRead);
     const wrap = (fn) => async (req, res) => { try { const out = await fn(req, res); if (out !== undefined) res.json(out); } catch (err) { sendError(res, err, req.ov, log); } };
-    const actor = (req) => ({ actor: req.principal.sub, trace: req.ov.traceId });
+    const actor = (req) => {
+        const delegated = String(req.get('x-ov-subject') || '');
+        const isExchange = String(req.principal && req.principal.sub || '').replace(/^svc:/, '') === 'exchange';
+        return { actor: isExchange && /^usr_[0-9A-HJKMNP-TV-Z]{26}$/.test(delegated) ? delegated : req.principal.sub, trace: req.ov.traceId };
+    };
     // Operators see the billing profile and shared pool name (migrations/0008) alongside the secret reference:
     // names only, never a value.
     const view = async (p) => { const v = await ops.providerView(p); return v && { ...v, billing_profile: p.billing_profile, pool_key: p.pool_key }; };

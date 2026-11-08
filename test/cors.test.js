@@ -62,7 +62,9 @@ t.test('public GET preflight succeeds; rejected origin or method gets no CORS he
 
 t.test('token and console routes never receive CORS headers', async () => {
     for (const [method, path] of [['GET', '/api/v1/runs'], ['OPTIONS', '/api/v1/runs'], ['GET', '/console'], ['OPTIONS', '/console'], ['GET', '/auth/login']]) {
-        const r = await request(h.base, method, path, { headers: { Origin: allowed, 'Access-Control-Request-Method': 'GET' } });
+        // Inspect the legacy routes' own answers. Following their redirects lands on a human page that
+        // may establish its own browser session and has a different CORS policy.
+        const r = await request(h.base, method, path, { redirect: 'manual', headers: { Origin: allowed, 'Access-Control-Request-Method': 'GET' } });
         assertNoCors(r.headers);
     }
     for (const path of ['/stats/extra', '/release.json/extra']) {

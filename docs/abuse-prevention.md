@@ -69,7 +69,7 @@ last week's per-minute baseline for that bucket. Above `AI_ABUSE_VELOCITY_MIN_TO
 `abuse.throttled` row goes to the operator audit log. The rate limit above records `abuse.rate_limited` the same
 way.
 
-Operators see both on `/console/abuse`, and the gauge `ai_abuse_throttles{reason}` (events in the last 15 minutes)
+Operators see both on [Exchange's abuse page](https://openvibe.exchange/console/abuse), and the gauge `ai_abuse_throttles{reason}` (events in the last 15 minutes)
 is on `/metrics`. OpenVibe.Host's `deploy/prometheus/openvibe-rules.yml` raises `OpenVibeAiAbuseThrottling`
 (severity ticket) above 20 in 15 minutes.
 

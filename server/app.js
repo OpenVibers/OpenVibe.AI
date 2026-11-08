@@ -221,21 +221,26 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
     // dashboard, an API for Exchange. Nothing here writes an offer; the offer belongs to Network and the Link owner.
     if (community) app.use('/api/v1', require('./api/community').communityRouter({ community, auth, log }));
     app.use(adminRouter({ config, db, registry, pool, quotas, cache, runs, auth, settings, ops, log }));
-    // The operator console (/console, /auth/*): Network staff, server-rendered, no scripts (server/console).
+    app.use(require('./api/console-data').consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth, clock, fetchImpl, gpus, abuse, priceBook, creditGrants, sessionCookies, vault, settings, config, log }));
+    // The operator console moved to OpenVibe.Exchange. Keep the legacy AI paths as permanent redirects;
+    // run receipts still use the person-session routes below and the AI JSON admin APIs stay here.
     // Person sessions are separate, read-only and open one run receipt each (server/person-session.js).
     const personSessions = createPersonSessions({ db, config, clock });
     // The person's own AI settings (L36 Y1/Y3): their keys under owner `self`, and their routing preferences. Only
     // the person's Network token or their AI site session (same origin) reaches them; a service token is refused.
     if (credentials && preferences && grants) {
         app.use(require('./me').meRouter({ credentials, preferences, grants, auth, registry, config, clock, log, personSessions, sessionCookies, sendError: (res, err, ctx) => sendError(res, err, ctx, log) }));
-        // The same settings as a page for people (GET /you, plain forms on AI's own person session).
-        app.use(require('./you-page').youPageRouter({ credentials, preferences, grants, personSessions, config, log, machines: pool && pool.machines }));
     }
-    app.use(consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, env, clock, fetchImpl, log, vault, settings, personSessions, abuse, priceBook, creditGrants, sessionCookies }));
+    // The person's human settings moved to Exchange; keep the JSON API here for first-party clients.
+    app.use('/you', (req, res) => res.redirect(301, `${config.exchangeUrl}/privacy/keys${req.originalUrl.includes('?') ? req.originalUrl.slice(req.originalUrl.indexOf('?')) : ''}`));
+    app.use('/console', (req, res) => res.redirect(301, `${config.exchangeUrl}${req.originalUrl}`));
+    app.get('/auth/login', (req, res) => res.redirect(301, `${config.exchangeUrl}/auth/login${req.originalUrl.includes('?') ? req.originalUrl.slice(req.originalUrl.indexOf('?')) : ''}`));
+    // Person sign-in for /runs/:id shares the console SSO router, but the legacy operator pages are intercepted above.
+    app.use(consoleRouter({ config, db, registry, env, clock, fetchImpl, log, personSessions }));
     app.use(runPageRouter({ runs, personSessions, log }));
 
     // ── The public pages moved to OpenVibe.Exchange (2026-11-07) ────
-    // ai.openvibe.services keeps the API, a run's receipt and the operator console. Every human page it used
+    // ai.openvibe.services keeps the API and a run's receipt. Every human page it used
     // to serve answers 301 to its Exchange home: the page map is exact, an unknown human path goes to the home,
     // and no API path is ever redirected. The site's page list, price page, update log, legal pages and
     // crawl artifacts moved with it.
@@ -261,8 +266,8 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
             'GET  /api/v1/workflows | templates | routes | providers | models | quotas | usage | audit',
             'GET  /api/health, /api/ready, /release.json',
             'GET  /runs/:id  your run receipt (OpenVibe.Network sign-in; your own runs only)',
-            'GET  /you        your own provider keys and how your AI is paid (OpenVibe.Network sign-in)',
-            'GET  /console     the operator console (OpenVibe.Network staff sign-in)',
+            `GET  ${EXCHANGE}/privacy/keys   your own provider keys and session cookies`,
+            `GET  ${EXCHANGE}/console        owner-only AI operator console`,
             '',
             'Callers authenticate with OpenVibe.Network tokens (audience openvibe.ai): first-party service tokens, or a',
             "developer app's token (ai.app.run) on the six direct operations and GET /api/v1/runs/:id.",

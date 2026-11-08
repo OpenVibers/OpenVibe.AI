@@ -34,7 +34,7 @@ t.test('the home: a browser is sent to Exchange, curl still gets the API index',
         assert.strictEqual(text.status, 200, String(accept));
         assert.match(text.headers.get('content-type'), /^text\/plain/, String(accept));
         assert.ok(text.text.startsWith('OpenVibe.AI: providers, models, routing'), String(accept));
-        assert.ok(text.text.includes('POST /api/v1/runs') && text.text.includes('GET  /runs/:id') && text.text.includes('GET  /console'), String(accept));
+        assert.ok(text.text.includes('POST /api/v1/runs') && text.text.includes('GET  /runs/:id') && text.text.includes(`${EXCHANGE}/console`), String(accept));
         assert.ok(text.text.includes(`${EXCHANGE}/`), 'the text index names the new home');
     }
     await moved('/?format=markdown', '/index.md');
@@ -70,13 +70,19 @@ t.test('an unknown human page goes to the Exchange home; an unknown API path sta
     }
 });
 
-t.test('the machine and session routes are not redirected', async () => {
+t.test('console paths redirect to Exchange while machine and receipt routes stay on AI', async () => {
     const health = await request(h.base, 'GET', '/api/health');
     assert.strictEqual(health.status, 200);
     assert.strictEqual(health.body.status, 'ok');
     const release = await request(h.base, 'GET', '/release.json');
     assert.strictEqual(release.status, 200);
-    for (const p of ['/console', '/runs/run_01J0000000000000000000000', '/auth/login']) {
+    await moved('/console', '/console');
+    await moved('/console/providers?tab=all', '/console/providers?tab=all');
+    await moved('/llms.txt', '/llms.txt');
+    await moved('/auth/login', '/auth/login');
+    await moved('/you', '/privacy/keys');
+    await moved('/you?allow=actor&provider=openai', '/privacy/keys?allow=actor&provider=openai');
+    for (const p of ['/runs/run_01J0000000000000000000000', '/auth/person/login']) {
         const r = await request(h.base, 'GET', p, { headers: { Accept: BROWSER }, redirect: 'manual' });
         assert.ok(!location(r).startsWith(EXCHANGE), `${p} stays on this origin (${r.status} ${location(r)})`);
     }

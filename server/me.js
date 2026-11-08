@@ -15,9 +15,9 @@
  * `on_behalf_of`, whatever capabilities it holds (memory rule, AI #204/#205): a Codes run token holds ai.run.create,
  * so a capability check alone would admit an agent. `ai.me.*` are person capabilities, never a service's.
  *
- * Writes are stricter than reads. A user token must carry audience `openvibe.ai` explicitly: a token minted for
- * `openvibe.network` is every OpenVibe site's session, and a site's server holding it must not be able to point a
- * person's prompts at its own endpoint or delete their keys. Such a token may still read (hints and settings only).
+ * Writes are stricter than reads. A user token must carry audience `openvibe.ai` explicitly, except Exchange may
+ * forward the signed-in person's `openvibe.network` token from its configured same-origin server request. Service
+ * tokens are always refused, including those with on_behalf_of; no caller can write another person's credentials.
  * AI's own person session must prove same-origin for a write: with neither Origin nor Sec-Fetch-Site the write is
  * refused, so a site cannot use the cookie with a bare request. Reads keep accepting that cookie as before.
  *
@@ -51,7 +51,12 @@ function sameOrigin(req, config, { write = false } = {}) {
     if (!site && !origin) return !write;
     if (site && site !== 'same-origin' && site !== 'none') return false;
     if (origin) {
-        try { return new URL(origin).origin === new URL(config.baseUrl).origin; } catch { return false; }
+        try {
+            const actual = new URL(origin).origin;
+            return [config.baseUrl, config.exchangeUrl].some((base) => {
+                try { return actual === new URL(base).origin; } catch { return false; }
+            });
+        } catch { return false; }
     }
     return true;
 }
@@ -84,9 +89,13 @@ function meRouter({ credentials, preferences, grants, auth, registry, config, cl
                     return http.sendProblem(res, 403, 'capability.denied', { detail: "a principal token is not accepted on the person's own route", ctx });
                 }
                 if (claims.on_behalf_of != null) return http.sendProblem(res, 403, 'capability.denied', { detail: 'a token acting on behalf of someone is not the person themselves', ctx });
-                // A token minted for openvibe.network is every OpenVibe site's session: it may read hints and settings,
-                // but a write needs a token whose aud explicitly names AI itself.
-                if (write && !audiencesOf(claims).includes(WRITE_AUDIENCE)) {
+                // A token minted for openvibe.network is every OpenVibe site's session. It may write only when the
+                // request came from Exchange (which holds the user's token in its httpOnly session),
+                // or when the person minted an AI-audience token directly. No service token can enter this route.
+                const audiences = audiencesOf(claims);
+                const exchangeWrite = audiences.includes('openvibe.network') && sameOrigin(req, config, { write: true })
+                    && req.get('origin') && new URL(req.get('origin')).origin === new URL(config.exchangeUrl).origin;
+                if (write && !audiences.includes(WRITE_AUDIENCE) && !exchangeWrite) {
                     return http.sendProblem(res, 403, 'capability.denied', { detail: 'a write needs a user token for audience openvibe.ai; a site session token may only read these settings', ctx });
                 }
                 const subject = SUBJECT_RE.test(String(claims.subject_id || '')) ? claims.subject_id : (SUBJECT_RE.test(String(claims.sub || '')) ? claims.sub : '');
@@ -126,7 +135,11 @@ function meRouter({ credentials, preferences, grants, auth, registry, config, cl
             const saved = await credentials.putSelf(personOf(req), body.provider, body);
             return { credential: { id: saved.provider, kind: 'api_key', provider: saved.provider, created: saved.created_at, label: body.label || saved.provider } };
         }));
-        r.get('/api/v1/me/credentials/:id/balance', guard, run(async (req) => ({ balance: await sessionCookies.balance('self', personOf(req), req.params.id) })));
+        r.get('/api/v1/me/credentials/:id/balance', guard, run(async (req) => {
+            const cookieBalance = await sessionCookies.balance('self', personOf(req), req.params.id);
+            if (cookieBalance) return { balance: cookieBalance };
+            return { balance: await credentials.balanceSelf(personOf(req), req.params.id) };
+        }));
         r.delete('/api/v1/me/credentials/:id', guard, async (req, res) => { try { const gone = await sessionCookies.remove('self', personOf(req), req.params.id) || await credentials.removeSelf(personOf(req), req.params.id); res.status(gone ? 204 : 404).end(); } catch (err) { sendError(res, err, req.ov); } });
     }
     r.put('/api/v1/me/credentials/:provider', guard, run(async (req) => {
