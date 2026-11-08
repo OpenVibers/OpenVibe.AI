@@ -55,7 +55,7 @@ t.test('a service that may not use the key is refused, and the answer says where
     assert.strictEqual(res.status, 403, res.text);
     assert.strictEqual(res.body.error.code, 'ai.credential_not_allowed');
     assert.ok(res.body.error.message.includes('allow actor to use your openai key'), res.text);
-    assert.ok(res.body.error.message.includes('/you?allow=actor&provider=openai'), 'the detail names the page');
+    assert.ok(res.body.error.message.includes('https://openvibe.exchange/privacy/keys?allow=actor&provider=openai'), 'the detail names the Exchange page');
     assert.ok(!res.text.includes(DANA_KEY), 'the key is not in the error');
 });
 

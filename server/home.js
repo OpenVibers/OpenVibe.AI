@@ -428,6 +428,8 @@ function llmsTxt({ siteUrl }) {
         ],
     });
     const optional = seo.llmsTxt({ name: '', sections: [], optional: [
+        { title: 'Owner AI operator console', url: 'https://openvibe.exchange/console' },
+        { title: 'Your keys and accounts', url: 'https://openvibe.exchange/privacy/keys' },
         { title: 'What shipped on OpenVibe.AI', url: `${siteUrl}/updates` },
         { title: 'Source (AGPL-3.0)', url: SOURCE },
         { title: 'Sitemap', url: `${siteUrl}/sitemap.xml` },

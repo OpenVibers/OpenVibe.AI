@@ -240,7 +240,7 @@ const GPU_SCHEMA = Object.freeze({
             'x-owner-input': {
                 group: 'gpus',
                 unlocks: 'Lets AI rent GPUs up to this amount each month. Without a cap nothing is rented, even with a key.',
-                get_it_at: 'https://ai.openvibe.services/console/gpus',
+                get_it_at: 'https://openvibe.exchange/console/gpus',
                 get_it_how: 'Pick the most you are happy to spend on GPUs in a month; the GPU page shows what this month has cost so far.',
                 test: false,
             },

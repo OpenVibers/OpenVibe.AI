@@ -2,8 +2,8 @@
 // L36 Y1/Y3/Y7/Y8: the person's own provider keys and how their runs route.
 //   - GET/PUT/DELETE/POST /api/v1/me/credentials and GET/PUT /api/v1/me/ai/preferences are person-only: a service
 //     token (with or without on_behalf_of) is refused, so is another site's cookie session;
-//   - a token minted for openvibe.network (every site's session) may read but never write; a write needs aud
-//     openvibe.ai, and a cookie write needs Origin or Sec-Fetch-Site;
+//   - a token minted for openvibe.network may read; Exchange may write from its configured origin, while other
+//     writes need aud openvibe.ai;
 //   - a key is sealed with the AAD self|subject|provider and never returned, logged or put in an error;
 //   - test on save lists models, falls back to a one-token request, records 401 and a timeout;
 //   - a run on_behalf_of a person tries their self key first, only_my_keys never falls back, and the explain names
@@ -74,7 +74,7 @@ t.test('the person routes refuse a service token, an on_behalf_of token, and ano
     assert.deepStrictEqual([r.status, r.body.code], [403, 'capability.denied'], 'another site cannot spend the session');
 });
 
-t.test('a site session token may read but never write; a token for openvibe.ai may write', async () => {
+t.test('a site session token may read; Exchange may write for that signed-in person; a service token remains refused', async () => {
     let r = await request(h.base, 'GET', '/api/v1/me/credentials', { tok: siteSession });
     assert.strictEqual(r.status, 200, 'a site token reads the hints');
     r = await request(h.base, 'GET', '/api/v1/me/ai/preferences', { tok: siteSession });
@@ -90,7 +90,19 @@ t.test('a site session token may read but never write; a token for openvibe.ai m
         r = await request(h.base, method, path, { tok: siteSession, body });
         assert.deepStrictEqual([r.status, r.body.code], [403, 'capability.denied'], `${method} ${path} refused a site session token: ${r.text}`);
     }
-    // A token whose aud explicitly names openvibe.ai reaches the writes.
+    r = await request(h.base, 'POST', '/api/v1/me/credentials', {
+        tok: siteSession, headers: { Origin: 'https://untrusted.example' },
+        body: { provider: 'gemini', key: API_KEY },
+    });
+    assert.deepStrictEqual([r.status, r.body.code], [403, 'capability.denied'], 'another site cannot forward a network session into a credential write');
+    // Exchange forwards the signed user's site token server-to-server from its allowlisted origin.
+    r = await request(h.base, 'POST', '/api/v1/me/credentials', {
+        tok: siteSession, headers: { Origin: 'https://openvibe.exchange' },
+        body: { provider: 'gemini', key: API_KEY },
+    });
+    assert.strictEqual(r.status, 200, r.text);
+    assert.ok(!r.text.includes(API_KEY), 'Exchange receives metadata only');
+    // A token whose aud explicitly names openvibe.ai reaches the writes without an Exchange origin.
     r = await request(h.base, 'PUT', '/api/v1/me/ai/preferences', { tok: person, body: prefsBody });
     assert.strictEqual(r.status, 200, r.text);
 });

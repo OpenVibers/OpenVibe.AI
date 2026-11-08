@@ -310,9 +310,9 @@ function createCredentials({ db, config, clock = { now: () => Date.now() }, fetc
      * the person: it names the page and carries the two values the page needs.
      */
     function allowHint(service, provider) {
-        const base = String(config.baseUrl || 'https://ai.openvibe.services').replace(/\/+$/, '');
+        const base = String(config.exchangeUrl || 'https://openvibe.exchange').replace(/\/+$/, '');
         const q = new URLSearchParams({ allow: String(service || ''), provider: String(provider || '') });
-        return `allow ${service} to use your ${provider} key at ${base}/you?${q.toString()}`;
+        return `allow ${service} to use your ${provider} key at ${base}/privacy/keys?${q.toString()}`;
     }
 
     /**
@@ -382,6 +382,16 @@ function createCredentials({ db, config, clock = { now: () => Date.now() }, fetc
     }
     async function hasSelf(subject) {
         return (await selfRows(subject)).length > 0;
+    }
+
+    /** A person's provider balance, when that provider exposes one; the key stays inside AI. */
+    async function balanceSelf(subject, provider) {
+        const own = await selfForRun(subject, provider);
+        if (!own || !own.apiKey) return null;
+        const base = own.base_url || PROVIDER_BASE_URL[provider];
+        if (!base) return null;
+        const balance = await balanceOf(provider, base, own.apiKey, doFetch, testTimeout());
+        return balance == null ? null : { provider, balance };
     }
 
     /** A person's own credential for one provider (no key returned to the caller; server-side use only). */
@@ -587,7 +597,7 @@ function createCredentials({ db, config, clock = { now: () => Date.now() }, fetc
 
     return {
         put, get, remove, admit, forRun, spentToday, providerKeyFor,
-        listSelf, hasSelf, selfForRun, selfForAllRuns, putSelf, removeSelf, testSelf, markFailed, getSelfNode, putSelfNode, removeSelfNode,
+        listSelf, hasSelf, selfForRun, selfForAllRuns, putSelf, removeSelf, testSelf, balanceSelf, markFailed, getSelfNode, putSelfNode, removeSelfNode,
         allowedProvidersWithKey, consentUse,
     };
 }

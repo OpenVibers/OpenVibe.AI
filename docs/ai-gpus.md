@@ -82,7 +82,7 @@ money, their destroy failures and their measured cold start are in `gpu_instance
 
 ## The console page
 
-`GET /console/gpus` (the "GPUs" entry in the console) shows whether the provisioner is on and why not,
+`GET https://openvibe.exchange/console/gpus` (the "GPUs" entry in the console) shows whether the provisioner is on and why not,
 the spend this month, the committed worst case and the cap, the models with their weights and their
 state, the measured cold start (from the launch to the first answered request), and every instance
 with its price (the hour and the second), endpoint, cold start and money. "Start" and "Stop" write a request row;
@@ -169,7 +169,7 @@ instances continue cleanup when these switches are unset. Quote previews show th
 price; the live placement audit records base, allowance and total separately.
 No new accounts, payment methods or provider keys are created.
 
-`GET /console/gpus/:model/quote?strategy=cheapest` previews without a Billing hold or provider
+`GET https://openvibe.exchange/console/gpus/:model/quote?strategy=cheapest` previews without a Billing hold or provider
 purchase. Exchange uses the public, minute-cached `/api/v1/exchange/gpu-quotes/:model` and can
 preview even when rentals are disabled. A private-endpoint create may include `strategy`;
 the choice persists on the endpoint. Every live GPU choice is recorded as `gpu.placement`

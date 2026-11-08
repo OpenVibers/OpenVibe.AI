@@ -5,8 +5,8 @@
 **Status:** alpha (roadmap Wave 13). Deployed on the host since 2026-09-23 on `127.0.0.1:4700` and in
 production use: OpenVibe.Live runs with `AI_SERVICE=remote` and Network's footer copy runs
 `network.site_copy` here. Public since 2026-10-07 at [ai.openvibe.services](https://ai.openvibe.services):
-the API (`ai.app.run`, the OpenAI-compatible `/v1`), a run's receipt (`/runs/:id`), a person's own provider
-keys (`/you`) and the operator console.
+the API (`ai.app.run`, the OpenAI-compatible `/v1`) and a run's receipt (`/runs/:id`). The operator console and
+personal credential settings live on OpenVibe.Exchange.
 **The public site moved to [openvibe.exchange](https://openvibe.exchange) on 2026-11-07:** the home, prices
 and latency, the changelog, the legal pages and the discovery files answer 301 there on an exact page map
 (`server/app.js`), while every API route on this origin is unchanged. The content and the map are in
@@ -31,13 +31,14 @@ owns publication truth: Wiki, Blog, News, Live, … decide what to publish.
 - people's own provider keys (`ai.credential.manage`), encrypted at rest, one per provider (Codes C3: `anthropic`,
   `openai`, `deepseek`, `minimax`, `openrouter` or a `custom` endpoint), and per-streamer
   attribution quotas (`ai.quota.attribution.manage`)
-- **"Your AI" (L36 Y1/Y3/Y8):** the person's own keys under the reserved owner `self` for every console provider
+- **"Your AI" (L36 Y1/Y3/Y8):** the person's own keys under the reserved owner `self` for every supported provider
   (Anthropic, OpenAI, Gemini, DeepSeek, Mistral, xAI, Groq, Cerebras, Together, Fireworks, OpenRouter, MiniMax and a
   custom endpoint), tested on save (its models, or one token) with status, `models_count` and a redacted `last_error`;
   their `only_my_keys`, `free_first`, price ceiling and default model per kind of work; a run `on_behalf_of` a person
   tries their keys first, `explain.paid_by` and the attempts name who paid and why each failed, and a 401/403 marks the
   key failing and publishes `ai.credential.failed` (`/api/v1/me/*`, `server/me.js`; only the person's own token or
-  AI-site session, never a service token or `on_behalf_of`)
+  AI-site session, never a service token or `on_behalf_of`). The person's settings UI is on
+  [OpenVibe.Exchange](https://openvibe.exchange/privacy/keys).
 - a person's own computer as their provider (credential provider `node`, contracts 0.220.0): a model on their own
   machine (Ollama, LM Studio, llama.cpp through the OpenVibe Link), reached through OpenVibe.Bot with `bot.machine.ai`
   for that person only, free and with no key (`server/machines.js`; Bot on this host by default, `OV_BOT_INTERNAL_URL`);
@@ -141,7 +142,7 @@ idempotent replay):
 | `GET /api/v1/usage/series?days=N` (N 1–90) — aggregate demand per UTC day and model: requests, successes and the four token totals, never a caller id or text (`AI_USAGE_SERIES=on`) | `ai.usage.read` |
 | `GET /api/health`, `GET /api/ready`, `GET /release.json` | public |
 | `GET /metrics` | direct loopback callers only (a request carrying X-Forwarded-For gets 404) |
-| `GET /console…`, `/auth/login\|callback`, `POST /auth/logout` | Network staff, signed in (see [Operator console](#operator-console)) |
+| `GET /console…` | 301 to the same path on [OpenVibe.Exchange](https://openvibe.exchange/console) |
 | `GET /runs/:id` — one run's receipt (status, workflow, model, cost, times, output or error; never the input) | the run's person, signed in (see [Run receipts](#run-receipts)) |
 | `GET /auth/person/login\|callback` | any Network person, for a run receipt |
 | `GET /robots.txt` | public: disallows `/console`, `/runs`, `/auth/`, `/api/` |
@@ -478,47 +479,9 @@ AI takes one on these routes alone, and every other route refuses `env: sandbox`
 
 ## Operator console
 
-`/console` on ai.openvibe.services (roadmap WS-O task 4) is a server-rendered staff console: no
-JavaScript, one inline stylesheet allowed by its CSP hash, `noindex` (meta and `X-Robots-Tag`),
-`no-store`, disallowed in `robots.txt`, in no sitemap. It does not load the OpenVibe Frame (the Frame
-needs scripts and inline styles), like Billing's staff console. Code: `server/console/`.
+The owner-only AI operator console is on [OpenVibe.Exchange](https://openvibe.exchange/console). It uses Exchange sign-in and Exchange's page shell; Exchange reads and writes AI's JSON admin API with the `exchange` service grant. The old `ai.openvibe.services/console` paths return 301 to the matching Exchange path. AI keeps its JSON admin APIs and run receipts, not operator-console HTML.
 
-| Page | What it shows |
-|---|---|
-| `/console` | providers needing attention, runs and failures of the last 24 h by error code, today's spend, the queue, the busiest quota windows |
-| `/console/providers` | every provider (kind, status, **secret reference name and whether it resolves, never a value**, circuit, base URL without query/user info, default model, priority/timeout) and the models; for the owner, per provider: replace its key, register a model (with prices typed from the provider's own price page, which the form requires) |
-| `/console/providers/new` | the owner adds a provider in a few clicks: DeepSeek, OpenRouter, Groq, Gemini, Mistral, Together, Fireworks, Cerebras, xAI, OpenAI, Anthropic or any OpenAI-compatible API (`server/console/presets.js`), with its API key, which is kept sealed in the config store, bound to the provider's origin (`vault:<provider>`, below) |
-| `/console/routes/:key` (owner form) | **use another provider**: a new route version whose primary is the provider and model chosen, with the previous primary kept as the first fallback; **back to the default** writes the newest seeded version again |
-| `/console/routes`, `/templates`, `/workflows` (`/:key[?version=]`) | every key's newest version and the version in use; per key every version with its status and content (primary and fallbacks in order, prompts, steps, schemas) |
-| `/console/runs` | runs newest first, filtered by status (tabs), workflow, requester (`live` = `service:live`), error code and a UTC time range; failed runs grouped by error code |
-| `/console/runs/:id` | versions used, provider/model, fallback, attempts, tokens, cost, the Billing reading with its delivery state, free share and last send error, error code and detail, requester/attribution/target, grounding, citations, the request log (hashes only), and the stored input/output **bounded**: strings cut at 240 characters, lists at 20 items, 6 KB in all, credential-named keys blanked; raw debug fields never |
-| `/console/quotas`, `/console/usage` | active quotas with their current windows and counters, every quota; usage by day, requester, workflow and provider/model over a day range (`quotas.usage`); the **free allowance this period** per subject × provider × metric (free used, allowance, remaining, period end; `quotas.freeAllowance.current()`); the `platform.usage-sample@1` readings by delivery state (queued, retrying, sent, failed) and the last send errors with their run. Staff only: the public `/stats` page never shows a subject |
-| `/console/exchange` | AI Exchange operational state, only with `AI_CREDITS` and/or `AI_ROUTING_EVIDENCE` on: the Credits settle queue's counts by status (queued, sent, review), the oldest queued row's age, the review rows (hold id, request id, tries, last error, created) with one **mark resolved** action that never retries, and the four settle-body usage counts only; per deployment samples, success and timeout rates, TTFT and decode EWMA and cache-hit ratio; the incumbents per decision key with the challenger and its streak |
-| `/console/cache` | live entries and hits by workflow |
-| `/console/audit` | the `audit_log`, filtered by kind (configuration changes by default, runs, AI Exchange, console, everything), action, actor, target |
-
-**Who may use what.** Sign-in is OpenVibe.Network SSO (authorization code + PKCE S256 as OAuth client
-`ai`; the refresh token is revoked at once). The staff claims of the Network token (contracts staff
-map, `policy.staff-role-map@1`) are mapped to AI's own capability ids, and each page and action needs
-the same one the admin API does:
-
-| Network staff capability | Held by | Console capability | Allows |
-|---|---|---|---|
-| `staff.site.view` | admin, owner | `ai.usage.read` | open the console, read every page |
-| `staff.ai.manage` | admin, owner | `ai.workflow.manage` | set a route/template/workflow version's status; cancel a queued or running run; mark a Credits settle review row resolved (never retried) |
-| `staff.secrets.manage` | owner | `ai.provider.manage` | add a provider with its key, replace a key, register a model, choose a route's provider and model, enable/disable a provider, reset its circuit, add/change a quota, purge the cache (one workflow, or all with a confirmation) |
-
-A `global_mod` (only `staff.console.access`), a user or a token without a `usr_` subject is refused
-(403, no session, audited as `console.sign_in.refused`). The session (`__Host-ovai_staff`, host-only,
-HttpOnly, Secure, SameSite=Strict, `AI_CONSOLE_SESSION_TTL_MIN` = 60 min absolute; only its hash is
-stored in `console_sessions`) keeps the sign-in token's staff claims and the mapping is applied again
-on every request. Every POST needs the session's CSRF token and a same-origin request. Writes go
-through the same functions as the admin API (`server/ops.js`, `registry.setStatus`, `quotas.upsert`,
-`runs.cancel`), so each writes the same `audit_log` row with the person's `usr_…` subject as actor
-(API changes show `svc:…`); sign-ins, sign-outs and refused requests are audited as `console.*`. New
-versions of routes, templates and workflows, models and provider records are still created through
-the admin API only. There is no drill mode in AI; the console starts nothing (no timer, no outbound
-call) until someone signs in.
+A person's provider keys and supported browser session cookies are managed at [Your keys and accounts](https://openvibe.exchange/privacy/keys). AI's `/api/v1/me/credentials` endpoints remain person-authenticated JSON APIs; list and balance responses contain metadata only, never secret values.
 
 ## Run receipts
 
@@ -737,7 +700,7 @@ OpenRouter's public model list is read as well, but only as a second opinion; no
 
 A price never changes silently. Every change lands in the `price_changes` log with the old price, the new
 price, the listing it was read from and the day it was read. A change of **more than 20%** waits there for the
-owner, who approves or rejects it on the operator console (`/console/pricebook`, `ai.provider.manage`); a
+owner, who approves or rejects it on the operator console ([price book](https://openvibe.exchange/console/pricebook), `ai.provider.manage`); a
 smaller one the job applies at once, and the model row carries the new price with the day it was checked. A
 listing that cannot be read leaves every price alone: an unreadable page is not evidence of a change. A price a
 person typed by hand is never touched.
@@ -1010,7 +973,7 @@ mix vectors from different providers (re-embed when the provider changes).
 | The shared compiled-schema cache (caller-supplied schemas) is an LRU bounded by count and bytes, in Ajv too | `test/schemas.test.js` |
 | Token and capability denial, namespaces, no secret values in any response, runs private to the requester | `test/auth.test.js` |
 | Developer apps: `ai.app.run` on the six direct operations and `GET /runs/:id`, 403 on every other route, project-scoped runs, readings and free allowance per project, govern tiers keyed by the project, sandbox and ungoverned runs free/local capacity only, a byok profile and `credential` never selected | `test/app-access.test.js` |
-| Operator console: SSO + PKCE, staff-only (anonymous → sign-in, non-staff 403), the staff → AI capability map, CSRF on every write, no script/secret on any page, noindex/robots, failed-run filters, audit rows from API and console changes | `test/console.test.js` |
+| Operator console: owner-only pages and controls on Exchange; AI keeps JSON admin APIs and redirects the old paths | Exchange `test/console-merge.test.js`, AI `test/home.test.js` |
 | Public price/latency page: 200 without auth, rows from seeded stats and rate cards, the empty state, no caller ids, own-key providers, URLs or secrets | `test/stats-page.test.js` |
 | The OpenAI Responses adapter (`kind: responses`) with a stubbed fetch: request shape, output and usage parsing, `text.format`, error mapping, the key never in an error | `test/provider-responses.test.js` |
 | Ported adapters against fake OpenAI/Anthropic servers, stub determinism, whisper filter, templates | `test/providers.test.js` |
@@ -1030,8 +993,8 @@ Reporting a vulnerability: [SECURITY.md](SECURITY.md). The rules the code keeps:
 - **Auth.** Every API route needs a Network service token for audience `openvibe.ai`, with the route's
   capability and, for runs, a namespace its `ns` claim allows. Runs are private to their requester.
   A developer-app token is accepted only on `ai.app.run`'s routes ([Developer apps](#developer-apps)),
-  where it acts as its project; every other route refuses it. The operator console is Network staff
-  only, signed in with SSO and PKCE, with CSRF on every write.
+where it acts as its project; every other route refuses it. The owner-only operator console is on OpenVibe.Exchange;
+AI's admin JSON endpoints still require their named capabilities.
 - **Secrets.** Shared provider keys are `env:NAME` references, never values; a person's own key is
   AES-256-GCM encrypted with `AI_CREDENTIALS_KEY`, bound to its owner and subject, and never returned
   (a four-character hint only). No response, log or console page carries a secret value.
