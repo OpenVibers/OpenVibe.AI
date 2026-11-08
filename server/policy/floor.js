@@ -17,7 +17,8 @@
  * (server/policy/classifiers.js):
  *
  *   the first line   Live's rule (a child together with a bare body) and Vision's `classifyText` (`minor_sexual`)
- *   the second line  no house classifier has a word for consent, so a narrow list names it
+ *   the second line  no house classifier has a word for consent, so narrow lists name it (unambiguous words alone;
+ *                    the words that need context only next to something sexual)
  *   the third line   no house classifier has a word for a weapon, so a narrow list names it
  *
  * The narrow lists are deliberately narrow, so an ordinary question ("how do I kill a stuck process", "cp -r src
@@ -39,14 +40,56 @@ const { minorNude, classifyText } = require('./classifiers');
 
 /** Words for a child and sex together (the clearest form of the first line, and the house has no word for it). */
 const CSAM = /\b(?:child\s?(?:porn|porno|abuse|sexual)|cp\s(?:content|video|series)\b|kiddie\s?(?:porn|porno)|pedophile|pedophilia|paedophile|paedophilia)\b/i;
-/** Non-consensual sex, and incest: refused wherever they appear, a story included. */
-const NONCONSENSUAL = /\b(?:rape|raped|rapes|raping|rapist|sexual assault|sexual abuse|molest(?:ed|ing|s)?|incest|statutory rape|non-?consensual|without (?:her|his|their|my) consent|she (?:said|said no|didn't consent|did not consent)|he (?:said no|didn't consent|did not consent)|they (?:said no|didn't consent|did not consent)|took advantage of (?:her|him|them)|she was (?:drugged|drunk|asleep|unconscious)|drugged (?:her|him|them)|unconscious (?:sex|woman|girl|man)|forced (?:sex|himself|herself|them)|coerc(?:e|ed|ing|ion)|groom(?:ed|ing)?|traffick(?:ed|ing)?|deepfake(?:s|d)?|revenge porn|nude photos? of (?:her|him|them)|sexual(?:ly)? explicit (?:photos?|pictures?|images?|videos?) of (?:her|him|them))\b/i;
+/**
+ * Non-consensual sex, and incest: refused wherever they appear, a story included. Three kinds of words, so the line
+ * holds without refusing ordinary text (11-08: the old single list matched a bare "she said", "she was asleep",
+ * "groomed", "coerced", "trafficking" and "deepfake", and refused every News summary and many stream summaries):
+ *
+ *   NONCONSENSUAL  unambiguous on their own: rape, sexual assault, molesting, incest, revenge porn, forced sex …
+ *   CONSENT_CUES   say "against someone's will" only next to something sexual: "she said no", "without her
+ *                  consent", "she was asleep", "took advantage of her", "drugged her", "coerced", "deepfake" …
+ *   SEXUAL         the sexual words a cue needs beside it
+ *
+ * A text breaks the line when it has an unambiguous word, or a cue within NEAR characters of a sexual word, or two
+ * different cues within NEAR characters of each other ("she was asleep and he took advantage of her"). Near, not the
+ * same sentence, so a story cannot split the act across a full stop.
+ */
+const NONCONSENSUAL = /\b(?:rape|raped|rapes|raping|rapist|rapists|statutory rape|sexual assault|sexually assault(?:ed|ing|s)?|sexual abuse|sexually abus(?:ed|ing|e)|molest(?:ed|ing|s|er|ers|ation)?|incest|incestuous|revenge porn|forced sex|unconscious sex|sex traffick(?:ing|ed|er|ers)|deepfake porn|non-?consensual (?:sex|porn|intimate|nude|explicit|images?|photos?|videos?)|nude photos? of (?:her|him|them)|sexual(?:ly)? explicit (?:photos?|pictures?|images?|videos?) of (?:her|him|them)|groom(?:ed|ing|s)? (?:a |the |young |)(?:child|children|kid|kids|minor|minors|teen|teens|girl|girls|boy|boys)\b)\b/i;
+const CONSENT_CUES = /\b(?:non-?consensual|without (?:her|his|their|my|your) consent|(?:she|he|they) said no|(?:she|he|they) (?:didn't|did not|never) consent(?:ed)?|took advantage of (?:her|him|them)|(?:she|he|they) (?:was|were) (?:drugged|drunk|asleep|unconscious|passed out|blackout drunk)|drugged (?:her|him|them)|unconscious (?:woman|girl|man|boy)|forced (?:her|him|them|himself|herself|themselves)|pinned (?:her|him|them) down|coerc(?:e|ed|es|ing|ion)|traffick(?:ed|ing|er|ers)|deepfakes?|deepfaked)\b/gi;
+const SEXUAL = /\b(?:sex|sexual|sexually|nude|nudes|naked|porn|porno|pornographic|explicit|intimate|undress(?:ed|ing)?|genitals?|penis|vagina|breasts?|fuck(?:ed|ing|s)?|orgasms?|slept with|had sex|grop(?:e|ed|ing)|fondl(?:e|ed|ing))\b/gi;
+const NEAR = 200;
+
+/** Every match of a global pattern, as [start, end, lower-cased text]. */
+function spans(re, text) {
+    re.lastIndex = 0;
+    return [...text.matchAll(re)].map((m) => [m.index, m.index + m[0].length, m[0].toLowerCase()]);
+}
+
+/** Two spans within NEAR characters of each other (either order, or overlapping). */
+const near = (a, b) => (a[0] <= b[1] + NEAR) && (b[0] <= a[1] + NEAR);
+
+/** The second line: an unambiguous word, or a cue near a sexual word, or two different cues near each other. */
+function nonConsensual(text) {
+    if (NONCONSENSUAL.test(text)) return true;
+    const cues = spans(CONSENT_CUES, text);
+    if (!cues.length) return false;
+    const sexual = spans(SEXUAL, text);
+    for (const c of cues) {
+        if (sexual.some((x) => near(c, x))) return true;
+        if (cues.some((d) => d !== c && d[2] !== c[2] && near(c, d))) return true;
+    }
+    return false;
+}
 /** A weapon of mass harm, by its own name: these are never a question about safety. */
 const MASS_HARM = /\b(?:nerve agent|sarin|vx gas|tabun|soman|mustard gas|chlorine gas|anthrax|ricin|botulinum|cyanide|nerve gas|bioweapon|biological weapon|chemical weapon|dirty bomb|nuclear (?:bomb|device|weapon)|radiological (?:bomb|device|weapon)|weapons? of mass destruction|\bwmd\b|germ warfare|biological warfare|pathogen (?:strain|weapon)|weaponized? (?:virus|pathogen|bacillus))\b/i;
 /** A weapon, and the asking: how to make one, get one or use it on people. */
 const WEAPON_INTENT = /\b(?:(?:make|build|construct|synthesi[sz]e|manufactur(?:e|ing)|assembl\w+|acquire|obtain|buy|purchase|deploy|detonat\w+|ignit\w+|use|plant|rig)\w*\b[^.?!]{0,60}\b(?:bomb|explosive|ied\b|pipe bomb|dirty bomb|grenade|molotov|napalm|thermite|shrapnel|untraceable (?:gun|firearm)|ghost gun|suppressor|silencer)|(?:bomb|explosive|ied\b|pipe bomb|grenade|molotov|napalm|thermite)\b[^.?!]{0,60}\b(?:make|build|construct|synthesi[sz]e|manufactur\w+|how to|recipe|instructions?|detonat\w+|ignit\w+))/i;
-/** An attack on people: the asking and the person. */
-const ATTACK_INTENT = /\b(?:(?:how (?:do|can|would) (?:i|we|you|one))\s+[^.?!]{0,40}\b(?:kill|murder|assassinate|poison|hurt|attack|stab|shoot)\b[^.?!]{0,40}\b(?:him|her|them|someone|somebody|people|my \w+|a person|people I|people at)|(?:kill|murder|assassinate|poison|stab|shoot)\s+(?:him|her|them|someone|somebody|people|my \w+|a person)|mass shooting|school shooting|terrorist attack|suicide attack|car bomb|truck bomb)\b/i;
+/**
+ * An attack on people: the asking and the person. (11-08: a bare "kill him" or "shoot them" no longer counts on its
+ * own. It is what players say in every shooter, what a meme caption says and what a story says; it is not asking for
+ * help, and it refused 153 stream summaries in a day. Asking how to do it to a person still does.)
+ */
+const ATTACK_INTENT = /\b(?:(?:how (?:do|can|would) (?:i|we|you|one))\s+[^.?!]{0,40}\b(?:kill|murder|assassinate|poison|hurt|attack|stab|shoot)\b[^.?!]{0,40}\b(?:him|her|them|someone|somebody|people|my \w+|a person|people I|people at)|mass shooting|school shooting|terrorist attack|suicide attack|car bomb|truck bomb)\b/i;
 
 /**
  * The three rules, in the order they are checked. Every text is checked against them.
@@ -62,7 +105,7 @@ const RULES = [
     },
     {
         rule: 'non_consensual', label: 'non-consensual sexual content',
-        test: (t) => NONCONSENSUAL.test(t),
+        test: (t) => nonConsensual(t),
     },
     {
         rule: 'mass_harm', label: 'weapons of mass harm or attacks on others',
@@ -189,6 +232,6 @@ function checkAnswer(text) { return check(Array.isArray(text) ? text : [text]); 
 function checkResult(result) { return check(textsOfAnswer(result)); }
 
 module.exports = {
-    RULES, CONTENT_RULES, PLAIN, CSAM, NONCONSENSUAL, MASS_HARM, WEAPON_INTENT, ATTACK_INTENT,
+    RULES, CONTENT_RULES, PLAIN, CSAM, NONCONSENSUAL, CONSENT_CUES, SEXUAL, nonConsensual, MASS_HARM, WEAPON_INTENT, ATTACK_INTENT,
     partsOf, textsOf, textsOfAnswer, check, checkRequest, checkAnswer, checkResult,
 };

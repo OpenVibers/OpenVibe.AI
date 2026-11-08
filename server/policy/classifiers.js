@@ -38,8 +38,16 @@ const MINOR = /\b(?:child(?:ren)?|kids?|minors?|minor|teen(?:age(?:rs?)?|s)?|tod
  */
 const NUDE = /\b(?:naked|nude|nudity|undress(?:ed|ing)?|topless|bottomless|genital(?:s|ia)?|penis(?:es)?|vaginas?|vulvas?|breasts?|boobs?|nipples?|erotic(?:a)?|orgasm|cunnilingus|fellatio)\b/i;
 
+/**
+ * Words that contain a body word and are not about a body (11-08: "chicken breast recipes the kids will like" was
+ * refused as sexual content involving minors). They are taken out before the body words are looked for, and only
+ * these exact compounds: every other body word still counts, anywhere in the text.
+ */
+const NOT_A_BODY = /\b(?:(?:chicken|turkey|duck|goose|quail|pheasant|pigeon|veal|lamb|beef|pork|bird'?s?)\s+breasts?|breasts?\s+(?:fillets?|meat|cutlets?)|breaststroke|breast-?\s?(?:feed(?:ing|s)?|fed|milk|pumps?|pumping|cancer|exams?|screening|reconstruction)|breastfe(?:ed|eding|eds|d))\b/gi;
+const bodyText = (t) => String(t || '').replace(NOT_A_BODY, ' ');
+
 /** Live: the hard line that nudity being art never moves. */
-const minorNude = (t) => MINOR.test(String(t || '')) && NUDE.test(String(t || ''));
+const minorNude = (t) => MINOR.test(String(t || '')) && NUDE.test(bodyText(t));
 
 /** Live: true when any of the texts describes sex acts or pornography, or puts a child and nudity together. */
 function isExplicit(...texts) {
@@ -69,7 +77,7 @@ function classifyText(...texts) {
     const all = texts.filter((t) => t != null).map(String).join('\n').trim();
     if (!all) return { category: 'fine', cue: 'empty', reason: 'there is no text to judge' };
     const minor = MINOR_VISION.test(all);
-    const nude = NUDE_VISION.test(all);
+    const nude = NUDE_VISION.test(bodyText(all));
     const sex = SEX.test(all);
     if (minor && (sex || nude)) {
         return { category: 'minor_sexual', cue: 'minor+nudity_or_sex', reason: 'the text puts a child together with nudity or sex acts' };
@@ -80,6 +88,6 @@ function classifyText(...texts) {
 }
 
 module.exports = {
-    EXPLICIT, MINOR, NUDE, MINOR_VISION, NUDE_VISION, SEX, CATEGORIES,
+    EXPLICIT, MINOR, NUDE, MINOR_VISION, NUDE_VISION, SEX, CATEGORIES, NOT_A_BODY,
     minorNude, isExplicit, classifyText,
 };
