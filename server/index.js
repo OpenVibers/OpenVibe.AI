@@ -84,6 +84,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     // The router reads them to know when a provider is at its off-peak price (server/providers/tiers.js).
     const offPeak = require('./pricebook/offpeak').createOffPeak({ db, clock });
     const creditGrants = require('./providers/credit-grants').createCreditGrants({ db, env, fetchImpl, clock });
+    const sessionCookies = require('./session-cookies').createSessionCookies({ db, config, clock });
     const pool = createProviderPool({ db, registry, config, clock, fetchImpl, env, log, credentialFetch, machineModels: machines, community, bench, variantEvidence, adultStatus, offPeak, creditGrants });
     // The hourly provider balance probe (server/providers/balance.js): a gauge for the operator alert, started
     // only when the service listens (never in tests) and off under a restore drill.
@@ -202,7 +203,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         clientSecret: env.OV_OAUTH_CLIENT_SECRET, fetch: fetchImpl,
     }) : null;
     const benchEvents = createBenchEvents({ bench, accountData, accountSend, config, log, fetchImpl, clientSecret: env.OV_OAUTH_CLIENT_SECRET });
-    const app = createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, grants, vault, settings, benchEvents, runBudgets, memory, memoryImport, memoryServices, memorySharing, community, endpoints, webhooks, presets, receipts, balance, creditGrants, gpus, abuse, priceBook, ownEndpoints, refusal, batches });
+    const app = createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, grants, vault, settings, benchEvents, runBudgets, memory, memoryImport, memoryServices, memorySharing, community, endpoints, webhooks, presets, receipts, balance, creditGrants, sessionCookies, gpus, abuse, priceBook, ownEndpoints, refusal, batches });
     let jwks = null;
     let keyLoaded = Promise.resolve(null);
     if (!keys.pinned && config.nodeEnv !== 'test') {

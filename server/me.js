@@ -56,7 +56,7 @@ function sameOrigin(req, config, { write = false } = {}) {
     return true;
 }
 
-function meRouter({ credentials, preferences, grants, auth, registry, config, clock = { now: () => Date.now() }, log = console, personSessions = null, sendError }) {
+function meRouter({ credentials, preferences, grants, auth, registry, config, clock = { now: () => Date.now() }, log = console, personSessions = null, sessionCookies = null, sendError }) {
     const r = express.Router();
 
     /** Authenticate a person, never a principal. Sets req.principal = { kind: 'user', subject }. */
@@ -118,7 +118,17 @@ function meRouter({ credentials, preferences, grants, auth, registry, config, cl
         try { await registry.audit(personOf(req), action, 'credential', personOf(req), { trace: req.ov && req.ov.traceId, metadata }); } catch { /* audit never breaks the person's request */ }
     };
 
-    r.get('/api/v1/me/credentials', guard, run(async (req) => ({ credentials: await credentials.listSelf(personOf(req)) })));
+    r.get('/api/v1/me/credentials', guard, run(async (req) => ({ credentials: [...await credentials.listSelf(personOf(req)), ...(sessionCookies ? await sessionCookies.list('self', personOf(req)) : [])] })));
+    if (sessionCookies) {
+        r.post('/api/v1/me/credentials', guard, run(async (req) => {
+            const body = req.body || {};
+            if (body.kind === 'session_cookie' || body.cookie != null) return { credential: await sessionCookies.add('self', personOf(req), body) };
+            const saved = await credentials.putSelf(personOf(req), body.provider, body);
+            return { credential: { id: saved.provider, kind: 'api_key', provider: saved.provider, created: saved.created_at, label: body.label || saved.provider } };
+        }));
+        r.get('/api/v1/me/credentials/:id/balance', guard, run(async (req) => ({ balance: await sessionCookies.balance('self', personOf(req), req.params.id) })));
+        r.delete('/api/v1/me/credentials/:id', guard, async (req, res) => { try { const gone = await sessionCookies.remove('self', personOf(req), req.params.id) || await credentials.removeSelf(personOf(req), req.params.id); res.status(gone ? 204 : 404).end(); } catch (err) { sendError(res, err, req.ov); } });
+    }
     r.put('/api/v1/me/credentials/:provider', guard, run(async (req) => {
         const out = await credentials.putSelf(personOf(req), req.params.provider, { ...(req.body || {}), ...(req.body && req.body.provider == null ? { provider: req.params.provider } : {}) });
         await audit(req, 'credential.self.put', { provider: out.provider, status: out.status, base_url: out.base_url });

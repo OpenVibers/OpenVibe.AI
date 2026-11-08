@@ -644,12 +644,13 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         });
         // Spend an entered promotional grant first, but only among candidates the route's own tier, capability,
         // trust, price cap and health checks already accepted. A person's own-key choice never reaches this pool.
-        if (creditGrants && creditGrants.shouldPrefer('anthropic') && ctx.personPays !== true && !route.pinned?.length
+        const preferredCreditProvider = creditGrants && ['openai', 'anthropic'].find((provider) => creditGrants.shouldPrefer(provider));
+        if (preferredCreditProvider && ctx.personPays !== true && !route.pinned?.length
             && ctx.aliasPolicy !== 'private' && !(route.constraints && route.constraints.objective === 'private')) {
-            const promotional = result.candidates.find((x) => x.eligible && (x.provider || splitOfferId(x.id).provider) === 'anthropic');
+            const promotional = result.candidates.find((x) => x.eligible && (x.provider || splitOfferId(x.id).provider) === preferredCreditProvider);
             if (promotional) {
                 result.selected = promotional.id;
-                result.reasons = ['Anthropic promotional credit is available above its configured floor', ...result.reasons];
+                result.reasons = [`${preferredCreditProvider} promotional credit is available above its configured floor`, ...result.reasons];
             }
         }
         const byId = new Map(offers.map(o => [o.offer_id, o]));

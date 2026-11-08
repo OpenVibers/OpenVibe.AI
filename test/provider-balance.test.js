@@ -58,6 +58,19 @@ t.test('grant cost uses cents strings and spends promotional credit in expiry or
     assert.deepStrictEqual(allocate([{ kind: 'promotional', amount_usd: 10, expires_at: '2026-01-01' }], 0, Date.parse('2026-02-01')), { promotional: 0, purchased: 0 });
 });
 
+t.test('OpenAI admin cost rows are summed in USD and paged', async () => {
+    const urls = [];
+    const db = { prepare(sql) { return { all: async () => [{ kind: 'promotional', amount_usd: '110', as_of: '2026-11-01', remaining_as_of_usd: '110', remaining_as_of: '2026-11-01' }], get: async () => ({ spent: 0 }) }; } };
+    const credits = createCreditGrants({ db, env: { AI_OPENAI_ADMIN_KEY_REF: 'env:OPENAI_ADMIN', OPENAI_ADMIN: 'admin-secret' }, clock: { now: () => Date.parse('2026-11-08T01:00:00Z') }, fetchImpl: async (url) => {
+        urls.push(String(url));
+        return { ok: true, json: async () => urls.length === 1 ? { data: [{ results: [{ amount: { value: '1.43' } }] }], has_more: true, next_page: 'page2' } : { data: [{ results: [{ amount: { value: '0.00' } }, { amount: { value: '0.00' } }] }], has_more: false } };
+    } });
+    const result = await credits.poll();
+    assert.strictEqual(urls.length, 2);
+    assert.match(urls[0], /start_time=1793491200/);
+    assert.strictEqual(result.find((r) => r.provider === 'openai').spent_usd, 1.43);
+});
+
 t.test('the optional Admin API key is sent only on its cost request and never returned', async () => {
     const calls = [];
     const db = { prepare(sql) { return { all: async () => [{ kind: 'promotional', amount_usd: '200', as_of: '2026-11-08T00:00:00Z', expires_at: null }], get: async () => ({ spent: 0 }) }; } };

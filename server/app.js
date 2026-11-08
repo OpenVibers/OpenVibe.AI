@@ -22,7 +22,7 @@ const pkg = require('../package.json');
 const { adminRoutes } = require('openvibe-shared/config');
 const ownerInputs = require('./owner-inputs');
 
-function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, credentials = null, preferences = null, grants = null, vault = null, settings = null, benchEvents = null, runBudgets = null, memory = null, memoryImport = null, memoryServices = null, memorySharing = null, community = null, endpoints = null, webhooks = null, presets = null, receipts = null, balance = null, creditGrants = null, gpus = null, abuse = null, priceBook = null, ownEndpoints = null, refusal = null, batches = null }) {
+function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, credentials = null, preferences = null, grants = null, vault = null, settings = null, benchEvents = null, runBudgets = null, memory = null, memoryImport = null, memoryServices = null, memorySharing = null, community = null, endpoints = null, webhooks = null, presets = null, receipts = null, balance = null, creditGrants = null, sessionCookies = null, gpus = null, abuse = null, priceBook = null, ownEndpoints = null, refusal = null, batches = null }) {
     const app = express();
     // /.well-known/agent.json (openvibe-shared/agent-layer, SEO-2): what this site serves, for agents.
     require('openvibe-shared/agent-layer').mount(app, { descriptor: require('./agent-descriptor') });
@@ -134,21 +134,31 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
             const creditsRouter = express.Router();
             creditsRouter.use(auth.requireCap(CAPS.configManage));
             creditsRouter.get('/', async (req, res) => {
-                try { res.json({ grants: await creditGrants.list('anthropic'), estimate: creditGrants.values().find((x) => x.provider === 'anthropic') || null }); }
+                try { res.json({ providers: await Promise.all(['anthropic', 'openai'].map(async (provider) => ({ provider, grants: await creditGrants.list(provider), estimate: creditGrants.values().find((x) => x.provider === provider) || null, preference: await creditGrants.preference(provider) }))) }); }
                 catch (err) { sendError(res, err, req.ov, log); }
             });
             creditsRouter.post('/', async (req, res) => {
                 try {
-                    const grant = await creditGrants.add({ ...req.body, provider_key: 'anthropic' });
+                    const provider = ['anthropic', 'openai'].includes(String(req.body.provider)) ? String(req.body.provider) : 'anthropic';
+                    const grant = await creditGrants.add({ ...req.body, provider_key: provider });
                     creditGrants.poll().catch((err) => log.warn(`[ai] credit estimate failed: ${String(err && err.message || err).slice(0, 180)}`));
                     res.status(201).json({ grant });
                 } catch (err) { sendError(res, err, req.ov, log); }
             });
             creditsRouter.put('/preference', async (req, res) => {
-                try { res.json({ preference: await creditGrants.setPreference({ enabled: req.body.enabled, floor_usd: req.body.floor_usd, provider_key: 'anthropic' }) }); }
+                try { res.json({ preference: await creditGrants.setPreference({ enabled: req.body.enabled, floor_usd: req.body.floor_usd, provider_key: ['anthropic', 'openai'].includes(String(req.body.provider)) ? String(req.body.provider) : 'anthropic' }) }); }
                 catch (err) { sendError(res, err, req.ov, log); }
             });
             app.use('/internal/provider-credits', creditsRouter);
+        }
+        if (sessionCookies) {
+            const express = require('express'); const cookiesRouter = express.Router();
+            cookiesRouter.use(auth.requireCap(CAPS.configManage));
+            cookiesRouter.get('/', async (req, res) => { try { res.set('Cache-Control', 'no-store').json({ credentials: await sessionCookies.list('operator', 'owner') }); } catch (err) { sendError(res, err, req.ov, log); } });
+            cookiesRouter.post('/', async (req, res) => { try { res.status(201).set('Cache-Control', 'no-store').json({ credential: await sessionCookies.add('operator', 'owner', req.body || {}) }); } catch (err) { sendError(res, err, req.ov, log); } });
+            cookiesRouter.delete('/:id', async (req, res) => { try { const gone = await sessionCookies.remove('operator', 'owner', req.params.id); res.status(gone ? 204 : 404).end(); } catch (err) { sendError(res, err, req.ov, log); } });
+            cookiesRouter.get('/:id/balance', async (req, res) => { try { res.set('Cache-Control', 'no-store').json({ balance: await sessionCookies.balance('operator', 'owner', req.params.id) }); } catch (err) { sendError(res, err, req.ov, log); } });
+            app.use('/internal/provider-session-credentials', cookiesRouter);
         }
         const configRoutes = adminRoutes([settings.exchange, settings.providerKeys.proxy, settings.gpus.proxy], {
             basePath: '/internal/config',
@@ -217,11 +227,11 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
     // The person's own AI settings (L36 Y1/Y3): their keys under owner `self`, and their routing preferences. Only
     // the person's Network token or their AI site session (same origin) reaches them; a service token is refused.
     if (credentials && preferences && grants) {
-        app.use(require('./me').meRouter({ credentials, preferences, grants, auth, registry, config, clock, log, personSessions, sendError: (res, err, ctx) => sendError(res, err, ctx, log) }));
+        app.use(require('./me').meRouter({ credentials, preferences, grants, auth, registry, config, clock, log, personSessions, sessionCookies, sendError: (res, err, ctx) => sendError(res, err, ctx, log) }));
         // The same settings as a page for people (GET /you, plain forms on AI's own person session).
         app.use(require('./you-page').youPageRouter({ credentials, preferences, grants, personSessions, config, log, machines: pool && pool.machines }));
     }
-    app.use(consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, env, clock, fetchImpl, log, vault, settings, personSessions, abuse, priceBook, creditGrants }));
+    app.use(consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, env, clock, fetchImpl, log, vault, settings, personSessions, abuse, priceBook, creditGrants, sessionCookies }));
     app.use(runPageRouter({ runs, personSessions, log }));
 
     // ── The public pages moved to OpenVibe.Exchange (2026-11-07) ────
