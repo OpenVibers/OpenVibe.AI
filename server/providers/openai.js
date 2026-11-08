@@ -57,6 +57,29 @@ function buildBody({ model, system, messages, image, json, maxTokens, temperatur
     return body;
 }
 
+/**
+ * The Chat Completions body of a complete operation (ai.complete), for a provider batch request too:
+ * the caller's own request with the routed model, a reasoning model's allowance, and the Flex tier.
+ */
+function buildCompleteBody({ model, openai = {}, maxTokens, temperature, serviceTier } = {}) {
+    const o = openai || {};
+    const body = { model, messages: o.messages };
+    for (const k of ['tools', 'tool_choice', 'parallel_tool_calls', 'response_format', 'stop', 'seed', 'top_p', 'presence_penalty', 'frequency_penalty']) {
+        if (o[k] !== undefined && o[k] !== null) body[k] = o[k];
+    }
+    if (isReasoningModel(model)) {
+        // max_tokens is the answer the caller wants; a reasoning model thinks first, out of the same allowance.
+        if (maxTokens) body.max_completion_tokens = Math.max(maxTokens, 256) + 1024;
+        body.reasoning_effort = 'low';
+        for (const k of ['top_p', 'presence_penalty', 'frequency_penalty']) delete body[k];
+    } else {
+        if (maxTokens) body.max_tokens = maxTokens;
+        if (temperature != null) body.temperature = temperature;
+    }
+    if (serviceTier) body.service_tier = String(serviceTier);
+    return body;
+}
+
 function createOpenAiProvider(record, { apiKey = '', fetchImpl = globalThis.fetch } = {}) {
     const baseUrl = String(record.base_url || DEFAULT_BASE_URL).replace(/\/+$/, '');
     // A local llama.cpp process serves one model, so the embedding endpoint may live on another local
@@ -146,23 +169,7 @@ function createOpenAiProvider(record, { apiKey = '', fetchImpl = globalThis.fetc
      */
     async function complete(req) {
         const o = req.openai || {};
-        const body = { model: req.model, messages: o.messages };
-        for (const k of ['tools', 'tool_choice', 'parallel_tool_calls', 'response_format', 'stop', 'seed', 'top_p', 'presence_penalty', 'frequency_penalty']) {
-            if (o[k] !== undefined && o[k] !== null) body[k] = o[k];
-        }
-        if (isReasoningModel(req.model)) {
-            // max_tokens is the answer the caller wants; a reasoning model thinks first, out of the same allowance. Without
-            // room for that, and with its default (medium) effort, a long tool result could use it all up thinking and
-            // answer nothing: Chat's first production inbox action (2026-10-25) ended "finish_reason: length", empty.
-            if (req.maxTokens) body.max_completion_tokens = Math.max(req.maxTokens, 256) + 1024;
-            body.reasoning_effort = 'low';
-            for (const k of ['top_p', 'presence_penalty', 'frequency_penalty']) delete body[k];
-        } else {
-            if (req.maxTokens) body.max_tokens = req.maxTokens;
-            if (req.temperature != null) body.temperature = req.temperature;
-        }
-        // The service tier (BA1): a Flex tier travels with the request and the answer says which tier it ran on.
-        if (req.serviceTier) body.service_tier = String(req.serviceTier);
+        const body = buildCompleteBody({ model: req.model, openai: o, maxTokens: req.maxTokens, temperature: req.temperature, serviceTier: req.serviceTier });
         if (typeof req.onDelta === 'function') return await completeStreaming(body, req);
         const j = await postJson(`${baseUrl}/chat/completions`, headers(), body, { signal: req.signal, timeoutMs: req.timeoutMs, fetchImpl });
         if (!Array.isArray(j.choices) || !j.choices.length) throw new ProviderError('completion has no choices', { code: 'provider.output' });
@@ -250,4 +257,4 @@ function createOpenAiProvider(record, { apiKey = '', fetchImpl = globalThis.fetc
     return adapter;
 }
 
-module.exports = { createOpenAiProvider, buildBody, DEFAULT_BASE_URL };
+module.exports = { createOpenAiProvider, buildBody, buildCompleteBody, DEFAULT_BASE_URL };

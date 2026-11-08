@@ -35,6 +35,18 @@ const TERMINAL = new Set(['succeeded', 'failed', 'cancelled', 'cached']);
 const QUEUE_RETRY_AFTER_S = 5;
 const newRunId = () => `run_${ids.ulid()}`;
 
+/**
+ * BA3: how long a batch-class run may wait for a provider's own batch API, in hours (1 to 72). The
+ * caller names it in options.deadline_hours; the default is the batcher's own 24 hours.
+ */
+function batchDeadlineHours(value) {
+    if (value == null || value === '') return 24;
+    const n = Number(value);
+    if (!Number.isFinite(n)) throw new AiError(422, 'input.invalid', 'deadline_hours must be a number of hours');
+    if (n < 1 || n > 72) throw new AiError(422, 'input.invalid', 'deadline_hours is between 1 and 72');
+    return Math.trunc(n);
+}
+
 function entityKey(ref) { return ref ? `${ref.service}:${ref.type}:${ref.id}` : null; }
 function subjectKey(ref) { return ref ? `${ref.type}:${ref.id}` : null; }
 
@@ -107,7 +119,7 @@ function routePinRequest(value, principal, wf) {
     return { provider, model };
 }
 
-function createRuns({ db, registry, engine, cache, quotas, config, clock = { now: () => Date.now() }, log = console, userModules = null, credentials = null, preferences: personPreferences = null, tiers = null, projectSecrets = null, pool = null, runBudgets = null, credits = null, community = null, presets = null, receipts = null, abuse = null, webhooks = null, batchWaiting = null }) {
+function createRuns({ db, registry, engine, cache, quotas, config, clock = { now: () => Date.now() }, log = console, userModules = null, credentials = null, preferences: personPreferences = null, tiers = null, projectSecrets = null, pool = null, runBudgets = null, credits = null, community = null, presets = null, receipts = null, abuse = null, webhooks = null, batchWaiting = null, batch = null }) {
     const inflight = new Map();     // run id -> { controller, promise, release, caller }
     // BA2: the runs that wait for a provider's own batch API: they are created at once and finish later.
     const deferred = new Map();     // run id -> { controller, scope, ctx, input, hold, resolveDone }
@@ -268,7 +280,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         const askedLatency = options.latency != null ? options.latency : null;
         const resolvedLatency = latency.resolve(workflowClass, askedLatency);
         if (resolvedLatency.error) throw new AiError(422, 'input.invalid', resolvedLatency.error, { latency_class: workflowClass });
-        const latencyClass = resolvedLatency.class;
+        let latencyClass = resolvedLatency.class;         // BA3 may move a batch-class run to the background class
         // A faster class than the workflow allows was asked for: it runs in its own class, and the run's options say so.
         if (resolvedLatency.clamped) options.latency_clamped = resolvedLatency.clamped;
         // Community capacity is opt-in per request: a person's machine sees the prompt, so only a caller that says so
@@ -475,6 +487,51 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             }
         }
 
+        // BA3: a run whose resolved class is 'batch' waits for a provider's own batch API whenever the
+        // route has one whose real batch price fits the half-price card (the same money rule as capacity
+        // route (d)). The run is created at once; the provider's answer finishes it on the ordinary path.
+        // When no provider on the route can batch, the run runs in the background class at once and says so.
+        let autoBatch = null;
+        let batchDeadline = null;
+        if (latencyClass === 'batch' && !(principal && principal.deferBatch)) {
+            batchDeadline = batchDeadlineHours(options.deadline_hours);
+            // A run paid by somebody else's key or by a free allowance is not put on the network's batch
+            // provider; a free-only app run cannot be placed on paid capacity either.
+            const appFreeOnly = Boolean(ctx.appRun && (ctx.sandbox || !(tiers && tiers.enabled)));
+            let prepared = null;
+            if (batch && typeof batch.planRun === 'function' && engine.prepareBatch
+                && credentialSubject === null && !projectProvider && !selfKeys && !freeUse && !communityOptIn && !appFreeOnly) {
+                try {
+                    prepared = await engine.prepareBatch(wf, { template_key: tpl ? tpl.key : null, template_version: tpl ? tpl.version : null }, input, { ...ctx, runId: id });
+                } catch (err) {
+                    log.warn(`[runs] ${id}: the batch request could not be prepared: ${(err && err.message) || err}`);
+                }
+            }
+            if (prepared && pool && typeof pool.offers === 'function') {
+                let offers = await pool.offers(prepared.route, prepared.operation, ctx).catch(() => []);
+                // A pinned run waits on the provider it pinned, never on another eligible one.
+                if (pinned) offers = offers.filter((o) => o.provider === pinned.provider && (pinned.model == null || o.model === pinned.model));
+                if (offers.length) autoBatch = await batch.planRun({ prepared, offers, principal, ctx, input, requestId: requestId || id, maxCostNano });
+            }
+            if (autoBatch) {
+                ctx.discount = 'half';
+                ctx.latencyClass = 'batch';
+                options.deadline_hours = batchDeadline;
+                options.batch = { provider: autoBatch.provider, model: autoBatch.model, deadline_hours: batchDeadline };
+            } else {
+                latencyClass = 'background';
+                ctx.latencyClass = 'background';
+                delete ctx.discount;
+                options.latency_clamped = { asked: 'batch', used: 'background' };
+            }
+            base.latency_class = latencyClass;
+            base.options = JSON.stringify({
+                ...parseJson(base.options, {}),
+                ...(options.latency_clamped ? { latency_clamped: options.latency_clamped } : {}),
+                ...(autoBatch ? { deadline_hours: batchDeadline, batch: { provider: autoBatch.provider, model: autoBatch.model } } : {}),
+            });
+        }
+
         // Queue caps, then quota: both before any provider call (a refused run is not counted).
         const caller = `${requester.type}:${requester.id}`;
         // Kudos bought with volunteer service start this run earlier in the queue (never cash, never a bypass of limits).
@@ -487,8 +544,8 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         const hold = credentialSubject !== null || projectProvider || selfKeys || !tiers ? null : await tiers.admit(ctx, id);
         let reserved;
         try {
-            // BA2: a batch run reserves its quota when the answer is here, not while it waits.
-            reserved = credentialSubject !== null || selfKeys || (principal && principal.deferBatch) ? null : await quotas.reserve(ctx);
+            // BA2/BA3: a batch run reserves its quota when the answer is here, not while it waits.
+            reserved = credentialSubject !== null || selfKeys || (principal && principal.deferBatch) || autoBatch ? null : await quotas.reserve(ctx);
         } catch (err) { if (hold) await tiers.release(hold); throw err; }
 
         try {
@@ -508,6 +565,46 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             const consent = await credentials.consentUse(requester.id, credentialSubject, credentialProvider).catch(() => null);
             if (consent) {
                 await registry.audit(principal.sub, 'credential.self.use', 'credential', `${consent.service}:${consent.subject}:${consent.provider}`, { trace, metadata: { service: consent.service, subject: consent.subject, provider: consent.provider, run_id: id } });
+            }
+        }
+
+        // BA3: the run waits for the provider's own batch API. It is created now (its class says 'batch')
+        // and takes no execution slot and no quota until the answer is here; the batcher then finishes it
+        // on the ordinary path, with the ordinary settle, receipt and events. A caller that waits (?wait=)
+        // is given the queued run at once (202 from the API), never held for hours.
+        if (autoBatch) {
+            const controller = new AbortController();
+            let resolveDone;
+            const done = new Promise((r) => { resolveDone = r; });
+            try {
+                deferred.set(id, { controller, scope, ctx, input, hold, resolveDone, runLevel: true });
+                inflight.set(id, { controller, promise: done, release: () => {}, caller, priority });
+                await batch.enqueueRun({ runId: id, plan: autoBatch, deadlineHours: batchDeadline });
+                return { run: await get(id), created: true, promise: null };
+            } catch (err) {
+                // The queue could not take it (the provider's batch table is unreachable, say): run it in
+                // the background class now rather than leave it queued for ever.
+                deferred.delete(id);
+                inflight.delete(id);
+                log.warn(`[runs] ${id}: the provider's batch queue did not take the run (${(err && err.message) || err}); it runs in the background class`);
+                latencyClass = 'background';
+                ctx.latencyClass = 'background';
+                delete ctx.discount;
+                const opts = { ...parseJson(base.options, {}), latency_clamped: { asked: 'batch', used: 'background' } };
+                delete opts.deadline_hours;
+                delete opts.batch;
+                base.latency_class = 'background';
+                base.options = JSON.stringify(opts);
+                await db.prepare("UPDATE runs SET latency_class = 'background', options = ? WHERE id = ?").run(base.options, id);
+                try {
+                    reserved = credentialSubject !== null || selfKeys ? null : await quotas.reserve(ctx);
+                } catch (qerr) {
+                    await db.prepare("UPDATE runs SET status = 'failed', error_code = ?, error_detail = ?, finished_at = ? WHERE id = ?")
+                        .run(qerr.code || 'quota.refused', String(qerr.detail || qerr.message || 'quota refused').slice(0, 500), iso(clock.now()), id);
+                    await events.runChanged(await getRow(id));
+                    if (hold) await tiers.release(hold);
+                    throw qerr;
+                }
             }
         }
 
@@ -839,7 +936,9 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                 await credit.holdRoute({ card: batchAnswer.holdRetail || null, provider: batchAnswer.provider || null, model: batchAnswer.model || null, access: batchAnswer.access || null, maxTokens: batchAnswer.maxTokens || 4096 });
             }
             let r = null;
-            if (batchAnswer && batchAnswer.ok) {
+            // BA3: a run-level answer resumes the workflow's own step (engine.execute reads it); a customer
+            // batch item's run is the ai.complete run the batcher created, finished by this shortcut.
+            if (batchAnswer && batchAnswer.ok && !batchAnswer.resume) {
                 r = { output: batchAnswer.output || { text: '' }, usage: batchAnswer.usage || { input: 0, output: 0, cached: 0, cache_write: 0 }, cost: Number(batchAnswer.cost) || 0, provider: batchAnswer.provider || null, model: batchAnswer.model || null, citations: [], explain: batchAnswer.explain || null, grounding: null, synthetic: false, fallbackUsed: false };
             }
             if (!r) r = await engine.execute(wf, row, input, { signal: controller.signal, logRequest, debugRaw: Boolean(config.debugRawLog && opts.debug), inputHash: row.input_hash, preferences,
@@ -872,6 +971,8 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                 ...(credential ? { credential, role: input && typeof input.role === 'string' ? input.role : null } : {}),
                 ...(billingDelta ? { onDelta: billingDelta } : {}),
                 ...(onRoute ? { onRoute } : {}),
+                // BA3: a run-level batch answer resumes the workflow's own step.
+                ...(batchAnswer ? { batchAnswer } : {}),
                 // BA1: the class this run may wait in: the router picks the tier from it.
                 latencyClass: ctx.latencyClass || latency.DEFAULT,
                 ...(ctx.flexBudgetMs ? { flexBudgetMs: ctx.flexBudgetMs } : {}) });
@@ -1010,6 +1111,10 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         if (TERMINAL.has(row.status)) throw new AiError(409, 'run.terminal', `run is already ${row.status}`);
         const h = inflight.get(id);
         const r = await db.prepare("UPDATE runs SET status = 'cancelled', error_code = 'run.cancelled', error_detail = 'cancelled by caller', finished_at = ? WHERE id = ? AND status IN ('queued', 'running')").run(iso(clock.now()), id);
+        // BA3: a run that has not been handed to a provider yet leaves its batch queue, so the provider is
+        // never given work for a run nobody will read; a submitted one finishes and is charged as it must.
+        await db.prepare("DELETE FROM batch_queue WHERE run_id = ? AND status = 'queued'").run(id).catch(() => null);
+        deferred.delete(id);
         if (h) {
             h.controller.abort();
             const i = queue.indexOf(id);
@@ -1148,7 +1253,15 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         const d = deferred.get(key);
         if (d) {
             deferred.delete(key);
-            const ctx = { ...d.ctx, batchAnswer: Promise.resolve(answer), ...(costCheck ? { costCheck } : {}) };
+            let baseCtx = d.ctx;
+            if (answer && answer.reroute) {
+                // The deadline passed: the batcher moved the run to the background class before this call.
+                const row = await getRow(key);
+                baseCtx = { ...baseCtx, latencyClass: (row && row.latency_class) || 'background' };
+                // A run-level run re-routed to the background path is charged at the ordinary price, not half.
+                if (d.runLevel) { const rest = { ...baseCtx }; delete rest.discount; baseCtx = rest; }
+            }
+            const ctx = { ...baseCtx, batchAnswer: Promise.resolve(answer), ...(costCheck ? { costCheck } : {}) };
             try {
                 const reserved = await quotas.reserve(ctx).catch(() => null);
                 await execute(key, { controller: d.controller, reserved, scope: d.scope, ctx, input: d.input, hold: d.hold });
@@ -1163,7 +1276,8 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         const row = await getRow(key);
         if (!row) return null;
         if (TERMINAL.has(row.status)) return null;                 // it already finished, or it was cancelled
-        const data = plan || {};
+        // A run-level run re-routed to the background path is charged at the ordinary price, not half.
+        const data = answer && answer.reroute && plan && plan.runLevel ? { ...plan, discount: null } : (plan || {});
         // The answer is the provider's own batch answer, exactly as in the fast path.
         const ctx = { ...(await rebuildCtx(row, data, costCheck)), batchAnswer: Promise.resolve(answer) };
         const input = data.input && typeof data.input === 'object' ? data.input : parseJson(row.input, {});
@@ -1192,6 +1306,9 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         const attribution = parseJson(row.attribution, null);
         const onBehalfOf = parseJson(row.on_behalf_of, null);
         const principal = data.principal || {};
+        // BA3: a run-level batch stores the scalars its own completion needs (the app, person and policy
+        // flags); a customer batch item has none and is rebuilt from its principal as before.
+        const saved = data.ctx && typeof data.ctx === 'object' ? data.ctx : {};
         // The person the run was made for: the row names them, and the options say whether they pay.
         const personSubject = opts.person_pays !== undefined ? (onBehalfOf && onBehalfOf.id ? String(onBehalfOf.id) : null) : null;
         const tokenBudget = runBudgets && principal.jti ? await runBudgets.spent(principal.jti).catch(() => null) : null;
@@ -1199,6 +1316,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             || Boolean(tokenBudget && (tokenBudget.budget_usd != null || tokenBudget.budget_tokens != null));
         const isApp = principal.kind === 'app';
         return {
+            ...saved,
             requesterType: row.requester_type,
             requesterId: row.requester_id,
             ...(principal.jti ? { runJti: principal.jti } : {}),
@@ -1211,7 +1329,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             personSubject,
             personPays: Boolean(opts.person_pays),
             serviceBudgeted,
-            freeUse: false,                                        // a batch run is never the anonymous Try it
+            freeUse: saved.freeUse === true,                        // a customer batch run is never the anonymous Try it
             ...(data.discount ? { discount: String(data.discount) } : {}),
             ...(data.maxCostNano != null ? { maxCostNano: String(data.maxCostNano) } : {}),
             ...(costCheck ? { costCheck } : {}),

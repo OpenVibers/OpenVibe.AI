@@ -63,7 +63,7 @@ const runBody = (required = []) => ({
         workflow: str({ description: 'The workflow key, e.g. ai.generate' }), version: integer({ minimum: 1 }),
         input: { type: 'object' }, idempotency_key: str({ minLength: 8, maxLength: 128 }),
         target: { type: 'object' }, attribution: { type: 'object' }, on_behalf_of: ref('SubjectRef'),
-        options: { type: 'object' }, route: { type: 'object', description: '{ provider, model } — one offer from GET /api/v1/routes?operation=…' },
+        options: { type: 'object', description: 'cache, debug, and the latency class: latency (interactive | background | batch); a batch-class run also takes deadline_hours (1-72, the default is 24)' }, route: { type: 'object', description: '{ provider, model } — one offer from GET /api/v1/routes?operation=…' },
     },
 });
 const directBody = {
@@ -708,6 +708,9 @@ function openapi() {
                     source_service: nullable('string'), target: nullable('object'), input: nullable('object'), output: nullable('object'),
                     error: nullable('object', { properties: { code: str(), detail: str() } }), synthetic: { type: 'boolean' },
                     provenance: { type: 'object' },
+                    latency_class: { type: 'string', enum: ['interactive', 'background', 'batch'] },
+                    service_tier: nullable('string', { description: 'the tier the answer really ran on: standard, flex, batch, offpeak or local' }),
+                    latency_clamped: nullable('object', { description: '{ asked, used }: the class the caller asked for and the class the run really took' }),
                     usage: { type: 'object', properties: { tokens_in: nullable('integer'), tokens_out: nullable('integer'), cost_usd: nullable('number'), attempts: nullable('integer'), usage_sample_ids: nullable(arrayOf(str())) } },
                     explain: nullable('object'), citations_count: nullable('integer'), grounding: nullable('object'),
                     retry_of: nullable('string'), idempotency_key: nullable('string'), trace_id: nullable('string'),
