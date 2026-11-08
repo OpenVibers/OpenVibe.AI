@@ -31,7 +31,6 @@ function allocate(grants, spentUsd, now = Date.now()) { const { promotional, pur
 function createCreditGrants({ db, env = process.env, fetchImpl = globalThis.fetch, clock = { now: () => Date.now() } }) {
     const latest = new Map();
     let running = null;
-    let lastAdminAt = 0;
     const list = async (provider = 'anthropic') => db.prepare('SELECT id, provider_key, kind, amount_usd, as_of, expires_at, applies_to, received_at, remaining_as_of_usd, remaining_as_of FROM provider_credit_grants WHERE provider_key = ? ORDER BY as_of DESC, id DESC').all(provider);
     async function add(grant) {
         const { provider_key = 'anthropic', kind, amount_usd, as_of, expires_at = null, applies_to = null, received_at = as_of, remaining_as_of_usd = amount_usd, remaining_as_of = as_of } = grant || {};

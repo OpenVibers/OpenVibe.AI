@@ -47,6 +47,10 @@ function createSessionCookies({ db, config, fetchImpl = guardedFetch, clock = { 
     async function balance(owner, subject, id = null) {
         const row = id == null ? await db.prepare('SELECT * FROM session_credentials WHERE owner=? AND subject=? ORDER BY provider LIMIT 1').get(owner, subject) : await db.prepare('SELECT * FROM session_credentials WHERE owner=? AND subject=? AND id=?').get(owner, subject, id);
         if (!row) return null;
+        if (row.expires_at && Date.parse(row.expires_at) <= clock.now()) {
+            await db.prepare('UPDATE session_credentials SET expired=1 WHERE id=?').run(row.id);
+            return { credential: view({ ...row, expired: 1 }), source: 'estimate', at: new Date(clock.now()).toISOString(), values: {} };
+        }
         const secret = open(row.secret_enc, aad(row)); const settings = JSON.parse(row.settings_json || '{}'); const values = {};
         try {
             for (const reader of READERS[row.provider] || []) {
