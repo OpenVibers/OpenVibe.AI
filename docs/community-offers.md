@@ -1,17 +1,17 @@
 # Community AI offers ("Offer to the network")
 
 The design's community machines (`EXCHANGE-REMAKE-2026-11-06.md`, plan §3, stage 4): a person turns on **Offer to the
-network** in OpenVibe.Node's `ai` plugin and their local models (Ollama, LM Studio, llama.cpp) or GPU become capacity
+network** in OpenVibe Link's `ai` plugin and their local models (Ollama, LM Studio, llama.cpp) or GPU become capacity
 OpenVibe.AI can place inference on. It is opt-in twice — the owner turns the offer on, and the caller asks for community
 capacity per request — because the machine sees the prompt.
 
 ## The chain
 
-1. **Node** (`plugins/ai`, 0.3.0) advertises `status.capabilities.ai.offer`: `enabled`, `models`, `hours`,
+1. **Link** (`plugins/ai`, 0.3.0) advertises `status.capabilities.ai.offer`: `enabled`, `models`, `hours`,
    `concurrency`, `price` (credits per million in/out), `audience`, `open_now`, `ready`. It enforces `enabled`, `hours`,
    `models` and `concurrency` on the machine, and accepts a community command only as a `community/<model>` request,
    which it strips before the local server sees it.
-2. **Bot** stores the Node's capabilities and reports every machine with an enabled offer to Network:
+2. **Bot** stores the Link's capabilities and reports every machine with an enabled offer to Network:
    `POST /internal/ai/offers/report` (source `bot`, `network.resource.report`). A community run reaches a machine even
    with "Let my AI use this computer's models" off, because the offer itself is the opt-in; the machine still only
    accepts `kind: ai`.
@@ -36,7 +36,7 @@ that answer carries no community label.
 
 ## Community endpoints
 
-The design's SDK gap: any server that speaks the OpenAI Chat Completions API can sell, not only a Node machine. The
+The design's SDK gap: any server that speaks the OpenAI Chat Completions API can sell, not only a machine running Link. The
 seller registers it with their own Network developer key on the Exchange's public API host, documented in
 `/openapi.json`:
 
@@ -69,7 +69,7 @@ service token is refused.
   OpenVibe as it is (put it behind an unguessable base path if you want it hard to find);
 - the seller's declared `concurrency` is enforced in-process: over it the call is busy and the router falls back.
 
-**Same trust as a Node machine.** The endpoint joins `server/community/index.js`'s offer list, so it gets the same three
+**Same trust as a machine running Link.** The endpoint joins `server/community/index.js`'s offer list, so it gets the same three
 canaries, the same model fingerprint (the `model` its answer reports must be the declared one), the same ~1% spot
 re-runs against a verified peer, the free tier only until verified, and the self-dealing rule (the owner, a merged
 account, or the project that registered it earns 0). Its answers carry `provider: community-endpoint:<id>`,

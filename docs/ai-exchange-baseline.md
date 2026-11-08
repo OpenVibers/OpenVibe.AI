@@ -24,7 +24,7 @@ This document records the current state of the repositories that implement (or w
 | OpenVibe.Exchange | `main` | `b562b0fd7d018dfa036219585a7d591330a50f3a` | 0.1.0 | v0.235.0 | v0.82.0 | v4.109.2 |
 | OpenVibe.Host | `main` | `46421d082f7d38c370cd9050df2135d7800e24f8` | 0.3.0 | v0.272.0 | v0.82.0 | v4.109.2 |
 | OpenVibe.Run | `main` | `1bacc978ab25d7294a6f5f75a339645b47fe6406` | 0.1.0 | v0.250.0 | v0.82.0 | v4.109.2 |
-| OpenVibe.Node | `main` | `c8564f0b58f567dd909daaadd2f2a7b91f29a7a7` | v0.38.0 (tag) | N/A (Go) | N/A | N/A |
+| OpenVibe Link | `main` | `c8564f0b58f567dd909daaadd2f2a7b91f29a7a7` | v0.38.0 (tag) | N/A (Go) | N/A | N/A |
 | OpenVibe.Watch | `main` | `52bfa57a83fdf3cb1b0879071c02ae6f5c601fa4` | 0.1.0 | v0.222.0 | v0.82.0 | v4.109.2 |
 | OpenVibe.Sources | `main` | `7b40905dd943a7ed33ed7afe4ed637f547f48df5` | 0.1.0 | v0.224.0 | v0.82.0 | v4.109.2 |
 | OpenVibe.Codes | `main` | `f955eebafd2d71c5660037cfe5f98631d4160c65` | 0.7.0 | v0.261.0 | v0.82.0 | v4.109.2 |
@@ -145,7 +145,7 @@ Notes:
 | **OpenVibe.Bench** | Pinned evaluation rounds, Elo/Pareto/cost-per-solved rankings, blind judgments, MCP (`docs/api.md`, `docs/benchmarks.md`, `server/pick/pick.js`, `server/rating/*`). | Model-variant family schemas, throughput/TTFT quantitative evidence types, inference-specific benchmark gates. |
 | **OpenVibe.Report** | Time-series/aggregation views, consumes Bench AI boards. | Supply-side profitability summaries tied to the new inference subledger; real model-catalog analytics. |
 | **OpenVibe.Host / Run** | Worker/deployment orchestration, async jobs. | Pinned GGUF/vLLM/SGLang inference worker images, GPU rental orchestration with budget gates. |
-| **OpenVibe.Node / Bot** | Owner-machine inference path in AI (`server/machines.js`). | Commercial node-pool isolation, DNS-rebinding/SSRF tests for node routing. |
+| **OpenVibe Link / Bot** | Owner-machine inference path in AI (`server/machines.js`). | Commercial node-pool isolation, DNS-rebinding/SSRF tests for node routing. |
 | **OpenVibe.Exchange** | v1 free/swap-only marketplace (`README.md`, `STATUS.json`, migrations). | Paid listing v2; inference API/model-pack marketplace (explicitly out of scope per D6). |
 | **OpenVibe.Codes / Actor** | Coding harness, provider integrations, proof-of-work. | Hosted runner completion; integration with new catalog/aliases. |
 | **OpenVibe.Watch / Sources** | Market-data sourcing, rate/model change alerts. | Official provider price/terms ingestion for inference providers; stale-data warnings. |

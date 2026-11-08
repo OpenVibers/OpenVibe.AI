@@ -187,7 +187,7 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
     // The budget of a Codes run token (Codes C3): Codes registers it when it mints the token.
     if (runBudgets) app.use(require('./api/run-budgets').runBudgetsRouter({ runBudgets, auth, log, sendError: (res, err, ctx) => sendError(res, err, ctx, log) }));
     // Community capacity (design: "Offer to the network"): the public offers Exchange lists and the seller's /sell
-    // dashboard, an API for Exchange. Nothing here writes an offer; the offer belongs to Network and the Node owner.
+    // dashboard, an API for Exchange. Nothing here writes an offer; the offer belongs to Network and the Link owner.
     if (community) app.use('/api/v1', require('./api/community').communityRouter({ community, auth, log }));
     app.use(adminRouter({ config, db, registry, pool, quotas, cache, runs, auth, settings, ops, log }));
     // The operator console (/console, /auth/*): Network staff, server-rendered, no scripts (server/console).

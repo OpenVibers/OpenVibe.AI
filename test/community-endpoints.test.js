@@ -2,7 +2,7 @@
 // Community endpoints (the design's SDK gap): a standalone OpenAI-compatible server is registered by its own https
 // address, and AI reaches it only through the egress guard. The tests are the guard's own: https only, no IP literal
 // (127.0.0.1, 10/8, 169.254.169.254, [::1], a NAT64 spelling), no private DNS answer, no redirect to one; a timeout and
-// a response cap; and never the buyer's identity in a header. Then the same trust as a Node machine: the canaries, the
+// a response cap; and never the buyer's identity in a header. Then the same trust as a machine running Link: the canaries, the
 // model fingerprint, the free tier only until verified, and self-dealing earns 0.
 const assert = require('assert');
 const { boot, request, token, suite, ALL } = require('./helpers');

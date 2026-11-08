@@ -188,7 +188,7 @@ t.test('machine any (contracts 0.221.0): the fastest of the person\'s own machin
     listed = [];
     await assert.rejects(m.chat({ machine: 'any', subject: FRAN, model: 'llama3.1:8b', messages: [] }), (e) => e.status === 503 && e.code === 'machine.none' && /is on with/.test(e.message));
     await assert.rejects(m.chat({ machine: 'anyone', subject: FRAN, model: 'm', messages: [] }), (e) => e.status === 422);
-    // Tools (contracts 0.277.0): only a machine whose Node says it can pass them; a named one without it is refused.
+    // Tools (contracts 0.277.0): only a machine whose Link says it can pass them; a named one without it is refused.
     listed = list.map((x) => (x.id === id('CC') ? { ...x, computer: { ...x.computer, ai: { ...x.computer.ai, tools: true } } } : x));
     busy = new Set();
     asked.length = 0;

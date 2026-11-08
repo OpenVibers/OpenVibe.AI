@@ -4,7 +4,7 @@
 -- public seller API. Only AI's own egress guard reaches the address (https, a public DNS answer, never an IP literal,
 -- timeouts, a response cap, and never the buyer's identity in a header). The verification state, spot re-runs, the
 -- reputation and the seller ledger live in community_offers/community_usage: an endpoint is verified exactly as a
--- Node machine is (canaries, the model fingerprint, about 1% spot re-runs, free tier only until verified,
+-- Link machine is (canaries, the model fingerprint, about 1% spot re-runs, free tier only until verified,
 -- self-dealing earns 0). Nothing here stores a prompt, an answer or a buyer.
 CREATE TABLE IF NOT EXISTS community_endpoint_offers (
     id              text COLLATE "C" PRIMARY KEY,       -- ep_<ULID>

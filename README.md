@@ -39,7 +39,7 @@ owns publication truth: Wiki, Blog, News, Live, … decide what to publish.
   key failing and publishes `ai.credential.failed` (`/api/v1/me/*`, `server/me.js`; only the person's own token or
   AI-site session, never a service token or `on_behalf_of`)
 - a person's own computer as their provider (credential provider `node`, contracts 0.220.0): a model on their own
-  machine (Ollama, LM Studio, llama.cpp through the OpenVibe Node), reached through OpenVibe.Bot with `bot.machine.ai`
+  machine (Ollama, LM Studio, llama.cpp through the OpenVibe Link), reached through OpenVibe.Bot with `bot.machine.ai`
   for that person only, free and with no key (`server/machines.js`; Bot on this host by default, `OV_BOT_INTERNAL_URL`);
   machine `any` (contracts 0.221.0) uses the fastest of their machines that is on with the model, then the next
 - the `ai.run.queued|succeeded|failed|cached` events and the `ai.preferences` / `ai.usage_summary`
@@ -392,7 +392,7 @@ receipt and in the answer's `x_openvibe`.
 Memory M2a (spec `research-2026-10-30/memory-m2-spec.md`): a person's own notes, sealed with `AI_MEMORY_KEY`
 (AES-256-GCM, AAD `memory|<owner>|<id>|<scope>`, `m1:`), deduped by an HMAC of the normalized text (HKDF-SHA256, info
 `memory-mac`), and scoped by `user:<usr_…>` on every query. The server redacts every item again with
-`openvibe-sdk/redact` (the Node's shapes and corpus) and refuses an item that is only a secret; what an agent writes is
+`openvibe-sdk/redact` (the Link's shapes and corpus) and refuses an item that is only a secret; what an agent writes is
 a suggestion, and every item a service writes passes `noLooks`. An agent's search is active-only, at most 8 items, in
 the scopes its token's grant names (`user` always; `project:*` when the grant lists it), and leaves a `memory_reads`
 row with ids, never text. The profile cache rebuilds only when its `items_hash` moves, at most once an hour, in-process
@@ -818,7 +818,7 @@ logged or stored.
 
 ### The CLI
 
-`openvibe-node exchange serve --model qwen3:32b --public-url https://…/v1` (OpenVibe.Node) serves the local model
+`openvibe-node exchange serve --model qwen3:32b --public-url https://…/v1` (OpenVibe Link) serves the local model
 through an OpenAI-compatible listener and registers it on the existing endpoint-seller API with the person's
 `OPENVIBE_DEVELOPER_KEY`; Ctrl-C removes the offer. See that repo's README.
 

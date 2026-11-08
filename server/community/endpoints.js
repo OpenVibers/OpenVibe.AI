@@ -1,7 +1,7 @@
 'use strict';
 /**
  * Community endpoints (design EXCHANGE-REMAKE-2026-11-06, "Gap found while building the SDK"): a standalone
- * OpenAI-compatible server can sell to the Exchange, not only an OpenVibe Node machine. A seller registers its own
+ * OpenAI-compatible server can sell to the Exchange, not only an OpenVibe Link machine. A seller registers its own
  * https address with their Network developer key on the public seller API (server/api/seller.js); AI stores the
  * offer here, reads it beside Network's Node offers, and reaches it through this module only.
  *
@@ -17,7 +17,7 @@
  *   - the request is built fresh: the model, the conversation, the output limit and the tools. Never the buyer's
  *     subject, on_behalf_of, run id, key, cookies or forwarding headers.
  *
- * Trust is the Node machine's (server/community/index.js): the same canaries, the same model fingerprint, the same
+ * Trust is the Link machine's (server/community/index.js): the same canaries, the same model fingerprint, the same
  * ~1% spot re-runs, the free tier only until verified, and the self-dealing rule. An endpoint is a community source:
  * it sees the prompt, and only requests that opt in ever reach it.
  */

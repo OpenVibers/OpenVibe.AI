@@ -109,7 +109,7 @@ t.test('your computer (L55 C3): a model at home, no key; an app reaches it only 
     let r = await page('/you', { headers: { Cookie: cookie } });
     assert.ok(r.text.includes('<h2 id="you-pc">Your computer</h2>'));
     assert.ok(r.text.includes('<b>Desk PC</b> · qwen3:8b, llama3.1:8b') && r.text.includes('<b>Old laptop</b> <span class="you-pill">away</span>'), 'its computers and their models');
-    assert.ok(r.text.includes('update OpenVibe Node to v0.36.0'), 'a Node that cannot pass tools says what to update');
+    assert.ok(r.text.includes('update OpenVibe Link to v0.36.0'), 'a Link that cannot pass tools says what to update');
     assert.ok(r.text.includes('<option value="qwen3:8b">'), 'the models to pick from');
     assert.ok(flash(await post('/you/computer', { model: 'two words' })).error, 'a model name has no spaces');
     r = await post('/you/computer', { model: 'qwen3:8b' });
