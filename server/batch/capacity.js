@@ -26,6 +26,8 @@
  */
 const { retailRate } = require('../providers/model-catalog');
 const { insideWindow } = require('../pricebook/offpeak');
+const { enabledProviders } = require('./providers');
+const { scaleCard, toCard } = require('./batcher');
 
 /** Half of a nano price, rounded down: the customer is never charged more than half. */
 const halfOf = (v) => (v == null ? null : (BigInt(v) / 2n).toString());
@@ -161,6 +163,33 @@ async function batchCapacity(model, at, { registry = null, community = null, pri
                 source: 'discount-window',
                 cost,
                 window: { start_hour: Number(row.start_hour), end_hour: Number(row.end_hour), weekdays: row.weekdays || [] },
+            });
+        }
+    }
+
+    // (d) A provider's own batch API, when its real batch price is at most half the retail card. The
+    // customer is charged half the card, so the provider's own batch price has to fit inside that half:
+    // OpenAI and DashScope are the providers whose batch tier is half their list price today. A customer
+    // batch on a paid model then runs at any hour, instead of waiting for an off-peak window.
+    if (registry) {
+        const rows = await registry.listModels();
+        for (const [key, cfg] of Object.entries(enabledProviders())) {
+            if (Number(cfg.discount) > 0.5) continue;                 // the real price would not fit inside the charge
+            const provider = await registry.getProvider(key);
+            if (!provider || provider.status !== 'active') continue;
+            const row = (rows || []).find((r) => String(r.provider_key) === key && String(r.model_key) === String(model.model_key) && r.status === 'active');
+            if (!row) continue;
+            const retail = toCard(retailRate(row));
+            if (!retail) continue;
+            const cost = scaleCard(retail, cfg.discount);
+            if (!cost || !within(cost.nano_usd_per_m, charge)) continue;
+            routes.push({
+                provider: key,
+                model: model.model_key,
+                source: 'native-batch',
+                cost: cost.nano_usd_per_m,
+                batch_discount: cfg.discount,
+                window: cfg.window,
             });
         }
     }

@@ -321,6 +321,42 @@ function createSession({ manager, requestId, payer, projectId, credentialId = nu
         return { maxTokens: plan.maxTokens };
     }
 
+    /**
+     * BA2: the hold of a batch run. The provider's batch API answers later, so no provider attempt
+     * happens before the answer and there is nothing for onRoute to hold on. The hold is taken here
+     * instead, on the same card the ordinary path would have used: the retail card, halved when the
+     * request is a batch. A provider the network has no managed access to is not held for (fail closed:
+     * nobody is charged and the network carries the cost).
+     */
+    async function holdRoute({ card = null, provider = null, model = null, access = null, maxTokens = 4096 } = {}) {
+        if (s.settled || s.released) return null;
+        if (!card || !card.nano_usd_per_m) return null;
+        const base = card;
+        const retail = applyDiscount(base, discount);
+        s.retailBase = base;
+        s.answeredProvider = provider;
+        s.answeredModel = model;
+        if (!MANAGED_ACCESS.has(String(access || ''))) return null;    // not a managed paid offer: nobody is charged
+        if (!retail) return null;
+        const plan = affordable(retail, { inputTokens: s.inputTokens, maxTokens });
+        s.retail = retail;
+        if (!s.holdId) {
+            s.heldNano = plan.amount;
+            const fingerprint = sha256({
+                resolved_model: model || null, revision: null,
+                input_tokens: s.inputTokens, output_tokens: plan.maxTokens, max_cost_usd: s.maxCostNano == null ? null : String(s.maxCostNano),
+                rate_version: retail.version, subject: s.subject, project_id: s.projectId,
+            });
+            const created = await manager.hold({
+                idempotency_key: holdKey, subject: s.subject, ...(s.projectId ? { project_id: s.projectId } : {}), ...(s.credentialId ? { credential_id: s.credentialId } : {}),
+                max_nano_usd: String(plan.amount), rate_version: retail.version, request_fingerprint: fingerprint, service: 'ai',
+            }, s.requestId);
+            s.holdId = created.hold_id;
+            s.heldNano = BigInt(String(created.held_nano_usd == null ? plan.amount : created.held_nano_usd));
+        }
+        return { maxTokens: plan.maxTokens };
+    }
+
     /** The projected output charge of what has streamed so far. */
     function projectedNano() {
         const output = Math.ceil(s.streamedChars / 4);
@@ -421,7 +457,7 @@ function createSession({ manager, requestId, payer, projectId, credentialId = nu
     }
 
     return {
-        onRoute, observe, settle, release, projectedNano, usageOf, requestId: s.requestId,
+        onRoute, holdRoute, observe, settle, release, projectedNano, usageOf, requestId: s.requestId,
         get holdId() { return s.holdId; }, get heldNano() { return s.heldNano; }, get retail() { return s.retail; },
         get streamedChars() { return s.streamedChars; }, get settled() { return s.settled; }, get released() { return s.released; },
         get inputTokens() { return s.inputTokens; }, get payer() { return s.payer; },
@@ -484,6 +520,34 @@ function createCredits({ config, db = null, registry = null, env = process.env, 
         pendingSettlements: settlements ? () => settlements.pending() : async () => [],
         startSettlements: settlements ? () => settlements.start() : () => null,
         stopSettlements: settlements ? () => settlements.stop() : () => {},
+        /**
+         * BA2: can this payer cover a run of this size at this card?
+         *
+         * The check is a real hold (Billing answers 402 when the Balance is short) that is released at
+         * once: nothing is reserved for a run that has not answered yet, and the money itself is taken
+         * when the answer arrives. A batch asks this before the provider is given the work, so a customer
+         * who cannot pay is refused before the network owes the provider anything.
+         *
+         * → { ok: true } when the payer can cover it, { ok: false, reason } when it cannot.
+         */
+        async probe({ requestId, ctx = {}, input = {}, card = null, provider = null, model = null, access = null, maxTokens = 4096 } = {}) {
+            if (!card) return { ok: true, skipped: 'no card' };
+            // The probe holds under its own key: the run's own hold (taken when the answer arrives) must
+            // not find the key taken.
+            const session = manager.begin({ requestId: `probe:${String(requestId || ctx.runId || '')}`, ctx, input, attribution: ctx.attribution || null, onBehalfOf: ctx.onBehalfOf || null, personPayer: ctx.personPays !== false });
+            if (!session) return { ok: true, skipped: 'no payer' };        // nobody pays: the network carries the run
+            try {
+                await session.holdRoute({ card, provider, model, access, maxTokens });
+            } catch (err) {
+                if (err && (err.status === 402 || err.code === 'billing.insufficient_funds')) {
+                    return { ok: false, reason: 'billing.insufficient_funds', detail: String((err && err.detail) || 'Not enough Balance') };
+                }
+                throw err;
+            }
+            await session.release().catch(() => null);
+            return { ok: true };
+        },
+
         /**
          * Begin a request's Balance session, or null when there is no payer (the pool then refuses paid offers
          * that carry a versioned card), when an app names no project, or for a BYOK run (no managed route).

@@ -21,6 +21,9 @@ function batchesRouter({ batches, auth, config, clock = { now: () => Date.now() 
     const r = express.Router();
     // The same guards the run routes use: a person's own token, a service token with ai.run.create, or
     // a developer app with ai.app.run.
+    // BA2: a first-party service may also open a batch of the network's own when its token carries the
+    // ai.batches.create grant. The grant is checked by the batch service (server/batch/service.js), which
+    // knows it as a local rule: the contracts do not know that capability id yet (BA3 adds it).
     const create = auth.appOrCap(CAPS.appRun, CAPS.runCreate);
     const read = auth.appOrCap(CAPS.appRun, CAPS.runRead, CAPS.runCreate);
     const wrap = (fn) => async (req, res) => { try { const out = await fn(req, res); if (out !== undefined) res.json(out); } catch (err) { sendError(res, err, req.ov, log); } };
