@@ -15,7 +15,7 @@ const OWNER = { type: 'user', id: 'usr_' + 'A'.repeat(26) };
 /** The owner's GPU settings: the marketplace key (a secret) and the monthly cap (money). */
 async function settings(h, { key = 'vast-test-key', cap = '50000000000', idle = null, maxRuntime = null } = {}) {
     const store = h.settings.gpus.store;
-    const values = { monthly_cap: Number(cap) };
+    const values = { monthly_cap: Number(cap), costs_bounded: true, extra_hourly_nano: 0 };
     if (idle != null) values.idle_minutes = idle;
     if (maxRuntime != null) values.max_runtime_minutes = maxRuntime;
     await store.apply(values, { merge: true, actor: OWNER, reason: 'the test' });
@@ -249,6 +249,26 @@ t.test('an unknown rental retains its reservation until reconciled', async () =>
         assert.strictEqual(row.status, 'starting');
         const after = await h.gpus.moneySummary();
         assert.ok(BigInt(after.committed_nano) >= BigInt(before.committed_nano), 'an empty listing cannot release an uncertain financial commitment');
+    } finally { await h.stop(); }
+});
+
+t.test('unbounded extras block rentals and the allowance counts against the cap', async () => {
+    const api = createGpuFetch();
+    const h = await boot({ clock: { now: () => T0 }, fetchImpl: api.fetchImpl });
+    try {
+        await settings(h, { cap: '1000000000', maxRuntime: 60 });
+        await h.settings.gpus.store.apply({ costs_bounded: false }, { merge: true, actor: OWNER });
+        const blocked = await h.gpus.launch('deepseek-r1-32b');
+        assert.strictEqual(blocked.ok, false);assert.match(blocked.reason, /hourly bound/);
+        assert.strictEqual(api.calls.create.length, 0);
+        await h.settings.gpus.store.apply({ costs_bounded: true, extra_hourly_nano: 1000000000 }, { merge: true, actor: OWNER });
+        assert.strictEqual((await h.gpus.launch('deepseek-r1-32b')).code, 'gpu.cap');
+        assert.strictEqual(api.calls.create.length, 0);
+        await h.settings.gpus.store.apply({ extra_hourly_nano: 100000000 }, { merge: true, actor: OWNER });
+        const rented = await h.gpus.launch('deepseek-r1-32b');
+        assert.ok(rented.ok, rented.reason);
+        assert.strictEqual(String(rented.hourly_nano), '234800000');
+        assert.strictEqual(rented.instance.price_per_hour, '0.2348');
     } finally { await h.stop(); }
 });
 

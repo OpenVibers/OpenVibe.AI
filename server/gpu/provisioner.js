@@ -101,22 +101,27 @@ function createGpuProvisioner({
         } catch {
             cap = null;
         }
+        let extraHourly = null;
+        try { extraHourly = money.nanoCount(v.extra_hourly_nano, 'the hourly storage and network allowance'); } catch {}
+        const bounded = v.costs_bounded === true && extraHourly != null && extraHourly >= 0n;
         const vastKey = String(v.vast_key || '');
         const runpodKey = String(v.runpod_key || '');
         let reason = '';
         if (!vastKey && !runpodKey) reason = 'no Vast.ai or RunPod API key';
         else if (cap == null || cap <= 0n) reason = 'no monthly cap';
+        else if (!bounded) reason = 'storage and network costs need an explicit hourly bound';
         return {
             strategy: STRATEGIES.includes(v.strategy) ? v.strategy : 'cheapest',
             dry_run: v.dry_run === true,
             vast_key: vastKey,
             runpod_key: runpodKey,
             cap_nano: cap,
+            extra_hourly_nano: extraHourly,
             idle_minutes: clampInt(v.idle_minutes, 1, 1440, DEFAULT_IDLE_MINUTES),
             max_runtime_minutes: clampInt(v.max_runtime_minutes, 1, 10080, DEFAULT_MAX_RUNTIME_MINUTES),
             warm_window: String(v.warm_window || '').trim(),
             region: String(v.region || DEFAULT_REGION).trim().toUpperCase() || DEFAULT_REGION,
-            enabled: Boolean(vastKey || runpodKey) && cap != null && cap > 0n,
+            enabled: Boolean(vastKey || runpodKey) && cap != null && cap > 0n && bounded,
             reason,
         };
     }
@@ -299,7 +304,8 @@ function createGpuProvisioner({
         if (!adapter) return { ok: false, code: 'gpu.no_key', reason: 'no ' + marketplace + ' API key' };
 
         // 2. the cap: the reservation has to fit under what is left of it
-        const hourly = money.nanoUsd(offer.price_per_hour, "the offer's price");
+        const baseHourly = money.nanoUsd(offer.price_per_hour, "the offer's price");
+        const hourly = baseHourly == null ? null : baseHourly + cfg.extra_hourly_nano;
         if (hourly == null || hourly <= 0n) {
             return { ok: false, code: 'gpu.bad_price', reason: "the offer has no usable price" };
         }
@@ -356,7 +362,7 @@ function createGpuProvisioner({
                 gpu_name: String(offer.gpu_name || ''), gpu_ram_mb: Number(offer.gpu_ram_mb) || 0,
                 num_gpus: Number(offer.num_gpus) || 1, disk_gb: Number(offer.disk_gb) || 0,
                 reliability: Number(offer.reliability) || 0, region: String(offer.region || ''),
-                price_per_hour: String(offer.price_per_hour), hourly_nano: hourly.toString(), reserved_nano: reserved.toString(),
+                price_per_hour: money.usdText(hourly).slice(1), hourly_nano: hourly.toString(), reserved_nano: reserved.toString(),
                 max_runtime_minutes: maxMinutes, started_at: iso(t), charged_at: iso(t), label: id,
                 created_at: iso(t), updated_at: iso(t),
                 own_endpoint_id: ownEndpointId, idle_minutes: idleMinutes == null ? null : clampInt(idleMinutes, 1, 1440, cfg.idle_minutes),
@@ -366,7 +372,7 @@ function createGpuProvisioner({
             if (err.code === 'gpu.cap' || err.code === 'gpu.uncertain') return { ok: false, code: err.code, reason: err.message };
             throw err;
         }
-        await audit(actor, 'gpu.placement', 'gpu_instance', id, { strategy, marketplace, offer_id: offer.id, reasons: quote.reasons, hourly_nano: hourly.toString() });
+        await audit(actor, 'gpu.placement', 'gpu_instance', id, { strategy, marketplace, offer_id: offer.id, reasons: quote.reasons, base_hourly_nano: baseHourly.toString(), extra_hourly_nano: cfg.extra_hourly_nano.toString(), hourly_nano: hourly.toString() });
         await audit(actor, 'gpu.instance.requested', 'gpu_instance', id, {
             model: spec.key, marketplace, offer_id: String(offer.id), hourly_nano: hourly.toString(),
             reserved_nano: reserved.toString(), max_runtime_minutes: maxMinutes, label: id,
