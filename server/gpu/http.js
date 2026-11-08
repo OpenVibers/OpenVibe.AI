@@ -5,22 +5,23 @@
  */
 const { AiError } = require('../util');
 
-async function apiJson(fetchImpl, url, { method = 'GET', body = null, key = null, label = 'the marketplace' } = {}) {
+async function apiJson(fetchImpl, url, { method = 'GET', body = null, key = null, label = 'the marketplace', allowMissing = false } = {}) {
     const headers = { Accept: 'application/json' };
     if (body != null) headers['Content-Type'] = 'application/json';
     if (key) headers.Authorization = 'Bearer ' + key;
     let res;
     try {
-        res = await fetchImpl(url, { method, headers, body: body != null ? JSON.stringify(body) : undefined });
+        res = await fetchImpl(url, { method, headers, redirect: 'error', signal: AbortSignal.timeout(15000), body: body != null ? JSON.stringify(body) : undefined });
     } catch (err) {
-        throw new AiError(502, 'gpu.marketplace_unreachable', label + ' did not answer: ' + String(err && err.message).slice(0, 200));
+        throw new AiError(502, 'gpu.marketplace_unreachable', label + ' did not answer');
     }
     const text = await res.text().catch(() => '');
     let json = null;
     try { json = text ? JSON.parse(text) : null; } catch { json = null; }
+    if (res.status === 404 && allowMissing) return { missing: true };
     if (!res.ok) {
         const detail = (json && (json.detail || json.message || json.error)) || String(res.status);
-        throw new AiError(502, 'gpu.marketplace_error', label + ' refused: ' + String(detail).slice(0, 200) + ' (' + res.status + ')');
+        throw new AiError(502, 'gpu.marketplace_error', label + ' refused (' + res.status + ')' );
     }
     return json;
 }

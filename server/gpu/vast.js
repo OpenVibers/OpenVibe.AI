@@ -105,7 +105,7 @@ function vastAdapter({ fetchImpl = globalThis.fetch, key = null, baseUrl = BASE_
                 // when no live row of ours owns it.
                 label: String(opts.label || ('openvibe-' + spec.key)),
             };
-            const out = await apiJson(fetchImpl, baseUrl + '/api/v0/asks/' + offer.id + '/', { method: 'POST', body, ...auth, label: 'Vast.ai' });
+            const out = await apiJson(fetchImpl, baseUrl + '/api/v0/asks/' + offer.id + '/', { method: 'PUT', body, ...auth, label: 'Vast.ai' });
             if (!out || out.success === false) {
                 const err = new Error('Vast.ai did not rent the offer');
                 err.status = 502;
@@ -121,18 +121,20 @@ function vastAdapter({ fetchImpl = globalThis.fetch, key = null, baseUrl = BASE_
         },
 
         async showInstance(remoteId) {
-            const out = await apiJson(fetchImpl, baseUrl + '/api/v0/instances/' + encodeURIComponent(remoteId), { ...auth, label: 'Vast.ai' });
-            const status = String((out && (out.actual_status || out.status)) || 'unknown');
+            const out = await apiJson(fetchImpl, baseUrl + '/api/v0/instances/' + encodeURIComponent(remoteId), { ...auth, label: 'Vast.ai', allowMissing: true });
+            if (out && out.missing) return { remote_id: remoteId, state: 'deleted', deleted: true, endpoint: '' };
+            const instance = out && out.instances ? out.instances : out;
+            const status = String((instance && (instance.actual_status || instance.status)) || 'unknown');
             return {
                 remote_id: remoteId,
                 state: status,
-                endpoint: endpointOf(out, (opts_port(out))),
+                endpoint: endpointOf(instance, (opts_port(instance))),
                 raw: out,
             };
         },
 
         async destroyInstance(remoteId) {
-            const out = await apiJson(fetchImpl, baseUrl + '/api/v0/instances/' + encodeURIComponent(remoteId), { method: 'DELETE', ...auth, label: 'Vast.ai' });
+            const out = await apiJson(fetchImpl, baseUrl + '/api/v0/instances/' + encodeURIComponent(remoteId), { method: 'DELETE', ...auth, label: 'Vast.ai', allowMissing: true });
             return Boolean(out && out.success !== false);
         },
     };

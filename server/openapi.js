@@ -475,9 +475,9 @@ route('get', '/own-endpoints', {
 });
 route('post', '/own-endpoints', {
     operationId: 'createOwnEndpoint', summary: 'Start a private endpoint on a chosen model or your own weights', tags: ['exchange'], security: [{ bearer: [] }],
-    description: 'Only a person. Name `model` (a key from GET /exchange/endpoints) or `weights` ({ repo, file, lora_repo?, lora_file? }: a Hugging Face .gguf and an optional LoRA, fetched by the rented container). The endpoint is started by the reconciler on the cheapest fit, after a Billing hold of its worst case; a start that would pass the owner\'s monthly cap is refused with a plain reason, and nothing is rented. 409 own_endpoint.off carries the same reason the public status does.',
+    description: 'Only a person. Name `model` (a key from GET /exchange/endpoints) or `weights` ({ repo, file, lora_repo?, lora_file? }: a Hugging Face .gguf and an optional LoRA, fetched by the rented container). The endpoint is started by the reconciler using the requested strategy (Cheapest by default), after a Billing hold of its worst case; a start that would pass the owner\'s monthly cap is refused with a plain reason, and nothing is rented. 409 own_endpoint.off carries the same reason the public status does.',
     requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: {
-        model: str(), idle_minutes: integer({ minimum: 1, maximum: 120 }),
+        model: str(), strategy: str({ enum: ['automatic', 'cheapest', 'fastest'] }), idle_minutes: integer({ minimum: 1, maximum: 120 }),
         weights: { type: 'object', required: ['repo', 'file'], properties: { repo: str(), file: str(), lora_repo: str(), lora_file: str() } },
         display_name: str(),
     } } } } },
@@ -494,6 +494,18 @@ route('post', '/own-endpoints/{id}/stop', {
     description: 'Only its owner. The reconciler gives the rent back; Billing settles the seconds it ran, and the price stops.',
     parameters: [path('id', str({ pattern: '^oep_[0-9A-HJKMNP-TV-Z]{26}$' }))],
     responses: { 200: json('The endpoint', { type: 'object', required: ['endpoint'], properties: { endpoint: { type: 'object' } } }), 404: problem, ...errors([401, 403]) },
+});
+route('get', '/exchange/gpu-quotes/{model}', {
+    operationId: 'exchangeGpuQuote', summary: 'Preview GPU marketplace prices without renting', tags: ['exchange'], security: [],
+    description: 'Public read-only preview for a known endpoint model. Base GPU rates exclude the operator storage/network allowance. No Billing hold or purchase; cached for one minute by model and strategy.',
+    parameters: [path('model', str(), 'Model key from /exchange/endpoints'), query('strategy', str({ enum: ['automatic', 'cheapest', 'fastest', 'private', 'own'], default: 'cheapest' }))],
+    responses: {
+        200: json('Quote preview', { type: 'object', properties: {
+            dry_run: { type: 'boolean' }, strategy: str(), selected: nullable('object'), offers: arrayOf({ type: 'object' }), reasons: arrayOf(str()), expires_at: str(),
+        } }),
+        422: json('Unknown model or strategy', { type: 'object', properties: { error: str() } }),
+        503: json('GPU quotes unavailable', { type: 'object', properties: { error: str() } }),
+    },
 });
 route('get', '/exchange/models/{slug}', {
     operationId: 'exchangeModel', summary: 'One model and its offers', tags: ['exchange'], security: [],

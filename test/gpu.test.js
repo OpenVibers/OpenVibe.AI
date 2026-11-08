@@ -15,7 +15,7 @@ const OWNER = { type: 'user', id: 'usr_' + 'A'.repeat(26) };
 /** The owner's GPU settings: the marketplace key (a secret) and the monthly cap (money). */
 async function settings(h, { key = 'vast-test-key', cap = '50000000000', idle = null, maxRuntime = null } = {}) {
     const store = h.settings.gpus.store;
-    const values = { monthly_cap: Number(cap) };
+    const values = { monthly_cap: Number(cap), costs_bounded: true, extra_hourly_nano: 0 };
     if (idle != null) values.idle_minutes = idle;
     if (maxRuntime != null) values.max_runtime_minutes = maxRuntime;
     await store.apply(values, { merge: true, actor: OWNER, reason: 'the test' });
@@ -228,10 +228,11 @@ t.test('a destroy that keeps failing is tried again every pass and the operator 
         assert.strictEqual(gauges[0].value, 3, 'the gauge the operator alert reads');
         const audit = await h.registry.listAudit({ action: 'gpu.orphan.destroy_failed' });
         assert.strictEqual(audit.length, 1, 'the operator alert is on the audit log');
+        assert.strictEqual((await h.gpus.launch('deepseek-r1-32b')).code, 'gpu.uncertain', 'an unaccounted orphan blocks new spending');
     } finally { await h.stop(); }
 });
 
-t.test('a row whose rental never came back gives its reservation back', async () => {
+t.test('an unknown rental retains its reservation until reconciled', async () => {
     const api = createGpuFetch();
     let now = T0;
     const h = await boot({ clock: { now: () => now }, fetchImpl: api.fetchImpl });
@@ -246,9 +247,113 @@ t.test('a row whose rental never came back gives its reservation back', async ()
         now += 11 * 60_000;      // past the give-up time
         await h.gpus.tick();
         const row = await h.db.prepare('SELECT * FROM gpu_instances WHERE id = ?').get(id);
-        assert.strictEqual(row.status, 'refused');
+        assert.strictEqual(row.status, 'starting');
         const after = await h.gpus.moneySummary();
-        assert.strictEqual(BigInt(after.committed_nano), 0n, 'the reservation is free again');
+        assert.ok(BigInt(after.committed_nano) >= BigInt(before.committed_nano), 'an empty listing cannot release an uncertain financial commitment');
+    } finally { await h.stop(); }
+});
+
+t.test('unbounded extras block rentals and the allowance counts against the cap', async () => {
+    const api = createGpuFetch();
+    const h = await boot({ clock: { now: () => T0 }, fetchImpl: api.fetchImpl });
+    try {
+        await settings(h, { cap: '1000000000', maxRuntime: 60 });
+        await h.settings.gpus.store.apply({ costs_bounded: false }, { merge: true, actor: OWNER });
+        const blocked = await h.gpus.launch('deepseek-r1-32b');
+        assert.strictEqual(blocked.ok, false);assert.match(blocked.reason, /hourly bound/);
+        assert.strictEqual(api.calls.create.length, 0);
+        await h.settings.gpus.store.apply({ costs_bounded: true, extra_hourly_nano: 1000000000 }, { merge: true, actor: OWNER });
+        assert.strictEqual((await h.gpus.launch('deepseek-r1-32b')).code, 'gpu.cap');
+        assert.strictEqual(api.calls.create.length, 0);
+        await h.settings.gpus.store.apply({ extra_hourly_nano: 100000000 }, { merge: true, actor: OWNER });
+        const rented = await h.gpus.launch('deepseek-r1-32b');
+        assert.ok(rented.ok, rented.reason);
+        assert.strictEqual(String(rented.hourly_nano), '234800000');
+        assert.strictEqual(rented.instance.price_per_hour, '0.2348');
+    } finally { await h.stop(); }
+});
+
+t.test('accepted deletion retains the reservation until the instance is confirmed gone', async () => {
+    const api = createGpuFetch();
+    let now = T0;
+    const h = await boot({ clock: { now: () => now }, fetchImpl: api.fetchImpl });
+    try {
+        await settings(h);
+        const rented = await h.gpus.launch('deepseek-r1-32b');
+        api.deletePending = true;
+        await settings(h, { cap: '0' });
+        await h.gpus.tick();
+        let row = await h.db.prepare('SELECT * FROM gpu_instances WHERE id=?').get(rented.instance.id);
+        assert.notStrictEqual(row.status, 'destroyed');
+        assert.ok(BigInt((await h.gpus.moneySummary()).committed_nano) > 0n);
+        now += 24 * 3600000;
+        const overdue = await h.gpus.moneySummary();
+        assert.ok(BigInt(overdue.committed_nano) >= BigInt(overdue.spent_nano), 'unconfirmed deletion cannot understate the commitment');
+        api.deletePending = false;
+        await h.gpus.tick();
+        row = await h.db.prepare('SELECT * FROM gpu_instances WHERE id=?').get(rented.instance.id);
+        assert.strictEqual(row.status, 'destroyed');
+    } finally { await h.stop(); }
+});
+
+t.test('quotes and dry runs work without a cap and never create an instance', async () => {
+    const api = createGpuFetch();
+    const h = await boot({ clock: { now: () => T0 }, fetchImpl: api.fetchImpl });
+    try {
+        const q = await h.gpus.preview('deepseek-r1-32b');
+        assert.strictEqual(q.selected.id, '111');
+        const dry = await h.gpus.launch('deepseek-r1-32b', { dryRun: true });
+        assert.strictEqual(dry.dry_run, true);
+        assert.strictEqual(api.calls.create.length, 0);
+        for (const strategy of ['own', 'private']) {
+            const p = await h.gpus.preview('deepseek-r1-32b', { strategy });
+            assert.strictEqual(p.selected, null);
+        }
+        assert.strictEqual((await h.gpus.state()).instances.length, 0);
+    } finally { await h.stop(); }
+});
+
+t.test('disabling the cap continues cleanup of paid instances', async () => {
+    const api = createGpuFetch();
+    const h = await boot({ clock: { now: () => T0 }, fetchImpl: api.fetchImpl });
+    try {
+        await settings(h);
+        await h.gpus.launch('deepseek-r1-32b');
+        await settings(h, { cap: '0' });
+        await h.gpus.tick();
+        assert.ok(api.calls.destroy.length > 0);
+    } finally { await h.stop(); }
+});
+
+t.test('concurrent models cannot over-reserve the same monthly cap', async () => {
+    const api = createGpuFetch();
+    const h = await boot({ clock: { now: () => T0 }, fetchImpl: api.fetchImpl });
+    try {
+        await settings(h, { cap: '150000000', maxRuntime: 60 });
+        const results = await Promise.all([h.gpus.launch('deepseek-r1-32b'), h.gpus.launch('deepseek-r1-32b-abliterated')]);
+        assert.strictEqual(results.filter(r => r.ok).length, 1);
+        assert.strictEqual(api.calls.create.length, 1);
+        assert.ok(BigInt((await h.gpus.moneySummary()).committed_nano) <= 150000000n);
+    } finally { await h.stop(); }
+});
+
+t.test('a lost create response retains its reservation and is recovered by label', async () => {
+    const api = createGpuFetch();
+    const fetchImpl = async (url, options) => {
+        const response = await api.fetchImpl(url, options);
+        if (String(url).includes('/asks/')) throw new Error('response lost');
+        return response;
+    };
+    const h = await boot({ clock: { now: () => T0 }, fetchImpl });
+    try {
+        await settings(h);
+        const pending = await h.gpus.launch('deepseek-r1-32b');
+        assert.strictEqual(pending.pending, true);
+        assert.ok(BigInt((await h.gpus.moneySummary()).committed_nano) > 0n);
+        await h.gpus.tick();
+        const row = await h.db.prepare('SELECT * FROM gpu_instances WHERE id=?').get(pending.instance.id);
+        assert.ok(row.remote_id, 'the label recovers the purchase rather than issuing a second one');
+        assert.strictEqual(api.calls.create.length, 1);
     } finally { await h.stop(); }
 });
 

@@ -95,7 +95,7 @@ function marketplace(billing) {
 
 async function setGpus(h, { key = 'vast-test-key', cap = '50000000000', idle = null } = {}) {
     const store = h.settings.gpus.store;
-    const values = { monthly_cap: Number(cap) };
+    const values = { monthly_cap: Number(cap), costs_bounded: true, extra_hourly_nano: 0 };
     if (idle != null) values.idle_minutes = idle;
     await store.apply(values, { merge: true, actor: OWNER, reason: 'the test' });
     if (key) await store.setSecret('vast.key', key, { actor: OWNER, reason: 'the test' });

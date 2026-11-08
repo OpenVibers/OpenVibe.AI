@@ -562,6 +562,9 @@ function consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, e
             state: await gpus.state(),
         }));
     }));
+    r.get('/console/gpus/:model/quote', read, wrap(async (req, res) => {
+        res.json(await gpus.preview(String(req.params.model), { strategy: req.query.strategy || undefined }));
+    }));
     r.post('/console/gpus/:model/:action', needs(CAPS.providerManage), wrap(async (req, res) => {
         await gpus.request(String(req.params.model || ''), String(req.params.action || ''), req.staff.subject);
         res.redirect(303, '/console/gpus?done=gpu_requested');

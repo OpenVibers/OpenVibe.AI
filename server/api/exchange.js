@@ -160,6 +160,25 @@ function exchangeRouter({ db, registry, pool, quotas = null, env = process.env, 
 
     // Your own endpoint: whether it is on and, when it is off, the plain reason. Public: the Exchange page
     // reads it before anyone signs in, and nothing here is per person.
+    // Public, non-personal, read-only previews. Cache each model/strategy for one minute to avoid
+    // turning this public page into unlimited provider searches. Never expose account keys or ids.
+    const gpuQuotes = new Map();
+    r.get('/api/v1/exchange/gpu-quotes/:model', publicCache(30), async (req, res, next) => {
+        try {
+            if (!ownEndpoints) return res.status(503).json({ error: 'GPU quotes unavailable' });
+            const model = String(req.params.model);
+            const strategy = String(req.query.strategy || 'cheapest');
+            if (!ownEndpoints.status().models.some(m => m.key === model) || !['automatic','cheapest','fastest','private','own'].includes(strategy)) return res.status(422).json({ error: 'unknown model or strategy' });
+            const key = model + ':' + strategy;
+            let entry = gpuQuotes.get(key);
+            if (!entry || entry.until < clock.now()) {
+                entry = { until: clock.now() + 60000, promise: ownEndpoints.preview(model, { strategy }) };
+                gpuQuotes.set(key, entry);
+            }
+            res.json(await entry.promise);
+        } catch (err) { next(err); }
+    });
+
     r.get('/api/v1/exchange/endpoints', publicCache(30), (req, res) => {
         res.json(ownEndpoints ? ownEndpoints.status() : {
             enabled: false, reason: 'The GPU provider is not set up yet, so no endpoint can start.', reasons: ['The GPU provider is not set up yet, so no endpoint can start.'],

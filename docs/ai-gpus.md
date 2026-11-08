@@ -2,10 +2,10 @@
 
 The design (§2 "Our own GPUs", the Exchange remake) asks for a provisioner that rents a GPU from a
 marketplace, serves a model on it, registers the endpoint as an offer for the router and scales the
-whole thing to zero when nobody is using it - under a hard monthly cap the owner sets.
+whole thing to zero when nobody is using it - under an owner-set monthly reservation cap.
 
 This is that provisioner. It lives in AI (server/gpu/) and it is **off until the owner has set a
-marketplace API key and a monthly cap**.
+marketplace API key, a monthly cap and a confirmed bound on extra storage/network costs**.
 
 ## The owner settings (the namespace `ai.gpus`)
 
@@ -23,7 +23,7 @@ The owner changes them the way every other AI setting changes: through Network's
 proxies to AI's `/internal/config/ai.gpus`. The keys are write-only (the panel never shows a value
 again), the origins are written by AI, and the cap is a money key.
 
-Without a key **or** without a cap the provisioner does nothing: no search, no instance, no money.
+Without a key **or** without a cap no new instance is rented. Read-only quotes work separately; cleanup of existing instances continues even if the cap is disabled.
 
 ## What it does
 
@@ -69,8 +69,8 @@ The money is integer nano-USD in BigInt, never a float (the same rule AI's Credi
 instance holds a **reservation** - the budget it may cost - before it starts, and the reservation
 is part of the month's committed spend. A new instance is only started when its reservation still
 fits under the cap; if it does not, the launch is refused and the reason is returned. The instance is
-given back when its reservation has run out, so the money stops there. The worst case (the
-committed spend) therefore never passes the cap.
+scheduled for release when its reservation runs out. New reservations cannot pass the cap;
+provider deletion failures can continue billing beyond it and require operator intervention.
 
 Vast and RunPod bill **per second**, so the money is charged for the seconds an instance really ran
 (the ledger rounds up to the nano, so it never charges less than the GPU was paid for). The console page
@@ -114,7 +114,7 @@ The feature is off while **any** of the three is missing, and the public
 `GET /api/v1/exchange/endpoints` answers the plain reason the Exchange page shows:
 
 1. `ai.gpus` `vast.key` or `runpod.key` (the owner's GPU provider key),
-2. `ai.gpus` `monthly_cap` (the hard monthly cap),
+2. `ai.gpus` `monthly_cap` (the monthly reservation cap), plus `costs_bounded=true` and an explicit `extra_hourly_nano`,
 3. Balance billing (`AI_CREDITS` and Billing), because an endpoint is paid for per second.
 
 The first two are `x-owner-input` fields (group `GPUs`, `x-required-for: "own endpoints"`) so the admin
@@ -127,7 +127,7 @@ panel's Setup tab lists them with what they turn on and where to get them.
 
 - it is off without a key and without a cap,
 - the cheapest offer that fits is rented, registered as an offer and health-checked,
-- the monthly cap is never passed: the launch is refused and says why,
+- a launch that would exceed the monthly reservation cap is refused with a reason,
 - an idle instance scales to zero and the money is settled,
 - an instance that dies is replaced and the router gets the new endpoint,
 - an instance the marketplace accepted before the row knew its id is recovered, not thrown away,
@@ -150,3 +150,42 @@ local fake Billing and a canned GPU answer:
 The weights URL, the image and the container command are data in `server/gpu/catalog.js` - they are
 what the first launch really runs, and the console page shows them. The owner checks them (and
 corrects them there) before the first rented instance starts.
+
+
+## Compute broker strategies and quote previews
+
+`ai.gpus.strategy` selects `cheapest` (default), `fastest`, or `automatic` across configured
+Vast and RunPod marketplaces. `private` and `own` refuse third-party GPU rentals; those need
+an existing Link/OpenVibe endpoint. Region remains a hard constraint. Without measured
+latency, Fastest explicitly reports that it falls back to price within the required region.
+`ai.gpus.dry_run=true` makes shared-model launch requests quote-only and disables new private
+endpoints. Keys and the positive `monthly_cap` (nano-USD) are still required for live rentals.
+Also explicitly set `ai.gpus.extra_hourly_nano` to a conservative per-instance hourly bound
+for disk/network charges (including zero if appropriate), and `ai.gpus.costs_bounded=true`
+only after enforcing those limits in the runtime/network. Both default to blocking live
+rentals. The allowance is added to reservations, hourly prices and metered cost estimates;
+these estimates are not a reconciliation against the provider invoice. Existing paid
+instances continue cleanup when these switches are unset. Quote previews show the base GPU
+price; the live placement audit records base, allowance and total separately.
+No new accounts, payment methods or provider keys are created.
+
+`GET /console/gpus/:model/quote?strategy=cheapest` previews without a Billing hold or provider
+purchase. Exchange uses the public, minute-cached `/api/v1/exchange/gpu-quotes/:model` and can
+preview even when rentals are disabled. A private-endpoint create may include `strategy`;
+the choice persists on the endpoint. Every live GPU choice is recorded as `gpu.placement`
+in the existing audit log, including marketplace, offer, strategy, reasons and hourly cost.
+
+Reservations are serialized through `gpu_budget_lock`. An uncertain creation result keeps
+its row and reservation for label recovery, including across month boundaries; an empty or
+failed instance listing cannot prove a purchase never happened. Disabling the cap continues
+remote cleanup. Metering splits elapsed time at UTC month boundaries and avoids counting
+already-charged runtime twice in the live summary. Release begins a minute before the runtime
+limit; an accepted DELETE retains the reservation until a follow-up lookup confirms absence.
+Failed or pending deletion remains a billable risk;
+the existing destroy-failure alert must be monitored.
+
+RunPod uses the official v2 catalogue (`/v2/catalog/gpus?include=AVAILABILITY&product=POD`),
+GiB-to-MiB conversion, secure-cloud GPU counts, region filtering, numeric disk size and an env
+map. Vast rents with PUT, not POST. Tests stub both APIs; no live purchase was made.
+
+Source: https://github.com/runpod/runpod-plugins-official/blob/main/plugins/runpod/skills/runpod-migrate/reference/graphql-to-v2.md

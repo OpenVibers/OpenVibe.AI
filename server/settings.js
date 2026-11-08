@@ -179,6 +179,26 @@ const GPU_SCHEMA = Object.freeze({
     type: 'object',
     additionalProperties: false,
     properties: {
+        strategy: {
+            type: 'string', enum: ['automatic', 'cheapest', 'fastest', 'private', 'own'], default: 'cheapest', title: 'GPU placement strategy', 'x-class': 'internal',
+            description: 'How GPU offers are selected within the required region, model resources and spending cap. Own and private strategies refuse marketplace rentals.',
+            'x-enum-labels': {
+                automatic: { label: 'Automatic', description: 'Use the first eligible compute tier, then choose by price.' },
+                cheapest: { label: 'Cheapest', description: 'Choose the lowest hourly price that fits the model.' },
+                fastest: { label: 'Fastest', description: 'Prefer measured latency; use regional price when unmeasured.' },
+                private: { label: 'Most private', description: 'Require existing OpenVibe or own capacity; refuse marketplaces.' },
+                own: { label: 'On my machine', description: 'Require existing own capacity; refuse marketplace rentals.' },
+            },
+        },
+        dry_run: { type: 'boolean', default: false, title: 'Quote without renting', 'x-class': 'internal', description: 'Preview GPU choices and costs without creating a new paid instance. Existing paid instances still receive cleanup.' },
+        costs_bounded: {
+            type: 'boolean', default: false, title: 'Storage and network costs are bounded', 'x-group': GPU_GROUP, 'x-danger': true,
+            description: 'Enable only after enforcing storage and network limits that fit the hourly allowance below. Without this confirmation GPU rentals remain off.',
+        },
+        extra_hourly_nano: {
+            type: 'integer', minimum: 0, title: 'Storage and network allowance per hour', 'x-group': GPU_GROUP, 'x-unit': 'nano_usd', 'x-danger': true,
+            description: 'A conservative upper bound for extra storage and network charges per instance per hour, in billionths of a dollar. Added to every reservation and metered estimate. Must be explicitly set, even when zero.',
+        },
         'vast.origin': {
             type: 'string', title: 'Address the Vast.ai key is locked to', 'x-group': GPU_GROUP, 'x-advanced': true,
             description: 'The Vast.ai address AI sends the key to. AI writes it itself; the key below only opens for this address, so it can never be sent anywhere else.',
@@ -216,7 +236,7 @@ const GPU_SCHEMA = Object.freeze({
         monthly_cap: {
             type: 'integer', title: 'Most the GPUs may cost in a month', 'x-group': GPU_GROUP, 'x-unit': 'nano_usd', 'x-danger': true,
             minimum: 0, 'x-example': 50000000000,
-            description: 'The most the rented GPUs may cost in one calendar month (in billionths of a dollar: 50000000000 is $50). AI never passes it: it refuses to start a GPU and says why. Unset, nothing is rented.',
+            description: 'The most the rented GPUs may cost in one calendar month (in billionths of a dollar: 50000000000 is $50). AI refuses new reservations above it; failed provider deletion can continue billing and needs operator intervention. Unset, nothing is rented.',
             'x-owner-input': {
                 group: 'gpus',
                 unlocks: 'Lets AI rent GPUs up to this amount each month. Without a cap nothing is rented, even with a key.',
@@ -447,6 +467,10 @@ async function createGpuSettings({ db, env = process.env, log = console, onChang
     function values() {
         const v = store.get() || {};
         return {
+            strategy: v.strategy || 'cheapest',
+            dry_run: v.dry_run === true,
+            costs_bounded: v.costs_bounded === true,
+            extra_hourly_nano: v.extra_hourly_nano == null ? null : String(v.extra_hourly_nano),
             vast_origin: String(v['vast.origin'] || ''),
             vast_key: String(v['vast.key'] || ''),
             runpod_origin: String(v['runpod.origin'] || ''),

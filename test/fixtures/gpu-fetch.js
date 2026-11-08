@@ -48,11 +48,15 @@ function createGpuFetch() {
                 if (method === 'DELETE') {
                     calls.destroy.push(u);
                     if (api.destroyFails) return reply(500, { detail: 'the marketplace refused to give the instance back' });
-                    rented.delete(u.split('/').pop());
+                    if (!api.deletePending) {
+                        rented.delete(u.split('/').pop());
+                        api.extra = api.extra.filter(x => String(x.id) !== u.split('/').pop());
+                    }
                     return reply(200, { success: true, msg: 'destroyed' });
                 }
                 calls.show += 1;
                 const id = u.split('/').pop();
+                if (!rented.has(id) && !api.extra.some(x => String(x.id) === id)) return reply(404, { detail: 'instance not found' });
                 const port = 12345 + Math.max(0, created - 1);
                 return reply(200, { ...RECORDED.instance, id, ports: { 8000: { port, proxy: 'https://gw.vast.ai:' + port } } });
             }

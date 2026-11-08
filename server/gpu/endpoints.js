@@ -87,7 +87,9 @@ function createOwnEndpoints({ db, gpus, credits, config = null, clock = { now: (
         if (!billing) reasons.push(BILLING_OFF);
         const marketplace = cfg.vast_key ? 'vast' : (cfg.runpod_key ? 'runpod' : null);
         return {
-            enabled: Boolean(cfg.enabled && billing),
+            enabled: Boolean(cfg.enabled && billing && !cfg.dry_run),
+            strategy: cfg.strategy || 'cheapest',
+            dry_run: Boolean(cfg.dry_run),
             reason: reasons.join(' '),
             reasons,
             marketplace,
@@ -131,6 +133,7 @@ function createOwnEndpoints({ db, gpus, credits, config = null, clock = { now: (
             id: row.id,
             status: row.status,
             source: row.source,
+            strategy: row.strategy || 'cheapest',
             display_name: row.display_name,
             catalog_key: row.catalog_key,
             weights: row.source === 'weights' ? { repo: row.weights_repo, file: row.weights_file, lora_repo: row.lora_repo, lora_file: row.lora_file } : null,
@@ -219,6 +222,8 @@ function createOwnEndpoints({ db, gpus, credits, config = null, clock = { now: (
         const st = status();
         if (!st.enabled) throw new AiError(409, 'own_endpoint.off', st.reason || 'Your own endpoint is off.');
         const cfg = gpuConfig();
+        const strategy = body.strategy || cfg.strategy || 'cheapest';
+        if (!['automatic', 'cheapest', 'fastest'].includes(strategy)) throw new AiError(422, 'input.invalid', 'marketplace rentals support automatic, cheapest or fastest; private and own require a Link machine');
         const active = await db.prepare(`SELECT COUNT(*) AS n FROM own_endpoints WHERE subject = ? AND status IN (${ACTIVE.map(() => '?').join(', ')})`)
             .get(String(subject), ...ACTIVE);
         if (Number(active && active.n) >= MAX_ACTIVE) throw new AiError(409, 'own_endpoint.limit', 'You already have ' + MAX_ACTIVE + ' endpoints running or starting. Stop one first.');
@@ -251,11 +256,11 @@ function createOwnEndpoints({ db, gpus, credits, config = null, clock = { now: (
         const t = now();
         const id = 'oep_' + ids.ulid();
         await db.prepare(`INSERT INTO own_endpoints (id, subject, status, source, catalog_key, display_name, weights_repo, weights_file,
-                lora_repo, lora_file, context_window, idle_minutes, max_runtime_minutes, month, created_at, updated_at)
-            VALUES (?, ?, 'requested', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+                lora_repo, lora_file, context_window, idle_minutes, max_runtime_minutes, month, created_at, updated_at, strategy)
+            VALUES (?, ?, 'requested', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
             id, String(subject), source, spec ? spec.key : null, display,
             weights ? weights.repo : null, weights ? weights.file : null, weights ? weights.loraRepo || null : null, weights ? weights.loraFile || null : null,
-            spec ? spec.context_window : 8192, idleMinutes, maxRuntime, at(t).slice(0, 7), at(t), at(t));
+            spec ? spec.context_window : 8192, idleMinutes, maxRuntime, at(t).slice(0, 7), at(t), at(t), strategy);
         return describe(await rowById(id));
     }
 
@@ -300,6 +305,7 @@ function createOwnEndpoints({ db, gpus, credits, config = null, clock = { now: (
         const res = await gpus.launchSpec(spec, {
             actor: 'user:' + row.subject,
             ownEndpointId: row.id,
+            strategy: row.strategy || undefined,
             idleMinutes: row.idle_minutes,
             maxRuntimeMinutes: row.max_runtime_minutes,
             beforeCreate: async ({ offer, hourly, reserved, maxMinutes, marketplace }) => {
@@ -491,7 +497,7 @@ function createOwnEndpoints({ db, gpus, credits, config = null, clock = { now: (
         return { status: res.status, contentType: res.headers.get('content-type') || 'application/json', body: res.body };
     }
 
-    return { status, create, list, get, stop, tick, specFor, ready, afterDestroy, forward, describe, settle };
+    return { status, create, list, get, stop, tick, specFor, ready, afterDestroy, forward, describe, settle, preview: (key, options) => gpus.preview(key, options) };
 }
 
 module.exports = { createOwnEndpoints, MAX_ACTIVE, MAX_IDLE_MINUTES, MAX_RUNTIME_MINUTES, BILLING_OFF, plainGpuReason, reasonText };

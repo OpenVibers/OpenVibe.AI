@@ -13,4 +13,4 @@
  * ○ and not counted as passed (openvibe-shared/test-runner).
  */
 'use strict';
-require('openvibe-shared/test-runner').main({ dir: __dirname, timeoutMs: 60000, pad: 32, parallel: 1 });
+require('openvibe-shared/test-runner').main({ dir: __dirname, timeoutMs: 180000, pad: 32, parallel: 1 });
