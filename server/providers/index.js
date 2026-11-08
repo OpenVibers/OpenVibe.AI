@@ -542,6 +542,11 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         const addOffer = async (p, model, caps) => {
             const id = offerId(p.key, model);
             if (seen.has(id)) return;
+            // The private objective means first-party capacity only; operator-paid public APIs never receive it.
+            if ((ctx.aliasPolicy === 'private' || (route.constraints && route.constraints.objective === 'private')) && p.kind === 'anthropic') {
+                accessExcluded.push({ provider: p.key, model, eligible: false, excluded_reason: 'private requests use first-party capacity only', cost: null, latency: null });
+                return;
+            }
             // The content policy narrows the pool before placement: an uncensored offer never answers a standard
             // request, and the adult tier has no other offer to run on.
             if (!(await policyAllows(registry, p, model, ctx.contentPolicy || 'standard'))) return;

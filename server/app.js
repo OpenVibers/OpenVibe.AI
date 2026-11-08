@@ -22,7 +22,7 @@ const pkg = require('../package.json');
 const { adminRoutes } = require('openvibe-shared/config');
 const ownerInputs = require('./owner-inputs');
 
-function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, credentials = null, preferences = null, grants = null, vault = null, settings = null, benchEvents = null, runBudgets = null, memory = null, memoryImport = null, memoryServices = null, memorySharing = null, community = null, endpoints = null, webhooks = null, presets = null, receipts = null, balance = null, gpus = null, abuse = null, priceBook = null, ownEndpoints = null, refusal = null, batches = null }) {
+function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, credentials = null, preferences = null, grants = null, vault = null, settings = null, benchEvents = null, runBudgets = null, memory = null, memoryImport = null, memoryServices = null, memorySharing = null, community = null, endpoints = null, webhooks = null, presets = null, receipts = null, balance = null, creditGrants = null, gpus = null, abuse = null, priceBook = null, ownEndpoints = null, refusal = null, batches = null }) {
     const app = express();
     // /.well-known/agent.json (openvibe-shared/agent-layer, SEO-2): what this site serves, for agents.
     require('openvibe-shared/agent-layer').mount(app, { descriptor: require('./agent-descriptor') });
@@ -34,7 +34,7 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
     // GET /metrics answers direct loopback callers only (Track O).
     const metrics = instrument(app, { service: 'ai', release: release.release });
     app.use(require('openvibe-sdk/service').telemetryMiddleware);   // request telemetry: a no-op until server/index.js calls telemetry.init()
-    registerAiGauges(metrics.registry, { runs, registry, pool, balance, gpus, abuse, db });
+    registerAiGauges(metrics.registry, { runs, registry, pool, balance, creditGrants, gpus, abuse, db });
     app.use(http.middleware());
     // Plan E5: the signed HttpOnly device id and the request's trust metadata on the model and Exchange APIs.
     // The address/device stay in the request: only keyed hashes reach the database (server/abuse/).
@@ -129,6 +129,22 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
     // ai.exchange, ai.provider_keys and ai.gpus (the GPU provisioner's marketplace keys and its monthly cap). Loopback only (the /internal guard above), guarded by ai.config.manage; the
     // actor is Network's X-OV-Subject (usr_…), and a secret or x-danger change needs X-OV-Fresh: 1.
     if (settings) {
+        if (creditGrants) {
+            const express = require('express');
+            const creditsRouter = express.Router();
+            creditsRouter.use(auth.requireCap(CAPS.configManage));
+            creditsRouter.get('/', async (req, res) => {
+                try { res.json({ grants: await creditGrants.list('anthropic'), estimate: creditGrants.values().find((x) => x.provider === 'anthropic') || null }); }
+                catch (err) { sendError(res, err, req.ov, log); }
+            });
+            creditsRouter.post('/', async (req, res) => {
+                try {
+                    const grant = await creditGrants.add({ ...req.body, provider_key: 'anthropic' });
+                    res.status(201).json({ grant });
+                } catch (err) { sendError(res, err, req.ov, log); }
+            });
+            app.use('/internal/provider-credits', creditsRouter);
+        }
         const configRoutes = adminRoutes([settings.exchange, settings.providerKeys.proxy, settings.gpus.proxy], {
             basePath: '/internal/config',
             requireAdmin: auth.requireCap(CAPS.configManage),
@@ -200,7 +216,7 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
         // The same settings as a page for people (GET /you, plain forms on AI's own person session).
         app.use(require('./you-page').youPageRouter({ credentials, preferences, grants, personSessions, config, log, machines: pool && pool.machines }));
     }
-    app.use(consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, env, clock, fetchImpl, log, vault, settings, personSessions, abuse, priceBook }));
+    app.use(consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, env, clock, fetchImpl, log, vault, settings, personSessions, abuse, priceBook, creditGrants }));
     app.use(runPageRouter({ runs, personSessions, log }));
 
     // ── The public pages moved to OpenVibe.Exchange (2026-11-07) ────

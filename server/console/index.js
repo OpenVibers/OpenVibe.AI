@@ -116,7 +116,7 @@ const DEF_KINDS = {
 };
 const DAY_MS = 86400000;
 
-function consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, vault = null, settings = null, personSessions = null, abuse = null, priceBook = null }) {
+function consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, vault = null, settings = null, personSessions = null, abuse = null, priceBook = null, creditGrants = null }) {
     const cc = config.console;
     const creditsOn = Boolean(config.credits && config.credits.enabled);
     const routingOn = Boolean(config.routingEvidence && config.routingEvidence.enabled);
@@ -339,8 +339,13 @@ function consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, e
     r.get('/console/providers', read, wrap(async (req, res) => await send(res, 200, pages.providers({
         ...common(req), rows: (await Promise.all((await registry.listProviders()).map(ops.providerView))), models: await registry.listModels(), stubFallback: config.stubFallback,
         canManage: req.staff.caps.includes(CAPS.providerManage), notice: notice(req), keyHints: vault ? await vault.hints() : new Map(),
-        breaker: config.breaker, now: clock.now(),
+        breaker: config.breaker, now: clock.now(), creditEstimate: creditGrants && creditGrants.values().find((x) => x.provider === 'anthropic') || null,
     }))));
+    r.post('/console/provider-credits', needs(CAPS.providerManage), wrap(async (req, res) => {
+        if (!creditGrants) throw new Error('credit grants are unavailable');
+        await creditGrants.add({ provider_key: 'anthropic', kind: String(req.body.kind || ''), amount_usd: Number(req.body.amount_usd), as_of: String(req.body.as_of || ''), expires_at: req.body.expires_at ? new Date(`${req.body.expires_at}T23:59:59Z`).toISOString() : null, applies_to: String(req.body.applies_to || '').slice(0, 200) || null });
+        res.redirect(303, '/console/providers?done=provider_credit');
+    }));
     r.get('/console/glossary', read, wrap(async (req, res) => await send(res, 200, pages.glossary({ ...common(req) }))));
     r.post('/console/providers/:key/status', needs(CAPS.providerManage), wrap(async (req, res) => {
         await ops.setProviderStatus(req.params.key, String(req.body.status || ''), who(req));

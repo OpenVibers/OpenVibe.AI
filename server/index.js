@@ -87,6 +87,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     // The hourly provider balance probe (server/providers/balance.js): a gauge for the operator alert, started
     // only when the service listens (never in tests) and off under a restore drill.
     const balance = require('./providers/balance').createBalanceProbe({ registry, config, env, fetchImpl, clock, log });
+    const creditGrants = require('./providers/credit-grants').createCreditGrants({ db, env, fetchImpl, clock });
     // T6 step 8: the SaaS tier budgets on openvibe-sdk/govern in Valkey (server/govern.js); off unless AI_GOVERN_TIERS=1.
     const tiers = createTiers({ config, valkey, clock, log });
     // §2.1.8: the provider free allowance per subject, priced off the pool's own rate cards (server/free-allowance.js);
@@ -201,7 +202,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         clientSecret: env.OV_OAUTH_CLIENT_SECRET, fetch: fetchImpl,
     }) : null;
     const benchEvents = createBenchEvents({ bench, accountData, accountSend, config, log, fetchImpl, clientSecret: env.OV_OAUTH_CLIENT_SECRET });
-    const app = createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, grants, vault, settings, benchEvents, runBudgets, memory, memoryImport, memoryServices, memorySharing, community, endpoints, webhooks, presets, receipts, balance, gpus, abuse, priceBook, ownEndpoints, refusal, batches });
+    const app = createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, grants, vault, settings, benchEvents, runBudgets, memory, memoryImport, memoryServices, memorySharing, community, endpoints, webhooks, presets, receipts, balance, creditGrants, gpus, abuse, priceBook, ownEndpoints, refusal, batches });
     let jwks = null;
     let keyLoaded = Promise.resolve(null);
     if (!keys.pinned && config.nodeEnv !== 'test') {
@@ -243,6 +244,13 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     // The signed webhook retry worker: never in test mode (tests call deliverDue with their own clock).
     if (listen && config.nodeEnv !== 'test') webhooks.start();
     if (listen) balance.start();
+    let creditTimer = null;
+    if (listen && config.balance.enabled) {
+        const tickCredits = () => creditGrants.poll().catch((err) => log.warn(`[ai] credit estimate failed: ${String(err && err.message || err).slice(0, 180)}`));
+        creditTimer = setInterval(tickCredits, config.balance.intervalMs);
+        if (creditTimer.unref) creditTimer.unref();
+        setTimeout(tickCredits, 5000).unref?.();
+    }
     if (listen && config.memoryJobs && config.memoryJobs.enabled) memoryJobs.start();
     // Team sharing's expiry sweep and delivery queue: production only, so a test's database has no background writers.
     if (listen && config.nodeEnv !== 'test' && memorySharing) memorySharing.start();
@@ -287,6 +295,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         clearInterval(housekeeping);
         if (gpuReconciler) clearInterval(gpuReconciler);
         balance.stop();
+        if (creditTimer) clearInterval(creditTimer);
         if (benchSubscription) benchSubscription.stop();
         if (accountSubscription) accountSubscription.stop();
         userModules.stop();
