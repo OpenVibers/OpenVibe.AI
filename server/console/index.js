@@ -336,12 +336,16 @@ function consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, e
     }));
 
     // ── Providers ────────────────────────────────────────────
-    r.get('/console/providers', read, wrap(async (req, res) => await send(res, 200, pages.providers({
+    r.get('/console/providers', read, wrap(async (req, res) => {
+        const grantRows = creditGrants ? await creditGrants.list('anthropic') : [];
+        const estimate = creditGrants && creditGrants.values().find((x) => x.provider === 'anthropic');
+        return await send(res, 200, pages.providers({
         ...common(req), rows: (await Promise.all((await registry.listProviders()).map(ops.providerView))), models: await registry.listModels(), stubFallback: config.stubFallback,
         canManage: req.staff.caps.includes(CAPS.providerManage), notice: notice(req), keyHints: vault ? await vault.hints() : new Map(),
-        breaker: config.breaker, now: clock.now(), creditEstimate: creditGrants && creditGrants.values().find((x) => x.provider === 'anthropic') || null,
+        breaker: config.breaker, now: clock.now(), creditEstimate: estimate || (grantRows.length ? { provider: 'anthropic', promotional: null, purchased: null, grants: grantRows, source: null, at: null } : null),
         creditPreference: creditGrants ? await creditGrants.preference('anthropic') : null,
-    }))));
+    }));
+    }));
     r.post('/console/provider-credits', needs(CAPS.providerManage), wrap(async (req, res) => {
         if (!creditGrants) throw new Error('credit grants are unavailable');
         await creditGrants.add({ provider_key: 'anthropic', kind: String(req.body.kind || ''), amount_usd: Number(req.body.amount_usd), as_of: String(req.body.as_of || ''), expires_at: req.body.expires_at ? new Date(`${req.body.expires_at}T23:59:59Z`).toISOString() : null, applies_to: String(req.body.applies_to || '').slice(0, 200) || null });
