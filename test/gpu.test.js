@@ -231,7 +231,7 @@ t.test('a destroy that keeps failing is tried again every pass and the operator 
     } finally { await h.stop(); }
 });
 
-t.test('a row whose rental never came back gives its reservation back', async () => {
+t.test('an unknown rental retains its reservation until reconciled', async () => {
     const api = createGpuFetch();
     let now = T0;
     const h = await boot({ clock: { now: () => now }, fetchImpl: api.fetchImpl });
@@ -246,9 +246,70 @@ t.test('a row whose rental never came back gives its reservation back', async ()
         now += 11 * 60_000;      // past the give-up time
         await h.gpus.tick();
         const row = await h.db.prepare('SELECT * FROM gpu_instances WHERE id = ?').get(id);
-        assert.strictEqual(row.status, 'refused');
+        assert.strictEqual(row.status, 'starting');
         const after = await h.gpus.moneySummary();
-        assert.strictEqual(BigInt(after.committed_nano), 0n, 'the reservation is free again');
+        assert.ok(BigInt(after.committed_nano) >= BigInt(before.committed_nano), 'an empty listing cannot release an uncertain financial commitment');
+    } finally { await h.stop(); }
+});
+
+t.test('quotes and dry runs work without a cap and never create an instance', async () => {
+    const api = createGpuFetch();
+    const h = await boot({ clock: { now: () => T0 }, fetchImpl: api.fetchImpl });
+    try {
+        const q = await h.gpus.preview('deepseek-r1-32b');
+        assert.strictEqual(q.selected.id, '111');
+        const dry = await h.gpus.launch('deepseek-r1-32b', { dryRun: true });
+        assert.strictEqual(dry.dry_run, true);
+        assert.strictEqual(api.calls.create.length, 0);
+        for (const strategy of ['own', 'private']) {
+            const p = await h.gpus.preview('deepseek-r1-32b', { strategy });
+            assert.strictEqual(p.selected, null);
+        }
+        assert.strictEqual((await h.gpus.state()).instances.length, 0);
+    } finally { await h.stop(); }
+});
+
+t.test('disabling the cap continues cleanup of paid instances', async () => {
+    const api = createGpuFetch();
+    const h = await boot({ clock: { now: () => T0 }, fetchImpl: api.fetchImpl });
+    try {
+        await settings(h);
+        await h.gpus.launch('deepseek-r1-32b');
+        await settings(h, { cap: '0' });
+        await h.gpus.tick();
+        assert.ok(api.calls.destroy.length > 0);
+    } finally { await h.stop(); }
+});
+
+t.test('concurrent models cannot over-reserve the same monthly cap', async () => {
+    const api = createGpuFetch();
+    const h = await boot({ clock: { now: () => T0 }, fetchImpl: api.fetchImpl });
+    try {
+        await settings(h, { cap: '150000000', maxRuntime: 60 });
+        const results = await Promise.all([h.gpus.launch('deepseek-r1-32b'), h.gpus.launch('deepseek-r1-32b-abliterated')]);
+        assert.strictEqual(results.filter(r => r.ok).length, 1);
+        assert.strictEqual(api.calls.create.length, 1);
+        assert.ok(BigInt((await h.gpus.moneySummary()).committed_nano) <= 150000000n);
+    } finally { await h.stop(); }
+});
+
+t.test('a lost create response retains its reservation and is recovered by label', async () => {
+    const api = createGpuFetch();
+    const fetchImpl = async (url, options) => {
+        const response = await api.fetchImpl(url, options);
+        if (String(url).includes('/asks/')) throw new Error('response lost');
+        return response;
+    };
+    const h = await boot({ clock: { now: () => T0 }, fetchImpl });
+    try {
+        await settings(h);
+        const pending = await h.gpus.launch('deepseek-r1-32b');
+        assert.strictEqual(pending.pending, true);
+        assert.ok(BigInt((await h.gpus.moneySummary()).committed_nano) > 0n);
+        await h.gpus.tick();
+        const row = await h.db.prepare('SELECT * FROM gpu_instances WHERE id=?').get(pending.instance.id);
+        assert.ok(row.remote_id, 'the label recovers the purchase rather than issuing a second one');
+        assert.strictEqual(api.calls.create.length, 1);
     } finally { await h.stop(); }
 });
 

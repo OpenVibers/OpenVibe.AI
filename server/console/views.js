@@ -694,9 +694,11 @@ function gpus({ staff, csrf, state, canManage, notice, error }) {
   <div class="card"><div class="k">Could still cost</div><div class="v">${usdNano(st.committed_nano)}</div><div class="muted">the most the GPUs running now may cost before they are given back</div></div>
   <div class="card"><div class="k">Monthly cap</div><div class="v">${st.cap_nano ? usdNano(st.cap_nano) : 'Not set'}</div><div class="muted">${st.cap_nano ? 'AI never starts a GPU that could pass it' : 'without a cap nothing is rented'}</div></div>
 </div>
+<p>Placement: ${st.strategy || 'cheapest'} · ${st.dry_run ? 'Quote only' : 'Renting allowed within the cap'}. <a href="https://openvibe.run/api/v1/compute">Desktop and browser pools</a></p>
 <p class="muted">An unused GPU is given back after ${n(st.idle_minutes)} minute${Number(st.idle_minutes) === 1 ? '' : 's'}; one GPU runs at most ${n(st.max_runtime_minutes)} minutes; ${st.warm_window ? `GPUs stay ready ${st.warm_window} UTC` : 'no hours keep GPUs ready'}; GPUs are rented in ${st.region}. Vast.ai key: ${mk.vast ? 'set' : 'not set'} · RunPod key: ${mk.runpod ? 'set' : 'not set'}.</p>
 <p class="muted">Vast.ai and RunPod bill by the second, so only the seconds a GPU really ran are charged; the price per second is next to the price per hour. "First answer after" is the time from renting a GPU to its first answer.</p>
 ${table('Models that can run on a rented GPU', ['Model', 'Marketplace', 'Runs with', 'GPU', 'Status', 'First answer after', 'Actions'], models.map((m) => gpuModelRow(m, canManage, csrf)), 'no model is set up to run on a rented GPU yet.')}
+<p>Preview without renting: ${models.map(m => html`<a href="/console/gpus/${enc(m.key)}/quote">${m.display_name}</a> `)}</p>
 ${table('GPUs rented', ['Model', 'Marketplace', 'GPU', 'Price per hour', 'Status', 'Address', 'Started', 'First answer after', 'Most it may cost', 'Spent'], instances.map((i) => gpuInstanceRow(i)), 'no GPU has been rented.')}
 `,
     });

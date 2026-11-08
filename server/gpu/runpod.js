@@ -34,9 +34,8 @@ function runpodAdapter({ fetchImpl = globalThis.fetch, key = null, baseUrl = BAS
     function priceOf(gpu) {
         const price = (gpu && gpu.price) || {};
         const secure = Number(price.secure);
-        const community = Number(price.community);
+
         if (Number.isFinite(secure) && secure > 0) return String(secure);
-        if (Number.isFinite(community) && community > 0) return String(community);
         return '0';
     }
 
@@ -46,7 +45,7 @@ function runpodAdapter({ fetchImpl = globalThis.fetch, key = null, baseUrl = BAS
         baseUrl,
 
         async searchOffers(req) {
-            const out = await apiJson(fetchImpl, baseUrl + '/v2/gpu-types', { ...auth, label: 'RunPod' });
+            const out = await apiJson(fetchImpl, baseUrl + '/v2/catalog/gpus?include=AVAILABILITY&product=POD', { ...auth, label: 'RunPod' });
             const gpus = (out && out.gpus) || [];
             const wanted = (req.gpuNames || []).map((n) => String(n).toLowerCase());
             const offers = [];
@@ -54,24 +53,26 @@ function runpodAdapter({ fetchImpl = globalThis.fetch, key = null, baseUrl = BAS
                 const name = String(gpu.name || '');
                 const lower = name.toLowerCase();
                 if (wanted.length && !wanted.some((w) => lower.includes(w.toLowerCase()))) continue;
-                if (Number(gpu.memory) < Number(req.vramMb)) continue;
-                if (Number(gpu.maxCount || 0) < Number(req.numGpus || 1)) continue;
-                const price = priceOf(gpu);
+                if (Number(gpu.memory) * 1024 < Number(req.vramMb)) continue;
+                if (Number(gpu.maxCount && gpu.maxCount.secure || 0) < Number(req.numGpus || 1)) continue;
+                const price = String(Number(priceOf(gpu)) * Number(req.numGpus || 1));
                 if (Number(price) > Number(req.maxPricePerHour)) continue;
                 for (const dc of (gpu.dataCenters || [])) {
-                    if (dc.availability !== undefined && !dc.availability) continue;
+                    if (!dc.availability || dc.availability === 'NONE') continue;
+                    const region = String(dc.countryCode || dc.region || String(dc.id).split('-')[0]);
+                    if (req.region && region.toUpperCase() !== String(req.region).toUpperCase()) continue;
                     offers.push({
                         id: String(gpu.id) + ':' + String(dc.id),
                         marketplace: 'runpod',
                         gpu_type_id: String(gpu.id),
                         data_center_id: String(dc.id),
                         gpu_name: name,
-                        gpu_ram_mb: Number(gpu.memory) || 0,
+                        gpu_ram_mb: Number(gpu.memory) * 1024 || 0,
                         num_gpus: Number(req.numGpus || 1),
                         disk_gb: Number(req.diskGb || 0),
                         price_per_hour: price,
                         reliability: 1,
-                        region: String(dc.name || dc.id || ''),
+                        region,
                     });
                 }
             }
@@ -84,7 +85,7 @@ function runpodAdapter({ fetchImpl = globalThis.fetch, key = null, baseUrl = BAS
          */
         async listInstances() {
             const body = await apiJson(fetchImpl, baseUrl + '/v2/pods', { ...auth, label: 'RunPod' });
-            const list = (body && (body.pods || body.items || body.data)) || [];
+            const list = Array.isArray(body) ? body : (body && (body.pods || body.items || body.data)) || [];
             return list.map((pod) => ({
                 id: String(pod.id == null ? '' : pod.id),
                 label: String(pod.name || ''),
@@ -101,13 +102,11 @@ function runpodAdapter({ fetchImpl = globalThis.fetch, key = null, baseUrl = BAS
                 name: String(opts.label || ('openvibe-' + spec.key)),
                 image: r.image,
                 gpu: { id: offer.gpu_type_id, count: spec.requirements.num_gpus },
-                disk: { size: spec.requirements.disk_gb, type: 'volume' },
+                disk: spec.requirements.disk_gb,
+                cloud: 'SECURE',
+                args: opts.command || '',
                 ports: [String(r.port || 8000) + '/http'],
-                env: [
-                    'MODEL_FILE=' + ((r.weights && r.weights.file) || ''),
-                    'MODEL_URL=' + (opts.weights_url || ''),
-                    'MODEL_ALIAS=' + spec.model_key,
-                ],
+                env: { MODEL_FILE: (r.weights && r.weights.file) || '', MODEL_URL: opts.weights_url || '', MODEL_ALIAS: spec.model_key },
                 start: true,
             };
             if (offer.data_center_id) body.dataCenterId = offer.data_center_id;
@@ -134,7 +133,7 @@ function runpodAdapter({ fetchImpl = globalThis.fetch, key = null, baseUrl = BAS
 
         async destroyInstance(remoteId) {
             const out = await apiJson(fetchImpl, baseUrl + '/v2/pods/' + encodeURIComponent(remoteId), { method: 'DELETE', ...auth, label: 'RunPod' });
-            return Boolean(out);
+            return out == null || out.success !== false;
         },
     };
 }

@@ -179,6 +179,8 @@ const GPU_SCHEMA = Object.freeze({
     type: 'object',
     additionalProperties: false,
     properties: {
+        strategy: { type: 'string', enum: ['automatic', 'cheapest', 'fastest', 'private', 'own'], default: 'cheapest', title: 'GPU placement strategy', 'x-class': 'internal' },
+        dry_run: { type: 'boolean', default: false, title: 'Quote without renting', 'x-class': 'internal' },
         'vast.origin': {
             type: 'string', title: 'Address the Vast.ai key is locked to', 'x-group': GPU_GROUP, 'x-advanced': true,
             description: 'The Vast.ai address AI sends the key to. AI writes it itself; the key below only opens for this address, so it can never be sent anywhere else.',
@@ -447,6 +449,8 @@ async function createGpuSettings({ db, env = process.env, log = console, onChang
     function values() {
         const v = store.get() || {};
         return {
+            strategy: v.strategy || 'cheapest',
+            dry_run: v.dry_run === true,
             vast_origin: String(v['vast.origin'] || ''),
             vast_key: String(v['vast.key'] || ''),
             runpod_origin: String(v['runpod.origin'] || ''),

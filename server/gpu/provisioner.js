@@ -19,6 +19,7 @@
  *      deterministic: the same offers in the same order always give the same instance.
  */
 const { randomUUID } = require('node:crypto');
+const { choose, STRATEGIES } = require('openvibe-sdk/compute');
 const { AiError } = require('../util');
 const money = require('./money');
 const catalog = require('./catalog');
@@ -39,8 +40,6 @@ const LABEL_RE = /^openvibe-[0-9a-f]{12}$/;
 // Three failed destroys in a row: the instance is still running and still being paid for, so the
 // operator is alerted (the gauge ai_gpu_destroy_failures and the rule in OpenVibe.Host's prometheus rules).
 const ALERT_AFTER = 3;
-// A row whose rental never came back is given up on after this long: its reservation is free again.
-const STALE_ROW_MS = 10 * 60_000;
 const PRICE_SOURCE = { vast: 'https://vast.ai/pricing', runpod: 'https://www.runpod.io/pricing' };
 
 function clampInt(value, min, max, fallback) {
@@ -108,6 +107,8 @@ function createGpuProvisioner({
         if (!vastKey && !runpodKey) reason = 'no Vast.ai or RunPod API key';
         else if (cap == null || cap <= 0n) reason = 'no monthly cap';
         return {
+            strategy: STRATEGIES.includes(v.strategy) ? v.strategy : 'cheapest',
+            dry_run: v.dry_run === true,
             vast_key: vastKey,
             runpod_key: runpodKey,
             cap_nano: cap,
@@ -147,18 +148,18 @@ function createGpuProvisioner({
     // ── the money ─────────────────────────────────────────────────────────
 
     /** The month's money: what was really spent, and what is committed (the worst case). */
-    async function moneySummary() {
+    async function moneySummary(handle = db) {
         const month = monthOf(now());
         const cfg = config();
-        const ledger = await db.prepare('SELECT COALESCE(SUM(nano_usd), 0) AS total FROM gpu_spend WHERE month = ?').get(month);
+        const ledger = await handle.prepare('SELECT COALESCE(SUM(nano_usd), 0) AS total FROM gpu_spend WHERE month = ?').get(month);
         const settled = toNano(ledger && ledger.total);
-        const rows = await db.prepare('SELECT * FROM gpu_instances WHERE month = ? AND status IN (?, ?, ?)').all(month, 'starting', 'running', 'stopping');
+        const rows = await handle.prepare('SELECT * FROM gpu_instances WHERE status IN (?, ?, ?)').all('starting', 'running', 'stopping');
         let reserved = 0n;
         let running = 0n;
         for (const row of rows) {
-            reserved += toNano(row.reserved_nano);
+            reserved += toNano(row.reserved_nano) > toNano(row.spent_nano) ? toNano(row.reserved_nano) - toNano(row.spent_nano) : 0n;
             const started = toMs(row.started_at);
-            if (started != null) running += money.nanoForSeconds(toNano(row.hourly_nano), (now() - started) / 1000);
+            if (started != null) running += money.nanoForSeconds(toNano(row.hourly_nano), Math.max(0, now() - Math.max(toMs(row.charged_at) || started, Date.parse(month + '-01T00:00:00Z'))) / 1000);
         }
         return {
             month,
@@ -172,17 +173,24 @@ function createGpuProvisioner({
 
     /** Write the money an instance has cost since the last charge. */
     async function charge(row, until, reason) {
+        return db.tx(async (tdb) => {
+        row = await tdb.prepare('SELECT * FROM gpu_instances WHERE id = ? FOR UPDATE').get(row.id) || row;
         const hourly = toNano(row.hourly_nano);
         const from = toMs(row.charged_at) || toMs(row.started_at) || until;
-        const seconds = Math.max(0, (until - from) / 1000);
-        if (seconds <= 0) return 0n;
-        const amount = money.nanoForSeconds(hourly, seconds);
-        if (amount <= 0n) return 0n;
-        await db.prepare('INSERT INTO gpu_spend (at, month, kind, nano_usd, instance_id, detail, actor, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-            .run(iso(until), monthOf(until), 'charge', amount.toString(), row.id, reason || 'the GPU ran', 'service:ai', iso(now()));
-        await db.prepare('UPDATE gpu_instances SET charged_at = ?, spent_nano = spent_nano + ?, updated_at = ? WHERE id = ?')
+        if (until <= from) return 0n;
+        let amount = 0n;
+        for (let start = from; start < until;) {
+            const d = new Date(start);
+            const end = Math.min(until, Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1));
+            const part = money.nanoForSeconds(hourly, (end - start) / 1000);
+            await tdb.prepare('INSERT INTO gpu_spend (at, month, kind, nano_usd, instance_id, detail, actor, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+                .run(iso(end), monthOf(start), 'charge', part.toString(), row.id, reason || 'the GPU ran', 'service:ai', iso(now()));
+            amount += part; start = end;
+        }
+        await tdb.prepare('UPDATE gpu_instances SET charged_at = ?, spent_nano = spent_nano + ?, updated_at = ? WHERE id = ?')
             .run(iso(until), amount.toString(), iso(now()), row.id);
         return amount;
+        });
     }
 
     // ── the instances ─────────────────────────────────────────────────────
@@ -198,16 +206,35 @@ function createGpuProvisioner({
         return rows || [];
     }
 
-    /** The cheapest offer that fits. The same offers in the same order always give the same one. */
-    function cheapest(offers) {
-        const usable = (offers || []).filter((o) => o && o.price_per_hour != null && Number(o.price_per_hour) > 0);
-        usable.sort((a, b) => {
-            const pa = Number(a.price_per_hour);
-            const pb = Number(b.price_per_hour);
-            if (pa !== pb) return pa - pb;
-            return String(a.id) < String(b.id) ? -1 : String(a.id) > String(b.id) ? 1 : 0;
-        });
-        return usable[0] || null;
+    /** A quote never creates a request, takes a Billing hold or rents anything. */
+    async function preview(modelKey, { strategy = config().strategy, region = config().region, runtimeSpec = null, rentalOnly = false } = {}) {
+        const spec = runtimeSpec || models.find(m => m.key === modelKey) || catalog.find(modelKey);
+        if (!spec) throw new AiError(404, 'ai.not_found', 'no such GPU model');
+        if (!STRATEGIES.includes(strategy)) throw new AiError(422, 'ai.invalid', 'unknown compute strategy');
+        if (strategy === 'own' || strategy === 'private') return { dry_run: true, strategy, selected: null, offers: [], reasons: ['rented marketplace GPUs are not own or OpenVibe machines; use a Link endpoint'] };
+        const cfg = config();
+        const names = ['vast', 'runpod'].filter(name => !rentalOnly || cfg[name + '_key']);
+        const offers = [];
+        const failures = [];
+        for (const name of names) {
+            const adapter = name === 'vast' ? vastAdapter({ fetchImpl, key: cfg.vast_key || null }) : runpodAdapter({ fetchImpl, key: cfg.runpod_key || null });
+            try {
+                const found = await adapter.searchOffers({ gpuNames: spec.requirements.gpu_names, vramMb: spec.requirements.vram_mb,
+                    diskGb: spec.requirements.disk_gb, numGpus: spec.requirements.num_gpus,
+                    minReliability: spec.requirements.min_reliability, region, maxPricePerHour: 10, limit: 50 });
+                // Never trust marketplace-side filters alone.
+                offers.push(...found.filter(o => o.gpu_ram_mb >= spec.requirements.vram_mb && o.num_gpus >= spec.requirements.num_gpus
+                    && o.disk_gb >= spec.requirements.disk_gb && o.reliability >= spec.requirements.min_reliability
+                    && Number(o.price_per_hour) > 0 && Number.isFinite(Number(o.price_per_hour))
+                    && (!region || String(o.region).toUpperCase() === String(region).toUpperCase())));
+            } catch { failures.push(name + ': quote API unavailable'); }
+        }
+        const candidates = offers.map(o => ({ id: o.marketplace + ':' + o.id, tier: 'partner', health: 'up', region: o.region,
+            hourly: Number(o.price_per_hour), currency: 'USD', free_ram_mb: 2048, free_slots: 1, gpu_mb: o.gpu_ram_mb,
+            latency_ms: o.latency_ms }));
+        const decision = choose({ strategy, region }, candidates, { currency: 'USD' }, { now: now() });
+        const selected = offers.find(o => o.marketplace + ':' + o.id === decision.selected) || null;
+        return { dry_run: true, strategy, selected, offers, reasons: [...decision.reasons, ...(strategy === 'fastest' && !offers.some(o => o.latency_ms != null) ? ['latency unmeasured; choosing by price within the required region'] : []), ...failures], expires_at: iso(now() + 60000) };
     }
 
     /** Ask for a model to start or stop. The reconciler does it; nothing here acts directly. */
@@ -255,34 +282,21 @@ function createGpuProvisioner({
      *   beforeCreate({ offer, hourly, reserved, maxMinutes, marketplace })   the endpoint's Billing hold, if
      *       any, is taken here - before the marketplace is called, so nothing runs that the person cannot pay.
      */
-    async function launchSpec(spec, { actor = 'service:ai', ownEndpointId = null, idleMinutes = null, maxRuntimeMinutes = null, beforeCreate = null } = {}) {
+    async function launchSpec(spec, { actor = 'service:ai', ownEndpointId = null, idleMinutes = null, maxRuntimeMinutes = null, beforeCreate = null, strategy = config().strategy, dryRun = false } = {}) {
         const cfg = config();
+        if (cfg.dry_run && ownEndpointId) return { ok: false, code: 'gpu.dry_run', reason: 'GPU rentals are in quote-only mode' };
+        if (dryRun || cfg.dry_run) return { ok: true, ...await preview(spec.key, { strategy, runtimeSpec: spec }) };
         if (!cfg.enabled) return { ok: false, code: 'gpu.off', reason: cfg.reason };
+        if (!STRATEGIES.includes(strategy)) throw new AiError(422, 'ai.invalid', 'unknown compute strategy');
+        if (strategy === 'private' || strategy === 'own') return { ok: false, code: 'gpu.no_offer', reason: 'this strategy requires an existing Link or OpenVibe machine' };
         const existing = ownEndpointId ? await liveInstanceForEndpoint(ownEndpointId) : await liveInstance(spec.key);
         if (existing) return { ok: true, instance: describe(existing), note: 'already running' };
-        const adapter = adapterFor(spec.marketplace, cfg);
-        if (!adapter) return { ok: false, code: 'gpu.no_key', reason: 'no ' + spec.marketplace + ' API key' };
-
-        // 1. the cheapest offer that fits the model
-        let offers;
-        try {
-            offers = await adapter.searchOffers({
-                gpuNames: spec.requirements.gpu_names,
-                vramMb: spec.requirements.vram_mb,
-                diskGb: spec.requirements.disk_gb,
-                numGpus: spec.requirements.num_gpus,
-                minReliability: spec.requirements.min_reliability,
-                region: cfg.region,
-                maxPricePerHour: 10,
-                limit: 50,
-            });
-        } catch (err) {
-            return { ok: false, code: 'gpu.search_failed', reason: String(err && err.message).slice(0, 200) };
-        }
-        const offer = cheapest(offers);
-        if (!offer) {
-            return { ok: false, code: 'gpu.no_offer', reason: 'no ' + spec.marketplace + ' offer fits ' + spec.display_name };
-        }
+        const quote = await preview(spec.key, { strategy, runtimeSpec: spec, rentalOnly: true });
+        const offer = quote.selected;
+        if (!offer) return { ok: false, code: 'gpu.no_offer', reason: quote.reasons.join('; ') };
+        const marketplace = offer.marketplace;
+        const adapter = adapterFor(marketplace, cfg);
+        if (!adapter) return { ok: false, code: 'gpu.no_key', reason: 'no ' + marketplace + ' API key' };
 
         // 2. the cap: the reservation has to fit under what is left of it
         const hourly = money.nanoUsd(offer.price_per_hour, "the offer's price");
@@ -310,7 +324,7 @@ function createGpuProvisioner({
         //     instance never runs that the person cannot pay for.
         if (beforeCreate) {
             try {
-                await beforeCreate({ offer, hourly, reserved, maxMinutes, marketplace: spec.marketplace });
+                await beforeCreate({ offer, hourly, reserved, maxMinutes, marketplace });
             } catch (err) {
                 return { ok: false, code: (err && err.code) || 'gpu.billing', reason: String((err && err.message) || err).slice(0, 300) };
             }
@@ -321,7 +335,14 @@ function createGpuProvisioner({
         //    the label and gives it back when no live row of ours owns it.
         const id = LABEL_PREFIX + randomUUID().replace(/-/g, '').slice(0, 12);
         const t = now();
-        await db.prepare(`INSERT INTO gpu_instances (id, model_key, provider_key, marketplace, offer_id, remote_id, status, endpoint, month,
+        try {
+            await db.tx(async (tdb) => {
+                await tdb.maybe('SELECT id FROM gpu_budget_lock WHERE id=1 FOR UPDATE');
+                const latest = await moneySummary(tdb);
+                if (latest.committed_nano + reserved > cap) throw new AiError(409, 'gpu.cap', 'the monthly cap has no room for another reservation');
+                const unknown = await tdb.prepare("SELECT id FROM gpu_instances WHERE status='starting' AND remote_id IS NULL AND error IS NOT NULL LIMIT 1").get();
+                if (unknown) throw new AiError(409, 'gpu.uncertain', 'an unknown provisioning outcome must be reconciled first');
+        await tdb.prepare(`INSERT INTO gpu_instances (id, model_key, provider_key, marketplace, offer_id, remote_id, status, endpoint, month,
                 gpu_name, gpu_ram_mb, num_gpus, disk_gb, reliability, region, price_per_hour, hourly_nano, reserved_nano, spent_nano,
                 max_runtime_minutes, started_at, charged_at, destroy_failures, label, cold_start_ms, health_failures, created_at, updated_at,
                 own_endpoint_id, idle_minutes)
@@ -330,7 +351,7 @@ function createGpuProvisioner({
                 @max_runtime_minutes, @started_at, @charged_at, 0, @label, NULL, 0, @created_at, @updated_at,
                 @own_endpoint_id, @idle_minutes)`)
             .run({
-                id, model_key: spec.key, provider_key: spec.provider_key, marketplace: spec.marketplace,
+                id, model_key: spec.key, provider_key: spec.provider_key, marketplace,
                 offer_id: String(offer.id), month: monthOf(t),
                 gpu_name: String(offer.gpu_name || ''), gpu_ram_mb: Number(offer.gpu_ram_mb) || 0,
                 num_gpus: Number(offer.num_gpus) || 1, disk_gb: Number(offer.disk_gb) || 0,
@@ -340,8 +361,14 @@ function createGpuProvisioner({
                 created_at: iso(t), updated_at: iso(t),
                 own_endpoint_id: ownEndpointId, idle_minutes: idleMinutes == null ? null : clampInt(idleMinutes, 1, 1440, cfg.idle_minutes),
             });
+            });
+        } catch (err) {
+            if (err.code === 'gpu.cap' || err.code === 'gpu.uncertain') return { ok: false, code: err.code, reason: err.message };
+            throw err;
+        }
+        await audit(actor, 'gpu.placement', 'gpu_instance', id, { strategy, marketplace, offer_id: offer.id, reasons: quote.reasons, hourly_nano: hourly.toString() });
         await audit(actor, 'gpu.instance.requested', 'gpu_instance', id, {
-            model: spec.key, marketplace: spec.marketplace, offer_id: String(offer.id), hourly_nano: hourly.toString(),
+            model: spec.key, marketplace, offer_id: String(offer.id), hourly_nano: hourly.toString(),
             reserved_nano: reserved.toString(), max_runtime_minutes: maxMinutes, label: id,
             ...(ownEndpointId ? { own_endpoint_id: ownEndpointId } : {}),
         });
@@ -356,11 +383,12 @@ function createGpuProvisioner({
                 label: id,
             });
         } catch (err) {
-            const reason = String(err && err.message).slice(0, 200);
-            await db.prepare("UPDATE gpu_instances SET status = 'refused', error = ?, updated_at = ? WHERE id = ?")
+            const reason = 'provision outcome unknown; reservation retained for reconciliation';
+            await db.prepare("UPDATE gpu_instances SET status = 'starting', error = ?, updated_at = ? WHERE id = ?")
                 .run(reason, iso(now()), id);
             await audit(actor, 'gpu.instance.refused', 'gpu_instance', id, { reason });
-            return { ok: false, code: 'gpu.create_failed', reason };
+            const pending = await db.prepare('SELECT * FROM gpu_instances WHERE id = ?').get(id);
+            return { ok: true, pending: true, instance: describe(pending), reason };
         }
         await db.prepare('UPDATE gpu_instances SET remote_id = ?, updated_at = ? WHERE id = ?')
             .run(String(created.remote_id || ''), iso(now()), id);
@@ -450,9 +478,10 @@ function createGpuProvisioner({
     async function destroy(row, reason, { actor = 'service:ai' } = {}) {
         const cfg = config();
         const adapter = adapterFor(row.marketplace, cfg);
+        if (!adapter || !row.remote_id) return { ok: false, reason: 'provider key or remote id missing; reservation retained' };
         if (adapter && row.remote_id) {
             try {
-                await adapter.destroyInstance(row.remote_id);
+                if (await adapter.destroyInstance(row.remote_id) === false) throw new Error('provider did not confirm deletion');
             } catch (err) {
                 const failures = Number(row.destroy_failures || 0) + 1;
                 await db.prepare('UPDATE gpu_instances SET destroy_failures = ?, updated_at = ? WHERE id = ?')
@@ -522,16 +551,8 @@ function createGpuProvisioner({
                 await destroyOrphan({ marketplace, remote_id: String(inst.id), label }, row, cfg);
             }
         }
-        // The rows whose rental never came back (a crash before the marketplace answered, or an
-        // answer we never got): their reservation is free again, or the month would carry a budget
-        // for an instance that does not exist.
-        const stale = await db.prepare("SELECT * FROM gpu_instances WHERE status = 'starting' AND (remote_id IS NULL OR remote_id = '') AND started_at < ?").all(iso(t - STALE_ROW_MS));
-        for (const row of stale || []) {
-            await db.prepare("UPDATE gpu_instances SET status = 'refused', error = ?, updated_at = ? WHERE id = ?")
-                .run('the rental never came back', iso(t), row.id);
-            await audit('service:ai', 'gpu.instance.abandoned', 'gpu_instance', row.id, { marketplace: row.marketplace });
-            log.warn && log.warn('[gpu] gave up on the row ' + row.id + ': the rental never came back, its reservation is free again');
-        }
+        // Unknown creation outcomes retain their reservation until the remote instance is recovered.
+        // A failed/truncated listing cannot prove that a purchase never happened.
         return seen;
     }
 
@@ -587,6 +608,7 @@ function createGpuProvisioner({
 
     /** One pass over the live instances: the reservation, the idle timer, the health. */
     async function reconcileInstance(row, cfg) {
+        if (!row.remote_id) return { changed: false, reason: 'creation outcome unknown; reservation retained' };
         const priv = Boolean(row.own_endpoint_id);
         const spec = priv
             ? (ownEndpoints && typeof ownEndpoints.specFor === 'function' ? ownEndpoints.specFor(row) : null)
@@ -738,7 +760,12 @@ function createGpuProvisioner({
     /** One pass: the owner's requests, the live instances, and the models that are wanted. */
     async function tick({ actor = 'service:ai' } = {}) {
         const cfg = config();
-        if (!cfg.enabled) return { ok: false, reason: cfg.reason, launched: 0, stopped: 0, destroyed: 0 };
+        if (!cfg.enabled) {
+            // Lowering the cap to zero disables new launches, but must not strand paid instances.
+            const rows = await db.prepare("SELECT * FROM gpu_instances WHERE status IN ('starting','running','stopping')").all();
+            for (const row of rows) if (row.remote_id && adapterFor(row.marketplace, cfg)) await destroy(row, 'GPU budget disabled');
+            return { ok: false, reason: cfg.reason, launched: 0, stopped: 0, destroyed: 0 };
+        }
 
         let launched = 0;
         let stopped = 0;
@@ -746,6 +773,13 @@ function createGpuProvisioner({
 
         // 0. the marketplace instances that carry our label: the ones no live row owns are given back
         await sweepOrphans(cfg);
+        if ((await moneySummary()).committed_nano > cfg.cap_nano) {
+            for (const row of await db.prepare("SELECT * FROM gpu_instances WHERE status IN ('starting','running','stopping')").all()) {
+                if (row.remote_id && adapterFor(row.marketplace, cfg)) await destroy(row, 'monthly cap lowered');
+            }
+            return { ok: false, reason: 'monthly cap lowered; paid instances are being released', launched: 0, stopped: 0, destroyed: 0 };
+        }
+
 
         // 1. the owner's requests
         const requests = await db.prepare('SELECT * FROM gpu_requests WHERE done_at IS NULL ORDER BY id').all();
@@ -758,7 +792,7 @@ function createGpuProvisioner({
                             .run(iso(now()), String(res.reason).slice(0, 300), req.id);
                         continue;
                     }
-                    launched += 1;
+                    if (!res.dry_run) launched += 1;
                 } else {
                     const row = await liveInstance(req.model_key);
                     if (row) {
@@ -785,7 +819,7 @@ function createGpuProvisioner({
             if (await liveInstance(spec.key)) continue;
             if (!await wanted(spec, cfg)) continue;
             const res = await launch(spec.key, { actor });
-            if (res.ok) launched += 1;
+            if (res.ok && !res.dry_run) launched += 1;
         }
 
         return { ok: true, launched, stopped, destroyed };
@@ -813,6 +847,8 @@ function createGpuProvisioner({
             };
         });
         return {
+            strategy: cfg.strategy,
+            dry_run: cfg.dry_run,
             enabled: cfg.enabled,
             reason: cfg.reason,
             month: sum.month,
@@ -858,6 +894,7 @@ function createGpuProvisioner({
 
     return {
         state,
+        preview,
         tick,
         launch,
         attachEndpoints,
