@@ -162,9 +162,12 @@ function createGpuProvisioner({
         let reserved = 0n;
         let running = 0n;
         for (const row of rows) {
-            reserved += toNano(row.reserved_nano) > toNano(row.spent_nano) ? toNano(row.reserved_nano) - toNano(row.spent_nano) : 0n;
+            const remaining = toNano(row.reserved_nano) > toNano(row.spent_nano) ? toNano(row.reserved_nano) - toNano(row.spent_nano) : 0n;
             const started = toMs(row.started_at);
-            if (started != null) running += money.nanoForSeconds(toNano(row.hourly_nano), Math.max(0, now() - Math.max(toMs(row.charged_at) || started, Date.parse(month + '-01T00:00:00Z'))) / 1000);
+            const accrued = started == null ? 0n : money.nanoForSeconds(toNano(row.hourly_nano), Math.max(0, now() - Math.max(toMs(row.charged_at) || started, Date.parse(month + '-01T00:00:00Z'))) / 1000);
+            running += accrued;
+            // Pending deletion may run beyond its reservation. Never make that overspend look like free budget.
+            reserved += remaining > accrued ? remaining : accrued;
         }
         return {
             month,
@@ -346,8 +349,8 @@ function createGpuProvisioner({
                 await tdb.maybe('SELECT id FROM gpu_budget_lock WHERE id=1 FOR UPDATE');
                 const latest = await moneySummary(tdb);
                 if (latest.committed_nano + reserved > cap) throw new AiError(409, 'gpu.cap', 'the monthly cap has no room for another reservation');
-                const unknown = await tdb.prepare("SELECT id FROM gpu_instances WHERE status='starting' AND remote_id IS NULL AND error IS NOT NULL LIMIT 1").get();
-                if (unknown) throw new AiError(409, 'gpu.uncertain', 'an unknown provisioning outcome must be reconciled first');
+                const unknown = await tdb.prepare("SELECT id FROM gpu_instances WHERE (status='starting' AND remote_id IS NULL AND error IS NOT NULL) OR status='orphan' LIMIT 1").get();
+                if (unknown) throw new AiError(409, 'gpu.uncertain', 'an unknown provisioning outcome or orphan must be reconciled first');
         await tdb.prepare(`INSERT INTO gpu_instances (id, model_key, provider_key, marketplace, offer_id, remote_id, status, endpoint, month,
                 gpu_name, gpu_ram_mb, num_gpus, disk_gb, reliability, region, price_per_hour, hourly_nano, reserved_nano, spent_nano,
                 max_runtime_minutes, started_at, charged_at, destroy_failures, label, cold_start_ms, health_failures, created_at, updated_at,
@@ -487,7 +490,9 @@ function createGpuProvisioner({
         if (!adapter || !row.remote_id) return { ok: false, reason: 'provider key or remote id missing; reservation retained' };
         if (adapter && row.remote_id) {
             try {
-                if (await adapter.destroyInstance(row.remote_id) === false) throw new Error('provider did not confirm deletion');
+                if (await adapter.destroyInstance(row.remote_id) === false) throw new Error('provider did not accept deletion');
+                const afterDelete = await adapter.showInstance(row.remote_id);
+                if (!afterDelete.deleted) throw new Error('provider deletion is not yet confirmed');
             } catch (err) {
                 const failures = Number(row.destroy_failures || 0) + 1;
                 await db.prepare('UPDATE gpu_instances SET destroy_failures = ?, updated_at = ? WHERE id = ?')
@@ -581,7 +586,7 @@ function createGpuProvisioner({
         // the orphan ran and was paid for: the seconds since the last charge are on the ledger
         await charge(row, t, 'the orphan ran');
         try {
-            await adapter.destroyInstance(inst.remote_id);
+            if (await adapter.destroyInstance(inst.remote_id) === false || !(await adapter.showInstance(inst.remote_id)).deleted) throw new Error('orphan deletion is not confirmed');
         } catch (err) {
             const failures = Number(row.destroy_failures || 0) + 1;
             await db.prepare('UPDATE gpu_instances SET destroy_failures = ?, updated_at = ? WHERE id = ?')
@@ -627,8 +632,9 @@ function createGpuProvisioner({
         // the money that ran while we were away
         await charge(row, t, 'the GPU ran');
 
-        // 1. the reservation ran out: the instance goes back, so the money stops there
-        if (t - started >= Number(row.max_runtime_minutes) * 60_000) {
+        // Begin deletion a minute early to allow the reconciliation interval and provider latency.
+        // A provider outage can still exceed this allowance; retain the commitment until confirmed gone.
+        if (t - started >= Math.max(0, Number(row.max_runtime_minutes) * 60_000 - 60_000)) {
             await destroy({ ...row, charged_at: row.charged_at }, 'the reservation ran out');
             return { changed: true, action: 'destroyed', reason: 'the reservation ran out' };
         }
@@ -766,6 +772,8 @@ function createGpuProvisioner({
     /** One pass: the owner's requests, the live instances, and the models that are wanted. */
     async function tick({ actor = 'service:ai' } = {}) {
         const cfg = config();
+        // Recovery and orphan cleanup also run while new rental spending is disabled.
+        await sweepOrphans(cfg);
         if (!cfg.enabled) {
             // Lowering the cap to zero disables new launches, but must not strand paid instances.
             const rows = await db.prepare("SELECT * FROM gpu_instances WHERE status IN ('starting','running','stopping')").all();
@@ -777,8 +785,6 @@ function createGpuProvisioner({
         let stopped = 0;
         let destroyed = 0;
 
-        // 0. the marketplace instances that carry our label: the ones no live row owns are given back
-        await sweepOrphans(cfg);
         if ((await moneySummary()).committed_nano > cfg.cap_nano) {
             for (const row of await db.prepare("SELECT * FROM gpu_instances WHERE status IN ('starting','running','stopping')").all()) {
                 if (row.remote_id && adapterFor(row.marketplace, cfg)) await destroy(row, 'monthly cap lowered');

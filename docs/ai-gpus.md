@@ -179,7 +179,9 @@ Reservations are serialized through `gpu_budget_lock`. An uncertain creation res
 its row and reservation for label recovery, including across month boundaries; an empty or
 failed instance listing cannot prove a purchase never happened. Disabling the cap continues
 remote cleanup. Metering splits elapsed time at UTC month boundaries and avoids counting
-already-charged runtime twice in the live summary. Failed deletion remains a billable risk;
+already-charged runtime twice in the live summary. Release begins a minute before the runtime
+limit; an accepted DELETE retains the reservation until a follow-up lookup confirms absence.
+Failed or pending deletion remains a billable risk;
 the existing destroy-failure alert must be monitored.
 
 RunPod uses the official v2 catalogue (`/v2/catalog/gpus?include=AVAILABILITY&product=POD`),

@@ -228,6 +228,7 @@ t.test('a destroy that keeps failing is tried again every pass and the operator 
         assert.strictEqual(gauges[0].value, 3, 'the gauge the operator alert reads');
         const audit = await h.registry.listAudit({ action: 'gpu.orphan.destroy_failed' });
         assert.strictEqual(audit.length, 1, 'the operator alert is on the audit log');
+        assert.strictEqual((await h.gpus.launch('deepseek-r1-32b')).code, 'gpu.uncertain', 'an unaccounted orphan blocks new spending');
     } finally { await h.stop(); }
 });
 
@@ -269,6 +270,29 @@ t.test('unbounded extras block rentals and the allowance counts against the cap'
         assert.ok(rented.ok, rented.reason);
         assert.strictEqual(String(rented.hourly_nano), '234800000');
         assert.strictEqual(rented.instance.price_per_hour, '0.2348');
+    } finally { await h.stop(); }
+});
+
+t.test('accepted deletion retains the reservation until the instance is confirmed gone', async () => {
+    const api = createGpuFetch();
+    let now = T0;
+    const h = await boot({ clock: { now: () => now }, fetchImpl: api.fetchImpl });
+    try {
+        await settings(h);
+        const rented = await h.gpus.launch('deepseek-r1-32b');
+        api.deletePending = true;
+        await settings(h, { cap: '0' });
+        await h.gpus.tick();
+        let row = await h.db.prepare('SELECT * FROM gpu_instances WHERE id=?').get(rented.instance.id);
+        assert.notStrictEqual(row.status, 'destroyed');
+        assert.ok(BigInt((await h.gpus.moneySummary()).committed_nano) > 0n);
+        now += 24 * 3600000;
+        const overdue = await h.gpus.moneySummary();
+        assert.ok(BigInt(overdue.committed_nano) >= BigInt(overdue.spent_nano), 'unconfirmed deletion cannot understate the commitment');
+        api.deletePending = false;
+        await h.gpus.tick();
+        row = await h.db.prepare('SELECT * FROM gpu_instances WHERE id=?').get(rented.instance.id);
+        assert.strictEqual(row.status, 'destroyed');
     } finally { await h.stop(); }
 });
 

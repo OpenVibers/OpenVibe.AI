@@ -121,7 +121,8 @@ function vastAdapter({ fetchImpl = globalThis.fetch, key = null, baseUrl = BASE_
         },
 
         async showInstance(remoteId) {
-            const out = await apiJson(fetchImpl, baseUrl + '/api/v0/instances/' + encodeURIComponent(remoteId), { ...auth, label: 'Vast.ai' });
+            const out = await apiJson(fetchImpl, baseUrl + '/api/v0/instances/' + encodeURIComponent(remoteId), { ...auth, label: 'Vast.ai', allowMissing: true });
+            if (out && out.missing) return { remote_id: remoteId, state: 'deleted', deleted: true, endpoint: '' };
             const instance = out && out.instances ? out.instances : out;
             const status = String((instance && (instance.actual_status || instance.status)) || 'unknown');
             return {
@@ -133,7 +134,7 @@ function vastAdapter({ fetchImpl = globalThis.fetch, key = null, baseUrl = BASE_
         },
 
         async destroyInstance(remoteId) {
-            const out = await apiJson(fetchImpl, baseUrl + '/api/v0/instances/' + encodeURIComponent(remoteId), { method: 'DELETE', ...auth, label: 'Vast.ai' });
+            const out = await apiJson(fetchImpl, baseUrl + '/api/v0/instances/' + encodeURIComponent(remoteId), { method: 'DELETE', ...auth, label: 'Vast.ai', allowMissing: true });
             return Boolean(out && out.success !== false);
         },
     };

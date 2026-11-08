@@ -121,7 +121,8 @@ function runpodAdapter({ fetchImpl = globalThis.fetch, key = null, baseUrl = BAS
         },
 
         async showInstance(remoteId) {
-            const out = await apiJson(fetchImpl, baseUrl + '/v2/pods/' + encodeURIComponent(remoteId), { ...auth, label: 'RunPod' });
+            const out = await apiJson(fetchImpl, baseUrl + '/v2/pods/' + encodeURIComponent(remoteId), { ...auth, label: 'RunPod', allowMissing: true });
+            if (out && out.missing) return { remote_id: remoteId, state: 'deleted', deleted: true, endpoint: '' };
             const status = String((out && out.status) || 'unknown').toLowerCase();
             return {
                 remote_id: remoteId,
@@ -132,7 +133,7 @@ function runpodAdapter({ fetchImpl = globalThis.fetch, key = null, baseUrl = BAS
         },
 
         async destroyInstance(remoteId) {
-            const out = await apiJson(fetchImpl, baseUrl + '/v2/pods/' + encodeURIComponent(remoteId), { method: 'DELETE', ...auth, label: 'RunPod' });
+            const out = await apiJson(fetchImpl, baseUrl + '/v2/pods/' + encodeURIComponent(remoteId), { method: 'DELETE', ...auth, label: 'RunPod', allowMissing: true });
             return out == null || out.success !== false;
         },
     };
