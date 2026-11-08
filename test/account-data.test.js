@@ -54,6 +54,7 @@ t.test('an export carries the person\'s sessions and credential hints, and a del
             await h.db.exec("INSERT INTO console_sessions (id_hash, subject, username, staff, csrf, created_at, expires_at) VALUES ($1, $2, $3, '{}', 'c', '2026-10-01', '2027-10-01')", [`h_${name}`, subject, name]);
             await h.db.exec("INSERT INTO person_sessions (id_hash, subject, username, created_at, expires_at) VALUES ($1, $2, $3, '2026-10-01', '2027-10-01')", [`p_${name}`, subject, name]);
             await h.db.exec("INSERT INTO subject_credentials (owner, subject, provider, key_enc, key_hint, models, created_at, updated_at) VALUES ('proj_1', $1, 'openai', 'v1:secret', $2, '{}', '2026-10-01', '2026-10-02')", [subject, `hint-${name}`]);
+            await h.db.exec("INSERT INTO session_credentials (owner, subject, provider, label, secret_enc, created_at) VALUES ('self', $1, 'openai', 'browser', 'v1:cookie-secret', '2026-10-01')", [subject]);
             await h.db.exec("INSERT INTO free_allowance_usage (subject, provider, metric, period_start, period_end, free_used, updated_at) VALUES ($1, 'openai', 'input-tokens', 1, 2, 10, '2026-10-01')", [subject]);
             // Plan E5: the free-tier counters are erased with the account (the shared device counter only when its
             // last account goes).
@@ -76,6 +77,9 @@ t.test('an export carries the person\'s sessions and credential hints, and a del
         assert.strictEqual(files['person-sessions.json'].length, 1);
         assert.strictEqual(files['provider-credentials.json'].length, 1);
         assert.strictEqual(files['provider-credentials.json'][0].key_hint, 'hint-ada');
+        assert.strictEqual(files['provider-session-credentials.json'].length, 1);
+        assert.strictEqual(files['provider-session-credentials.json'][0].label, 'browser');
+        assert.ok(!JSON.stringify(part.body).includes('v1:cookie-secret'), 'the encrypted session cookie is never exported');
         assert.ok(!JSON.stringify(part.body).includes('v1:secret'), 'the encrypted key is never exported');
         assert.ok(!JSON.stringify(part.body).includes(B), 'nobody else\'s rows');
 
@@ -87,6 +91,7 @@ t.test('an export carries the person\'s sessions and credential hints, and a del
         assert.strictEqual(Number(await h.db.value('SELECT count(*)::int FROM abuse_devices WHERE subject = $1', [B])), 1, "nobody else's device row");
         assert.strictEqual(Number(await h.db.value('SELECT count(*)::int FROM person_sessions WHERE subject = $1', [A])), 0);
         assert.strictEqual(Number(await h.db.value('SELECT count(*)::int FROM subject_credentials WHERE subject = $1', [A])), 0);
+        assert.strictEqual(Number(await h.db.value('SELECT count(*)::int FROM session_credentials WHERE subject = $1', [A])), 0, 'the session cookie is erased');
         assert.strictEqual(Number(await h.db.value('SELECT count(*)::int FROM free_allowance_usage WHERE subject = $1', [A])), 1, 'the allowance ledger stays');
         assert.strictEqual(Number(await h.db.value('SELECT count(*)::int FROM routes WHERE created_by = $1', [A])), 1, 'the staff catalogue stays');
         assert.strictEqual(Number(await h.db.value('SELECT count(*)::int FROM console_sessions WHERE subject = $1', [B])), 1, 'Bo stays');
