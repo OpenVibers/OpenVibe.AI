@@ -9,7 +9,7 @@ API both use one definition of private here; nothing in Exchange re-implements i
 
 | label | when |
 | --- | --- |
-| `private` | the provider's own terms say zero retention **and** no training, or the offer is a person's own machine (a Node credential), or it is the host's own deployment (`metadata.local`). |
+| `private` | the provider's own terms say zero retention **and** no training, or the offer is a person's own machine (a Link credential), or it is the host's own deployment (`metadata.local`). |
 | `community` | the offer runs on a community machine (a person's hardware, Node's "Offer to the network"): that machine sees the prompt. |
 | `anonymized` | everything else, including a provider that declares no policy (`known: false` says so). |
 

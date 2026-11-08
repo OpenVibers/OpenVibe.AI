@@ -18,7 +18,7 @@
  *   POST /you/computer                     a model on your own computer (model; any of your computers)
  *   POST /you/computer/remove              forget it
  *
- * Your computer (plan L55 C3): a model the person runs at home, reached through OpenVibe.Bot and their OpenVibe Node,
+ * Your computer (plan L55 C3): a model the person runs at home, reached through OpenVibe.Bot and their OpenVibe Link,
  * kept here like a key but with no key: the model, and any of their computers that lets their AI use its models. An
  * app uses it only when the person allows that app below (provider node), and it never stands in for a key.
  */
@@ -145,10 +145,10 @@ function allowRequest(query) {
 function computerSection(pc, machines) {
     const models = [...new Set(machines.flatMap((m) => m.models))].slice(0, 60);
     const onNow = machines.filter((m) => m.online);
-    const line = (m) => `<li><b>${esc(m.name)}</b>${m.online ? '' : ' <span class="you-pill">away</span>'}${m.models.length ? ` · ${esc(m.models.slice(0, 6).join(', '))}${m.models.length > 6 ? ` and ${m.models.length - 6} more` : ''}` : ' · no models listed'}${m.tools ? '' : ' · <span class="you-pill">update OpenVibe Node to v0.36.0 for agents</span>'}</li>`;
+    const line = (m) => `<li><b>${esc(m.name)}</b>${m.online ? '' : ' <span class="you-pill">away</span>'}${m.models.length ? ` · ${esc(m.models.slice(0, 6).join(', '))}${m.models.length > 6 ? ` and ${m.models.length - 6} more` : ''}` : ' · no models listed'}${m.tools ? '' : ' · <span class="you-pill">update OpenVibe Link to v0.36.0 for agents</span>'}</li>`;
     const where = machines.length
         ? `<ul class="you-pcs">${machines.map(line).join('')}</ul>`
-        : '<p class="you-empty">None of your computers lets OpenVibe use its models yet. On the computer, run a model server (Ollama, LM Studio or llama.cpp) and OpenVibe Node with <code>--ai</code>, then turn on &ldquo;Let my AI use this computer&rsquo;s models&rdquo; at <a href="https://openvibe.bot/machines">openvibe.bot/machines</a>.</p>';
+        : '<p class="you-empty">None of your computers lets OpenVibe use its models yet. On the computer, run a model server (Ollama, LM Studio or llama.cpp) and OpenVibe Link with <code>--ai</code>, then turn on &ldquo;Let my AI use this computer&rsquo;s models&rdquo; at <a href="https://openvibe.bot/machines">openvibe.bot/machines</a>.</p>';
     const saved = pc ? `<ul class="you-keys"><li class="you-key"><div class="you-key-t"><b>Any of your computers</b><span class="you-pill${onNow.some((m) => m.models.includes(pc.model)) ? ' is-ok' : ''}">${esc(pc.model || 'no model')}</span></div>
 <div class="you-acts"><form method="post" action="/you/computer/remove"><button class="you-btn" type="submit">Remove</button></form></div>
 <div class="you-key-n">${onNow.some((m) => m.models.includes(pc.model)) ? 'On now, with this model' : 'None of your computers with this model is on right now'}${pc.last_used_at ? ` · used ${esc(ago(pc.last_used_at))}` : ''}</div></li></ul>` : '';

@@ -1,6 +1,6 @@
 # Memory M5: services, sharing and the portable file
 
-This is the fifth stage of the Memory plan (`../../OpenVibe_Memory_Plan_2026-10-30.md`). M1–M4 are the Node readers,
+This is the fifth stage of the Memory plan (`../../OpenVibe_Memory_Plan_2026-10-30.md`). M1–M4 are the Link readers,
 the store, the cloud imports, the write-back and the agent API. M5 adds three things to the same store:
 
 - the memory-service adapters (mem0, Letta, Zep) with the person's own key;
@@ -102,7 +102,7 @@ forwards the person's token, the method, the body and `If-Match` to AI, and keep
   another account without carrying anyone's identity, and a profile is derived from the notes and rebuilt.
 - The round trip is proved in `test/memory-m5.test.js`: export A's store, import it as B, and compare text, kind,
   scope and source; importing the same file again changes nothing.
-- The Node writes and reads the same file (`openvibe-node memory export|import`); Codes offers a download and an
+- The Link writes and reads the same file (`openvibe-node memory export|import`); Codes offers a download and an
   import form. The format is the contract, not either client.
 
 ## Tests

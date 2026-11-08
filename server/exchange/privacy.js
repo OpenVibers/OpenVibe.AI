@@ -46,7 +46,7 @@ function dataPolicyOf(record) {
  *   credential  the person's own key's descriptor, when the answer came from their key or their machine
  */
 function labelFor({ record = null, credential = null } = {}) {
-    // A person's own machine (a Node credential): the prompt never left their hardware.
+    // A person's own machine (a Link credential): the prompt never left their hardware.
     if (credential && credential.provider === 'node') {
         return { label: 'private', retention: 'none', training: false, region: null, trust: 'own_machine', known: true, source: 'your own machine' };
     }

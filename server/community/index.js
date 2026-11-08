@@ -142,7 +142,7 @@ function createCommunity({ db, config, env = process.env, machines = null, endpo
     if (!identityTokens && secret && network) {
         identityTokens = createServiceTokenClient({ tokenUrl: `${network}/oauth/token`, clientId, clientSecret: secret, scope: { 'openvibe.network': 'identity.subject.resolve' }, fetch: fetchImpl });
     }
-    // A Node offer comes from Network and is reached through Bot; a community endpoint is registered here and reached
+    // A Link offer comes from Network and is reached through Bot; a community endpoint is registered here and reached
     // through its own https address. Each works without the other.
     const registryEnabled = Boolean(cfg.enabled && db && machines && network && registryTokens);
     const endpointsEnabled = Boolean(cfg.enabled && db && endpoints && endpoints.enabled);
@@ -438,7 +438,7 @@ function createCommunity({ db, config, env = process.env, machines = null, endpo
         const wanted = ctx.communityOfferId ? String(ctx.communityOfferId) : null;
         const out = [];
         for (const offer of list) {
-            // The Node's own ready flag may be a few minutes stale (status is sent on changes); the hours are read here
+            // The Link's own ready flag may be a few minutes stale (status is sent on changes); the hours are read here
             // too, so a request outside the owner's window never reaches the machine.
             if (offer.health === 'down' || offer.ready !== true || !withinHours(offer, clock.now())) continue;
             if (wanted && String(offer.offer_id) !== wanted) continue;

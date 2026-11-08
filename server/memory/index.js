@@ -483,7 +483,7 @@ function createMemory({ db, config, clock = { now: () => Date.now() }, log = con
                 : String(req.principal.sub || '').replace(/^svc:/, '');
             const source = validateSource(serviceCaller ? serviceSource : (raw.source || 'person'));
             // A service is an agent: what it writes is a suggestion, stored as written. A person may mark their own item
-            // as AI-produced too (the Node imports what a coding tool wrote).
+            // as AI-produced too (the Link imports what a coding tool wrote).
             const aiMade = serviceCaller || raw.no_looks === true || AI_SOURCES.has(source);
             let text = clean;
             text = String(text == null ? '' : text);

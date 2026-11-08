@@ -2,7 +2,7 @@
 /**
  * The public seller API (design EXCHANGE-REMAKE-2026-11-06, "Gap found while building the SDK"): a standalone
  * OpenAI-compatible server can sell to the Exchange with the seller's own Network developer key, not only an
- * OpenVibe Node machine. Served on the Exchange's public API host (api.openvibe.exchange) and documented in
+ * OpenVibe Link machine. Served on the Exchange's public API host (api.openvibe.exchange) and documented in
  * /openapi.json.
  *
  *   POST   /api/v1/exchange/seller/offers          ai.app.run (a developer key), or a person's own token

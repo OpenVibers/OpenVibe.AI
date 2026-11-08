@@ -3,12 +3,12 @@
  * A person's own machine as their model (AI on your own machines: contracts 0.219.0 bot.command@1 kind ai and the
  * capability bot.machine.ai; 0.220.0 the credential provider node). One chat completion goes through OpenVibe.Bot,
  * POST /api/v1/machines/:id/commands with kind ai, as OpenVibe.AI acting for the person (X-OV-Subject), to the machine's
- * own model server (OpenVibe Node's ai plugin: Ollama, LM Studio, llama.cpp). Bot checks that the machine is theirs and
+ * own model server (OpenVibe Link's ai plugin: Ollama, LM Studio, llama.cpp). Bot checks that the machine is theirs and
  * that they turned on "Let my AI use this computer's models"; the prompt never reaches anyone else's machine.
  *
  * Machine `any` (contracts 0.221.0): whichever of the person's own machines is on, lets their AI use its models and
  * offers the model, from Bot's list for OpenVibe.AI (GET /api/v1/machines, only those with the switch on). The fastest
- * at that model goes first (computer.ai_speed, OpenVibe.Node v0.29.0), then the others; one that is busy, away or fails
+ * at that model goes first (computer.ai_speed, OpenVibe Link v0.29.0), then the others; one that is busy, away or fails
  * hands over to the next. Never anyone else's machine, never another provider.
  *
  * Off without OV_BOT_INTERNAL_URL or a client secret: a credential with provider node is then refused, never sent
@@ -17,7 +17,7 @@
  *
  * Tools (contracts 0.277.0, plan L55 C3): an agent's loop on the person's own model. The command carries the tools and
  * the calls already made; the machine hands back the calls its model asked for (message.tool_calls) and runs none. Only
- * a machine whose Node says computer.ai.tools (v0.36.0) is asked: with machine any the others are passed over, and a
+ * a machine whose Link says computer.ai.tools (v0.36.0) is asked: with machine any the others are passed over, and a
  * named machine without it is refused with what to update.
  */
 const { AiError } = require('./util');
@@ -78,14 +78,14 @@ function createMachineModels({ config, env = process.env, fetchImpl = globalThis
         const tools = Array.isArray(args.tools) && args.tools.length > 0;
         if (machine !== ANY) {
             if (tools) {
-                // A Node older than v0.36.0 would drop the tools and answer in words: say what to update instead.
+                // A Link older than v0.36.0 would drop the tools and answer in words: say what to update instead.
                 const m = (await listed(subject, signal)).find((x) => x && x.id === machine);
-                if (m && m.computer && m.computer.ai && m.computer.ai.tools !== true) throw new AiError(422, 'machine.no_tools', 'this computer\'s OpenVibe Node cannot pass tools to its model yet: update it to v0.36.0 or newer');
+                if (m && m.computer && m.computer.ai && m.computer.ai.tools !== true) throw new AiError(422, 'machine.no_tools', 'this computer\'s OpenVibe Link cannot pass tools to its model yet: update it to v0.36.0 or newer');
             }
             return { ...(await once(machine, args)), machine, tried: [] };
         }
         const ids = (await candidates(subject, model, signal, { tools })).slice(0, MAX_TRIED);
-        if (!ids.length) throw new AiError(503, 'machine.none', `none of the person's own machines is on with ${String(model).slice(0, 120)} and lets their AI use it${tools ? ', with an OpenVibe Node that can pass tools (v0.36.0 or newer)' : ''}`);
+        if (!ids.length) throw new AiError(503, 'machine.none', `none of the person's own machines is on with ${String(model).slice(0, 120)} and lets their AI use it${tools ? ', with an OpenVibe Link that can pass tools (v0.36.0 or newer)' : ''}`);
         const tried = [];
         for (const id of ids) {
             try {
@@ -101,7 +101,7 @@ function createMachineModels({ config, env = process.env, fetchImpl = globalThis
 
     async function once(machine, { subject, model, messages, maxTokens = null, temperature = null, signal = null, timeoutMs = 120000, tools = null, toolChoice = null, community = false }) {
         // The ack wire has no extra field for "this is the machine's offer to the network" (bot.command@1's value is
-        // closed), so the model carries the community/ prefix; the Node ai plugin strips it before its model server
+        // closed), so the model carries the community/ prefix; the Link ai plugin strips it before its model server
         // sees it and enforces the offer. The prefix never reaches the local model.
         const asked = community && !String(model).startsWith('community/') ? `community/${model}` : model;
         const value = { model: asked, messages, ...(maxTokens ? { max_tokens: Math.min(32768, Math.max(1, Math.round(maxTokens))) } : {}), ...(temperature != null ? { temperature: Math.min(2, Math.max(0, Number(temperature))) } : {}),
@@ -136,7 +136,7 @@ function createMachineModels({ config, env = process.env, fetchImpl = globalThis
 
     /**
      * The person's computers that let their AI use their models, for their own settings page: name, whether it is on,
-     * its models and whether its Node can pass tools. [] when Bot cannot be reached.
+     * its models and whether its Link can pass tools. [] when Bot cannot be reached.
      */
     async function mine(subject, signal = null) {
         if (!enabled || !SUBJECT_RE.test(String(subject))) return [];
