@@ -356,19 +356,20 @@ const batchItem = {
     type: 'object', required: ['idx', 'status'],
     properties: {
         idx: integer({ minimum: 0 }),
-        status: str({ enum: ['queued', 'running', 'succeeded', 'failed'] }),
+        status: str({ enum: ['queued', 'waiting', 'running', 'succeeded', 'failed', 'expired', 'cancelled'] }),
         model: nullable('string'),
         run_id: nullable('string', { description: 'The run that answered this prompt' }),
         answer: nullable('string'),
         error_code: nullable('string'),
         error_detail: nullable('string'),
+        reason: nullable('string', { description: 'The plain note about the prompt: it expired (it was not charged), it was cancelled before it ran (it was not charged), or it was already sent to the provider (it finishes and is charged).' }),
     },
 };
 const batch = {
     type: 'object', required: ['id', 'status', 'items'],
     properties: {
         id: str(), owner_type: str({ enum: ['user', 'app'] }), owner_id: str(), project_id: nullable('string'),
-        status: str({ enum: ['queued', 'running', 'succeeded', 'failed'] }),
+        status: str({ enum: ['queued', 'running', 'succeeded', 'failed', 'expired', 'cancelled'] }),
         item_count: integer({ minimum: 1, description: 'How many prompts the batch carries' }),
         items: arrayOf(batchItem),
         discount: str({ description: 'The price the batch is charged at: half the retail rate, through Billing like every other request.' }),
@@ -395,6 +396,12 @@ route('get', '/batches/{id}', {
     description: 'ai.run.read. Where the batch stands (queued, running, succeeded, failed) and what each of its prompts was answered with.',
     parameters: [path('id', str())],
     responses: { 200: json('The batch', { type: 'object', required: ['batch'], properties: { batch: batch } }), 404: problem, ...errors([401, 403]) },
+});
+route('post', '/batches/{id}/cancel', {
+    operationId: 'cancelBatch', summary: 'Cancel a batch: the prompts that never had a run are cancelled, and nothing is charged for them', tags: ['batches'], security: SERVICE_OR_APP,
+    description: 'ai.run.create (or a developer app\'s ai.app.run). Only the prompts of the batch that never had a run are cancelled, and they are not charged for. A prompt that already has a run (BA2 puts one on the provider\'s own batch API) goes on and settles on its own path: it keeps its status, the answer says it was already sent to the provider, and nobody is told it was not charged. The prompts that already answered keep their answers. The batch itself is cancelled only when nothing is left in flight. Somebody else\'s batch is 404 batch.not_found.',
+    parameters: [path('id', str())],
+    responses: { 200: json('The cancelled batch', { type: 'object', required: ['batch'], properties: { batch: batch } }), 404: problem, ...errors([401, 403]) },
 });
 
 // ── Exchange read API (OpenVibe.Exchange) ───────────────────────────────────────────────────

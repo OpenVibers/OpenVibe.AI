@@ -5,6 +5,7 @@
  *   POST /api/v1/batches          submit a batch (ai.run.create, or an app's ai.app.run)
  *   GET  /api/v1/batches          the caller's batches
  *   GET  /api/v1/batches/:id      one batch and its items
+ *   POST /api/v1/batches/:id/cancel  cancel a batch (the items that had not run)
  *
  * A batch is billed at half the retail price, through Billing like every other request: the batch
  * table is the queue and the status, never a second ledger. The owner of the batch is the account
@@ -47,6 +48,15 @@ function batchesRouter({ batches, auth, config, clock = { now: () => Date.now() 
 
     r.get('/api/v1/batches/:id', read, wrap(async (req) => {
         const batch = await batches.get(req.params.id, req.principal);
+        return { batch };
+    }));
+
+    // BA3: a batch can be cancelled. Only the prompts that never had a run are cancelled, and nothing is
+    // charged for them. A prompt that already has a run (BA2 puts one on the provider's own batch API) goes on
+    // and settles on its own path: it keeps its status, and the answer says so.
+    r.post('/api/v1/batches/:id/cancel', create, wrap(async (req) => {
+        const batch = await batches.cancel(req.params.id, req.principal);
+        if (!batch) throw new AiError(404, 'batch.not_found', 'no such batch');
         return { batch };
     }));
 
