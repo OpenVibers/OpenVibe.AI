@@ -43,7 +43,10 @@ function createSessionCookies({ db, config, fetchImpl = guardedFetch, clock = { 
         return view({ ...row, label: String(body.label || `${provider} browser session`).slice(0, 80), created_at: now, expires_at: body.expires_at || null, expired: 0 });
     }
     async function list(owner, subject) { return (await db.prepare('SELECT * FROM session_credentials WHERE owner=? AND subject=? ORDER BY provider').all(owner, subject)).map(view); }
-    async function remove(owner, subject, id) { return (await db.prepare('DELETE FROM session_credentials WHERE owner=? AND subject=? AND id=?').run(owner, subject, id)).changes > 0; }
+    async function remove(owner, subject, id) {
+        if (!/^\d+$/.test(String(id))) return false;
+        return (await db.prepare('DELETE FROM session_credentials WHERE owner=? AND subject=? AND id=?').run(owner, subject, id)).changes > 0;
+    }
     async function balance(owner, subject, id = null) {
         const row = id == null ? await db.prepare('SELECT * FROM session_credentials WHERE owner=? AND subject=? ORDER BY provider LIMIT 1').get(owner, subject) : await db.prepare('SELECT * FROM session_credentials WHERE owner=? AND subject=? AND id=?').get(owner, subject, id);
         if (!row) return null;

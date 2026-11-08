@@ -118,7 +118,7 @@ function meRouter({ credentials, preferences, grants, auth, registry, config, cl
         try { await registry.audit(personOf(req), action, 'credential', personOf(req), { trace: req.ov && req.ov.traceId, metadata }); } catch { /* audit never breaks the person's request */ }
     };
 
-    r.get('/api/v1/me/credentials', guard, run(async (req) => ({ credentials: [...await credentials.listSelf(personOf(req)), ...(sessionCookies ? await sessionCookies.list('self', personOf(req)) : [])] })));
+    r.get('/api/v1/me/credentials', guard, run(async (req) => ({ credentials: [...(await credentials.listSelf(personOf(req))).map((c) => ({ ...c, id: c.provider, kind: 'api_key', label: c.provider, created: c.created_at, last_used: c.last_used_at || null })), ...(sessionCookies ? await sessionCookies.list('self', personOf(req)) : [])] })));
     if (sessionCookies) {
         r.post('/api/v1/me/credentials', guard, run(async (req) => {
             const body = req.body || {};

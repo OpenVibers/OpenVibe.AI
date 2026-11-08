@@ -216,12 +216,12 @@ function createCredentials({ db, config, clock = { now: () => Date.now() }, fetc
     /** The person's own view (ai.me-credential@1): no owner/subject/spend, no key, a four-character hint. */
     function selfView(row) {
         return {
-            id: row.provider, kind: 'api_key', provider: row.provider, label: row.provider, hint: String(row.key_hint || '').slice(-4) || '????',
+            provider: row.provider, hint: String(row.key_hint || '').slice(-4) || '????',
             base_url: row.base_url || null,
             budget_usd_per_day: row.budget_usd_day == null ? null : row.budget_usd_day,
             status: row.status || 'untested', checked_at: row.checked_at || null, last_error: row.last_error || null,
             models_count: Number(row.models_count) || 0,
-            created: row.created_at, created_at: row.created_at, updated_at: row.updated_at, last_used: row.last_used_at || null,
+            created_at: row.created_at, updated_at: row.updated_at,
         };
     }
     const getRow = async (owner, subject, provider) => provider
