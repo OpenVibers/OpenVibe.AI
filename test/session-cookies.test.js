@@ -23,3 +23,14 @@ t.test('a rejected cookie reader response falls back without exposing cookie mat
     assert.equal(JSON.stringify(balance).includes('sess-secret'), false);
     assert.equal(updates.length, 2);
 });
+
+t.test('an Anthropic organization id must be a UUID, so nothing else reaches a reader path', async () => {
+    let wrote = false;
+    const db = { prepare() { return { get: async () => null, run: async () => { wrote = true; return { changes: 1 }; } }; } };
+    const api = createSessionCookies({ db, config: { credentialsKey: 'a'.repeat(64) }, clock: { now: () => 10 }, fetchImpl: async () => { throw new Error('no fetch expected'); } });
+    const subject = 'usr_01ARZ3NDEKTSV4RRFFQ69G5FAV';
+    for (const org_id of ['..', '../../v1/x', 'org-test', '']) {
+        await assert.rejects(api.add('self', subject, { provider: 'anthropic', cookie: 'sk-ant-sid01-long-enough-value', org_id }), /org_id/);
+    }
+    assert.equal(wrote, false, 'a refused org id is never stored');
+});

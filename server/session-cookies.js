@@ -3,6 +3,8 @@
 // Provider readers are deliberately a closed allowlist. Callers cannot supply a URL, method, host, path, or header.
 const crypto = require('crypto');
 const { guardedFetch } = require('./providers/guarded-fetch');
+// An Anthropic organization id is a UUID; anything else never reaches a reader's path (no '..' or extra segments).
+const ORG_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const READERS = Object.freeze({
     anthropic: Object.freeze([
         Object.freeze({ name: 'purchased', method: 'GET', host: 'console.anthropic.com', path: (s) => `/api/organizations/${encodeURIComponent(s.org_id)}/prepaid/credits`, header: (secret) => ({ Cookie: `sessionKey=${secret}` }), parse: (j) => Number(j.amount) / 100 }),
@@ -12,6 +14,12 @@ const READERS = Object.freeze({
         Object.freeze({ name: 'credit_grants', method: 'GET', host: 'api.openai.com', path: () => '/dashboard/billing/credit_grants', header: (secret) => ({ Authorization: `Bearer ${secret}` }), parse: (j) => ({ total_granted: j.total_granted, total_used: j.total_used, total_available: j.total_available, grants: Array.isArray(j.grants) ? j.grants : [] }) }),
     ]),
 });
+
+function orgIdOf(value) {
+    const id = String(value || '').trim();
+    if (!ORG_ID.test(id)) throw new TypeError('org_id must be the organization id from the provider console (a UUID)');
+    return id.toLowerCase();
+}
 
 function createSessionCookies({ db, config, fetchImpl = guardedFetch, clock = { now: () => Date.now() }, notify = async () => {} }) {
     const key = () => {
@@ -39,7 +47,7 @@ function createSessionCookies({ db, config, fetchImpl = guardedFetch, clock = { 
         const row = { owner, subject, provider };
         await db.prepare(`INSERT INTO session_credentials(owner,subject,provider,label,secret_enc,created_at,expires_at,settings_json,expired,notified_expired) VALUES(?,?,?,?,?,?,?,?,0,0)
             ON CONFLICT(owner,subject,provider) DO UPDATE SET label=excluded.label, secret_enc=excluded.secret_enc, created_at=excluded.created_at, last_used_at=NULL, expires_at=excluded.expires_at, settings_json=excluded.settings_json, expired=0, notified_expired=0`)
-            .run(owner, subject, provider, String(body.label || `${provider} browser session`).slice(0, 80), seal(body.cookie, aad(row)), now, body.expires_at || null, JSON.stringify(provider === 'anthropic' ? { org_id: String(body.org_id || '').slice(0, 120) } : {}));
+            .run(owner, subject, provider, String(body.label || `${provider} browser session`).slice(0, 80), seal(body.cookie, aad(row)), now, body.expires_at || null, JSON.stringify(provider === 'anthropic' ? { org_id: orgIdOf(body.org_id) } : {}));
         return view({ ...row, label: String(body.label || `${provider} browser session`).slice(0, 80), created_at: now, expires_at: body.expires_at || null, expired: 0 });
     }
     async function list(owner, subject) { return (await db.prepare('SELECT * FROM session_credentials WHERE owner=? AND subject=? ORDER BY provider').all(owner, subject)).map(view); }
@@ -57,6 +65,7 @@ function createSessionCookies({ db, config, fetchImpl = guardedFetch, clock = { 
         const secret = open(row.secret_enc, aad(row)); const settings = JSON.parse(row.settings_json || '{}'); const values = {};
         try {
             for (const reader of READERS[row.provider] || []) {
+                if (row.provider === 'anthropic' && !ORG_ID.test(String(settings.org_id || ''))) throw new Error('reader allowlist rejected request');
                 const url = new URL(reader.path(settings), `https://${reader.host}`);
                 if (url.hostname !== reader.host || url.protocol !== 'https:' || !reader.path(settings).startsWith('/') || reader.method !== 'GET') throw new Error('reader allowlist rejected request');
                 const response = await fetchImpl(url, { method: 'GET', headers: reader.header(secret), redirect: 'error', signal: AbortSignal.timeout(10000) });
