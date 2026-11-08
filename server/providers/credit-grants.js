@@ -37,6 +37,24 @@ function createCreditGrants({ db, env = process.env, fetchImpl = globalThis.fetc
         const result = await db.prepare('INSERT INTO provider_credit_grants (provider_key, kind, amount_usd, as_of, expires_at, applies_to, created_at) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id').get(provider_key, kind, Number(amount_usd), as_of, expires_at, applies_to, new Date(clock.now()).toISOString());
         return result;
     }
+    async function preference(provider = 'anthropic') {
+        const row = await db.prepare('SELECT use_promotional_first, promotional_floor_usd FROM provider_credit_preferences WHERE provider_key = ?').get(provider);
+        return row ? { enabled: Boolean(row.use_promotional_first), floor_usd: Number(row.promotional_floor_usd) } : { enabled: true, floor_usd: 5 };
+    }
+    async function setPreference({ provider_key = 'anthropic', enabled = true, floor_usd = 5 }) {
+        if (typeof enabled !== 'boolean' || !Number.isFinite(Number(floor_usd)) || Number(floor_usd) < 0 || Number(floor_usd) > 1000000) throw new TypeError('preference requires a boolean enabled and nonnegative floor_usd');
+        await db.prepare(`INSERT INTO provider_credit_preferences (provider_key, use_promotional_first, promotional_floor_usd, updated_at) VALUES (?, ?, ?, ?)
+            ON CONFLICT (provider_key) DO UPDATE SET use_promotional_first = excluded.use_promotional_first, promotional_floor_usd = excluded.promotional_floor_usd, updated_at = excluded.updated_at`)
+            .run(provider_key, enabled ? 1 : 0, Number(floor_usd), new Date(clock.now()).toISOString());
+        return preference(provider_key);
+    }
+    function shouldPrefer(provider = 'anthropic') {
+        const balance = latest.get(provider);
+        if (!balance) return false;
+        // Preferences are loaded in the hourly poll, so routing never needs a database read per request.
+        const pref = balance.preference || { enabled: true, floor_usd: 5 };
+        return pref.enabled && balance.promotional > pref.floor_usd;
+    }
     async function spend(provider, grants) {
         const ref = env.AI_ANTHROPIC_ADMIN_KEY_REF;
         const key = resolveSecret(ref, env);
@@ -67,13 +85,13 @@ function createCreditGrants({ db, env = process.env, fetchImpl = globalThis.fetc
             if (!grants.length) return values();
             const spentResult = await spend('anthropic', grants);
             const balances = allocate(grants, spentResult.usd, clock.now());
-            latest.set('anthropic', { ...balances, grants, spent_usd: spentResult.usd, source: spentResult.source, at: clock.now() });
+            latest.set('anthropic', { ...balances, grants, ...{ preference: await preference('anthropic') }, spent_usd: spentResult.usd, source: spentResult.source, at: clock.now() });
             return values();
         })().finally(() => { running = null; });
         return running;
     }
     function values() { return [...latest.entries()].map(([provider, value]) => ({ provider, ...value })); }
-    return { add, list, poll, values };
+    return { add, list, poll, values, preference, setPreference, shouldPrefer };
 }
 
 module.exports = { createCreditGrants, centsToUsd, allocate };

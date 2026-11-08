@@ -83,11 +83,11 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     // The price book's off-peak windows (BA1): what a provider's own price is inside the hours it publishes.
     // The router reads them to know when a provider is at its off-peak price (server/providers/tiers.js).
     const offPeak = require('./pricebook/offpeak').createOffPeak({ db, clock });
-    const pool = createProviderPool({ db, registry, config, clock, fetchImpl, env, log, credentialFetch, machineModels: machines, community, bench, variantEvidence, adultStatus, offPeak });
+    const creditGrants = require('./providers/credit-grants').createCreditGrants({ db, env, fetchImpl, clock });
+    const pool = createProviderPool({ db, registry, config, clock, fetchImpl, env, log, credentialFetch, machineModels: machines, community, bench, variantEvidence, adultStatus, offPeak, creditGrants });
     // The hourly provider balance probe (server/providers/balance.js): a gauge for the operator alert, started
     // only when the service listens (never in tests) and off under a restore drill.
     const balance = require('./providers/balance').createBalanceProbe({ registry, config, env, fetchImpl, clock, log });
-    const creditGrants = require('./providers/credit-grants').createCreditGrants({ db, env, fetchImpl, clock });
     // T6 step 8: the SaaS tier budgets on openvibe-sdk/govern in Valkey (server/govern.js); off unless AI_GOVERN_TIERS=1.
     const tiers = createTiers({ config, valkey, clock, log });
     // §2.1.8: the provider free allowance per subject, priced off the pool's own rate cards (server/free-allowance.js);

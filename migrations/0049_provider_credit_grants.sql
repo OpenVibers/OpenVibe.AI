@@ -10,3 +10,9 @@ CREATE TABLE IF NOT EXISTS provider_credit_grants (
     created_at text COLLATE "C" NOT NULL
 );
 CREATE INDEX IF NOT EXISTS provider_credit_grants_provider ON provider_credit_grants(provider_key, kind, as_of);
+CREATE TABLE IF NOT EXISTS provider_credit_preferences (
+    provider_key text COLLATE "C" PRIMARY KEY,
+    use_promotional_first bigint NOT NULL DEFAULT 1,
+    promotional_floor_usd numeric(14, 6) NOT NULL DEFAULT 5 CHECK (promotional_floor_usd >= 0),
+    updated_at text COLLATE "C" NOT NULL
+);

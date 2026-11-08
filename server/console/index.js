@@ -340,10 +340,17 @@ function consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, e
         ...common(req), rows: (await Promise.all((await registry.listProviders()).map(ops.providerView))), models: await registry.listModels(), stubFallback: config.stubFallback,
         canManage: req.staff.caps.includes(CAPS.providerManage), notice: notice(req), keyHints: vault ? await vault.hints() : new Map(),
         breaker: config.breaker, now: clock.now(), creditEstimate: creditGrants && creditGrants.values().find((x) => x.provider === 'anthropic') || null,
+        creditPreference: creditGrants ? await creditGrants.preference('anthropic') : null,
     }))));
     r.post('/console/provider-credits', needs(CAPS.providerManage), wrap(async (req, res) => {
         if (!creditGrants) throw new Error('credit grants are unavailable');
         await creditGrants.add({ provider_key: 'anthropic', kind: String(req.body.kind || ''), amount_usd: Number(req.body.amount_usd), as_of: String(req.body.as_of || ''), expires_at: req.body.expires_at ? new Date(`${req.body.expires_at}T23:59:59Z`).toISOString() : null, applies_to: String(req.body.applies_to || '').slice(0, 200) || null });
+        res.redirect(303, '/console/providers?done=provider_credit');
+    }));
+    r.post('/console/provider-credit-preference', needs(CAPS.providerManage), wrap(async (req, res) => {
+        if (!creditGrants) throw new Error('credit preferences are unavailable');
+        await creditGrants.setPreference({ provider_key: 'anthropic', enabled: req.body.enabled === '1', floor_usd: Number(req.body.floor_usd) });
+        creditGrants.poll().catch((err) => log.warn(`[ai] credit estimate failed: ${String(err && err.message || err).slice(0, 180)}`));
         res.redirect(303, '/console/providers?done=provider_credit');
     }));
     r.get('/console/glossary', read, wrap(async (req, res) => await send(res, 200, pages.glossary({ ...common(req) }))));

@@ -216,7 +216,7 @@ function selfModelFor(cred, operation, req, ctx, prefs) {
     return { model, kind, why };
 }
 
-function createProviderPool({ db, registry, config, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, credentialFetch = null, machineModels = null, community = null, bench = null, variantEvidence = null, adultStatus = null, offPeak = null }) {
+function createProviderPool({ db, registry, config, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, credentialFetch = null, machineModels = null, community = null, bench = null, variantEvidence = null, adultStatus = null, offPeak = null, creditGrants = null }) {
     // A person's own machine as their model (credential provider node, server/machines.js).
     const machines = machineModels || require('../machines').createMachineModels({ config, env, fetchImpl });
     const cache = new Map();          // key -> { stamp, adapter }
@@ -641,6 +641,16 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             rateCards, states, now: clock.now(), current, minGain: config.placement.minGain,
             weights: { cost: config.placement.costWeight, latency: config.placement.latencyWeight },
         });
+        // Spend an entered promotional grant first, but only among candidates the route's own tier, capability,
+        // trust, price cap and health checks already accepted. A person's own-key choice never reaches this pool.
+        if (creditGrants && creditGrants.shouldPrefer('anthropic') && ctx.personPays !== true && !route.pinned?.length
+            && ctx.aliasPolicy !== 'private' && !(route.constraints && route.constraints.objective === 'private')) {
+            const promotional = result.candidates.find((x) => x.eligible && (x.provider || splitOfferId(x.id).provider) === 'anthropic');
+            if (promotional) {
+                result.selected = promotional.id;
+                result.reasons = ['Anthropic promotional credit is available above its configured floor', ...result.reasons];
+            }
+        }
         const byId = new Map(offers.map(o => [o.offer_id, o]));
         const explain = {
             objective: result.objective, reasons: result.reasons, selected: result.selected,

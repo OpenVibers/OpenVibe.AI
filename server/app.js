@@ -140,8 +140,13 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
             creditsRouter.post('/', async (req, res) => {
                 try {
                     const grant = await creditGrants.add({ ...req.body, provider_key: 'anthropic' });
+                    creditGrants.poll().catch((err) => log.warn(`[ai] credit estimate failed: ${String(err && err.message || err).slice(0, 180)}`));
                     res.status(201).json({ grant });
                 } catch (err) { sendError(res, err, req.ov, log); }
+            });
+            creditsRouter.put('/preference', async (req, res) => {
+                try { res.json({ preference: await creditGrants.setPreference({ enabled: req.body.enabled, floor_usd: req.body.floor_usd, provider_key: 'anthropic' }) }); }
+                catch (err) { sendError(res, err, req.ov, log); }
             });
             app.use('/internal/provider-credits', creditsRouter);
         }
