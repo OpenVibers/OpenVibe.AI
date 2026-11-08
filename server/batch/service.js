@@ -40,6 +40,8 @@ const { retailChargeNano } = require('../credits');
 
 const DEFAULT_MAX_ITEMS = 1000;
 const EXPIRED_REASON = 'No low-cost capacity came free before your deadline. You were not charged.';
+const CANCELLED_REASON = 'The batch was cancelled before this prompt ran. You were not charged.';
+const SENT_REASON = 'Already sent to the provider: it finishes and is charged.';
 
 /**
  * The grant a first-party service needs to open a batch of the network's own (BA2). It is checked here,
@@ -219,11 +221,46 @@ function createBatchService({ db, runs, registry = null, community = null, price
         return { ...rest, item_count: count, items: items || [] };
     }
 
-    /** The caller's own batches, newest first. */
+    /** The caller's own batches, newest first: the same shape one batch has (the items are not in the list). */
     async function list(principal) {
         const owner = ownerOf(principal);
         const rows = await db.prepare('SELECT * FROM batches WHERE owner_type = ? AND owner_id = ? ORDER BY created_at DESC LIMIT 100').all(owner.type, owner.id);
-        return rows || [];
+        return (rows || []).map((row) => { const { items: count, ...rest } = row; return { ...rest, item_count: count, items: [] }; });
+    }
+
+    /**
+     * Cancel a batch: only the prompts that never had a run are cancelled, and nothing is charged for them.
+     * A prompt that already has a run goes on and settles on its own path: it keeps its status and the answer
+     * says so. The prompts that already answered keep their answers.
+     * → the batch, as GET /api/v1/batches/:id shows it (or null when it is not the caller's).
+     */
+    async function cancel(id, principal) {
+        const row = await db.prepare('SELECT * FROM batches WHERE id = ?').get(String(id)).catch(() => null);
+        if (!row) return null;
+        const owner = ownerOf(principal);
+        if (!(row.owner_type === owner.type && String(row.owner_id) === owner.id)) return null;
+        const at = iso();
+        await db.tx(async () => {
+            // Only the prompts that never had a run are cancelled: they are not charged for.
+            await db.prepare(`UPDATE batch_items SET status = 'cancelled', reason = ?, charged_nano_usd = 0, claimed_until = NULL, claimed_by = NULL, updated_at = ?
+                WHERE batch_id = ? AND run_id IS NULL AND status IN ('queued', 'waiting')`).run(CANCELLED_REASON, at, row.id);
+            // A prompt that already has a run (BA2 puts one on the provider's own batch API; the ordinary
+            // path keeps it) goes on and settles on its own path. It keeps its status and says so: nobody is
+            // told it was not charged.
+            await db.prepare(`UPDATE batch_items SET reason = ?, updated_at = ?
+                WHERE batch_id = ? AND run_id IS NOT NULL AND status IN ('waiting', 'running')`).run(SENT_REASON, at, row.id);
+        });
+        // The batch is cancelled only when nothing is left in flight: a prompt that has a run finishes on its own.
+        const left = await db.prepare(`SELECT COUNT(*) AS n FROM batch_items WHERE batch_id = ? AND run_id IS NOT NULL AND status IN ('waiting', 'running')`).get(row.id);
+        if (Number(left && left.n || 0) > 0) {
+            await db.prepare(`UPDATE batches SET status = CASE WHEN status IN ('queued', 'running') THEN 'running' ELSE status END,
+                claimed_until = NULL, claimed_by = NULL, updated_at = ? WHERE id = ?`).run(at, row.id);
+        } else {
+            await db.prepare(`UPDATE batches SET status = CASE WHEN status IN ('queued', 'running') THEN 'cancelled' ELSE status END,
+                claimed_until = NULL, claimed_by = NULL, finished_at = CASE WHEN status IN ('queued', 'running') THEN ? ELSE finished_at END, updated_at = ?
+                WHERE id = ?`).run(at, at, row.id);
+        }
+        return get(id, principal);
     }
 
     /**
@@ -517,7 +554,7 @@ function createBatchService({ db, runs, registry = null, community = null, price
         if (timer) { clearInterval(timer); timer = null; }
     }
 
-    return { submit, get, list, runOnce, start, stop, settings, maxItems, EXPIRED_REASON, resolveModel, finishBatch, settleCheckFor };
+    return { submit, get, list, cancel, runOnce, start, stop, settings, maxItems, EXPIRED_REASON, CANCELLED_REASON, SENT_REASON, resolveModel, finishBatch, settleCheckFor };
 }
 
-module.exports = { createBatchService, DEFAULT_MAX_ITEMS, EXPIRED_REASON };
+module.exports = { createBatchService, DEFAULT_MAX_ITEMS, EXPIRED_REASON, CANCELLED_REASON, SENT_REASON };

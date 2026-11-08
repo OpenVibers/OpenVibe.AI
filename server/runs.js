@@ -138,6 +138,9 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             // BA1: how long the caller may wait, and the tier the run really ran on.
             latency_class: r.latency_class || latency.DEFAULT,
             service_tier: r.service_tier || null,
+            // BA3: a caller that asked for a faster class than the workflow allows is told so (the class asked
+            // for and the class the run really ran in); nothing else about the run changes.
+            latency_clamped: (parseJson(r.options, {}) || {}).latency_clamped || null,
             usage: { tokens_in: r.tokens_in, tokens_out: r.tokens_out, cost_usd: r.cost_usd, attempts: r.attempts, usage_sample_ids: r.usage_sample_ids || (r.usage_sample_id ? [r.usage_sample_id] : null) },
             explain: parseJson(r.explain, null),
             citations_count: r.citations_count,
@@ -415,6 +418,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             input: null, input_hash: inputHash, idempotency_key: idem, trace_id: trace, request_id: requestId, retry_of: retryOf,
             latency_class: latencyClass,
             options: JSON.stringify({ cache: options.cache !== false && credentialSubject === null && !projectProvider && !pinned && !selfKeys && !communityOptIn, debug: Boolean(options.debug), input_retained: kept.full,
+                ...(options.latency_clamped ? { latency_clamped: options.latency_clamped } : {}),
                 ...(credentialSubject !== null ? { credential_subject: credentialSubject } : {}), ...(credentialProvider !== null ? { credential_provider: credentialProvider } : {}),
                 ...(selfKeys ? { self_subject: runPerson } : {}),
                 ...(runPerson ? { person_pays: personPays } : {}),

@@ -242,10 +242,13 @@ t.test('a caller cannot make a background workflow interactive (it still runs, i
         const fast = await request(h.base, 'POST', '/api/v1/runs?wait=5000', { tok: all, body: { workflow: 'live.easter_egg', input: {}, options: { latency: 'interactive', cache: false } } });
         assert.strictEqual(fast.status, 201, `the run happens (${fast.text})`);
         assert.strictEqual(fast.body.run.latency_class, 'background', 'a background workflow stays in the background');
+        // BA3: the run says that it was asked for more than it can give: the class asked for and the class used.
+        assert.deepStrictEqual(fast.body.run.latency_clamped, { asked: 'interactive', used: 'background' }, 'the run says it was clamped');
         // A slower class is allowed.
         const slower = await request(h.base, 'POST', '/api/v1/runs?wait=5000', { tok: all, body: { workflow: 'live.easter_egg', input: {}, options: { latency: 'batch', cache: false } } });
         assert.strictEqual(slower.status, 201, `a slower class is allowed (${slower.text})`);
         assert.strictEqual(slower.body.run.latency_class, 'batch');
+        assert.strictEqual(slower.body.run.latency_clamped, null, 'a slower ask is not clamped');
         // The plain run is background, on the Flex tier, and says so.
         const run = await request(h.base, 'POST', '/api/v1/runs?wait=5000', { tok: all, body: { workflow: 'live.easter_egg', input: {}, options: { cache: false } } });
         assert.strictEqual(run.status, 201, run.text);
@@ -254,6 +257,7 @@ t.test('a caller cannot make a background workflow interactive (it still runs, i
         const read = await request(h.base, 'GET', `/api/v1/runs/${run.body.run.id}`, { tok: all });
         assert.strictEqual(read.body.run.service_tier, 'flex', 'the wire shape carries the tier');
         assert.strictEqual(read.body.run.latency_class, 'background');
+        assert.strictEqual(read.body.run.latency_clamped, null, 'the wire shape carries the clamp');
         // The gauges say the same: the tier the run ran on, and what waiting earned.
         const metrics = await (await fetch(`${h.base}/metrics`)).text();
         assert.ok(/ai_runs_by_tier\{tier="flex",provider="shared"\} \d+\n/.test(metrics), `the tier is on the metrics:\n${metrics}`);
