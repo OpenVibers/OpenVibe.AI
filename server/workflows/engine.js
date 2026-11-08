@@ -34,6 +34,16 @@ const { preferenceLines } = require('../user-modules');
 const schemas = require('../schemas');
 const { PREPARE, POSTPROCESS } = require('./hooks');
 const modelCatalog = require('../providers/model-catalog');
+const { buildBody, buildCompleteBody } = require('../providers/openai');
+
+/** The last user message's text, for the queue's own record of what one item asks (never sent as-is). */
+function lastUserText(messages) {
+    for (let i = (messages || []).length - 1; i >= 0; i--) {
+        const m = messages[i];
+        if (m && m.role === 'user' && typeof m.content === 'string') return m.content.slice(0, 20000);
+    }
+    return '';
+}
 
 const ROLE_TIMEOUT = { chat: 20000, vision: 30000, director: 25000, summary: 30000, legacy: 30000 };
 const INLINE_AUDIO_MAX = 1024 * 1024;
@@ -120,6 +130,28 @@ function normMessages(messages, user) {
     return out;
 }
 
+/**
+ * BA3: the answer of a provider's own batch API, when it is resuming the step that asked for it. The
+ * batcher says `resume: true` and which kind of step the request was; the step then shapes the stored
+ * answer exactly as it shapes a live one.
+ */
+function batchAnswerFor(ctx, stepKind) {
+    const b = ctx && ctx.batchAnswer;
+    return b && b.ok === true && b.resume === true && b.stepKind === stepKind ? b : null;
+}
+
+/** The exec shape the steps use, built from a batch answer (no provider call, the batch cost). */
+function batchExec(b, result) {
+    const usage = b.usage || {};
+    return {
+        result,
+        provider: b.provider || null, model: b.model || null,
+        usage: { input: Number(usage.input || 0), output: Number(usage.output || 0), cached: Number(usage.cached || 0) },
+        cost: Number(b.cost) || 0, serviceTier: 'batch', savedUsd: 0,
+        explain: b.explain || null, synthetic: false, fallbackUsed: false,
+    };
+}
+
 function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spawnImpl, log = console, research = null }) {
     // One loopback reader for everything that streams media (server/media-proxy.js): transcripts and media.analyze.
     let proxy = null;
@@ -134,7 +166,13 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
         return r;
     }
 
-    async function llmStep(step, input, wf, run, ctx) {
+    /**
+     * Everything an llm step needs before its provider call: the template it pinned, the rendered system and
+     * user prompts, the route, the optional image and the request the pool would send. BA3 splits this out of
+     * llmStep so the same request can be sent to a provider's own batch API (prepareBatch) and so a batch
+     * answer can finish the step on the ordinary path (batchAnswer) without calling a provider again.
+     */
+    async function prepareLlm(step, input, wf, run, ctx) {
         // The run pinned its template version when it was created; later steps use the active one.
         const template = run.template_key === step.template && run.template_version
             ? await registry.getTemplate(step.template, run.template_version)
@@ -174,7 +212,19 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
             timeoutMs: p.timeout_ms || route.timeout_ms || 30000,
             cacheKey: `${wf.key}:${wf.version}`,
         };
-        const exec = await pool.execute(route, step.operation || 'chat', req, { ...ctx, routeKey: route.key, routeVersion: route.version, promptHash: sha256({ s: system, u: user, i: image ? image.base64.length : 0 }) });
+        return { template, prep, vars, system, user, route, jsonSchema, image, req };
+    }
+
+    async function llmStep(step, input, wf, run, ctx) {
+        const p = await prepareLlm(step, input, wf, run, ctx);
+        if (p.output !== undefined) return { output: p.output, noProvider: true, template: p.template };
+        const { template, system, user, route, jsonSchema, image, req } = p;
+        // BA3: the answer came from the provider's own batch API. The step shapes it as it shapes a live
+        // answer (JSON parse, postprocess, citations); no provider is called again.
+        const batch = batchAnswerFor(ctx, 'llm');
+        const exec = batch
+            ? batchExec(batch, { text: (batch.output && batch.output.text) || '' })
+            : await pool.execute(route, step.operation || 'chat', req, { ...ctx, routeKey: route.key, routeVersion: route.version, promptHash: sha256({ s: system, u: user, i: image ? image.base64.length : 0 }) });
         // synthetic: the stub answered (no provider configured, or a test); a postprocess that checks an answer's
         // substance (a space needs a real index.html) lets a synthetic answer through in the right shape.
         const r = { text: exec.result.text || '', json: exec.result.json || null, synthetic: Boolean(exec.synthetic) };
@@ -210,7 +260,10 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
             cacheKey: input.cache_key || null,
             prefer: ctx.prefer || null,
         };
-        const exec = await pool.execute(route, 'chat', req, { ...ctx, routeKey: route.key, routeVersion: route.version, promptHash: sha256({ s: sys, m: messages }) });
+        const batch = batchAnswerFor(ctx, 'passthrough');
+        const exec = batch
+            ? batchExec(batch, { text: (batch.output && batch.output.text) || '' })
+            : await pool.execute(route, 'chat', req, { ...ctx, routeKey: route.key, routeVersion: route.version, promptHash: sha256({ s: sys, m: messages }) });
         let json = exec.result.json || null;
         if (input.json && !json) json = parseJsonLoose(exec.result.text);
         return { output: { text: exec.result.text || '', json }, exec, route };
@@ -234,6 +287,59 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
             : { policy: selection.policy, aliasPolicy: selection.policy };
     }
 
+    /**
+     * BA3: the provider request of a run that may wait for a provider's own batch. Only a workflow with a
+     * single provider step can be batched: a batch API answers one request, not a workflow's later steps.
+     * The body is built for the model the run is placed on (the batcher knows it after the money check).
+     *
+     * → { stepKind, operation, route, maxTokens, prompt, bodyFor(model) } or null.
+     */
+    async function prepareBatch(wf, run, input, ctx = {}) {
+        if (!wf || !Array.isArray(wf.steps) || wf.steps.length !== 1) return null;
+        const step = wf.steps[0];
+        if (step.kind === 'llm') {
+            // An image cannot travel in a provider batch request here: the answer would need the media file.
+            if (step.image && input && input[step.image]) return null;
+            const p = await prepareLlm(step, input, wf, run, ctx);
+            if (!p || p.output !== undefined || p.image) return null;
+            const bodyFor = (model) => buildBody({
+                model, system: p.req.system, messages: p.req.messages, image: null,
+                json: p.req.json, maxTokens: p.req.maxTokens, temperature: p.req.temperature,
+                cacheKey: null, baseUrl: '', serviceTier: null,
+            }, 'schema');
+            return { stepKind: 'llm', operation: step.operation || 'chat', route: p.route, maxTokens: p.req.maxTokens, bodyFor, prompt: lastUserText(p.req.messages) };
+        }
+        if (step.kind === 'complete') {
+            const { route } = await selectedRoute(await routeFor(step.route || 'default.chat'), input);
+            const openai = {};
+            for (const k of ['messages', 'tools', 'tool_choice', 'parallel_tool_calls', 'response_format', 'stop', 'seed', 'top_p', 'presence_penalty', 'frequency_penalty']) {
+                if (input[k] !== undefined) openai[k] = input[k];
+            }
+            if (!Array.isArray(openai.messages) || !openai.messages.length) return null;
+            const maxTokens = Math.max(1, Math.round(input.max_tokens || route.max_output_tokens || 1024));
+            const temperature = input.temperature == null ? null : input.temperature;
+            return {
+                stepKind: 'complete', operation: 'complete', route, maxTokens, prompt: lastUserText(openai.messages),
+                bodyFor: (model) => buildCompleteBody({ model, openai, maxTokens, temperature }),
+            };
+        }
+        if (step.kind === 'passthrough') {
+            if (input.image) return null;
+            const route = await routeFor(step.route || `${step.route_prefix || 'live'}.${input.role || 'legacy'}`);
+            const sys = typeof input.system === 'string' ? (input.system.trim() ? [{ text: input.system, cache: false }] : [])
+                : Array.isArray(input.system) ? input.system.filter(x => x && String(x.text || '').trim()).map(x => ({ text: String(x.text), cache: Boolean(x.cache) })) : [];
+            const messages = normMessages(input.messages, input.user);
+            const json = input.json ? { name: input.json.name || 'result', schema: input.json.schema, strict: input.json.strict !== false, description: input.json.description } : null;
+            const maxTokens = Math.max(1, Math.round(input.max_tokens || 400));
+            const temperature = input.temperature == null ? null : input.temperature;
+            return {
+                stepKind: 'passthrough', operation: 'chat', route, maxTokens, prompt: lastUserText(messages),
+                bodyFor: (model) => buildBody({ model, system: sys, messages, image: null, json, maxTokens, temperature, cacheKey: null, baseUrl: '', serviceTier: null }, 'schema'),
+            };
+        }
+        return null;
+    }
+
     /** complete: the OpenAI Chat Completions request as the caller wrote it (ai.complete), to an upstream that speaks it. */
     async function completeStep(step, input, wf, run, ctx) {
         const { route, selection } = await selectedRoute(await routeFor(step.route || 'default.chat'), input);
@@ -249,7 +355,10 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
             prefer: ctx.prefer || null,
             ...(typeof ctx.onDelta === 'function' ? { onDelta: ctx.onDelta } : {}),
         };
-        const exec = await pool.execute(route, 'complete', req, { ...ctx, ...selectionCtx(selection), routeKey: route.key, routeVersion: route.version, promptHash: sha256({ m: openai.messages, t: openai.tools || null }) });
+        const batch = batchAnswerFor(ctx, 'complete');
+        const exec = batch
+            ? batchExec(batch, { completion: (batch.output && batch.output.completion) || null })
+            : await pool.execute(route, 'complete', req, { ...ctx, ...selectionCtx(selection), routeKey: route.key, routeVersion: route.version, promptHash: sha256({ m: openai.messages, t: openai.tools || null }) });
         const c = exec.result.completion;
         if (!c || !Array.isArray(c.choices) || !c.choices.length) throw new AiError(502, 'output.empty', 'the provider answered, but with no choices');
         return { output: { choices: c.choices, system_fingerprint: c.system_fingerprint || null, model: exec.model }, exec, route };
@@ -396,7 +505,7 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
         };
     }
 
-    return { execute, narrowCitations, research: () => megasource() };
+    return { execute, prepareBatch, narrowCitations, research: () => megasource() };
 }
 
 module.exports = { createEngine, narrowCitations, collectCited, collectGaps, groundingOf };

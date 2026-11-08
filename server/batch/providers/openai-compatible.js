@@ -195,7 +195,9 @@ function createOpenAiCompatibleAdapter({ baseUrl, apiKey, fetchImpl = globalThis
                 out.push({
                     custom_id: row.custom_id,
                     ok: true,
-                    output: { text },
+                    // The raw answer's choices, so a complete run (ai.complete) keeps its tool calls and finish
+                    // reason too; the text is what a chat/generate step shapes.
+                    output: { text, completion: { choices: body.choices || [], system_fingerprint: body.system_fingerprint || null } },
                     usage: {
                         input: Number(usage.prompt_tokens || 0),
                         output: Number(usage.completion_tokens || 0),

@@ -244,11 +244,12 @@ t.test('a caller cannot make a background workflow interactive (it still runs, i
         assert.strictEqual(fast.body.run.latency_class, 'background', 'a background workflow stays in the background');
         // BA3: the run says that it was asked for more than it can give: the class asked for and the class used.
         assert.deepStrictEqual(fast.body.run.latency_clamped, { asked: 'interactive', used: 'background' }, 'the run says it was clamped');
-        // A slower class is allowed.
+        // A slower class is allowed. This route has no priced model, so no provider's batch price can be
+        // checked: the run stays on the ordinary path, in the background class, and says it was clamped.
         const slower = await request(h.base, 'POST', '/api/v1/runs?wait=5000', { tok: all, body: { workflow: 'live.easter_egg', input: {}, options: { latency: 'batch', cache: false } } });
-        assert.strictEqual(slower.status, 201, `a slower class is allowed (${slower.text})`);
-        assert.strictEqual(slower.body.run.latency_class, 'batch');
-        assert.strictEqual(slower.body.run.latency_clamped, null, 'a slower ask is not clamped');
+        assert.strictEqual(slower.status, 201, `a slower class is answered (${slower.text})`);
+        assert.strictEqual(slower.body.run.latency_class, 'background', 'no batch provider on the route: the background class');
+        assert.deepStrictEqual(slower.body.run.latency_clamped, { asked: 'batch', used: 'background' }, 'and the run says so');
         // The plain run is background, on the Flex tier, and says so.
         const run = await request(h.base, 'POST', '/api/v1/runs?wait=5000', { tok: all, body: { workflow: 'live.easter_egg', input: {}, options: { cache: false } } });
         assert.strictEqual(run.status, 201, run.text);

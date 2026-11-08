@@ -84,7 +84,7 @@ function createBatcher({ db, runs, registry, credits = null, config = {}, clock 
     // The batch service is attached after the batcher is built (the service needs the batcher too).
     const native = (config.batches && config.batches.native) || {};
     const settings = {
-        enabled: true,
+        enabled: !(config.batches && config.batches.enabled === false),
         // How many requests one provider batch carries (the provider's own limit is the ceiling; this is
         // the network's own, so a file is never bigger than it needs to be).
         maxItemsPerGroup: 1000,
@@ -196,6 +196,90 @@ function createBatcher({ db, runs, registry, credits = null, config = {}, clock 
         };
     }
 
+    /** What a restarted service needs of the run's context: scalars only, never a function or a token. */
+    function ctxSnapshot(ctx) {
+        const out = {};
+        for (const k of ['appRun', 'projectId', 'sandbox', 'appId', 'onBehalfOf', 'personSubject', 'personPays', 'serviceBudgeted',
+            'freeUse', 'byok', 'maxCostNano', 'communityOptIn', 'contentPolicy', 'presetPolicy', 'presetName']) {
+            if (ctx && ctx[k] !== undefined) out[k] = ctx[k];
+        }
+        return out;
+    }
+
+    /**
+     * BA3: where a batch-class run waits. The run's own workflow has one provider step (the engine built its
+     * request); the route's offers are tried in order, and the first provider whose own batch API is enabled
+     * and whose real batch price fits inside the half of the retail card the customer is charged takes it.
+     * A payer whose Balance cannot cover the run is refused here, before the provider is given the work.
+     *
+     * → { provider, model, body, prompt, stepKind, operation, maxTokens, holdCard, data } or null (no
+     *   eligible provider: the run runs in the background class and says it was clamped).
+     */
+    async function planRun({ prepared = null, offers = [], principal = {}, ctx = {}, input = null, requestId = null, maxCostNano = null } = {}) {
+        if (!settings.enabled || !prepared || typeof prepared.bodyFor !== 'function' || !prepared.route) return null;
+        const capacity = require('./capacity');                     // lazy: capacity requires this module for its cards
+        for (const offer of offers || []) {
+            if (!offer || !offer.provider || !offer.model) continue;
+            const cfg = providerConfig(offer.provider);
+            // Only a provider whose batch API is enabled and whose adapter speaks the OpenAI batch shape.
+            if (!cfg || !cfg.enabled || cfg.adapter !== 'openai-compatible') continue;
+            const provider = await registry.getProvider(offer.provider);
+            if (!provider || provider.status !== 'active') continue;
+            const cards = await cardsFor(offer.provider, offer.model);
+            if (!cards || !cards.batch) continue;
+            // The same money rule as capacity route (d): the provider's real batch price fits inside the
+            // retail card the run is charged at.
+            const charge = capacity.chargeOf(cards.row);
+            if (!charge || !capacity.within(cards.batch.nano_usd_per_m, charge)) continue;
+            let body;
+            try { body = prepared.bodyFor(offer.model); } catch { continue; }
+            if (!body || !Array.isArray(body.messages) || !body.messages.length) continue;
+            body.model = offer.model;
+            // BA2's probe: a real hold, released at once. A payer who cannot cover the run is refused now,
+            // so the network never owes a provider for an answer nobody can pay for.
+            if (credits && typeof credits.probe === 'function') {
+                const verdict = await credits.probe({
+                    requestId: requestId || String(ctx.runId || ''),
+                    ctx: payerCtx(principal, { discount: 'half', maxCostNano, requestId }),
+                    input, card: cards.retail, provider: offer.provider, model: offer.model, access: cards.access,
+                    maxTokens: prepared.maxTokens,
+                });
+                if (!verdict.ok) throw new AiError(402, String(verdict.reason || 'billing.insufficient_funds'), String(verdict.detail || 'Not enough Balance'));
+            }
+            return {
+                provider: offer.provider, model: offer.model, body, prompt: prepared.prompt || '',
+                stepKind: prepared.stepKind, operation: prepared.operation, maxTokens: prepared.maxTokens,
+                holdCard: cards.retail,
+                data: {
+                    principal: planOf({ principal, input, card: cards.retail, maxTokens: prepared.maxTokens, discount: 'half', maxCostNano, requestId, servicePaid: Boolean(ctx.serviceBudgeted) }).principal,
+                    input: input || null, card: cards.retail, maxTokens: Number(prepared.maxTokens) || 4096,
+                    discount: 'half', maxCostNano: maxCostNano == null ? null : String(maxCostNano),
+                    requestId: requestId || null, route: null, charge: null,
+                    runLevel: true, stepKind: prepared.stepKind, ctx: ctxSnapshot(ctx),
+                },
+            };
+        }
+        return null;
+    }
+
+    /**
+     * BA3: put a run that already exists (created by runs.create) into the queue, with the deadline its
+     * caller asked for. The run itself is never created here: the API saw it at once, and the answer is
+     * written onto that same run when the provider answers.
+     */
+    async function enqueueRun({ runId, plan, deadlineHours = null } = {}) {
+        if (!runId || !plan || !plan.body) throw new AiError(500, 'batch.no_run', 'a batch-class run needs its own run');
+        const hours = Number(deadlineHours) > 0 ? Math.max(1, Math.min(72, Math.trunc(Number(deadlineHours)))) : Number(settings.deadlineHours) || 24;
+        const deadline = new Date(clock.now() + hours * 3600 * 1000).toISOString();
+        const id = `bni_${crypto.randomBytes(10).toString('hex')}`;
+        const data = { ...(plan.data || {}), deadlineHours: hours };
+        await db.prepare(`INSERT INTO batch_queue (id, run_id, kind, batch_id, idx, provider, model, prompt, request_body, hold_card, plan, status, deadline_at, created_at, updated_at)
+            VALUES (?, ?, 'service', NULL, NULL, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)`)
+            .run(id, runId, plan.provider, plan.model, plan.prompt || '', JSON.stringify(plan.body),
+                plan.holdCard ? JSON.stringify(plan.holdCard) : null, JSON.stringify(data), deadline, iso(), iso());
+        return { id, runId };
+    }
+
     /**
      * Put one item in the queue. The run is created at once (so the customer sees it, and its latency
      * class says 'batch'), but it waits for the provider instead of running.
@@ -244,8 +328,11 @@ function createBatcher({ db, runs, registry, credits = null, config = {}, clock 
         if (running) return { skipped: 'running' };
         running = true;
         try {
+            // BA3: an item whose deadline passed before the provider took it is never sent: it re-routes
+            // to the ordinary (background) path now, exactly once.
+            const rerouted = await reroutePending('the deadline passed before the provider took the batch');
             const groups = await db.prepare(`SELECT provider, model, COUNT(*) AS n, MIN(created_at) AS oldest
-                FROM batch_queue WHERE status = 'queued' GROUP BY provider, model`).all();
+                FROM batch_queue WHERE status = 'queued' AND deadline_at > ?::timestamptz GROUP BY provider, model`).all(iso());
             const sent = [];
             for (const group of groups || []) {
                 const age = clock.now() - new Date(group.oldest).getTime();
@@ -253,7 +340,7 @@ function createBatcher({ db, runs, registry, credits = null, config = {}, clock 
                 const job = await submitGroup(group.provider, group.model);
                 if (job) sent.push(job);
             }
-            return { sent: sent.length, jobs: sent };
+            return { sent: sent.length, jobs: sent, ...(rerouted ? { rerouted } : {}) };
         } catch (err) {
             log.warn('[batch] the submitter stopped early: ' + String((err && err.message) || err));
             return { error: String((err && err.code) || 'error') };
@@ -265,7 +352,7 @@ function createBatcher({ db, runs, registry, credits = null, config = {}, clock 
     /** Send one group to the provider's own batch API, as one file and one batch. */
     async function submitGroup(providerKey, modelKey) {
         const items = await db.prepare(`SELECT * FROM batch_queue WHERE provider = ? AND model = ? AND status = 'queued'
-            ORDER BY created_at LIMIT ?`).all(providerKey, modelKey, Number(settings.maxItemsPerGroup));
+            AND deadline_at > ?::timestamptz ORDER BY created_at LIMIT ?`).all(providerKey, modelKey, iso(), Number(settings.maxItemsPerGroup));
         if (!items || !items.length) return null;
         const adapter = await adapterFor(providerKey);
         const cfg = providerConfig(providerKey);
@@ -320,8 +407,10 @@ function createBatcher({ db, runs, registry, credits = null, config = {}, clock 
         running = true;
         try {
             // An item that was being settled when the service stopped goes back into the queue: the
-            // provider's answer is still there, and the run must not wait for ever.
-            await db.prepare("UPDATE batch_queue SET status = 'submitted', updated_at = ? WHERE status = 'settling' AND updated_at <= ?")
+            // provider's answer is still there, and the run must not wait for ever. An item with no
+            // provider batch (a re-route that was interrupted) goes back to 'queued', so the deadline
+            // is looked at again instead of waiting for a job that does not exist.
+            await db.prepare("UPDATE batch_queue SET status = CASE WHEN job_id IS NULL THEN 'queued' ELSE 'submitted' END, updated_at = ? WHERE status = 'settling' AND updated_at <= ?")
                 .run(iso(), new Date(clock.now() - Math.max(1000, Number(settings.claimTtlMs) || 0)).toISOString());
             const job = await claimJob();
             if (!job) return { skipped: 'no batch' };
@@ -425,6 +514,9 @@ function createBatcher({ db, runs, registry, credits = null, config = {}, clock 
                 explain: { objective: 'batch', reasons: [`answered by the provider's own batch API (${item.provider})`], selected: `batch:${item.provider}`, candidates: [], attempts: [] },
                 serviceTier: 'batch',
                 maxTokens: plan.maxTokens || 4096,
+                // BA3: a run-level item resumes its own workflow step with this answer; a customer batch
+                // item's run is the ai.complete run the batcher created, which the shortcut finishes.
+                ...(plan.runLevel ? { resume: true, stepKind: plan.stepKind || null } : {}),
             }, { plan, costCheck: await checkFor(item, plan) });
             await db.prepare(`UPDATE batch_queue SET status = 'succeeded', answer = ?, usage = ?, cost_nano_usd = ?, updated_at = ? WHERE id = ?`)
                 .run(String((res.output && res.output.text) || '').slice(0, 20000), JSON.stringify(usage), String(nano), iso(), item.id);
@@ -440,19 +532,40 @@ function createBatcher({ db, runs, registry, credits = null, config = {}, clock 
 
     /**
      * The deadline passed and the provider cannot meet it: the item goes back to the ordinary path. The
-     * run answers through the pool as any other run does, and the item says it was re-routed.
+     * run answers through the pool as any other run does, and the item says it was re-routed. A run-level
+     * run (BA3) re-routes into the background class, exactly once: the item is then no longer queued, and
+     * the run itself never asks for a batch again.
      */
+    async function rerouteItem(item, reason, from = 'submitted') {
+        const claimed = await db.prepare(`UPDATE batch_queue SET status = 'settling', updated_at = ? WHERE id = ? AND status = ? RETURNING id`)
+            .get(iso(), item.id, from).catch(() => null);
+        if (!claimed) return false;
+        const plan = item.plan ? JSON.parse(item.plan) : {};
+        if (plan.runLevel && item.run_id) {
+            const row = await db.prepare('SELECT options FROM runs WHERE id = ?').get(item.run_id).catch(() => null);
+            const opts = row && row.options ? (JSON.parse(row.options) || {}) : {};
+            opts.latency_clamped = { asked: 'batch', used: 'background' };
+            await db.prepare("UPDATE runs SET latency_class = 'background', options = ? WHERE id = ?")
+                .run(JSON.stringify(opts), item.run_id).catch(() => null);
+        }
+        await runs.completeBatch(item.run_id, { reroute: true }, { plan });
+        await db.prepare(`UPDATE batch_queue SET status = 'rerouted', error_code = 'batch.rerouted', error_detail = ?, updated_at = ? WHERE id = ?`)
+            .run(String(reason || '').slice(0, 300), iso(), item.id);
+        await writeBack(item);
+        return true;
+    }
+
+    /** The items whose deadline passed before the provider ever took them. */
+    async function reroutePending(reason) {
+        const rows = await db.prepare(`SELECT * FROM batch_queue WHERE status = 'queued' AND deadline_at <= ?::timestamptz`).all(iso()).catch(() => []);
+        let n = 0;
+        for (const item of rows || []) if (await rerouteItem(item, reason, 'queued')) n++;
+        return n;
+    }
+
     async function rerouteJob(job, reason) {
         const items = await db.prepare(`SELECT * FROM batch_queue WHERE job_id = ? AND status = 'submitted'`).all(job.id);
-        for (const item of items || []) {
-            const claimed = await db.prepare(`UPDATE batch_queue SET status = 'settling', updated_at = ? WHERE id = ? AND status = 'submitted' RETURNING id`)
-                .get(iso(), item.id).catch(() => null);
-            if (!claimed) continue;
-            await runs.completeBatch(item.run_id, { reroute: true }, { plan: item.plan ? JSON.parse(item.plan) : {} });
-            await db.prepare(`UPDATE batch_queue SET status = 'rerouted', error_code = 'batch.rerouted', error_detail = ?, updated_at = ? WHERE id = ?`)
-                .run(String(reason || '').slice(0, 300), iso(), item.id);
-            await writeBack(item);
-        }
+        for (const item of items || []) await rerouteItem(item, reason, 'submitted');
         await db.prepare(`UPDATE provider_batches SET status = 'expired', error_code = 'batch.rerouted', error_detail = ?, finished_at = ?, updated_at = ?, claimed_until = NULL, claimed_by = NULL WHERE id = ?`)
             .run(String(reason || '').slice(0, 300), iso(), iso(), job.id);
     }
@@ -510,7 +623,7 @@ function createBatcher({ db, runs, registry, credits = null, config = {}, clock 
     /** The batch service, so that a customer's batch is closed when its items are done. */
     function attach(theService) { service = theService; return api; }
 
-    const api = { enqueue, submitOnce, pollOnce, runOnce, start, stop, settings, cardsFor, scaleCard, attach };
+    const api = { enqueue, enqueueRun, planRun, submitOnce, pollOnce, runOnce, start, stop, settings, cardsFor, scaleCard, attach };
     return api;
 }
 

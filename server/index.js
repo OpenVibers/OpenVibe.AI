@@ -144,7 +144,10 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     // a GPU key and a monthly cap AND Balance billing is on; the public status says which one is missing.
     const ownEndpoints = require('./gpu/endpoints').createOwnEndpoints({ db, gpus, credits: creditsRef, config, clock, fetchImpl, log });
     gpus.attachEndpoints(ownEndpoints);
-    const runs = createRuns({ db, registry, engine, cache, quotas, config, clock, log, userModules, credentials, preferences, tiers, projectSecrets, pool, runBudgets, credits: creditsRef, community, presets, receipts, abuse, webhooks,
+    // BA3: the runs and the batcher need each other (a batch-class run is created first, then queued), so
+    // the runs hold this facade and the batcher fills it in below, before any request can arrive.
+    const batchRef = {};
+    const runs = createRuns({ db, registry, engine, cache, quotas, config, clock, log, userModules, credentials, preferences, tiers, projectSecrets, pool, runBudgets, credits: creditsRef, community, presets, receipts, abuse, webhooks, batch: batchRef,
         // BA2: a run that waits for a provider's batch answer is not interrupted by a restart: it stays
         // queued until the batcher finishes it (the provider is still working on it).
         batchWaiting: async (runId) => {
@@ -185,6 +188,9 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     const refusal = require('./refusal/job').createRefusalJob({ db, registry, pool, config, env, clock, log });
     // The native batcher (BA2): the providers' own batch APIs, behind one queue.
     const batcher = require('./batch/batcher').createBatcher({ db, runs, registry, credits: creditsRef, config, clock, log, env, fetchImpl });
+    // BA3: a batch-class run asks the batcher where it may wait, and hands its own run to the queue.
+    batchRef.planRun = batcher.planRun;
+    batchRef.enqueueRun = batcher.enqueueRun;
     // The half-price batches (server/batch/): many prompts, answered later, billed through Billing.
     const batches = require('./batch/service').createBatchService({ db, runs, registry, community, priceBook: offPeak, batcher, config, clock, log });
     batcher.attach(batches);
