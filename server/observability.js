@@ -88,7 +88,7 @@ function createAiReadiness({ db, registry, pool, keys, runs, release = null }) {
 }
 
 /** AI gauges on the openvibe-shared/metrics registry. */
-function registerAiGauges(registry, { runs, registry: ai, pool, balance = null, gpus = null, abuse = null, db = null }) {
+function registerAiGauges(registry, { runs, registry: ai, pool, balance = null, creditGrants = null, gpus = null, abuse = null, db = null }) {
     registry.gauge({
         name: 'ai_runs', help: 'Runs waiting for a slot (queued) and holding one (running)', labelNames: ['state'],
         collect: () => {
@@ -108,8 +108,11 @@ function registerAiGauges(registry, { runs, registry: ai, pool, balance = null, 
     });
     // The hourly balance probe's last reading (server/providers/balance.js), never a live call on scrape.
     registry.gauge({
-        name: 'ai_provider_balance_usd', help: 'Provider account balance in USD, as last read by the hourly probe', labelNames: ['provider'],
-        collect: () => (balance ? balance.values() : []).map(r => ({ labels: { provider: r.provider }, value: r.usd })),
+        name: 'ai_provider_balance_usd', help: 'Provider balance in USD; grant balances are estimates', labelNames: ['provider', 'kind'],
+        collect: () => [
+            ...(balance ? balance.values().map(r => ({ labels: { provider: r.provider, kind: 'available' }, value: r.usd })) : []),
+            ...(creditGrants ? creditGrants.values().flatMap((r) => ['promotional', 'purchased'].map((kind) => ({ labels: { provider: r.provider, kind }, value: r[kind] }))) : []),
+        ],
     });
     // Plan E5: free-tier requests throttled in the last 15 minutes, by reason (velocity, rate, hosting, network).
     // OpenVibe.Host's prometheus rule alerts when the sum stays high: the automatic throttle is working, and an

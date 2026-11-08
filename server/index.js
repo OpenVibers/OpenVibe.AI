@@ -83,7 +83,9 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     // The price book's off-peak windows (BA1): what a provider's own price is inside the hours it publishes.
     // The router reads them to know when a provider is at its off-peak price (server/providers/tiers.js).
     const offPeak = require('./pricebook/offpeak').createOffPeak({ db, clock });
-    const pool = createProviderPool({ db, registry, config, clock, fetchImpl, env, log, credentialFetch, machineModels: machines, community, bench, variantEvidence, adultStatus, offPeak });
+    const creditGrants = require('./providers/credit-grants').createCreditGrants({ db, env, fetchImpl, clock });
+    const sessionCookies = require('./session-cookies').createSessionCookies({ db, config, clock });
+    const pool = createProviderPool({ db, registry, config, clock, fetchImpl, env, log, credentialFetch, machineModels: machines, community, bench, variantEvidence, adultStatus, offPeak, creditGrants });
     // The hourly provider balance probe (server/providers/balance.js): a gauge for the operator alert, started
     // only when the service listens (never in tests) and off under a restore drill.
     const balance = require('./providers/balance').createBalanceProbe({ registry, config, env, fetchImpl, clock, log });
@@ -201,7 +203,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         clientSecret: env.OV_OAUTH_CLIENT_SECRET, fetch: fetchImpl,
     }) : null;
     const benchEvents = createBenchEvents({ bench, accountData, accountSend, config, log, fetchImpl, clientSecret: env.OV_OAUTH_CLIENT_SECRET });
-    const app = createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, grants, vault, settings, benchEvents, runBudgets, memory, memoryImport, memoryServices, memorySharing, community, endpoints, webhooks, presets, receipts, balance, gpus, abuse, priceBook, ownEndpoints, refusal, batches });
+    const app = createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, grants, vault, settings, benchEvents, runBudgets, memory, memoryImport, memoryServices, memorySharing, community, endpoints, webhooks, presets, receipts, balance, creditGrants, sessionCookies, gpus, abuse, priceBook, ownEndpoints, refusal, batches });
     let jwks = null;
     let keyLoaded = Promise.resolve(null);
     if (!keys.pinned && config.nodeEnv !== 'test') {
@@ -243,6 +245,13 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     // The signed webhook retry worker: never in test mode (tests call deliverDue with their own clock).
     if (listen && config.nodeEnv !== 'test') webhooks.start();
     if (listen) balance.start();
+    let creditTimer = null;
+    if (listen && config.balance.enabled) {
+        const tickCredits = () => creditGrants.poll().catch((err) => log.warn(`[ai] credit estimate failed: ${String(err && err.message || err).slice(0, 180)}`));
+        creditTimer = setInterval(tickCredits, config.balance.intervalMs);
+        if (creditTimer.unref) creditTimer.unref();
+        setTimeout(tickCredits, 5000).unref?.();
+    }
     if (listen && config.memoryJobs && config.memoryJobs.enabled) memoryJobs.start();
     // Team sharing's expiry sweep and delivery queue: production only, so a test's database has no background writers.
     if (listen && config.nodeEnv !== 'test' && memorySharing) memorySharing.start();
@@ -287,6 +296,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         clearInterval(housekeeping);
         if (gpuReconciler) clearInterval(gpuReconciler);
         balance.stop();
+        if (creditTimer) clearInterval(creditTimer);
         if (benchSubscription) benchSubscription.stop();
         if (accountSubscription) accountSubscription.stop();
         userModules.stop();

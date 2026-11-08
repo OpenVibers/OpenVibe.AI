@@ -216,7 +216,7 @@ function selfModelFor(cred, operation, req, ctx, prefs) {
     return { model, kind, why };
 }
 
-function createProviderPool({ db, registry, config, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, credentialFetch = null, machineModels = null, community = null, bench = null, variantEvidence = null, adultStatus = null, offPeak = null }) {
+function createProviderPool({ db, registry, config, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, credentialFetch = null, machineModels = null, community = null, bench = null, variantEvidence = null, adultStatus = null, offPeak = null, creditGrants = null }) {
     // A person's own machine as their model (credential provider node, server/machines.js).
     const machines = machineModels || require('../machines').createMachineModels({ config, env, fetchImpl });
     const cache = new Map();          // key -> { stamp, adapter }
@@ -542,6 +542,12 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         const addOffer = async (p, model, caps) => {
             const id = offerId(p.key, model);
             if (seen.has(id)) return;
+            // The private objective means first-party capacity only; operator-paid public APIs never receive it.
+            if ((ctx.aliasPolicy === 'private' || (route.constraints && route.constraints.objective === 'private'))
+                && p.kind === 'anthropic' && !(p.metadata && p.metadata.local === true && modelCatalog.accessOf(p) === 'OWN_DEPLOYMENT')) {
+                accessExcluded.push({ provider: p.key, model, eligible: false, excluded_reason: 'private requests exclude operator-paid Anthropic capacity', cost: null, latency: null });
+                return;
+            }
             // The content policy narrows the pool before placement: an uncensored offer never answers a standard
             // request, and the adult tier has no other offer to run on.
             if (!(await policyAllows(registry, p, model, ctx.contentPolicy || 'standard'))) return;
@@ -636,6 +642,17 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             rateCards, states, now: clock.now(), current, minGain: config.placement.minGain,
             weights: { cost: config.placement.costWeight, latency: config.placement.latencyWeight },
         });
+        // Spend an entered promotional grant first, but only among candidates the route's own tier, capability,
+        // trust, price cap and health checks already accepted. A person's own-key choice never reaches this pool.
+        const preferredCreditProvider = creditGrants && ['openai', 'anthropic'].find((provider) => creditGrants.shouldPrefer(provider));
+        if (preferredCreditProvider && ctx.personPays !== true && !route.pinned?.length
+            && ctx.aliasPolicy !== 'private' && !(route.constraints && route.constraints.objective === 'private')) {
+            const promotional = result.candidates.find((x) => x.eligible && (x.provider || splitOfferId(x.id).provider) === preferredCreditProvider);
+            if (promotional) {
+                result.selected = promotional.id;
+                result.reasons = [`${preferredCreditProvider} promotional credit is available above its configured floor`, ...result.reasons];
+            }
+        }
         const byId = new Map(offers.map(o => [o.offer_id, o]));
         const explain = {
             objective: result.objective, reasons: result.reasons, selected: result.selected,

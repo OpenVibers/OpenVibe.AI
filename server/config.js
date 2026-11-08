@@ -353,7 +353,7 @@ function load(env = process.env) {
             cooldownMs: int(env.AI_BREAKER_COOLDOWN_MS, 60000),
             // A provider that answered "insufficient balance" is out of money, not flaky: its circuit stays open this
             // long (10 minutes), shared by every request, before one probe is allowed to spend again.
-            exhaustedCooldownMs: Math.max(60000, int(env.AI_BREAKER_EXHAUSTED_COOLDOWN_MS, 10 * 60000)),
+            exhaustedCooldownMs: Math.max(60000, int(env.AI_BREAKER_EXHAUSTED_COOLDOWN_MS, 15 * 60000)),
         },
         // One retry on a transient failure (timeout, 429, 5xx, connection reset) before the
         // router moves on to the fallback — Live's rule.

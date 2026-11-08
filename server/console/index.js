@@ -116,7 +116,7 @@ const DEF_KINDS = {
 };
 const DAY_MS = 86400000;
 
-function consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, vault = null, settings = null, personSessions = null, abuse = null, priceBook = null }) {
+function consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, vault = null, settings = null, personSessions = null, abuse = null, priceBook = null, creditGrants = null, sessionCookies = null }) {
     const cc = config.console;
     const creditsOn = Boolean(config.credits && config.credits.enabled);
     const routingOn = Boolean(config.routingEvidence && config.routingEvidence.enabled);
@@ -336,11 +336,39 @@ function consoleRouter({ config, db, registry, pool, quotas, cache, runs, ops, e
     }));
 
     // ── Providers ────────────────────────────────────────────
-    r.get('/console/providers', read, wrap(async (req, res) => await send(res, 200, pages.providers({
+    r.get('/console/providers', read, wrap(async (req, res) => {
+        const estimates = creditGrants ? await Promise.all(['anthropic', 'openai'].map(async (provider) => {
+            const grantRows = await creditGrants.list(provider);
+            const estimate = creditGrants.values().find((x) => x.provider === provider);
+            return { provider, estimate: estimate || (grantRows.length ? { provider, promotional: null, purchased: null, grants: grantRows, source: null, at: null } : null), preference: await creditGrants.preference(provider) };
+        })) : [];
+        const canManageCookies = req.staff.caps.includes(CAPS.configManage);
+        const sessionCredentials = sessionCookies && canManageCookies ? await sessionCookies.list('operator', 'owner') : [];
+        const sessionBalances = sessionCookies && canManageCookies ? await Promise.all(sessionCredentials.map((c) => sessionCookies.balance('operator', 'owner', c.id))) : [];
+        return await send(res, 200, pages.providers({
         ...common(req), rows: (await Promise.all((await registry.listProviders()).map(ops.providerView))), models: await registry.listModels(), stubFallback: config.stubFallback,
         canManage: req.staff.caps.includes(CAPS.providerManage), notice: notice(req), keyHints: vault ? await vault.hints() : new Map(),
-        breaker: config.breaker, now: clock.now(),
-    }))));
+        breaker: config.breaker, now: clock.now(), creditEstimates: estimates.map(({ provider, estimate, preference }) => ({ provider, estimate: estimate || { provider, promotional: null, purchased: null, grants: [], source: null, at: null }, preference })), sessionCredentials, sessionBalances, canManageCookies,
+    }));
+    }));
+    r.post('/console/provider-credits', needs(CAPS.providerManage), wrap(async (req, res) => {
+        if (!creditGrants) throw new Error('credit grants are unavailable');
+        const provider = ['anthropic', 'openai'].includes(String(req.body.provider)) ? String(req.body.provider) : 'anthropic';
+        await creditGrants.add({ provider_key: provider, kind: String(req.body.kind || 'promotional'), amount_usd: Number(req.body.amount_usd), as_of: String(req.body.as_of || ''), received_at: String(req.body.received_at || req.body.as_of || ''), remaining_as_of_usd: req.body.remaining_as_of_usd == null ? Number(req.body.amount_usd) : Number(req.body.remaining_as_of_usd), remaining_as_of: String(req.body.remaining_as_of || req.body.as_of || ''), expires_at: req.body.expires_at ? new Date(`${req.body.expires_at}T23:59:59Z`).toISOString() : null, applies_to: String(req.body.applies_to || '').slice(0, 200) || null });
+        res.redirect(303, '/console/providers?done=provider_credit');
+    }));
+    r.post('/console/provider-credit-preference', needs(CAPS.providerManage), wrap(async (req, res) => {
+        if (!creditGrants) throw new Error('credit preferences are unavailable');
+        const provider = ['anthropic', 'openai'].includes(String(req.body.provider)) ? String(req.body.provider) : 'anthropic';
+        await creditGrants.setPreference({ provider_key: provider, enabled: req.body.enabled === '1', floor_usd: Number(req.body.floor_usd) });
+        creditGrants.poll().catch((err) => log.warn(`[ai] credit estimate failed: ${String(err && err.message || err).slice(0, 180)}`));
+        res.redirect(303, '/console/providers?done=provider_credit');
+    }));
+    r.post('/console/provider-session-credentials', needs(CAPS.configManage), wrap(async (req, res) => {
+        if (!sessionCookies) throw new Error('session credentials are unavailable');
+        await sessionCookies.add('operator', 'owner', { provider: req.body.provider, cookie: String(req.body.cookie || ''), label: req.body.label, expires_at: req.body.expires_at || null, org_id: req.body.org_id });
+        res.redirect(303, '/console/providers?done=session_credential');
+    }));
     r.get('/console/glossary', read, wrap(async (req, res) => await send(res, 200, pages.glossary({ ...common(req) }))));
     r.post('/console/providers/:key/status', needs(CAPS.providerManage), wrap(async (req, res) => {
         await ops.setProviderStatus(req.params.key, String(req.body.status || ''), who(req));

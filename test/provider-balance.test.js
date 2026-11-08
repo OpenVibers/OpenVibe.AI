@@ -5,6 +5,7 @@
 const assert = require('assert');
 const { createRegistry } = require('openvibe-shared/metrics');
 const { createBalanceProbe, deepseekUsd } = require('../server/providers/balance');
+const { centsToUsd, allocate, createCreditGrants } = require('../server/providers/credit-grants');
 const { registerAiGauges } = require('../server/observability');
 const { load } = require('../server/config');
 const { suite } = require('./helpers');
@@ -41,7 +42,48 @@ t.test('DeepSeek balance: USD total read, gauge exposed, key never logged', asyn
         balance: probe,
     });
     const text = await metrics.metricsAsync();
-    assert.ok(/ai_provider_balance_usd\{provider="shared"\} 0\.05\n/.test(text), text);
+    assert.ok(/ai_provider_balance_usd\{provider="shared",kind="available"\} 0\.05\n/.test(text), text);
+});
+
+t.test('grant cost uses cents strings and spends promotional credit in expiry order', () => {
+    assert.strictEqual(centsToUsd('41280.000000'), 412.8);
+    assert.strictEqual(centsToUsd('0.05'), 0.0005);
+    assert.strictEqual(centsToUsd(5), null);
+    const left = allocate([
+        { kind: 'purchased', amount_usd: '40', as_of: '2026-01-01' },
+        { kind: 'promotional', amount_usd: '25', expires_at: '2026-12-01', as_of: '2026-01-01' },
+        { kind: 'promotional', amount_usd: '10', expires_at: '2026-11-01', as_of: '2026-01-01' },
+    ], 12, Date.parse('2026-10-01'));
+    assert.deepStrictEqual(left, { promotional: 23, purchased: 40 });
+    assert.deepStrictEqual(allocate([{ kind: 'promotional', amount_usd: 10, expires_at: '2026-01-01' }], 0, Date.parse('2026-02-01')), { promotional: 0, purchased: 0 });
+});
+
+t.test('OpenAI admin cost rows are summed in USD and paged', async () => {
+    const urls = [];
+    const db = { prepare(sql) { return { all: async () => [{ kind: 'promotional', amount_usd: '110', as_of: '2026-11-01', remaining_as_of_usd: '110', remaining_as_of: '2026-11-01' }], get: async () => ({ spent: 0 }) }; } };
+    const credits = createCreditGrants({ db, env: { AI_OPENAI_ADMIN_KEY_REF: 'env:OPENAI_ADMIN', OPENAI_ADMIN: 'admin-secret' }, clock: { now: () => Date.parse('2026-11-08T01:00:00Z') }, fetchImpl: async (url) => {
+        urls.push(String(url));
+        return { ok: true, json: async () => urls.length === 1 ? { data: [{ results: [{ amount: { value: '1.43' } }] }], has_more: true, next_page: 'page2' } : { data: [{ results: [{ amount: { value: '0.00' } }, { amount: { value: '0.00' } }] }], has_more: false } };
+    } });
+    const result = await credits.poll();
+    assert.strictEqual(urls.length, 2);
+    assert.match(urls[0], /start_time=1793491200/);
+    assert.strictEqual(result.find((r) => r.provider === 'openai').spent_usd, 1.43);
+});
+
+t.test('the optional Admin API key is sent only on its cost request and never returned', async () => {
+    const calls = [];
+    const db = { prepare(sql) { return { all: async () => [{ kind: 'promotional', amount_usd: '200', as_of: '2026-11-08T00:00:00Z', expires_at: null }], get: async () => ({ spent: 0 }) }; } };
+    const credits = createCreditGrants({ db, env: { AI_ANTHROPIC_ADMIN_KEY_REF: 'env:ANTHROPIC_ADMIN', ANTHROPIC_ADMIN: 'admin-secret' }, clock: { now: () => Date.parse('2026-11-08T01:00:00Z') }, fetchImpl: async (url, options) => {
+        calls.push({ url: String(url), key: options.headers['x-api-key'] });
+        return { ok: true, json: async () => ({ data: [{ cost: { amount: '360.000000' } }] }) };
+    } });
+    const result = await credits.poll();
+    assert.strictEqual(calls.length, 1);
+    assert.ok(calls[0].url.includes('starting_at='));
+    assert.strictEqual(calls[0].key, 'admin-secret');
+    assert.strictEqual(result[0].promotional, 196.4);
+    assert.ok(!JSON.stringify(result).includes('admin-secret'));
 });
 
 t.test('a failed probe keeps the last reading and does not fail the caller', async () => {

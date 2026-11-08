@@ -30,6 +30,9 @@ const TABLES = [
     { table: 'person_sessions', subject: 'subject', file: 'person-sessions.json', columns: ['username', 'created_at', 'expires_at', 'revoked_at'], order: 'created_at' },
     { table: 'subject_credentials', subject: 'subject', file: 'provider-credentials.json', order: 'updated_at',
         columns: ['owner', 'subject', 'provider', 'base_url', 'machine', 'key_hint', 'models', 'budget_usd_day', 'is_default', 'spend_key', 'status', 'checked_at', 'last_error', 'models_count', 'created_at', 'updated_at', 'last_used_at'] },
+    // Session-cookie values are never exported; only the person's credential metadata and non-secret reader settings.
+    { table: 'session_credentials', subject: 'subject', file: 'provider-session-credentials.json', order: 'created_at',
+        columns: ['owner', 'subject', 'provider', 'label', 'created_at', 'last_used_at', 'expires_at', 'expired', 'settings_json'] },
     // L36 Y3: how the person's runs route (only_my_keys, free_first, the price ceiling and the defaults). Their own
     // settings, so they go with the account; the row holds no key.
     { table: 'ai_person_preferences', subject: 'subject', file: 'ai-preferences.json', columns: ['preferences', 'created_at', 'updated_at'], order: 'created_at' },
