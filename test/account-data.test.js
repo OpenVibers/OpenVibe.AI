@@ -51,6 +51,7 @@ t.test('an export carries the person\'s sessions and credential hints, and a del
     const h = await boot({ env: { AI_EVENTS_SECRET: SECRET, AI_EVENTS_SUBSCRIBE: '0', OV_NETWORK_INTERNAL_URL: stub.url, OV_OAUTH_CLIENT_SECRET: 'ai-secret' } });
     try {
         for (const [subject, name] of [[A, 'ada'], [B, 'bo']]) {
+            await h.db.exec('INSERT INTO exchange_key_requests(owner,idempotency_key,request_hash,max_cost_usd) VALUES ($1,$2,$3,1)', [subject, `request-${name}`, `hash-${name}`]);
             await h.db.exec("INSERT INTO console_sessions (id_hash, subject, username, staff, csrf, created_at, expires_at) VALUES ($1, $2, $3, '{}', 'c', '2026-10-01', '2027-10-01')", [`h_${name}`, subject, name]);
             await h.db.exec("INSERT INTO person_sessions (id_hash, subject, username, created_at, expires_at) VALUES ($1, $2, $3, '2026-10-01', '2027-10-01')", [`p_${name}`, subject, name]);
             await h.db.exec("INSERT INTO subject_credentials (owner, subject, provider, key_enc, key_hint, models, created_at, updated_at) VALUES ('proj_1', $1, 'openai', 'v1:secret', $2, '{}', '2026-10-01', '2026-10-02')", [subject, `hint-${name}`]);
@@ -82,10 +83,13 @@ t.test('an export carries the person\'s sessions and credential hints, and a del
         assert.ok(!JSON.stringify(part.body).includes('v1:cookie-secret'), 'the encrypted session cookie is never exported');
         assert.ok(!JSON.stringify(part.body).includes('v1:secret'), 'the encrypted key is never exported');
         assert.ok(!JSON.stringify(part.body).includes(B), 'nobody else\'s rows');
+        assert.deepStrictEqual(part.body.files.find((f) => f.name === 'exchange-key-requests.json').content, [{ idempotency_key: 'request-ada', request_hash: 'hash-ada', max_cost_usd: 1 }]);
 
         const d = await deliver(ev('evt_01JZ0000000000000000000D01', 'network.account.deleted', { deletion_id: DEL, subject: A, aliases: [] }));
         assert.deepStrictEqual([d.status, d.json.outcome], [200, 'erased']);
         assert.strictEqual(Number(await h.db.value('SELECT count(*)::int FROM console_sessions WHERE subject = $1', [A])), 0);
+        assert.strictEqual(Number(await h.db.value('SELECT count(*)::int FROM exchange_key_requests WHERE owner = $1', [A])), 0, 'request claims are erased with their owner');
+        assert.strictEqual(Number(await h.db.value('SELECT count(*)::int FROM exchange_key_requests WHERE owner = $1', [B])), 1, 'another owner\'s claims remain');
         assert.strictEqual(Number(await h.db.value('SELECT count(*)::int FROM abuse_devices WHERE subject = $1', [A])), 0, 'the device row goes');
         assert.strictEqual(Number(await h.db.value('SELECT count(*)::int FROM abuse_daily_usage WHERE subject = $1', [`user:${A}`])), 0, 'the daily counter goes');
         assert.strictEqual(Number(await h.db.value('SELECT count(*)::int FROM abuse_devices WHERE subject = $1', [B])), 1, "nobody else's device row");

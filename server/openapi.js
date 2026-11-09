@@ -499,6 +499,7 @@ const exchangeKey = {
         id: str({ pattern: '^xkey_' }), name: str({ maxLength: 80 }), prefix: str({ description: 'The first ten characters of the secret (ovx_…), to tell keys apart' }),
         monthly_cap_usd: { type: 'number', minimum: 0 }, allowed_models: arrayOf(str()), created_at: str({ format: 'date-time' }),
         revoked_at: nullable('string', { format: 'date-time' }),
+        expires_at: nullable('string', { format: 'date-time' }),
     },
 };
 route('get', '/exchange/keys', {
@@ -511,6 +512,7 @@ route('post', '/exchange/keys', {
     description: 'Only a person. The secret (ovx_…) is in this answer only; it is stored as a digest. A run with the key is refused once the month\'s cap is spent, and for a model not in allowed_models.',
     requestBody: body({ type: 'object', required: ['name', 'monthly_cap_usd', 'allowed_models'], properties: {
         name: str({ minLength: 1, maxLength: 80 }), monthly_cap_usd: { type: 'number', minimum: 0 }, allowed_models: arrayOf(str({ maxLength: 200 })),
+        expires_at: nullable('string', { format: 'date-time', description: 'Optional future expiry; checked at authentication and reservation, before a hold' }),
     } }),
     responses: { 201: json('The key and its secret, shown once', { type: 'object', required: ['key', 'secret'], properties: { key: exchangeKey, secret: str({ pattern: '^ovx_' }) } }), 422: problem, ...errors([401, 403]) },
 });
