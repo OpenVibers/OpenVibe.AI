@@ -124,7 +124,7 @@ const MARKERS = [
     /\bi(?:'m| am) (?:a|an)\b/i,
     /\bi (?:live|work|grew up) (?:in|at|on|for)\b/i,
     /\bi (?:prefer|like|love|hate|avoid|use|always|never|usually)\b/i,
-    /\bmy (?:favourite|favorite|preferred|pronouns?|timezone|birthday|team|company|role|job|editor|setup|stack|repo|project)\b/i,
+    /\bmy (?:favourite|favorite|preferred|timezone|birthday|team|company|role|job|editor|setup|stack|repo|project)\b/i,
     /\bwe (?:decided|agreed|chose|use|always|never)\b/i,
     /\b(?:in|for) this (?:project|repo|repository|codebase|app)\b/i,
     /\bplease (?:always|never|use|keep|remember)\b/i,
