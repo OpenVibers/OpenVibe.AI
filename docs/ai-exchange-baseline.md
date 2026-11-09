@@ -31,8 +31,8 @@ This document records the current state of the repositories that implement (or w
 | OpenVibe.Actor | `main` | `41d802a8f1140fa979185a4528ec59d12d888bfa` | 0.1.0 | v0.269.0 | v0.82.0 | v4.109.2 |
 
 Notes:
-- All repos except Node use npm `package.json` versions and tarball pins.
-- Node uses Go modules; the latest tag at refresh was `v0.38.0`.
+- All repos except Link use npm `package.json` versions and tarball pins.
+- Link uses Go modules; the latest tag at refresh was `v0.38.0`.
 - Shared and SDK are pinned uniformly at v4.109.2 and v0.82.0 respectively across the matrix repos that consume them.
 - Contracts pins diverge by repo (Network v0.280.0, AI v0.262.0, Billing/Services v0.222.0, etc.). This is consistent with the PLAN note that repos deliberately pin different versions.
 
