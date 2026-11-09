@@ -262,11 +262,12 @@ function createCatalog({ db, registry, pool, env = process.env, clock = { now: (
         // else the answering attempt's total latency.
         const measured = await seen.read({ days });
         observed.fold(measured, drafts);
+        // The router's own measurements win once they have 20 samples; until then the observed runs' numbers stay.
         const performance = await db.prepare('SELECT * FROM provider_metrics').all();
         for (const d of drafts) {
-            const p = performance.find(p => p.provider_key === d.providerKey && p.model_key === d.modelKey);
-            d.offer.speed.ttft_ms = p && Number(p.ttft_samples) >= 20 ? Number(p.ttft_ms) : null;
-            d.offer.speed.tokens_per_second = p && Number(p.decode_samples) >= 20 ? Number(p.decode_tps) : null;
+            const p = performance.find((m) => m.provider_key === d.providerKey && m.model_key === d.modelKey);
+            if (p && Number(p.ttft_samples) >= 20) d.offer.speed.ttft_ms = Number(p.ttft_ms);
+            if (p && Number(p.decode_samples) >= 20) d.offer.speed.tokens_per_second = Number(p.decode_tps);
             d.offer.error_rate = d.offer.uptime == null ? null : 1 - d.offer.uptime;
         }
 
