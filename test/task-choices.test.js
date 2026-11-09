@@ -29,10 +29,13 @@ t.test('a site session saves a choice only from a first-party origin, and search
  assert.equal(r.body.defaults.search,'search/commons');
  r=await request(h.base,'PUT','/api/v1/me/ai/preferences',{tok:user('user'),body:{...prefs,defaults:{...prefs.defaults,search:7}}});assert.equal(r.status,422,r.text);
 });
-t.test('the seeded search tasks resolve to an engine and its order',async()=>{
+t.test('the seeded search tasks resolve to an engine and refuse a model',async()=>{
  const store=createChoices({db:h.db,registry:h.registry,clock:{now:()=>Date.now()},preferences:{get:async()=>null}});
  let r=await store.resolve('search.web');assert.equal(r.task.kind,'search');assert.equal(r.why,'builtin');assert.equal(r.choice.model,'search/wikipedia');
  r=await store.resolve('wiki.article.images');assert.equal(r.choice.model,'search/commons');
+ await assert.rejects(()=>store.save(subject,'search.web',c('anthropic/claude-opus-5-5')),e=>e.code==='choice.invalid');
+ const value={signed_out:c('search/openverse'),signed_in:c('openverse/model'),fallbacks:[],image_model:null,search_engines:[],max_cost_usd:null};
+ await assert.rejects(()=>store.putDefaults({defaults:[{task:'search.web',value}]},subject),e=>e.code==='choice.invalid');
 });
 t.test('model choices reject extra fields and require machine identity',()=>{assert.throws(()=>choice({model:'x',source:'machines'}));assert.throws(()=>choice({...c('a/b'),api_key:'no'}));});
 t.test('precedence, cache expires in 60s, audit and only-my-keys',async()=>{

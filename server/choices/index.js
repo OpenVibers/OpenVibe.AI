@@ -38,6 +38,15 @@ const MACHINE_RE = /^(any|dev_[0-9A-HJKMNP-TV-Z]{26})$/;
 const TASK_RE = /^[a-z][a-z0-9_-]*\.[a-z0-9_.-]{1,100}$/;
 const ENGINE_RE = /^[a-z][a-z0-9_-]{0,39}$/;
 
+/** A search task answers from a search engine: its choice is `search/<engine>` from the research providers. */
+function checkSearchChoice(kind, picked) {
+    if (kind !== 'search') return;
+    const engine = String(picked.model).replace(/^search\//, '');
+    if (!picked.model.startsWith('search/') || !ENGINES.includes(engine)) {
+        throw new AiError(422, 'choice.invalid', `a search task names an engine: ${ENGINES.map((e) => `search/${e}`).join(', ')}`);
+    }
+}
+
 /** One model and its source, or 422. A machine choice names the machine; no other source does. */
 function choice(value) {
     const usable = value && typeof value === 'object' && !Array.isArray(value);
@@ -133,8 +142,11 @@ function createChoices({ db, registry, preferences, credentials, machines, catal
         if (!body || !Array.isArray(body.defaults) || body.defaults.length > 200) throw new AiError(422, 'defaults.invalid', 'defaults must be a list of task settings');
         const list = [];
         for (const row of body.defaults) {
-            if (!await task(row.task)) throw new AiError(404, 'task.not_found', 'unknown task');
-            list.push([row.task, defaultValue(row.value)]);
+            const t = await task(row.task);
+            if (!t) throw new AiError(404, 'task.not_found', 'unknown task');
+            const value = defaultValue(row.value);
+            for (const c of [value.signed_out, value.signed_in, ...value.fallbacks]) checkSearchChoice(t.kind, c);
+            list.push([row.task, value]);
         }
         await db.tx(async () => {
             for (const [name, value] of list) {
@@ -150,8 +162,10 @@ function createChoices({ db, registry, preferences, credentials, machines, catal
     }
 
     async function save(subject, name, value) {
-        if (!await task(name)) throw new AiError(404, 'task.not_found', 'unknown task');
+        const t = await task(name);
+        if (!t) throw new AiError(404, 'task.not_found', 'unknown task');
         const c = choice(value);
+        checkSearchChoice(t.kind, c);
         await db.prepare(`INSERT INTO ai_task_choices (subject, task, choice, updated_at) VALUES (?, ?, ?, ?)
             ON CONFLICT (subject, task) DO UPDATE SET choice = excluded.choice, updated_at = excluded.updated_at`)
             .run(subject, name, JSON.stringify(c), iso(clock.now()));
@@ -177,6 +191,7 @@ function createChoices({ db, registry, preferences, credentials, machines, catal
                 : perKind && perKind !== 'auto' ? { value: built(perKind), why: 'kind' }
                     : fromOwner ? { value: fromOwner, why: 'owner' }
                         : { value: t.default, why: 'builtin' };
+        checkSearchChoice(t.kind, picked.value);
         if (picked.value.source !== 'openvibe' && !subject) throw new AiError(401, 'choice.sign_in', 'sign in to use your keys or machines');
         if (prefs && prefs.only_my_keys && picked.value.source === 'openvibe') throw new AiError(422, 'ai.needs_key', 'only_my_keys is on; choose one of your keys or machines');
         return {
