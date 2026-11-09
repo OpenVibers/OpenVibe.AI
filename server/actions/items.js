@@ -28,8 +28,9 @@ function bucketFor(status) {
  * Cancel and retry are not offered: Network has no AI decide route, and AI would need a delegated
  * person principal to authorize them.
  */
-function actionsFor() {
-    return ['open'];
+function actionsFor(bucket) {
+    // A failed run can be run again; the authority that owns it does the work.
+    return bucket === 'failed' ? ['open', 'retry'] : ['open'];
 }
 
 /** Plain text (no HTML or Markdown), single line, at most `max` characters. */
@@ -57,10 +58,28 @@ function runPage(id) {
     return `${PUBLIC_ORIGIN}/runs/${encodeURIComponent(id)}`;
 }
 
+// The shared code map (Contracts' ai.run-error@1, manifests/ai-run-error-codes.v1.json) is the source of truth; this
+// copy is what AI answers with until the Contracts release that carries the manifest is pinned here.
+const ERROR_WORDS = {
+    'route.unavailable': ['No model could take this task.', 'Pick a model or add an AI key, then retry.', 'pick_model'],
+    'provider.unavailable': ['The model provider is unavailable.', 'Retry when the provider is back.', 'retry'],
+    'provider.rate_limited': ['The model provider reached its limit.', 'Retry after the limit resets.', 'retry_later'],
+    'credentials.unavailable': ['Your AI key is unavailable.', 'Add or check your AI key.', 'add_key'],
+    'quota.refused': ['Your AI allowance is used up.', 'Pick another model or retry when it resets.', 'pick_model'],
+    'queue.full': ['AI is busy right now.', 'Retry in a moment.', 'retry_later'],
+    'run.interrupted': ['This run stopped during a service restart.', 'Retry the task.', 'retry'],
+};
+function safeError(error) {
+    const code = String(error && error.code || 'unknown').slice(0, 80);
+    const [words, next, action] = ERROR_WORDS[code] || ['This run could not finish.', 'Open its details or retry.', 'open'];
+    return { code, words, next, action };
+}
+
 function toItem(run, workflow = null) {
     const bucket = bucketFor(run.status);
-    const detail = run.error ? (run.error.detail || run.error.code || '') : '';
-    const summary = detail || summaryOf(run.output);
+    const failure = run.error ? safeError(run.error) : null;
+    const summary = failure ? failure.words : summaryOf(run.output);
+    const duration = run.started_at && run.finished_at ? Math.max(0, Date.parse(run.finished_at) - Date.parse(run.started_at)) : null;
     return {
         service: 'ai',
         id: run.id,
@@ -72,7 +91,14 @@ function toItem(run, workflow = null) {
         agent: run.provenance && run.provenance.model ? plain(run.provenance.model, 80) : null,
         cost_usd: run.usage && Number.isFinite(Number(run.usage.cost_usd)) ? Number(run.usage.cost_usd) : null,
         steps: null,   // AI keeps token/attempt counts, not tool-call steps
-        error: detail ? plain(detail, 400) : null,
+        error: failure ? failure.words : null,
+        run_error: failure,
+        skill: run.workflow && run.workflow.key || null,
+        subject: null,
+        model: run.provenance && run.provenance.model || null,
+        maker: run.provenance && run.provenance.provider || null,
+        duration_ms: Number.isFinite(duration) ? duration : null,
+        step: bucket === 'running' ? 'Working on your request' : null,
         created_at: run.created_at,
         updated_at: run.finished_at || run.started_at || run.created_at,
         href: runPage(run.id),
