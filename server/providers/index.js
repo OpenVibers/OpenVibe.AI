@@ -1362,6 +1362,14 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         if (ctx.compatRouting) {
             const { select, policyFor } = require('../exchange/compat-routing');
             const ordered = [];
+            const ratingEvidence = require('../bench/evidence');
+            let ratings = [];
+            if (bench && ['quality', 'value'].includes(ctx.compatRouting.policy.sort)) {
+                for (const kind of bench.kindCandidates(route, operation === 'messages' ? 'complete' : operation)) {
+                    ratings = await bench.list(kind, bench.categoryFor(route));
+                    if (ratings.length) break;
+                }
+            }
             for (const group of [...new Set(ctx.compatRouting.offers.map(o => o.group))]) {
                 const offers = ctx.compatRouting.offers.filter(o => o.group === group);
                 const variant = offers[0]?.variant;
@@ -1371,11 +1379,15 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                     const d = await describeCandidate(c);
                     const privacy = exchangePrivacy.dataPolicyOf(d.record) || {};
                     const metrics = await createProviderMetrics({ db, clock }).get(c.provider, c.model);
-                    // Only Report-published ratings qualify; catalogue strength tiers are not ratings.
-                    const report = d.row?.metadata?.report;
+                    // Report's board pages read Bench. Use the same event-fed ratings, never a declared tier.
+                    const rating = ratings.find(row => ratingEvidence.usable(row) && (
+                        ratingEvidence.matchesOffer(row, c) || ratingEvidence.matchesOffer(row, {
+                            ...c, model: require('../exchange/catalog').canonicalOf(d.row, d.record),
+                        })
+                    ));
                     return { priceIn: d.row?.cost?.in_per_mtok ?? null, priceOut: d.row?.cost?.out_per_mtok ?? null, training: privacy.training,
                         retention: privacy.retention, latency: metrics?.ttft_ms, throughput: metrics?.decode_tps,
-                        quality: report?.rating };
+                        quality: rating ? Number(rating.rating) : null };
                 });
                 ordered.push(...result.allowed);
                 for (const x of result.excluded) explain.candidates.push({ ...x, eligible: false, excluded_reason: x.reason });

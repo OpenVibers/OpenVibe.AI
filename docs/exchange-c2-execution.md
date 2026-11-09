@@ -9,10 +9,9 @@ All attempts remain one run and one Exchange key hold. Idempotent replays do not
 reserve or call a provider again. Every requested fallback must be allowed by the key.
 
 Sorts are `price`, `throughput`, `latency`, `quality`, `value`. Quality reads the
-Report rating in the registered model's `metadata.report.rating`; value divides
-that rating by the sum of input and output USD per million tokens. The catalogue
-must be populated with Report ratings; this change does not add a Report ingestion
-job. Throughput and latency use measured decode tokens/second and TTFT. Missing
+Bench board ratings shown by Report, through AI's existing `bench.rating.changed`
+evidence store. Value divides that rating by the sum of input and output USD per
+million tokens. Provisional ratings and ratings without confidence intervals are excluded. Throughput and latency use measured decode tokens/second and TTFT. Missing
 quality or speed evidence excludes the offer. Price and privacy limits fail closed.
 `max_price.prompt` and `max_price.completion` are USD per million tokens.
 `data_collection: "deny"` requires declared no-training; `zdr: true` requires no retention.

@@ -126,6 +126,7 @@ async function select(list, policy, facts) {
         }
         if (policy.sort === 'quality' || policy.sort === 'value') {
             if (!finite(f.quality)) reason = 'provider.rating_unavailable';
+            if (policy.sort === 'value' && cost === null) reason = 'provider.price_unavailable';
             score =
                 policy.sort === 'quality'
                     ? -f.quality

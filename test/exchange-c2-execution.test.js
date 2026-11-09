@@ -12,13 +12,14 @@ const { createKeys } = require('../server/platform/keys');
             const b = JSON.parse(raw); seen.push(b);
             res.setHeader('Content-Type', 'application/json');
             if (b.model === 'broken') { res.statusCode = 503; return res.end('{"error":{"message":"fixture failure"}}'); }
+            if (req.url.endsWith('/messages')) return res.end(JSON.stringify({ id: 'msg_fixture', type: 'message', role: 'assistant', model: b.model, content: [{ type: 'text', text: 'fixture message' }], stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 3 } }));
             if (req.url.endsWith('/embeddings')) return res.end(JSON.stringify({ data: b.input.map((_, index) => ({ index, embedding: [1, 2] })), usage: { prompt_tokens: 2, total_tokens: 2 } }));
             if (req.url.endsWith('/images/generations')) return res.end(JSON.stringify({ data: [{ b64_json: 'Zml4dHVyZQ==' }] }));
             res.end(JSON.stringify({ id: 'fixture', model: b.model, choices: [{ index: 0, message: { role: 'assistant', content: 'fixture answer' }, finish_reason: 'stop' }], usage: { prompt_tokens: 10, completion_tokens: 3, total_tokens: 13 } }));
         });
     });
     await new Promise(resolve => upstream.listen(0, '127.0.0.1', resolve));
-    const h = await boot({ env: { AI_IMAGE_MODEL: 'image', AI_STUB_FALLBACK: 'false', AI_PROVIDER_RETRIES: '0', AI_FREE_PROVIDERS: 'fixture', AI_FREE_MAX_OUTPUT_PRICE_USD_PER_MTOK: '5' } });
+    const h = await boot({ env: { AI_IMAGE_MODEL: 'image', AI_STUB_FALLBACK: 'false', AI_PROVIDER_RETRIES: '0', AI_FREE_PROVIDERS: 'fixture,anthfixture', AI_FREE_MAX_OUTPUT_PRICE_USD_PER_MTOK: '5' } });
     try {
         const svc = token('exchange', ALL);
         const added = await request(h.base, 'POST', '/api/v1/providers', { tok: svc, body: {
@@ -31,10 +32,18 @@ const { createKeys } = require('../server/platform/keys');
             const out = await request(h.base, 'POST', '/api/v1/models', { tok: svc, body: {
                 provider_key: 'fixture', model_key: model, type, status: 'active', context_window: 8192, max_output: 4096,
                 supports: { streaming: true }, cost: { in_per_mtok: 0, out_per_mtok: 0, cached_per_mtok: 0 },
-                metadata: { org: 'fixture', model, report: { rating: model === 'good' ? 90 : 50 } },
+                metadata: { org: 'fixture', model },
             } });
             assert.equal(out.status, 201, out.text);
         }
+        assert.equal((await request(h.base, 'POST', '/api/v1/providers', { tok: svc, body: {
+            key: 'anthfixture', kind: 'anthropic', base_url: `http://127.0.0.1:${upstream.address().port}`, auth_mode: 'none',
+            capabilities: ['chat', 'messages'], default_model: 'claude', provider_access: 'OWN_DEPLOYMENT',
+        } })).status, 201);
+        assert.equal((await request(h.base, 'POST', '/api/v1/models', { tok: svc, body: {
+            provider_key: 'anthfixture', model_key: 'claude', type: 'chat', status: 'active', context_window: 8192,
+            supports: {}, cost: { in_per_mtok: 0, out_per_mtok: 0, cached_per_mtok: 0 }, metadata: { org: 'fixture', model: 'claude' },
+        } })).status, 201);
         const owner = 'usr_01JAB2C3D4E5F6G7H8J9K0MNPQ';
         const keys = createKeys({ db: h.db });
         const key = await keys.create(owner, { name: 'fixture', monthly_cap_usd: 2, allowed_models: [] });
@@ -57,6 +66,11 @@ const { createKeys } = require('../server/platform/keys');
         const before = seen.length;
         assert.equal((await post('/v1/chat/completions', { ...body, model: 'fixture/good', models: undefined, provider: { ignore: ['fixture'] } })).status, 503);
         assert.equal(seen.length, before, 'hard routing refusal never calls upstream');
+        const quality = { model: 'fixture/good', provider: { sort: 'quality' }, messages: body.messages };
+        assert.equal((await post('/v1/chat/completions', quality)).status, 503, 'missing Report/Bench evidence refuses quality routing');
+        await h.db.prepare(`INSERT INTO bench_evidence(kind_id,category,model,provider,rating,ci_lower,ci_upper,games,provisional,updated_at)
+            VALUES('chat.reply','all','good','fixture',1400,1350,1450,20,0,?)`).run(new Date().toISOString());
+        assert.equal((await post('/v1/chat/completions', quality)).status, 200, 'the event-fed rating used by Report enables quality routing');
         const presets = require('../server/exchange/compat-presets').createCompatPresets(h.db);
         await presets.put(owner, { name: 'writer', model: 'fixture/good:free', system: 'fixture system', temperature: .2 });
         const preset = await post('/v1/chat/completions', { model: '@preset/writer', messages: body.messages });
@@ -73,9 +87,29 @@ const { createKeys } = require('../server/platform/keys');
         const images = await post('/v1/images/generations', { model: 'fixture/image', prompt: 'fixture' }, 'image-request-001');
         assert.equal(images.status, 200, images.text);
         assert.equal(images.body.data[0].b64_json, 'Zml4dHVyZQ==');
+        const msgBody = { model: 'fixture/claude', provider: { only: ['anthfixture'] }, max_tokens: 32, messages: body.messages, usage: { include: true } };
+        const message = await post('/v1/messages', msgBody, 'messages-request-001');
+        assert.equal(message.status, 200, message.text);
+        assert.equal(message.body.usage.provider, 'anthfixture');
+        const attempts = seen.length;
+        for (const [path, input, idem] of [
+            ['/v1/messages', msgBody, 'messages-request-001'],
+            ['/v1/embeddings', { model: 'fixture/embed', input: ['hello', 'world'] }, 'embedding-request-001'],
+            ['/v1/images/generations', { model: 'fixture/image', prompt: 'fixture' }, 'image-request-001'],
+            ['/v1/completions', { model: 'fixture/good', prompt: 'hello' }, 'legacy-request-001'],
+        ]) {
+            const replayed = await post(path, input, idem);
+            assert.equal(replayed.status, 200, replayed.text);
+            assert.equal(replayed.headers.get('x-openvibe-replayed'), '1');
+        }
+        assert.equal(seen.length, attempts, 'every new endpoint replays without another provider call');
+        const restricted = await keys.create(owner, { name: 'restricted', monthly_cap_usd: 1, allowed_models: ['fixture/good'] });
+        const denied = await request(h.base, 'POST', '/v1/chat/completions', { tok: restricted.secret, body });
+        assert.equal(denied.status, 403);
+        assert.equal((await h.db.prepare('SELECT id FROM exchange_key_usage WHERE key_id = ?').all(restricted.key.id)).length, 0, 'a disallowed fallback is rejected before reserve');
         await new Promise(resolve => setTimeout(resolve, 150));
         const rows = await h.db.prepare('SELECT * FROM exchange_key_usage WHERE key_id = ?').all(key.key.id);
-        assert.equal(rows.length, 6, 'fallback and replay share one hold; other calls each have one');
+        assert.equal(rows.length, 9, 'fallback and replay share one hold; other calls each have one');
         assert.ok(rows.every(row => row.status === 'settled'));
         assert.equal((await h.db.prepare('SELECT reserved FROM exchange_key_months WHERE key_id = ?').get(key.key.id)).reserved, 0);
         console.log('exchange-c2-execution: ok');
