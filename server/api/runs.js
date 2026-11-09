@@ -46,7 +46,9 @@ function runsRouter({ choices = null, runs, registry, auth, config, log = consol
             if (!appMayRun(req.principal, workflowKey)) throw new AiError(403, 'capability.namespace_denied', `an app may only run its own app.${req.principal.projectKey}.* namespace, not ${workflowKey}`);
             return;
         }
-        if (!namespaceAllowed(req.principal, workflowKey)) throw new AiError(403, 'capability.namespace_denied', `this token may not run ${workflowKey}`);
+        // content.devblog is the Blog writer's public workflow name; it uses the existing blog grant.
+        const permissionKey = workflowKey === 'content.devblog' ? 'blog.devblog.write' : workflowKey;
+        if (!namespaceAllowed(req.principal, permissionKey)) throw new AiError(403, 'capability.namespace_denied', `this token may not run ${workflowKey}`);
     }
 
     /**
