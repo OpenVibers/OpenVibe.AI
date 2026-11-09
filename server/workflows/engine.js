@@ -430,12 +430,11 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
 
     /** research: no model call. A developer app's run leaves the paid web search out (its DeepSeek calls are ours). */
     async function researchStep(step, input, wf, run, ctx) {
-        let output;
+        let output, answered = null, engineIndex = 0, candidates = [];
         try {
             // Search's own web ladder calls this endpoint for DeepSeek and Wikipedia. It must not be asked back
             // (Search -> AI research -> Search): every other caller gets the fabric first, Search keeps DeepSeek.
             const fromSearch = ctx.requesterType === 'service' && ctx.requesterId === 'search';
-            let answered = null, engineIndex = 0;
             if (ctx.taskChoice?.task.kind === 'search') {
                 // A search task runs the engines its choice names, in order: the owner's saved order when the owner's
                 // default won, else the chosen engine and the task's fallbacks. A disabled engine is never called, and
@@ -448,6 +447,11 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
                     ? plan.search_engines.filter((e) => e.enabled).map((e) => e.engine)
                     : [...new Set([asked, ...plan.fallbacks.map((c) => engineOf(c.model))])];
                 if (!ordered.length) throw new AiError(422, 'choice.unavailable', 'no search engine is enabled for this task');
+                candidates = ordered.map((engine) => ({
+                    provider: engine, model: `search/${engine}`,
+                    eligible: engine !== 'deepseek' || plan.max_cost_usd == null,
+                    excluded_reason: engine === 'deepseek' && plan.max_cost_usd != null ? 'cost ceiling has no per-run bound' : null,
+                }));
                 const images = plan.task.kind === 'search' && plan.task.name !== 'search.web';
                 for (const engine of ordered) {
                     if (ENGINES.includes(engine) === false) throw new AiError(422, 'choice.unavailable', `unknown search engine ${engine}`);
@@ -467,9 +471,9 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
         const exec = { provider: 'research', model: 'megasource', usage: { input: 0, output: 0, cached: 0 }, cost: Number(output.usage && output.usage.cost_usd) || 0, synthetic: false, fallbackUsed: false, explain: ctx.taskChoice ? {
             // The contract's explain needs an objective, a reason, what was selected and the candidates; a search
             // task's candidates are its engines, and the one that answered is the selection.
-            objective: 'exact', policy: 'exact',
+            objective: 'exact',
             reasons: [`search task ${ctx.taskChoice.task.name}: ${answered} answered`],
-            selected: `search/${answered}`, candidates: [],
+            selected: `search/${answered}`, candidates,
             task_choice: { task: ctx.taskChoice.task.name, requested: ctx.taskChoice.choice, answered: { model: `search/${answered}`, source: 'openvibe' }, why: ctx.taskChoice.why, fallback_index: engineIndex },
         } : null };
         return { output, exec };

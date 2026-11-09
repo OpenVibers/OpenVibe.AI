@@ -37,6 +37,14 @@ t.test('the seeded search tasks resolve to an engine and refuse a model',async()
  const value={signed_out:c('search/openverse'),signed_in:c('openverse/model'),fallbacks:[],image_model:null,search_engines:[],max_cost_usd:null};
  await assert.rejects(()=>store.putDefaults({defaults:[{task:'search.web',value}]},subject),e=>e.code==='choice.invalid');
 });
+t.test('a search task records a contract-valid run and the engines it considered',async()=>{
+ const r=await request(h.base,'POST','/api/v1/runs?wait=10000',{tok:svc,body:{task:'search.web',input:{query:'SQLite'}}});
+ assert.equal(r.status,201,r.text);
+ assert.equal(r.body.run.status,'succeeded',r.text);
+ for(const field of ['objective','reasons','selected','candidates']) assert(Object.hasOwn(r.body.run.explain,field),field);
+ assert.equal(r.body.run.explain.selected,'search/wikipedia');
+ assert.deepEqual(r.body.run.explain.candidates.map(c=>c.provider),['wikipedia']);
+});
 t.test('model choices reject extra fields and require machine identity',()=>{assert.throws(()=>choice({model:'x',source:'machines'}));assert.throws(()=>choice({...c('a/b'),api_key:'no'}));});
 t.test('precedence, cache expires in 60s, audit and only-my-keys',async()=>{
  let now=100000,prefs={defaults:{code:'kind/model'}};
