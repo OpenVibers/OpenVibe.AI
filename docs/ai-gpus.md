@@ -88,6 +88,45 @@ state, the measured cold start (from the launch to the first answered request), 
 with its price (the hour and the second), endpoint, cold start and money. "Start" and "Stop" write a request row;
 the reconciler (one implementation, the same one the service runs) does the work.
 
+## Public marketplace prices, and what a token costs
+
+The console's GPUs and supply sections also show what the cards cost on the public marketplaces, read from the
+providers' own pages by `server/gpu/market.js` (migration `0061_gpu_market_prices.sql`):
+
+| Source | Public page | What it publishes |
+| --- | --- | --- |
+| Vast.ai | `POST https://console.vast.ai/api/v0/bundles/` | the offer search (on demand and the minimum interruptible bid), with region and reliability |
+| RunPod | `https://www.runpod.io/pricing` | the Secure and Community Cloud on-demand columns (neither is a spot quote) |
+| Salad | `https://salad.com/pricing/` | High (never preempted) and Lowest (most interruptible) priority tiers |
+| TensorDock | `https://www.tensordock.com/` | the public "from" prices for its most popular enterprise cards |
+| CloudRift | `https://www.cloudrift.ai/pricing` | on-demand rates; H100 and H200 are quoted on request |
+
+The cards are RTX 3090, RTX 4090, RTX 5090, A100 80GB, H100 and H200. For each one the report gives the lowest
+on-demand and the lowest interruptible/spot hour, the provider, the region when the provider states it, the
+reliability words or score it publishes, and when it was read. The job signs in nowhere, rents nothing and stops
+nothing. It refreshes when due (six hours by default) and is off in tests and under a restore drill. A source that
+fails keeps its last rows and is marked `stale`; the console can still show the last known price, labelled.
+
+Both readings and the per-token cost they imply are on the admin API:
+
+- `GET /api/v1/admin/console/gpus`: `state` (the provisioner) plus `market` and `token_costs`;
+- `GET /api/v1/admin/console/supply`: the supply report plus the same `market` and `token_costs`;
+- `POST /api/v1/admin/console/gpus/prices/refresh`: read the public pages now (operator capability; still no rent).
+
+`token_costs` is one row per catalog model, GPU it fits, price kind and provider reading:
+
+```
+USD per million output tokens = hourly USD × 1,000,000 / throughput tokens per hour
+```
+
+The throughput and its source are on the row (the catalog's planning estimate today;
+`server/gpu/catalog.js`). `is_cheapest` marks the fresh floor for that model, card and kind. Each row also carries
+`cheapest_api`: the cheapest published API price for the same model, the same model family and weights
+(`same_family_weights`), the same family, or the same uncensored weights. If no comparable API model has a price,
+it is `null` rather than a guess. The console only renders this data; the page design stays in Exchange.
+
+Test coverage is `test/gpu-market.test.js` with saved pages in `test/fixtures/gpu-market/`; it makes no live call.
+
 ## Your own endpoint (the private rent)
 
 The Exchange's product line 6, "your own endpoint", is the same provisioner with a private rent on top

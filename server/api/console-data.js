@@ -7,11 +7,20 @@ const { AiError } = require('../util');
 const providerPresets = require('../console/presets');
 const providerCatalog = require('../providers/catalog');
 const poolSeed = require('../providers/pool-seed');
+const gpuCatalog = require('../gpu/catalog');
+const { tokenCosts } = require('../gpu/token-cost');
 
 /** Read-only JSON read models for Exchange's owner console. Every query is bounded and the query module redacts runs. */
-function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, gpus = null, abuse = null, priceBook = null, creditGrants = null, sessionCookies = null, vault = null, settings = null, config = {}, log = console }) {
+function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, gpus = null, gpuMarket = null, abuse = null, priceBook = null, creditGrants = null, sessionCookies = null, vault = null, settings = null, config = {}, log = console }) {
     const r = express.Router();
     const supply = require('../platform/supply').createSupply({ db, registry, clock });
+    // The public marketplace readings and the per-token cost they imply, added to both console sections. Data only:
+    // Exchange renders it with its existing console classes.
+    const marketPayload = async () => {
+        if (!gpuMarket) return { market: null, token_costs: [] };
+        const market = await gpuMarket.report();
+        return { market, token_costs: tokenCosts({ market, models: await registry.listModels(), catalog: gpuCatalog }) };
+    };
     const json = express.json({ limit: '64kb' });
     const read = auth.requireCap(CAPS.usageRead);
     const write = auth.requireCap(CAPS.providerManage);
@@ -26,7 +35,7 @@ function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth,
     };
     r.get('/api/v1/admin/console/:section', read, wrap(async (req) => {
         const section = req.params.section;
-        if (section === 'supply') return supply.report();
+        if (section === 'supply') return { ...await supply.report(), ...await marketPayload() };
         if (section === 'overview') {
             const since = new Date(clock.now() - 86400000).toISOString();
             return { status: await ops.status(), counts24: await q.statusCounts(db, since), failures24: await q.failures(db, since), queue: runs.stats(), cache: await cache.stats() };
@@ -70,7 +79,7 @@ function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth,
             const result = await q.listAudit(db, filters);
             return { rows: result.rows, next: result.next, filters: form, invalid_filters: bad, kinds: q.AUDIT_KINDS };
         }
-        if (section === 'gpus') return { state: gpus ? await gpus.state() : null };
+        if (section === 'gpus') return { state: gpus ? await gpus.state() : null, ...await marketPayload() };
         if (section === 'pricebook') return { report: priceBook ? priceBook.last : null, state: priceBook ? await priceBook.state.read() : null,
             pending: priceBook ? await priceBook.pending(50) : [], recent: priceBook ? await priceBook.changes({ status: 'applied', limit: 50 }) : [] };
         if (section === 'exchange') return { credits: await q.settleQueue(db, clock.now()), routing: await q.routingEvidence(db) };
@@ -81,6 +90,11 @@ function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth,
     r.get('/api/v1/admin/console/gpus/:model/quote', read, wrap(async (req) => {
         if (!gpus) throw new AiError(409, 'ai.conflict', 'GPU quotes are off on this host');
         return await gpus.preview(String(req.params.model), { strategy: req.query.strategy || undefined });
+    }));
+    // Read the public marketplace pages now instead of waiting for the due tick. It still never rents anything.
+    r.post('/api/v1/admin/console/gpus/prices/refresh', write, wrap(async () => {
+        if (!gpuMarket) throw new AiError(409, 'ai.conflict', 'GPU price sources are off on this host');
+        return { ...await gpuMarket.refresh(), ...await marketPayload() };
     }));
     r.post('/api/v1/admin/console/supply/quotes', json, write, wrap(async req => ({ recorded: await require('../pricebook/gpus').recordGpuQuotes(db, JSON.stringify(req.body.quotes)), dry_run: true })));
     r.post('/api/v1/admin/console/supply', json, write, wrap(req => supply.save(req.body || {}, actor(req))));

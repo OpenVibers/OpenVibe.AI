@@ -9,10 +9,16 @@ const { SOURCES } = require('../server/pricebook/sources');
 const { PROVIDERS } = require('../server/providers/pool-providers');
 const { boot, request, suite } = require('./helpers');
 const dev = require('./fixtures/market/models-dev.json');
-const files = { deepseek:'deepseek.md', qwen:'qwen.html', kimi:'kimi.html', glm:'glm.md', minimax:'minimax.md', deepinfra:'deepinfra.json', novita:'novita.json', featherless:'featherless.json', refuseless:'refuseless.md', abliteration:'abliteration.md' };
+// Each own source saves its page under its own key; discover the extension so a new source does not break the replay.
+const fixtureFor = (key) => {
+    const dir = path.join(__dirname, 'fixtures/pricebook');
+    const name = fs.readdirSync(dir).find((entry) => entry.startsWith(key + '.'));
+    if (!name) throw new Error(`no saved pricebook page for ${key}`);
+    return name;
+};
 const observations = [];
 for (const s of SOURCES.filter(s => s.role === 'own')) {
-    const raw = fs.readFileSync(path.join(__dirname, 'fixtures/pricebook', files[s.key] || `${s.key}.json`), 'utf8');
+    const raw = fs.readFileSync(path.join(__dirname, 'fixtures/pricebook', fixtureFor(s.key)), 'utf8');
     for (const [model_key, price] of Object.entries(s.parse(s.kind === 'json' ? JSON.parse(raw) : raw))) observations.push({ provider_key: s.provider, model_key, price, source: s.url, checked_at: '2026-11-09' });
 }
 const t = suite('exchange-market'); let h;
