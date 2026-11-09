@@ -30,7 +30,7 @@ const SEEDS = [
     ['image.generate', 'image', 'Make an image from a description.', 'ai.image'],
     ['search.web', 'search', 'Find sources on the web.', 'research.gather'],
     ['search.images', 'search', 'Find licensed images.', 'research.gather'],
-    ['blog.changelog.tag', 'text', 'Describe and tag a shipped change.', 'ai.generate'],
+    ['blog.changelog.tag', 'text', 'Describe and tag a shipped change.', 'blog.changelog.tag'],
 ];
 
 const MODEL_RE = /^[a-zA-Z0-9._:/@+\-]{1,200}$/;
@@ -109,6 +109,10 @@ function createChoices({ db, registry, preferences, credentials, machines, catal
         // signed out the cheapest good model, signed in Claude.
         await db.prepare('INSERT INTO ai_task_defaults (task, value, updated_by, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT (task) DO NOTHING')
             .run('design.icon', JSON.stringify({ signed_out: built('openvibe/cheapest'), signed_in: built('anthropic/claude-opus-5-5'), fallbacks: [built('openvibe/cheapest')], image_model: null, search_engines: [], max_cost_usd: 0.5 }), 'seed', iso(clock.now()));
+        // Blog's changelog tagger runs on every batch of collected commits: the cheapest good model, signed out
+        // and in, with a small per-batch ceiling. The owner can change it on Exchange like any task default.
+        await db.prepare('INSERT INTO ai_task_defaults (task, value, updated_by, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT (task) DO NOTHING')
+            .run('blog.changelog.tag', JSON.stringify({ signed_out: built('openvibe/cheapest'), signed_in: built('openvibe/cheapest'), fallbacks: [built('openvibe/cheapest')], image_model: null, search_engines: [], max_cost_usd: 0.1 }), 'seed', iso(clock.now()));
     }
 
     async function register(body, service) {

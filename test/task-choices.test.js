@@ -11,11 +11,13 @@ const c=model=>({model,source:'openvibe'});
 t.test('catalogue, personal isolation and admin role gate',async()=>{
  h=await boot({dir:tmpDir()});
  let r=await request(h.base,'GET','/api/v1/tasks');assert.equal(r.status,200,r.text);assert(r.body.tasks.some(t=>t.name==='design.icon'));
+ const changelogTask=r.body.tasks.find(t=>t.name==='blog.changelog.tag');assert.equal(changelogTask.workflow,'blog.changelog.tag');
  r=await request(h.base,'PUT','/api/v1/me/choices/design.icon',{tok:svc,body:c('a/b')});assert.equal(r.status,403);
  r=await request(h.base,'PUT','/api/v1/me/choices/design.icon',{tok:user('user'),body:c('a/b')});assert.equal(r.status,200,r.text);
  r=await request(h.base,'GET','/api/v1/admin/task-defaults',{tok:user('user')});assert.equal(r.status,403);
  r=await request(h.base,'GET','/api/v1/admin/task-defaults',{tok:svc});assert.equal(r.status,403);
  r=await request(h.base,'GET','/api/v1/admin/task-defaults',{tok:user('admin')});assert.equal(r.status,200,r.text);assert.equal(r.body.defaults['design.icon'].signed_in.model,'anthropic/claude-opus-5-5');
+ assert.equal(r.body.defaults['blog.changelog.tag'].signed_out.model,'openvibe/cheapest');assert.equal(r.body.defaults['blog.changelog.tag'].signed_in.model,'openvibe/cheapest');
  r=await request(h.base,'POST','/api/v1/tasks',{tok:svc,body:{name:'wiki.foreign',kind:'text',sentence:'No.',default:c('a/b')}});assert.equal(r.status,422);
 });
 t.test('a site session saves a choice only from a first-party origin, and search preferences are kept',async()=>{
