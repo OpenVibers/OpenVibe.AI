@@ -1,0 +1,20 @@
+{
+  "response": {
+    "items": [
+      {
+        "title": "Lantern",
+        "link": "https://example.org/article",
+        "snippet": "A new lantern"
+      }
+    ]
+  },
+  "request": {
+    "host": "customsearch.googleapis.com",
+    "path": "/customsearch/v1",
+    "method": "GET"
+  },
+  "expected": {
+    "title": "Lantern",
+    "cost": 0.005
+  }
+}

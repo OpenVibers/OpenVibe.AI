@@ -1,0 +1,27 @@
+{
+  "response": {
+    "results": [
+      {
+        "title": "Cat",
+        "url": "https://example.org/article",
+        "properties": {
+          "url": "https://images.example.org/cat.jpg",
+          "width": 2400,
+          "height": 1600
+        },
+        "thumbnail": {
+          "src": "https://images.example.org/thumb.jpg"
+        }
+      }
+    ]
+  },
+  "request": {
+    "host": "api.search.brave.com",
+    "path": "/res/v1/images/search",
+    "method": "GET"
+  },
+  "expected": {
+    "title": "Cat",
+    "cost": 0.005
+  }
+}

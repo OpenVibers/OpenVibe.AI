@@ -1,0 +1,24 @@
+{
+  "response": {
+    "hits": [
+      {
+        "tags": "Cat",
+        "largeImageURL": "https://images.example.org/cat.jpg",
+        "previewURL": "https://images.example.org/thumb.jpg",
+        "imageWidth": 2400,
+        "imageHeight": 1600,
+        "user": "Alex",
+        "pageURL": "https://example.org/article"
+      }
+    ]
+  },
+  "request": {
+    "host": "pixabay.com",
+    "path": "/api/",
+    "method": "GET"
+  },
+  "expected": {
+    "title": "Cat",
+    "cost": 0
+  }
+}

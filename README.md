@@ -1084,3 +1084,7 @@ Part of the [OpenVibe network](https://openvibe.network). Built in the open by [
 - openvibe-sdk: v0.125.0
 - openvibe-shared: v4.175.0
 <!-- versions:end -->
+
+### Exchange search engines
+
+The web, image, icon and fetch APIs, provider configuration, verified tariffs, personal keys and receipts are documented in [docs/search-engines.md](docs/search-engines.md). `GET /api/v1/exchange/search/engines` publishes the current adapter catalog; `/openapi.json` describes all four search/fetch endpoints.

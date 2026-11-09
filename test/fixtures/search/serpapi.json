@@ -1,0 +1,21 @@
+{
+  "response": {
+    "organic_results": [
+      {
+        "title": "Lantern",
+        "link": "https://example.org/article",
+        "snippet": "A new lantern",
+        "date": "2026-11-08T12:00:00Z"
+      }
+    ]
+  },
+  "request": {
+    "host": "serpapi.com",
+    "path": "/search.json",
+    "method": "GET"
+  },
+  "expected": {
+    "title": "Lantern",
+    "cost": 0.025
+  }
+}

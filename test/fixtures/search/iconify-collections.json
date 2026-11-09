@@ -1,0 +1,12 @@
+{
+  "demo": {
+    "license": {
+      "spdx": "MIT",
+      "url": "https://example.org/license"
+    },
+    "author": {
+      "name": "Alex",
+      "url": "https://example.org"
+    }
+  }
+}

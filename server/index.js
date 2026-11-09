@@ -32,7 +32,7 @@ const { AiError } = require('./util');
 const { gracefulStop, telemetry } = require('openvibe-sdk/service');
 const { createPgTelemetrySink, startTelemetryRetention } = require('openvibe-sdk/telemetry');
 
-async function start({ config, db: givenDb = null, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, listen = true, credentialFetch = null, valkey = null, research = null, machineModels = null, variantEvidence = null, community: givenCommunity = null, communityEndpoints: givenEndpoints = null, webhooks: givenWebhooks = null, abuse: givenAbuse = null, memoryTransport = null, memoryLookup = null } = {}) {
+async function start({ searchFetch = null, config, db: givenDb = null, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, listen = true, credentialFetch = null, valkey = null, research = null, machineModels = null, variantEvidence = null, community: givenCommunity = null, communityEndpoints: givenEndpoints = null, webhooks: givenWebhooks = null, abuse: givenAbuse = null, memoryTransport = null, memoryLookup = null } = {}) {
     config = config || load(env);
     schemas.configure(config.schemaCache);
     // PostgreSQL (ADR-035): opened and migrated here unless the caller (a test) hands in a migrated handle.
@@ -205,7 +205,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         clientSecret: env.OV_OAUTH_CLIENT_SECRET, fetch: fetchImpl,
     }) : null;
     const benchEvents = createBenchEvents({ bench, accountData, accountSend, config, log, fetchImpl, clientSecret: env.OV_OAUTH_CLIENT_SECRET });
-    const app = createApp({ choices, config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, grants, vault, settings, benchEvents, runBudgets, memory, memoryImport, memoryServices, memorySharing, community, endpoints, webhooks, presets, receipts, balance, creditGrants, sessionCookies, gpus, abuse, priceBook, ownEndpoints, refusal, batches });
+    const app = createApp({ choices, searchFetch, config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, grants, vault, settings, benchEvents, runBudgets, memory, memoryImport, memoryServices, memorySharing, community, endpoints, webhooks, presets, receipts, balance, creditGrants, sessionCookies, gpus, abuse, priceBook, ownEndpoints, refusal, batches });
     let jwks = null;
     let keyLoaded = Promise.resolve(null);
     if (!keys.pinned && config.nodeEnv !== 'test') {

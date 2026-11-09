@@ -4,12 +4,12 @@ const { CAPS } = require('../auth');
 const { AiError, sendError } = require('../util');
 const { createKeys } = require('./keys');
 const { claimRequest } = require('./idempotency');
-const { createSearch } = require('../search');
-function platform({ db, auth, clock, log, searchFetch }) {
+const { createSearch, CHARGE } = require('../search');
+function platform({ db, auth, clock, log, searchFetch, credentials, env = process.env }) {
     const keys = createKeys({ db, clock });
     const search = createSearch({
         ...(searchFetch ? { fetchImpl: searchFetch } : {}),
-        now: () => clock.now(),
+        now: () => clock.now(), credentials, env,
     });
     const r = express.Router();
     const wrap = (fn) => async (req, res) => {
@@ -18,6 +18,7 @@ function platform({ db, auth, clock, log, searchFetch }) {
             const out = await fn(req, res);
             if (out !== undefined) res.json(out);
         } catch (e) {
+            if (e[CHARGE] != null) res.locals.searchCharge = e[CHARGE];
             sendError(res, e, req.ov, log);
         }
     };
@@ -54,6 +55,10 @@ function platform({ db, auth, clock, log, searchFetch }) {
         person,
         wrap((req) => keys.usage(owner(req))),
     );
+    const searchContext = req => ({
+        subject: req.principal?.kind === 'user' ? req.principal.subject.id : null,
+        plan: req.searchPlan, budget: req.searchBudget,
+    });
     r.get('/api/v1/exchange/search/engines', (_req, res) =>
         res.json({ engines: search.engines() }),
     );
@@ -65,10 +70,12 @@ function platform({ db, auth, clock, log, searchFetch }) {
         for (const [key, value] of searchWindows)
             if (value.until <= now) searchWindows.delete(key);
         const entry = searchWindows.get(id) || { until: now + 60000, count: 0 };
-        if (entry.count >= 60)
+        if (entry.count >= 60) {
+            res.locals.searchCharge = 0;
             return res
                 .status(429)
                 .json({ error: 'Search limit reached; try again in a minute' });
+        }
         entry.count++;
         searchWindows.set(id, entry);
         next();
@@ -78,13 +85,13 @@ function platform({ db, auth, clock, log, searchFetch }) {
             '/v1/search' + (kind === 'web' ? '' : '/' + kind),
             allow,
             searchLimit,
-            wrap(async (req) => search.search(kind, req.body || {})),
+            wrap(async (req) => search.search(kind, req.body || {}, searchContext(req))),
         );
     r.post(
         '/v1/fetch',
         allow,
         searchLimit,
-        wrap((req) => search.read(req.body?.url)),
+        wrap((req) => search.read(req.body || {}, searchContext(req))),
     );
     // Exchange keys only enter inference and the search surface. They never authorize management routes.
     async function keyMiddleware(req, res, next) {
@@ -124,16 +131,25 @@ function platform({ db, auth, clock, log, searchFetch }) {
                 throw new AiError(403, 'exchange.model_denied', 'This model is not allowed by this key');
             if (inference && req.get('idempotency-key'))
                 claim = await claimRequest(db, key.owner, req.get('idempotency-key'), req.body);
-            const hold = models || claim?.replay
-                ? null
-                : await keys.reserve(
-                      key,
-                      isSearch
-                          ? 'search:' + req.path
-                          : String(req.body?.model || ''),
-                      isSearch,
-                      Number.isFinite(req.body?.max_cost_usd) ? req.body.max_cost_usd : null,
-                  );
+            if (isSearch) {
+                const kind = req.path === '/v1/fetch' ? 'fetch' : req.path.split('/')[3] || 'web';
+                req.searchPlan = await search.prepare(kind, req.body || {}, { subject: key.owner });
+            }
+            const searchCeiling = req.searchPlan?.ceiling || 0;
+            const hold = models || claim?.replay ? null : await keys.reserve(
+                key, isSearch ? 'search:' + req.path : String(req.body?.model || ''),
+                isSearch && searchCeiling === 0,
+                isSearch ? searchCeiling : Number.isFinite(req.body?.max_cost_usd) ? req.body.max_cost_usd : null,
+                isSearch,
+            );
+            if (isSearch) {
+                req.searchBudget = hold.amount;
+                const minimum = Math.min(...req.searchPlan.candidates.map(c => c.own ? 0 : c.ceiling));
+                if (hold.amount + 1e-12 < minimum) {
+                    await hold.settle({ cost_usd: 0 });
+                    throw new AiError(429, 'exchange.key_cap', 'The remaining key cap cannot cover this search');
+                }
+            }
             if (inference && !(claim?.replay && claim.maxCost === null)) {
                 req.body.max_cost_usd = claim?.replay ? claim.maxCost : Math.min(
                     hold.amount,
@@ -183,9 +199,10 @@ function platform({ db, auth, clock, log, searchFetch }) {
                         }
                     const usage = result?.usage || {};
                     const cost =
-                        (isSearch || res.getHeader('x-openvibe-replayed') === '1') && res.statusCode < 400
-                            ? 0
-                            : result?.x_openvibe?.cost_usd;
+                        isSearch ? result?.[CHARGE] ?? res.locals.searchCharge
+                            : res.getHeader('x-openvibe-replayed') === '1' && res.statusCode < 400
+                                ? 0 : result?.x_openvibe?.cost_usd;
+                    // Search uses only its own charge, never inference metadata.
                     // An early disconnect can precede run insertion. Keep its claim
                     // until a response finishes so a retry cannot take another hold.
                     hold.settle({

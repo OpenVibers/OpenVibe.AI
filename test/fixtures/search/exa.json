@@ -1,0 +1,26 @@
+{
+  "response": {
+    "results": [
+      {
+        "title": "Lantern",
+        "url": "https://example.org/article",
+        "highlights": [
+          "A new lantern"
+        ],
+        "publishedDate": "2026-11-08T12:00:00Z"
+      }
+    ],
+    "costDollars": {
+      "total": 0.007
+    }
+  },
+  "request": {
+    "host": "api.exa.ai",
+    "path": "/search",
+    "method": "POST"
+  },
+  "expected": {
+    "title": "Lantern",
+    "cost": 0.007
+  }
+}

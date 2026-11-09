@@ -1,0 +1,26 @@
+{
+  "response": {
+    "data": [
+      {
+        "t": 1,
+        "title": "Image block"
+      },
+      {
+        "t": 0,
+        "title": "Lantern",
+        "url": "https://example.org/article",
+        "snippet": "A new lantern",
+        "published": "2026-11-08T12:00:00Z"
+      }
+    ]
+  },
+  "request": {
+    "host": "kagi.com",
+    "path": "/api/v0/search",
+    "method": "GET"
+  },
+  "expected": {
+    "title": "Lantern",
+    "cost": 0.025
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "response": {
+    "photos": [
+      {
+        "alt": "Cat",
+        "src": {
+          "original": "https://images.example.org/cat.jpg",
+          "medium": "https://images.example.org/thumb.jpg"
+        },
+        "width": 2400,
+        "height": 1600,
+        "photographer": "Alex",
+        "photographer_url": "https://www.pexels.com/@alex",
+        "url": "https://example.org/article"
+      }
+    ]
+  },
+  "request": {
+    "host": "api.pexels.com",
+    "path": "/v1/search",
+    "method": "GET"
+  },
+  "expected": {
+    "title": "Cat",
+    "cost": 0
+  }
+}
