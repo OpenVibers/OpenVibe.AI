@@ -439,7 +439,11 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
             if (err && err.status === 422) throw new AiError(422, 'input.invalid', err.message);
             throw err;
         }
-        if (!output.sources.length && !output.images.length) throw new AiError(502, 'source.unavailable', `no source answered for "${output.query}"`, { providers: output.providers });
+        if (!output.sources.length && !output.images.length) {
+            // A writer already has its article's sources: web search finding nothing new is not a failed run.
+            if (Array.isArray(input.sources) && input.sources.length) output = { ...output, sources: input.sources };
+            else throw new AiError(502, 'source.unavailable', `no source answered for "${output.query}"`, { providers: output.providers });
+        }
         // Recorded like a provider call: DeepSeek's per-call price counts against the cost quotas and the daily usage.
         const exec = { provider: 'research', model: 'megasource', usage: { input: 0, output: 0, cached: 0 }, cost: Number(output.usage && output.usage.cost_usd) || 0, synthetic: false, fallbackUsed: false, explain: null };
         return { output, exec };
