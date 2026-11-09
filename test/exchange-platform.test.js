@@ -30,21 +30,20 @@ const { decide, adapter } = require('../server/platform/supply');
             keys.reserve(key, 'other'),
             (e) => e.status === 403,
         );
-        const holds = await Promise.allSettled([
-            keys.reserve(key, 'model'),
-            keys.reserve(key, 'model'),
-        ]);
-        assert.equal(holds.filter((x) => x.status === 'fulfilled').length, 1);
-        await holds
-            .find((x) => x.status === 'fulfilled')
-            .value.settle({ cost_usd: 2, tokens_in: 5, tokens_out: 6 });
-        const next = await keys.reserve(key, 'model');
-        assert.equal(next.amount, 8);
-        await next.settle({ cost_usd: 8 });
-        await assert.rejects(
-            keys.reserve(key, 'model'),
-            (e) => e.status === 429,
-        );
+        // Calls run side by side: each holds its own ceiling ($1 by default), and holds add up to the cap.
+        const holds = await Promise.all([keys.reserve(key, 'model'), keys.reserve(key, 'model')]);
+        assert.deepEqual(holds.map((x) => x.amount), [1, 1]);
+        await holds[0].settle({ cost_usd: 0.25, tokens_in: 5, tokens_out: 6 });
+        await holds[1].settle({});   // the cost never came (the client hung up): the hold is charged
+        // A call's own max_cost_usd is its hold, never more than what is left: 10 - 0.25 - 1 = 8.75.
+        const big = await keys.reserve(key, 'model', false, 50);
+        assert.equal(big.amount, 8.75);
+        await assert.rejects(keys.reserve(key, 'model'), (e) => e.status === 429, 'the cap is fully held');
+        await big.settle({ cost_usd: 0.5 });
+        const after = await keys.reserve(key, 'model', false, 100);
+        assert.equal(after.amount, 8.25, 'the unused hold came back');
+        await after.settle({ cost_usd: 8.25 });
+        await assert.rejects(keys.reserve(key, 'model'), (e) => e.status === 429, 'the cap is spent');
         await assert.rejects(
             keys.revoke('bob', key.id),
             (e) => e.status === 404,

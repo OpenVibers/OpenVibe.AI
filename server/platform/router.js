@@ -125,6 +125,7 @@ function platform({ db, auth, clock, log, searchFetch }) {
                           ? 'search:' + req.path
                           : String(req.body?.model || ''),
                       isSearch,
+                      Number.isFinite(req.body?.max_cost_usd) ? req.body.max_cost_usd : null,
                   );
             if (inference) {
                 req.body.max_cost_usd = Math.min(
@@ -155,7 +156,9 @@ function platform({ db, auth, clock, log, searchFetch }) {
                     tail = (tail + String(chunk)).slice(-65536);
                     return write(chunk, ...args);
                 };
-                res.once('finish', () => {
+                // 'close' without 'finish' is a client that hung up: the hold still settles (at the hold, when
+                // the cost is unknown), or the key would keep it until the month ends.
+                const done = () => {
                     if (!result && tail)
                         for (const line of tail
                             .split('\n')
@@ -179,7 +182,9 @@ function platform({ db, auth, clock, log, searchFetch }) {
                     }).catch(() =>
                         log.error('Exchange usage settlement failed'),
                     );
-                });
+                };
+                res.once('finish', done);
+                res.once('close', done);
             }
             next();
         } catch (e) {
