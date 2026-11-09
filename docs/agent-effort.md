@@ -73,6 +73,6 @@ Catalog offers expose `cache_hit_share_7d`: cached input tokens / total input to
 from successful, non-synthetic provider attempts in seven days, clamped to [0,1]. No
 samples yields null. This is provider token-cache usage, distinct from whole-run reuse.
 
-Migration 0057 is expand-only, above main's 0055 and open PRs' 0056 at implementation.
+Migration 0058 is expand-only, above main's 0056 and open PR #409's 0057 at validation.
 It adds only role policy storage and a receipt time index. Tests use fixture responses
 and temporary databases; no paid provider calls, production writes or deployment.
