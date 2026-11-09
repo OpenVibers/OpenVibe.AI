@@ -26,6 +26,7 @@ const PERSON_RUN = `on_behalf_of IS NOT NULL AND on_behalf_of::jsonb ->> 'type' 
 const RUN_COLUMNS = 'id, workflow_key, workflow_version, template_key, template_version, route_key, status, model_key, provider_key, input, output, citations_count, error_code, error_detail, tokens_in, tokens_out, cost_usd, created_at, started_at, finished_at';
 
 const TABLES = [
+    { table: 'exchange_compat_presets', subject: 'owner', file: 'exchange-request-presets.json', columns: ['name', 'definition'], erase: 'delete' },
     { table: 'exchange_api_keys', subject: 'owner', file: 'exchange-keys.json', columns: ['id','name','prefix','monthly_cap_usd','allowed_models','created_at','revoked_at','expires_at'], erase: { keep: 'extraErase deletes key usage and cap rows before deleting keys' } },
     { table: 'exchange_key_requests', subject: 'owner', file: 'exchange-key-requests.json', columns: ['idempotency_key','request_hash','max_cost_usd'], erase: 'delete' },
     { table: 'exchange_supply_settings', subject: 'actor', file: null, erase: { keep: 'owner pricing decisions are the operator audit trail' } },

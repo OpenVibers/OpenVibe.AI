@@ -107,6 +107,7 @@ const { createKeys } = require('../server/platform/keys');
         const message = await post('/v1/messages', msgBody, 'messages-request-001');
         assert.equal(message.status, 200, message.text);
         assert.equal(message.body.usage.provider, 'anthfixture');
+        assert.equal((await request(h.base, 'GET', '/v1/generation?id=' + message.body.id, { tok: key.secret })).status, 200);
         const attempts = seen.length;
         for (const [path, input, idem] of [
             ['/v1/messages', msgBody, 'messages-request-001'],
