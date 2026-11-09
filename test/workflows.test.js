@@ -37,6 +37,7 @@ const EXAMPLES = {
     'ai.embed': { input: ['one', 'two'] },
     'ai.image': { prompt: 'A goose eating croutons, watercolour.', size: '1024x1024', n: 1 },
     'wiki.generate_space': { topic: 'SQLite', max_pages: 6, sources: SRC(2) },
+    'content.wiki': { title: 'SQLite', topic: 'SQLite', space: 'SQLite', query: 'SQLite', instruction: 'Write the article from its sources.', outline: ['History'], pages: ['SQLite'], sources: SRC(2) },
     'wiki.generate_page': { title: 'WAL mode', topic: 'SQLite', pages: ['SQLite', 'WAL mode', 'Journal'], images: [{ title: 'WAL diagram', description: 'How WAL writes' }], sources: SRC(3) },
     'research.gather': { query: 'SQLite', max_images: 4 },
     'blog.draft_post': { topic: 'Why we self-host', sources: SRC(1) },
@@ -103,7 +104,7 @@ t.test('boot seeds every required workflow key', async () => {
     // AI_IMAGE_MODEL seeds default.image, so ai.image runs end to end on the stub's PNG like every other workflow.
     h = await boot({ env: { OV_MEDIA_INTERNAL_URL: mediaBase, AI_IMAGE_MODEL: 'gpt-image-1' } });
     const keys = (await h.registry.listWorkflows()).map(w => w.key);
-    for (const k of ['wiki.generate_space', 'wiki.generate_page', 'blog.draft_post', 'blog.write_digest', 'blog.write_satire', 'news.summarize_story', 'news.compare_perspectives', 'reviews.summarize_entity', 'deals.enrich_deal',
+    for (const k of ['content.wiki', 'wiki.generate_space', 'wiki.generate_page', 'blog.draft_post', 'blog.write_digest', 'blog.write_satire', 'news.summarize_story', 'news.compare_perspectives', 'reviews.summarize_entity', 'deals.enrich_deal',
         'coupons.extract_coupon', 'trade.summarize_market_context', 'codes.generate_docs', 'games.generate_lore', 'moderation.classify', 'tools.describe', 'food.suggest_recipes', 'food.read_pantry_photo', 'pics.describe_image', 'rent.screen_listing', 'chat.member.reply', 'chat.member.turn', 'chat.vibe.listen',
         'live.translate', 'live.stream.describe_frame', 'live.stream.summarize', 'live.viewers.reply', 'live.chat.insight', 'live.hero.slogans', 'live.stream.recap', 'network.site_copy']) {
         assert.ok(keys.includes(k), `missing ${k}`);
@@ -142,20 +143,23 @@ t.test('every workflow runs end to end on the stub and returns schema-valid outp
         const run = r.body.run;
         assert.strictEqual(run.status, 'succeeded', `${w.key}: ${JSON.stringify(run.error)}`);
         // Research calls no model: it reads (here, the canned web of test/fixtures/research-fetch.js) and is never synthetic.
-        const reads = w.steps.some((s) => s.kind === 'research');
-        assert.strictEqual(run.synthetic, !reads, `${w.key} should ${reads ? 'not ' : ''}be marked synthetic`);
+        const researchOnly = w.steps.length === 1 && w.steps[0].kind === 'research';
+        assert.strictEqual(run.synthetic, !researchOnly, `${w.key} should ${researchOnly ? 'not ' : ''}be marked synthetic`);
         assert.strictEqual(run.provenance.origin, 'ai');
         assert.strictEqual(run.provenance.workflow, w.key);
         assert.ok(run.provenance.model, `${w.key} has a model`);
         assert.ok(schemas.validate(w.output_schema, run.output).valid, `${w.key} output invalid`);
-        if (reads) { assert.ok(run.output.sources.length && Array.isArray(run.grounding.gaps)); continue; }
+        if (researchOnly) { assert.ok(run.output.sources.length && Array.isArray(run.grounding.gaps)); continue; }
         // WS-O task 3: every output says what backs it: cited sources, or explicit gaps.
         assert.ok(run.grounding && Array.isArray(run.grounding.cited) && Array.isArray(run.grounding.gaps), `${w.key} has grounding`);
         assert.ok(run.grounding.cited.length || run.grounding.gaps.length, `${w.key}: citations or explicit gaps`);
         if (EXAMPLES[w.key].sources) {
-            assert.strictEqual(run.citations_count, EXAMPLES[w.key].sources.length, `${w.key} citations`);
+            // A research step adds what it read to the caller's sources; a writing run's list only grows.
+            const researches = w.steps.some((s) => s.kind === 'research');
+            if (researches) assert.ok(run.citations_count >= EXAMPLES[w.key].sources.length, `${w.key} citations`);
+            else assert.strictEqual(run.citations_count, EXAMPLES[w.key].sources.length, `${w.key} citations`);
             const d = await request(h.base, 'GET', `/api/v1/runs/${run.id}`, { tok });
-            assert.strictEqual(d.body.citations.length, EXAMPLES[w.key].sources.length);
+            assert.ok(d.body.citations.length >= EXAMPLES[w.key].sources.length);
             assert.ok(d.body.citations.every(c => c.source_type && c.content_hash), 'citations carry type and content hash');
         }
     }

@@ -328,6 +328,23 @@ const PREPARE = {
             },
         };
     },
+    // The wiki writer (content.wiki): the numbered sources, the outline and the pages it may link.
+    'content.wiki'(input) {
+        const outline = (Array.isArray(input.outline) ? input.outline : []).map((h) => clean(h, 300)).filter(Boolean).slice(0, 30);
+        const pages = (Array.isArray(input.pages) ? input.pages : []).map((t) => clean(t, 200)).filter(Boolean).slice(0, 60);
+        return {
+            vars: {
+                ...input,
+                topic: input.topic || input.title,
+                space: input.space || input.topic || input.title,
+                instruction: input.instruction ? clean(input.instruction, 4000) : '',
+                outline_block: outline.map((h, i) => `${i + 1}. ${h}`).join('\n'),
+                pages_block: pages.map((t) => `- ${t}`).join('\n'),
+                sources_block: sourcesBlock(input.sources),
+                source_count: (input.sources || []).length,
+            },
+        };
+    },
     'pics.describe_image'(input) {
         return { vars: { title: clean(input.title, 120) || '' } };
     },

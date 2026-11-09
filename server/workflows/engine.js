@@ -466,10 +466,20 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
         let saved = 0;
         let exec = null;
         let jsonSchema = null;
+        let researchOut = null;
         for (const step of wf.steps) {
             const fn = STEP[step.kind];
             if (!fn) throw new AiError(500, 'workflow.broken', `unknown step kind ${step.kind}`);
             last = await fn(step, input, wf, run, ctx);
+            // A research step feeds the steps after it: what it read joins input.sources, with the caller's own
+            // sources first and no URL twice, so the writer cites the numbered list it was shown.
+            if (step.kind === 'research' && last && last.output) {
+                researchOut = last.output;
+                const before = Array.isArray(input.sources) ? input.sources : [];
+                const seen = new Set(before.map((s) => s && s.url).filter(Boolean));
+                const added = (Array.isArray(last.output.sources) ? last.output.sources : []).filter((s) => s && s.url && !seen.has(s.url));
+                if (added.length) input = { ...input, sources: [...before, ...added] };
+            }
             if (last.exec) {
                 exec = last.exec;
                 usage.input += exec.usage.input || 0;
@@ -493,7 +503,16 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
         }));
         return {
             output: last.output, citations, jsonSchema,
-            grounding: wf.steps.some((s) => s.kind === 'research') ? researchGrounding(last.output) : groundingOf(last.output, sources.length, citeStep),
+            grounding: researchOut
+                ? (wf.steps.length === 1
+                    ? researchGrounding(researchOut)
+                    : (() => {
+                        // A workflow that researches and then writes: what was read, and what the answer cites.
+                        const read = researchGrounding(researchOut);
+                        const wrote = groundingOf(last.output, sources.length, citeStep);
+                        return { ...read, cited: wrote.cited, gaps: [...read.gaps, ...wrote.gaps].slice(0, 20) };
+                    })())
+                : groundingOf(last.output, sources.length, citeStep),
             synthetic: Boolean(exec && exec.synthetic),
             provider: exec ? exec.provider : null, model: exec ? exec.model : null, fallbackUsed: Boolean(exec && exec.fallbackUsed),
             ...(exec && exec.result && exec.result.label ? { contentPolicy: exec.result.policy || 'uncensored', label: exec.result.label } : {}),
