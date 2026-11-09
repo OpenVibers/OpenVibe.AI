@@ -247,6 +247,7 @@ function messagesRouter({ runs, auth, config, registry, presets = null, receipts
             const created = await runs.create(body, req.principal, { trace: req.ov && req.ov.traceId, requestId: req.ov && req.ov.requestId, abuse: req.abuse,
                 ...(live ? { onDelta: live.event } : {}),
                 ...(live && config.modelCatalog && config.modelCatalog.enabled ? { onRoute: (info) => live.route(info) } : {}) });
+            res.locals.inferenceAdmitted = true;
             if (created.created === false) res.setHeader('x-openvibe-replayed', '1');
             if (live) live.open(created.run);
             run = await runs.explained(await runs.wait(created, Math.max(config.runs.maxWaitMs, 120000)));
@@ -255,7 +256,7 @@ function messagesRouter({ runs, auth, config, registry, presets = null, receipts
             if ((err && err.status) >= 500) log.warn(`[ai] /v1/messages: ${err && err.message}`);
             return anthropicError(res, (err && err.status) || 500, err && (err.detail || err.message), err && err.code === 'credential.unsupported' ? 'invalid_request_error' : null);
         }
-        if (['succeeded', 'cached', 'failed', 'cancelled'].includes(run.status)) res.locals.inferenceCharge = Number(run.usage.cost_usd || 0);
+        if (['succeeded', 'cached'].includes(run.status) || (['failed', 'cancelled'].includes(run.status) && run.usage.attempts === 0)) res.locals.inferenceCharge = Number(run.usage.cost_usd || 0);
         if (live && (run.status === 'failed' || run.status === 'cancelled' || !run.output || !Array.isArray(run.output.content))) {
             const code = (run.error && run.error.code) || (['failed', 'cancelled'].includes(run.status) ? 'run.failed' : 'run.timeout');
             return live.fail((run.error && run.error.detail) || (code === 'run.timeout' ? `the message is still running; GET /api/v1/runs/${run.id}` : code), code);

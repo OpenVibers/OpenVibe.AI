@@ -37,7 +37,8 @@ saved sampling/routing fields. Preset edits change the idempotent request finger
 `POST /v1/completions` supports one string prompt and streaming through chat completions.
 `POST /v1/embeddings` supports strings/string arrays with float vectors (no token-id
 arrays or dimension override). `POST /v1/images/generations` uses the existing image
-adapter and requires a configured image route; no provider is enabled by this change.
+adapter and requires a configured non-metered image route; paid image calls are
+refused until per-image accounting is wired; no provider is enabled by this change.
 `GET /v1/models` adds pricing as USD per token strings, context length, architecture,
 and top-provider limits to catalogue model entries. Unknown prices remain null.
 

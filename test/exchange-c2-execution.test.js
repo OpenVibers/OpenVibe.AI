@@ -25,7 +25,7 @@ const { createKeys } = require('../server/platform/keys');
         const added = await request(h.base, 'POST', '/api/v1/providers', { tok: svc, body: {
             key: 'fixture', kind: 'openai', base_url: `http://127.0.0.1:${upstream.address().port}/v1`, auth_mode: 'none',
             capabilities: ['chat', 'complete', 'embed', 'image'], default_model: 'good', provider_access: 'OWN_DEPLOYMENT',
-            metadata: { data_policy: { training: false, retention: 'none' } },
+            metadata: { paid: false, data_policy: { training: false, retention: 'none' } },
         } });
         assert.equal(added.status, 201, added.text);
         for (const [model, type] of [['broken', 'chat'], ['good', 'chat'], ['embed', 'embedding'], ['image', 'image']]) {
@@ -43,6 +43,14 @@ const { createKeys } = require('../server/platform/keys');
         assert.equal((await request(h.base, 'POST', '/api/v1/models', { tok: svc, body: {
             provider_key: 'anthfixture', model_key: 'claude', type: 'chat', status: 'active', context_window: 8192,
             supports: {}, cost: { in_per_mtok: 0, out_per_mtok: 0, cached_per_mtok: 0 }, metadata: { org: 'fixture', model: 'claude' },
+        } })).status, 201);
+        assert.equal((await request(h.base, 'POST', '/api/v1/providers', { tok: svc, body: {
+            key: 'paid-image', kind: 'openai', base_url: `http://127.0.0.1:${upstream.address().port}/v1`, auth_mode: 'none',
+            capabilities: ['image'], default_model: 'paid-image', provider_access: 'OWN_DEPLOYMENT',
+        } })).status, 201);
+        assert.equal((await request(h.base, 'POST', '/api/v1/models', { tok: svc, body: {
+            provider_key: 'paid-image', model_key: 'paid-image', type: 'image', status: 'active', supports: {},
+            cost: { in_per_mtok: 1, out_per_mtok: 1 }, metadata: { org: 'fixture', model: 'paid-image' },
         } })).status, 201);
         const owner = 'usr_01JAB2C3D4E5F6G7H8J9K0MNPQ';
         const keys = createKeys({ db: h.db });
@@ -87,6 +95,10 @@ const { createKeys } = require('../server/platform/keys');
         const images = await post('/v1/images/generations', { model: 'fixture/image', prompt: 'fixture' }, 'image-request-001');
         assert.equal(images.status, 200, images.text);
         assert.equal(images.body.data[0].b64_json, 'Zml4dHVyZQ==');
+        const beforePaidImage = seen.length;
+        const paidImage = await post('/v1/images/generations', { model: 'fixture/paid-image', prompt: 'must not run' });
+        assert.equal(paidImage.status, 503, paidImage.text);
+        assert.equal(seen.length, beforePaidImage, 'paid image capacity cannot bypass missing per-image accounting');
         const msgBody = { model: 'fixture/claude', provider: { only: ['anthfixture'] }, max_tokens: 32, messages: body.messages, usage: { include: true } };
         const message = await post('/v1/messages', msgBody, 'messages-request-001');
         assert.equal(message.status, 200, message.text);
@@ -107,9 +119,15 @@ const { createKeys } = require('../server/platform/keys');
         const denied = await request(h.base, 'POST', '/v1/chat/completions', { tok: restricted.secret, body });
         assert.equal(denied.status, 403);
         assert.equal((await h.db.prepare('SELECT id FROM exchange_key_usage WHERE key_id = ?').all(restricted.key.id)).length, 0, 'a disallowed fallback is rejected before reserve');
+        const failedKey = await keys.create(owner, { name: 'failed attempt', monthly_cap_usd: 1, allowed_models: [] });
+        const failed = await request(h.base, 'POST', '/v1/chat/completions', { tok: failedKey.secret,
+            body: { model: 'fixture/broken', messages: body.messages } });
+        assert.equal(failed.status, 503, failed.text);
         await new Promise(resolve => setTimeout(resolve, 150));
+        const failedRows = await h.db.prepare('SELECT * FROM exchange_key_usage WHERE key_id = ?').all(failedKey.key.id);
+        assert.equal(failedRows[0].status, 'unresolved', 'unknown failed upstream usage retains conservative settlement');
         const rows = await h.db.prepare('SELECT * FROM exchange_key_usage WHERE key_id = ?').all(key.key.id);
-        assert.equal(rows.length, 9, 'fallback and replay share one hold; other calls each have one');
+        assert.equal(rows.length, 10, 'fallback and replay share one hold; other calls each have one');
         assert.ok(rows.every(row => row.status === 'settled'));
         assert.equal((await h.db.prepare('SELECT reserved FROM exchange_key_months WHERE key_id = ?').get(key.key.id)).reserved, 0);
         console.log('exchange-c2-execution: ok');

@@ -211,7 +211,7 @@ function platform({ db, auth, clock, log, searchFetch, credentials, env = proces
                     const cost =
                         isSearch ? result?.[CHARGE] ?? res.locals.searchCharge
                             : res.getHeader('x-openvibe-replayed') === '1' && res.statusCode < 400
-                                ? 0 : result?.x_openvibe?.cost_usd ?? res.locals.inferenceCharge ?? (res.writableFinished && res.statusCode < 500 && res.statusCode >= 400 ? 0 : undefined);
+                                ? 0 : result?.x_openvibe?.cost_usd ?? res.locals.inferenceCharge ?? (!res.locals.inferenceAdmitted && res.writableFinished && res.statusCode < 500 && res.statusCode >= 400 ? 0 : undefined);
                     // Search uses only its own charge, never inference metadata.
                     // An early disconnect can precede run insertion. Keep its claim
                     // until a response finishes so a retry cannot take another hold.

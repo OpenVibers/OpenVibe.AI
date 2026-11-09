@@ -30,9 +30,10 @@ function compatExtra({ runs, auth, config, log }) {
         const input = { input: b.input, max_cost_usd: b.max_cost_usd };
         if (b.model || b.provider || b.models) input.compat_routing = require('../exchange/compat-routing').request(b);
         const created = await runs.create({ workflow: 'ai.embed', input, idempotency_key: req.get('idempotency-key') || undefined }, req.principal, { trace: req.ov?.traceId });
+        res.locals.inferenceAdmitted = true;
         if (!created.created) res.set('x-openvibe-replayed', '1');
         const run = await runs.wait(created, Math.max(config.runs.maxWaitMs, 120000));
-        if (['succeeded', 'cached', 'failed', 'cancelled'].includes(run.status)) res.locals.inferenceCharge = Number(run.usage.cost_usd || 0);
+        if (['succeeded', 'cached'].includes(run.status) || (['failed', 'cancelled'].includes(run.status) && run.usage.attempts === 0)) res.locals.inferenceCharge = Number(run.usage.cost_usd || 0);
         if (!['succeeded', 'cached'].includes(run.status)) throw new AiError(503, run.error?.code || 'run.failed', run.error?.detail || 'Embedding unavailable');
         res.json({ id: run.id, object: 'list', model: run.provenance.model,
             data: run.output.vectors.map((embedding, index) => ({ object: 'embedding', index, embedding })),
@@ -43,11 +44,12 @@ function compatExtra({ runs, auth, config, log }) {
         const b = req.body || {};
         if (b.response_format && !['url', 'b64_json'].includes(b.response_format)) throw new AiError(400, 'input.invalid', 'Unknown image response format');
         const input = { prompt: b.prompt, ...(b.size ? { size: b.size } : {}), ...(b.n ? { n: b.n } : {}), max_cost_usd: b.max_cost_usd };
-        if (b.model || b.provider || b.models) input.compat_routing = require('../exchange/compat-routing').request(b);
+        input.compat_routing = require('../exchange/compat-routing').request(b);
         const created = await runs.create({ workflow: 'ai.image', input, idempotency_key: req.get('idempotency-key') || undefined }, req.principal, { trace: req.ov?.traceId });
+        res.locals.inferenceAdmitted = true;
         if (!created.created) res.set('x-openvibe-replayed', '1');
         const run = await runs.wait(created, Math.max(config.runs.maxWaitMs, 120000));
-        if (['succeeded', 'cached', 'failed', 'cancelled'].includes(run.status)) res.locals.inferenceCharge = Number(run.usage.cost_usd || 0);
+        if (['succeeded', 'cached'].includes(run.status) || (['failed', 'cancelled'].includes(run.status) && run.usage.attempts === 0)) res.locals.inferenceCharge = Number(run.usage.cost_usd || 0);
         if (!['succeeded', 'cached'].includes(run.status)) throw new AiError(503, run.error?.code || 'run.failed', run.error?.detail || 'Image provider unavailable');
         res.json({ id: run.id, created: Math.floor(Date.parse(run.created_at) / 1000),
             data: run.output.images.map(i => i.b64 ? { b64_json: i.b64 } : { url: i.url }),

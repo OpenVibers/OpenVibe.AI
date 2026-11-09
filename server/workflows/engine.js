@@ -290,6 +290,7 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
                 for (const row of rows) {
                     const provider = providers.get(row.provider_key);
                     if (!provider || row.status !== 'active' || provider.status !== 'active') continue;
+                    if (!modelCatalog.managedAccessAllowed(provider) || provider.metadata?.hidden || provider.metadata?.synthetic) continue;
                     if (!dynamic && require('../exchange/catalog').canonicalOf(row, provider) !== entry.model && row.metadata?.id !== entry.model) continue;
                     if (row.metadata?.hidden || row.metadata?.synthetic || row.metadata?.restricted || row.metadata?.byok) continue;
                     if (['CUSTOMER_BYOK', 'RESTRICTED'].includes(row.provider_access || row.metadata?.provider_access)) continue;
@@ -447,7 +448,7 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
         const prompt = String(input.prompt || '').trim();
         if (!prompt) throw new AiError(422, 'input.invalid', 'image needs a prompt');
         const req = { prompt, size: input.size || (step.params && step.params.size) || (config.image && config.image.size) || null, n: Math.max(1, Math.min(Number(input.n) || 1, 4)), timeoutMs: route.timeout_ms || 120000 };
-        const exec = await pool.execute(route, 'image', req, { ...ctx, ...selectionCtx(selection), routeKey: route.key, routeVersion: route.version, promptHash: sha256({ p: prompt }) });
+        const exec = await pool.execute(route, 'image', req, { ...ctx, ...(input.compat_routing ? { freeOnly: true } : {}), ...selectionCtx(selection), routeKey: route.key, routeVersion: route.version, promptHash: sha256({ p: prompt }) });
         const images = (exec.result.images || []).filter(i => i && (i.b64 || i.url));
         if (!images.length) throw new AiError(502, 'output.invalid', 'no image was returned');
         return { output: { images: images.map(i => ({ b64: i.b64 || null, url: i.url || null })), count: images.length }, exec, route };

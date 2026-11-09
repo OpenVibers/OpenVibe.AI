@@ -1218,6 +1218,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                 const card = row ? modelCatalog.retailRate(row) : null;
                 const policyOk = p ? await policyAllows(registry, p, offer.model, ctx.contentPolicy || 'standard') : false;
                 if (!p) why.push('unknown_provider');
+                else if (!appOffered(ctx, p)) why.push('app_provider_not_allowed');
                 else if (!policyOk) why.push('content_policy');
                 else if (ctx.creditsRequired && !isFreeProvider(p) && card && card.version) { why.push('payer_required'); payerSkipped = true; }
                 else if (freeSources && !allowsProvider(p.key, p, freeSources)) {
