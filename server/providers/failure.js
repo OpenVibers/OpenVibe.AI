@@ -107,7 +107,7 @@ function offerStatus({ circuit = null, measured = null } = {}) {
             status_class: failureClass,
         };
     }
-    return { status: 'up', status_reason: null, status_since: measured && measured.last_ok ? measured.last_ok : null, status_class: null };
+    return { status: 'up', status_reason: null, status_since: null, status_class: null };
 }
 
 module.exports = { CLASSES, classifyFailure, detailOf, reasonForClass, circuitStatus, offerStatus, iso };
