@@ -93,11 +93,11 @@ t.test('catalog groups the same model across providers, with prices, speed, upti
     assert.strictEqual(dear.uptime, 0.9, '18 answered / (18 + 2 failed), from attempts');
     assert.strictEqual(dear.requests_7d, 20, 'real attempts only; the 3 cached answers are counted apart');
     assert.strictEqual(dear.cached_7d, 3);
-    assert.deepStrictEqual(dear.speed, { p50_ms: 950, p95_ms: 1715, ttft_ms: null, tokens_per_second: null }, 'TTFT where recorded, else total');
+    assert.deepStrictEqual(dear.speed, { p50_ms: 950, p95_ms: 1715 }, 'TTFT where recorded, else total');
     assert.strictEqual(dear.requests_today, 20);
     assert.strictEqual(cheap.uptime, null, 'no data is unknown, not 0');
     assert.strictEqual(cheap.requests_7d, 0);
-    assert.deepStrictEqual(cheap.speed, { p50_ms: null, p95_ms: null, ttft_ms: null, tokens_per_second: null });
+    assert.deepStrictEqual(cheap.speed, { p50_ms: null, p95_ms: null });
     assert.deepStrictEqual(dear.data_policy, { trains: false, retention_days: 0, region: 'cn', anonymized: null });
     assert.strictEqual(cheap.data_policy && cheap.data_policy.trains, false, 'DeepInfra carries its published policy (seeded by AI #307): no training');
     assert.strictEqual(m.requests_7d, 20);

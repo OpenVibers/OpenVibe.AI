@@ -186,12 +186,12 @@ function platform({ db, auth, clock, log, searchFetch }) {
                         (isSearch || res.getHeader('x-openvibe-replayed') === '1') && res.statusCode < 400
                             ? 0
                             : result?.x_openvibe?.cost_usd;
+                    // An early disconnect can precede run insertion. Keep its claim
+                    // until a response finishes so a retry cannot take another hold.
                     hold.settle({
                         cost_usd: cost,
                         tokens_in: usage.prompt_tokens || 0,
                         tokens_out: usage.completion_tokens || 0,
-                    // An early disconnect can precede run insertion. Keep its claim
-                    // until a response finishes so a retry cannot take another hold.
                     }).then(() => res.writableFinished ? claim?.abandon?.() : undefined).catch(() =>
                         log.error('Exchange usage settlement failed'),
                     );
