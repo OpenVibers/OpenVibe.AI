@@ -15,6 +15,10 @@ const SRC = (n) => Array.from({ length: n }, (_, i) => ({ source_type: 'news.art
 const PASS = { role: 'chat', kind: 'chat_global', system: [{ text: 'You summarize chat.', cache: true }], user: 'Summarize: hi all', max_tokens: 80 };
 
 const EXAMPLES = {
+    'blog.changelog.tag': { entries: [
+        { id: '1', service: 'live', subject: 'Recent changes card: show the newest devblog with its art (#714)' },
+        { id: '2', service: 'chat', subject: 'Fix scroll jump when a message arrives while reading history (#361)' },
+    ] },
     'content.devblog': require('./fixtures/devblog').input,
     'meme.caption': { format: 'Two choices', topic: 'choosing whether to fix the bug before lunch' },
     'ai.messages': { max_tokens: 64, messages: [{ role: 'user', content: 'Say hello' }] },
