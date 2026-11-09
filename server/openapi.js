@@ -23,7 +23,8 @@
 const pkg = require('../package.json');
 
 const MOUNT = '/api/v1';
-const SITE = 'https://openvibe.ai';
+// The public base of this API (BASE_URL in production).
+const SITE = 'https://ai.openvibe.services';
 
 const ref = (name) => ({ $ref: `#/components/schemas/${name}` });
 const str = (extra = {}) => ({ type: 'string', ...extra });
