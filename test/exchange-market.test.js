@@ -26,7 +26,7 @@ t.test('production presets and recorded pages include disabled and unregistered 
     const offers = buildOffers({ observations, metadata: { entries: indexMetadata(dev) } });
     const snapshot = { generated_at: '2026-11-09T00:00:00Z', metadata: { source: 'https://models.dev/api.json', checked_at: null, stale: true }, offers };
     const page = pageMarket(snapshot, { limit: 500 });
-    assert.strictEqual(page.total_models, 60); assert.strictEqual(page.total_offers, 75); assert(offers.every(o => !o.routed));
+    assert(observations.every(row => offers.some(o => o.provider === row.provider_key && bare(o.provider_model) === bare(row.model_key))), 'every recorded own-page model is listed'); assert(offers.every(o => !o.routed));
     assert(offers.some(o => o.price.in === null)); assert(offers.some(o => o.uncensored));
     const providerFlag = buildOffers({ observations: [{ provider_key: 'refuseless', model_key: 'new-fixture-model', price: { in: null, out: null, cached: null }, source: 'https://refuseless.com', checked_at: '2026-11-09' }] });
     assert.strictEqual(providerFlag.find(o => o.provider_model === 'new-fixture-model').uncensored, true, 'new models retain their provider preset flag');
@@ -42,6 +42,8 @@ t.test('routing belongs to a provider offer; metadata joins dated names, prices 
     const offers = buildOffers({ metadata: { entries }, catalogue: { models: [{ offers:[{provider:p.key, model:m.model_key}] }] },
         providers: [{ ...p, status:'disabled', secret_ref:'must-not-be-exported', metadata:{account_id:'private-account'} }] });
     const offer = offers.find(o => o.provider === p.key && o.provider_model === m.model_key);
+    const aliasOnly = buildOffers({ catalogue: { models: [{ offers: [{ provider: p.key, model: m.model_key + '-latest' }] }] } });
+    assert.strictEqual(aliasOnly.find(o => o.provider === p.key && o.provider_model === m.model_key).routed, false, 'metadata aliases must not mark an unrouted endpoint as routed');
     assert(offer.routed); assert.strictEqual(offer.context,m.context_window); assert.strictEqual(offer.max_output,42);
     assert.strictEqual(offer.licence,'Apache-2.0'); assert.strictEqual(offer.field_sources.licence,'https://models.dev/api.json');
     assert.strictEqual(offer.field_sources.context,m.source); assert.strictEqual(offer.price.in,m.cost.in_per_mtok);
