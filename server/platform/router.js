@@ -3,6 +3,7 @@ const express = require('express');
 const { CAPS } = require('../auth');
 const { AiError, sendError } = require('../util');
 const { createKeys } = require('./keys');
+const { claimRequest } = require('./idempotency');
 const { createSearch } = require('../search');
 function platform({ db, auth, clock, log, searchFetch }) {
     const keys = createKeys({ db, clock });
@@ -92,6 +93,7 @@ function platform({ db, auth, clock, log, searchFetch }) {
             '',
         );
         if (!token.startsWith('ovx_')) return next();
+        let claim = null;
         try {
             const isSearch =
                 req.method === 'POST' &&
@@ -115,9 +117,14 @@ function platform({ db, auth, clock, log, searchFetch }) {
                 throw new AiError(
                     401,
                     'token.invalid',
-                    'Invalid or revoked Exchange key',
+                    'Invalid, expired or revoked Exchange key',
                 );
-            const hold = models
+            const allowed = JSON.parse(key.allowed_models);
+            if (inference && allowed.length && !allowed.includes(req.body?.model))
+                throw new AiError(403, 'exchange.model_denied', 'This model is not allowed by this key');
+            if (inference && req.get('idempotency-key'))
+                claim = await claimRequest(db, key.owner, req.get('idempotency-key'), req.body);
+            const hold = models || claim?.replay
                 ? null
                 : await keys.reserve(
                       key,
@@ -127,13 +134,17 @@ function platform({ db, auth, clock, log, searchFetch }) {
                       isSearch,
                       Number.isFinite(req.body?.max_cost_usd) ? req.body.max_cost_usd : null,
                   );
-            if (inference) {
-                req.body.max_cost_usd = Math.min(
+            if (inference && !(claim?.replay && claim.maxCost === null)) {
+                req.body.max_cost_usd = claim?.replay ? claim.maxCost : Math.min(
                     hold.amount,
                     Number.isFinite(req.body.max_cost_usd)
                         ? req.body.max_cost_usd
                         : hold.amount,
                 );
+                if (claim && !claim.replay) {
+                    try { await claim.admitted(req.body.max_cost_usd); }
+                    catch (err) { await hold.settle({ cost_usd: 0 }); throw err; }
+                }
             }
             req.exchangePrincipal = {
                 kind: 'user',
@@ -172,14 +183,16 @@ function platform({ db, auth, clock, log, searchFetch }) {
                         }
                     const usage = result?.usage || {};
                     const cost =
-                        isSearch && res.statusCode < 400
+                        (isSearch || res.getHeader('x-openvibe-replayed') === '1') && res.statusCode < 400
                             ? 0
                             : result?.x_openvibe?.cost_usd;
+                    // An early disconnect can precede run insertion. Keep its claim
+                    // until a response finishes so a retry cannot take another hold.
                     hold.settle({
                         cost_usd: cost,
                         tokens_in: usage.prompt_tokens || 0,
                         tokens_out: usage.completion_tokens || 0,
-                    }).catch(() =>
+                    }).then(() => res.writableFinished ? claim?.abandon?.() : undefined).catch(() =>
                         log.error('Exchange usage settlement failed'),
                     );
                 };
@@ -188,6 +201,7 @@ function platform({ db, auth, clock, log, searchFetch }) {
             }
             next();
         } catch (e) {
+            if (claim && !claim.replay) await claim.abandon().catch(() => log.error('Exchange request cleanup failed'));
             sendError(res, e, req.ov, log);
         }
     }

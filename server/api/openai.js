@@ -201,7 +201,7 @@ function openaiRouter({ runs, auth, config, registry, presets = null, receipts =
         if (maxTokens != null) input.max_tokens = Math.max(1, Math.min(Number(maxTokens) || 1, 16000));
         // AI Exchange F: the caller's liability cap for the Balance hold (an OpenVibe extension, like x_openvibe).
         if (b.max_cost_usd != null) input.max_cost_usd = b.max_cost_usd;
-        let body = { workflow: 'ai.complete', input };
+        let body = { workflow: 'ai.complete', input, idempotency_key: req.get('idempotency-key') || undefined };
         // The preset's rules ride the run into the router.
         if (preset) body = { ...body, preset: { name: preset.name, scope: preset.scope, policy: preset.policy } };
         if (preset && preset.policy.adult && b.policy == null) body = { ...body, policy: 'uncensored' };
@@ -238,6 +238,7 @@ function openaiRouter({ runs, auth, config, registry, presets = null, receipts =
             const created = await runs.create(body, req.principal, { trace: req.ov && req.ov.traceId, requestId: req.ov && req.ov.requestId, abuse: req.abuse,
                 ...(live ? { onDelta: live.delta } : {}),
                 ...(live && config.modelCatalog && config.modelCatalog.enabled ? { onRoute: (info) => live.route(info) } : {}) });
+            if (created.created === false) res.setHeader('x-openvibe-replayed', '1');
             if (live) live.open(created.run);
             run = await runs.explained(await runs.wait(created, Math.max(config.runs.maxWaitMs, 120000)));
         } catch (err) {
