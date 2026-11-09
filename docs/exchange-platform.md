@@ -38,6 +38,12 @@ records: `provider` (vast/runpod), `gpu`, `region`, `hourly_usd`, `vram_mb`, `so
 It requires the same operator capability as provider configuration. The parser reads bytes only. Stale quotes (over seven
 days) and missing throughput never cause a rent proposal. Recording listings does not rent anything or contact providers.
 
+The same two console reads also carry the public marketplace readings and the per-token cost they imply:
+`market` (Vast.ai, RunPod, Salad, TensorDock and CloudRift, cached in `gpu_market_prices`) and `token_costs`
+(catalog throughput × hourly price, beside `cheapest_api`). The reader is `server/gpu/market.js`; it reads public
+pages only, never signs in, never rents, and a failed source keeps its last rows marked `stale`. `POST
+/api/v1/admin/console/gpus/prices/refresh` forces a read. See [ai-gpus.md](ai-gpus.md#public-marketplace-prices-and-what-a-token-costs).
+
 Migration 0052 is expand-only. These changes need money/security review before deployment; this PR does not deploy.
 
 ## Public market observations
