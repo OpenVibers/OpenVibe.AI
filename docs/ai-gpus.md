@@ -91,7 +91,7 @@ the reconciler (one implementation, the same one the service runs) does the work
 ## Public marketplace prices, and what a token costs
 
 The console's GPUs and supply sections also show what the cards cost on the public marketplaces, read from the
-providers' own pages by `server/gpu/market.js` (migration `0059_gpu_market_prices.sql`):
+providers' own pages by `server/gpu/market.js` (migration `0061_gpu_market_prices.sql`):
 
 | Source | Public page | What it publishes |
 | --- | --- | --- |

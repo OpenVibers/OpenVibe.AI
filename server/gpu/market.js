@@ -17,7 +17,7 @@
  *   - The reading carries where it came from, when it was read, the region when the provider states one, and
  *     the reliability words the provider publishes. A number without those is not a price the owner can trust.
  *
- * The cache is in the database (migrations/0059_gpu_market_prices.sql) because AI is deployed several times a
+ * The cache is in the database (migrations/0061_gpu_market_prices.sql) because AI is deployed several times a
  * day: a timer in the process would be reset by every deploy. The refresh is due-based, like the price book.
  */
 const { AiError } = require('../util');
