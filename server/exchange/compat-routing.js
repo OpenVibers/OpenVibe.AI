@@ -155,4 +155,14 @@ async function select(list, policy, facts) {
         excluded,
     };
 }
-module.exports = { normalize, policyFor, modelName, select };
+// Validated once at admission, retained in the run input and never forwarded upstream.
+function request(body) {
+    if (body.models !== undefined && (!Array.isArray(body.models) || !body.models.length || body.models.length > 8))
+        bad('models must contain one to eight model ids');
+    const names = [...new Set([...(body.model ? [body.model] : []), ...(body.models || [])])];
+    if (names.length > 8) bad('At most eight distinct models are supported');
+    const entries = (names.length ? names : ['openvibe/auto']).map(modelName);
+    const policy = normalize(body.provider);
+    return { entries, policy };
+}
+module.exports = { normalize, policyFor, modelName, select, request };

@@ -7,6 +7,7 @@ const { claimRequest } = require('./idempotency');
 const { createSearch, CHARGE } = require('../search');
 function platform({ db, auth, clock, log, searchFetch, credentials, env = process.env }) {
     const keys = createKeys({ db, clock });
+    const presets = require('../exchange/compat-presets').createCompatPresets(db);
     const search = createSearch({
         ...(searchFetch ? { fetchImpl: searchFetch } : {}),
         now: () => clock.now(), credentials, env,
@@ -55,6 +56,10 @@ function platform({ db, auth, clock, log, searchFetch, credentials, env = proces
         person,
         wrap((req) => keys.usage(owner(req))),
     );
+    r.get('/api/v1/exchange/presets', person, wrap(async req => ({ data: await presets.list(owner(req)) })));
+    r.post('/api/v1/exchange/presets', person, wrap(req => presets.put(owner(req), req.body)));
+    r.post('/v1/presets/import', person, wrap(req => presets.put(owner(req), req.body)));
+    r.delete('/api/v1/exchange/presets/:name', person, wrap(req => presets.remove(owner(req), req.params.name)));
     const searchContext = req => ({
         subject: req.principal?.kind === 'user' ? req.principal.subject.id : null,
         plan: req.searchPlan, budget: req.searchBudget,
@@ -111,8 +116,8 @@ function platform({ db, auth, clock, log, searchFetch, credentials, env = proces
                     '/v1/fetch',
                 ].includes(req.path);
             const inference =
-                req.method === 'POST' && req.path === '/v1/chat/completions';
-            const models = req.method === 'GET' && req.path === '/v1/models';
+                req.method === 'POST' && ['/v1/chat/completions', '/v1/messages', '/v1/completions', '/v1/embeddings', '/v1/images/generations'].includes(req.path);
+            const models = req.method === 'GET' && ['/v1/models', '/v1/generation'].includes(req.path);
             if (!isSearch && !inference && !models)
                 throw new AiError(
                     403,
@@ -126,18 +131,20 @@ function platform({ db, auth, clock, log, searchFetch, credentials, env = proces
                     'token.invalid',
                     'Invalid, expired or revoked Exchange key',
                 );
+            if (inference) req.body = await presets.expand(key.owner, req.body || {}, req.path === '/v1/messages' ? 'messages' : 'openai');
+            if (inference) require('../exchange/compat-routing').request(req.body || {});
             const allowed = JSON.parse(key.allowed_models);
-            if (inference && allowed.length && !allowed.includes(req.body?.model))
+            if (inference && allowed.length && [req.body?.model || req.body?.models?.[0] || 'openvibe/auto', ...(req.body?.models || [])].some(model => !allowed.includes(require('../exchange/compat-routing').modelName(model).model)))
                 throw new AiError(403, 'exchange.model_denied', 'This model is not allowed by this key');
             if (inference && req.get('idempotency-key'))
-                claim = await claimRequest(db, key.owner, req.get('idempotency-key'), req.body);
+                claim = await claimRequest(db, key.owner, req.get('idempotency-key'), req.path === '/v1/chat/completions' ? req.body : { path: req.path, body: req.body });
             if (isSearch) {
                 const kind = req.path === '/v1/fetch' ? 'fetch' : req.path.split('/')[3] || 'web';
                 req.searchPlan = await search.prepare(kind, req.body || {}, { subject: key.owner });
             }
             const searchCeiling = req.searchPlan?.ceiling || 0;
             const hold = models || claim?.replay ? null : await keys.reserve(
-                key, isSearch ? 'search:' + req.path : String(req.body?.model || ''),
+                key, isSearch ? 'search:' + req.path : require('../exchange/compat-routing').modelName(req.body?.model || req.body?.models?.[0] || 'openvibe/auto').model,
                 isSearch && searchCeiling === 0,
                 isSearch ? searchCeiling : Number.isFinite(req.body?.max_cost_usd) ? req.body.max_cost_usd : null,
                 isSearch,
@@ -171,6 +178,7 @@ function platform({ db, auth, clock, log, searchFetch, credentials, env = proces
                 exchangeKeyId: key.id,
             };
             if (hold) {
+                let completed = false;
                 let result = null,
                     tail = '';
                 const json = res.json.bind(res);
@@ -186,6 +194,8 @@ function platform({ db, auth, clock, log, searchFetch, credentials, env = proces
                 // 'close' without 'finish' is a client that hung up: the hold still settles (at the hold, when
                 // the cost is unknown), or the key would keep it until the month ends.
                 const done = () => {
+                    if (completed) return;
+                    completed = true;
                     if (!result && tail)
                         for (const line of tail
                             .split('\n')
@@ -201,14 +211,14 @@ function platform({ db, auth, clock, log, searchFetch, credentials, env = proces
                     const cost =
                         isSearch ? result?.[CHARGE] ?? res.locals.searchCharge
                             : res.getHeader('x-openvibe-replayed') === '1' && res.statusCode < 400
-                                ? 0 : result?.x_openvibe?.cost_usd;
+                                ? 0 : result?.x_openvibe?.cost_usd ?? res.locals.inferenceCharge ?? (res.writableFinished && res.statusCode < 500 && res.statusCode >= 400 ? 0 : undefined);
                     // Search uses only its own charge, never inference metadata.
                     // An early disconnect can precede run insertion. Keep its claim
                     // until a response finishes so a retry cannot take another hold.
                     hold.settle({
                         cost_usd: cost,
-                        tokens_in: usage.prompt_tokens || 0,
-                        tokens_out: usage.completion_tokens || 0,
+                        tokens_in: usage.prompt_tokens || usage.input_tokens || 0,
+                        tokens_out: usage.completion_tokens || usage.output_tokens || 0,
                     }).then(() => res.writableFinished ? claim?.abandon?.() : undefined).catch(() =>
                         log.error('Exchange usage settlement failed'),
                     );

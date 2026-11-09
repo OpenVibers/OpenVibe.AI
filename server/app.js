@@ -216,11 +216,12 @@ function createApp({ searchFetch = null, config, db, registry, pool, quotas, cac
     const ops = createOps({ db, registry, pool, quotas, cache, runs });
     app.use(runsRouter({ runs, registry, auth, config, log }));
     app.use(actionsRouter({ runs, registry, auth, log }));
+    app.use(require('./api/compat-extra').compatExtra({ runs, auth, config, log }));
     // The OpenAI-compatible endpoint (POST /v1/chat/completions, GET /v1/models): runs of ai.complete.
     app.use(require('./api/routing-preview').routingPreview({ auth, registry, log }));
-    app.use(require('./api/openai').openaiRouter({ runs, auth, config, registry, presets, receipts, log }));
+    app.use(require('./api/openai').openaiRouter({ runs, auth, config, registry, presets, receipts, db, log }));
     // The Anthropic-compatible endpoint (POST /v1/messages, GET /v1/models): runs of ai.messages (Codes C3).
-    app.use(require('./api/messages').messagesRouter({ runs, auth, config, registry, presets, receipts, log }));
+    app.use(require('./api/messages').messagesRouter({ runs, auth, config, registry, presets, receipts, db, log }));
     app.use(require('./api/attribution-quotas').attributionQuotasRouter({ db, quotas, auth, clock, sendError: (res, err, ctx) => sendError(res, err, ctx, log) }));
     if (memory) app.use(require('./memory').memoryRouter({ memory, memoryImport, services: memoryServices, sharing: memorySharing, auth, config, clock, log, sendError: (res, err, ctx) => sendError(res, err, ctx, log) }));
     // Memory M5: the uniform share routes for kind memory-store (and /api/v1/share/people, /api/v1/shared-with-me).
