@@ -102,7 +102,7 @@ function registerAiGauges(registry, { runs, registry: ai, pool, balance = null, 
         name: 'ai_provider_circuit', help: 'Circuit-breaker state of each active provider (1 = the current state)', labelNames: ['provider', 'state'],
         collect: async () => (await providerView(ai, pool)).flatMap(p => CIRCUIT_STATES.map(state => ({ labels: { provider: p.key, state }, value: p.circuit === state ? 1 : 0 }))),
     });
-    // The measured per-offer breaker (migrations/0057): 1 while the offer's circuit is open, 0 while it serves
+    // The measured per-offer breaker (migrations/0060): 1 while the offer's circuit is open, 0 while it serves
     // or waits for a half-open probe. The class is why it opened: balance, auth or transient.
     registry.gauge({
         name: 'ai_provider_circuit_open', help: 'Open circuit per provider and model (1 = open)', labelNames: ['provider', 'model', 'class'],

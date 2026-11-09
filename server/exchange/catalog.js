@@ -147,7 +147,7 @@ function createCatalog({ db, registry, pool, env = process.env, clock = { now: (
         const now = clock.now();
         const providers = await registry.listProviders();
         const byKey = new Map(providers.map((p) => [p.key, p]));
-        // The router's per-offer circuit (server/providers/index.js, migrations/0057) is the authority; a
+        // The router's per-offer circuit (server/providers/index.js, migrations/0060) is the authority; a
         // provider-level provider_health row is still read for a state written before it (or by a test).
         // Measured failures are folded in below: over 5% of at least 10 requests in the last hour is degraded.
         const circuits = await db.prepare('SELECT * FROM provider_circuits').all().catch(() => []);

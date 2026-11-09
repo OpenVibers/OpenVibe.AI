@@ -555,7 +555,7 @@ provider that is disabled, missing credentials, circuit-open or unable to do the
 failure. A failure is classified as `balance` (402, `insufficient_quota`, "credit balance is too low",
 OpenRouter's 402 credits), `auth` (401/403), `rate_limit` (429), `transient` (timeout, 5xx, broken
 stream) or `request` (400/413/422 and context too long). The circuit is per provider+model
-(`provider_circuits`, migrations/0057, survives a restart): balance and auth open it at once and are
+(`provider_circuits`, migrations/0060, survives a restart): balance and auth open it at once and are
 never retried; a run of transient failures opens it for 30 s doubling to 10 min; rate limits and
 malformed requests never open it. A balance/auth circuit may probe the next real request after
 `AI_BREAKER_EXHAUSTED_COOLDOWN_MS` (15 minutes) and closes on a success or when the provider's key

@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS provider_circuits (
 CREATE INDEX IF NOT EXISTS idx_provider_circuits_state ON provider_circuits(state);
 
 -- Why failures happened, by provider and class, for ai_provider_failures_total. Kept here so the
--- counter survives a restart; a request log row also carries its error_class (migrations/0057).
+-- counter survives a restart; a request log row also carries its error_class (migrations/0060).
 CREATE TABLE IF NOT EXISTS provider_failure_counts (
     provider_key text COLLATE "C" NOT NULL,
     failure_class text COLLATE "C" NOT NULL,

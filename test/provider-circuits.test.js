@@ -1,5 +1,5 @@
 'use strict';
-// Provider failure classes and the per provider+model circuit (migrations/0057).
+// Provider failure classes and the per provider+model circuit (migrations/0060).
 //
 // The recorded shapes of every provider's error answer are replayed against a local seam (no test
 // reaches the network). A balance or auth answer opens that offer's circuit at once; a run of
