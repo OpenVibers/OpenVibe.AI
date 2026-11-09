@@ -17,9 +17,11 @@
  * through placement_state.current); or it pins `[primary, ...fallbacks]`. `explain` (objective,
  * reasons, selected, candidates with their excluded reasons) rides every run response.
  *
- * Circuit breaker per provider: `failureThreshold` consecutive failures open it for `cooldownMs`;
- * after that one half-open probe decides whether it closes again. A provider's own "insufficient balance"
- * answer opens it at once for the long exhausted cooldown, is never retried, and the router fails over.
+ * Circuit breaker per provider+model (server/providers/failure.js): a run of transient failures opens
+ * that offer for 30 s doubling to 10 min; a balance or auth answer opens it at once for the long
+ * exhausted cooldown and is never retried; the next real request after the cooldown is the one probe.
+ * Another model on the same provider keeps answering. The state is stored (provider_circuits, 0057),
+ * so a restart keeps it, and a changed provider key resets it.
  * When nothing can serve because offers are exhausted or paused, the route answers 503 ai.resting with a
  * human sentence and Retry-After. The host's local model is a last offer for short text only, one request at
  * a time, labelled local on the receipt.
