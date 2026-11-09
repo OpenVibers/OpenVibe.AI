@@ -21,6 +21,7 @@ const FILE = {
     deepseek: 'deepseek.md', qwen: 'qwen.html', kimi: 'kimi.html', glm: 'glm.md', minimax: 'minimax.md',
     deepinfra: 'deepinfra.json', novita: 'novita.json', featherless: 'featherless.json',
     refuseless: 'refuseless.md', abliteration: 'abliteration.md', openrouter: 'openrouter.json',
+    ...Object.fromEntries(['venice', 'abliteratedmodels', 'uplinkswitch', 'chutes', 'siliconflow', 'nebius', 'together', 'fireworks', 'groq', 'cerebras', 'sambanova', 'baseten', 'hyperbolic'].map((key) => [key, `${key}.json`])),
 };
 const read = (name) => fs.readFileSync(path.join(FIXTURES, name), 'utf8');
 const json = (name) => JSON.parse(read(name));
@@ -29,7 +30,7 @@ const json = (name) => JSON.parse(read(name));
 const BY_URL = new Map(SOURCES.map((s) => [s.url, FILE[s.key]]));
 async function recorded({ url }) {
     const file = BY_URL.get(url);
-    if (!file) return { status: 404, headers: {}, body: '' };
+    if (!file || !fs.existsSync(path.join(FIXTURES, file))) return { status: 404, headers: {}, body: '' };
     return { status: 200, headers: {}, body: read(file) };
 }
 
@@ -61,6 +62,16 @@ t.test('every provider listing is read in its own shape', async () => {
     assert.deepStrictEqual(parsers.featherless(json('featherless.json'))['qwen/qwen3-14b'], { in: 0.12, cached: null, out: 0.24 });
     // A provider that publishes no price at all: the price stays unknown, it is never guessed.
     assert.deepStrictEqual(parsers.refuseless(read('refuseless.md'))['deepseek-v4.1-flash-abliterated'], { in: null, cached: null, out: null });
+    assert.deepStrictEqual(parsers.compatibleModels(json('venice.json'))['venice-uncensored-1-2'], { in: 0.2, cached: null, out: 0.9 });
+    assert.deepStrictEqual(parsers.compatibleModels(json('abliteratedmodels.json')).uncensored, { in: 0.15, cached: null, out: 0.5 });
+    assert.deepStrictEqual(parsers.compatibleModels(json('chutes.json'))['qwen/qwen3-32b-tee'], { in: 0.104, cached: null, out: 0.416 });
+    assert.deepStrictEqual(parsers.compatibleModels(json('nebius.json'))['qwen/qwen3-30b-a3b-instruct-2507'], { in: 0.1, cached: null, out: 0.3 });
+    assert.deepStrictEqual(parsers.compatibleModels(json('fireworks.json'))['accounts/fireworks/models/gpt-oss-120b'], { in: 0.15, cached: null, out: 0.6 });
+    assert.deepStrictEqual(parsers.compatibleModels(json('together.json'))['openai/gpt-oss-120b'], { in: 0.15, cached: null, out: 0.6 });
+    assert.deepStrictEqual(parsers.compatibleModels(json('groq.json'))['openai/gpt-oss-120b'], { in: 0.15, cached: 0.075, out: 0.6 });
+    assert.deepStrictEqual(parsers.compatibleModels(json('sambanova.json'))['gpt-oss-120b'], { in: 0.22, cached: null, out: 0.59 });
+    for (const key of ['uplinkswitch', 'siliconflow', 'cerebras', 'baseten', 'hyperbolic'])
+        assert.deepStrictEqual(parsers.compatibleModels(json(`${key}.json`)), {}, `${key} exposes no price in its recorded listing`);
 });
 
 t.test('the recorder keeps the rows the catalogue knows, and reads nothing of its own', async () => {

@@ -1,0 +1,12 @@
+{
+  "data": [
+    {
+      "id": "openai/gpt-oss-120b",
+      "pricing": {
+        "input": 0.15,
+        "cached": 0.075,
+        "output": 0.6
+      }
+    }
+  ]
+}

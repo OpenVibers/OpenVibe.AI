@@ -78,7 +78,21 @@ function adminRouter({ config = {}, db, registry, pool, quotas, cache, runs, aut
             if (!String(b.base_url || '').trim()) throw new AiError(422, 'ai.invalid', 'a provider needs a base URL');
             await settings.providerKeys.setOrigin(prev.key, b.base_url, { actor: { type: 'service', id: 'ai' }, reason: 'provider base_url changed' });
         }
-        const provider = await registry.upsertProvider({ ...b, key: req.params.key }, { ...actor(req), origin: 'admin' });
+        const access = ['OWN_DEPLOYMENT', 'AUTHORIZED_WHOLESALE', 'CUSTOMER_BYOK', 'RESTRICTED', 'UNVERIFIED'];
+        if (b.provider_access !== undefined && !access.includes(b.provider_access)) throw new AiError(422, 'ai.invalid', 'provider_access is not a supported access mode');
+        if (b.status !== undefined && !['active', 'disabled'].includes(b.status)) throw new AiError(422, 'ai.invalid', 'status must be active or disabled');
+        const meta = { ...(prev.metadata || {}), ...(b.metadata || {}) };
+        if (b.uncensored !== undefined) {
+            if (typeof b.uncensored !== 'boolean') throw new AiError(422, 'ai.invalid', 'uncensored must be a boolean');
+            meta.uncensored = b.uncensored;
+        }
+        if (b.preference_order !== undefined && b.priority === undefined) b.priority = b.preference_order;
+        if (b.markup_percent !== undefined) {
+            const markup = Number(b.markup_percent);
+            if (!Number.isFinite(markup) || markup < 0 || markup > 500) throw new AiError(422, 'ai.invalid', 'markup_percent must be between 0 and 500');
+            meta.markup_percent = markup;
+        }
+        const provider = await registry.upsertProvider({ ...b, metadata: meta, key: req.params.key }, { ...actor(req), origin: 'admin' });
         const answer = { provider: await view(provider) };
         if (moved && String(provider.secret_ref || '').startsWith('vault:')) {
             answer.key_reentry_required = true;
@@ -96,7 +110,25 @@ function adminRouter({ config = {}, db, registry, pool, quotas, cache, runs, aut
     r.post('/api/v1/models', provWrite, wrap(async (req, res) => { res.status(201); return { model: await registry.upsertModel(body(req), actor(req)) }; }));
     r.patch('/api/v1/models/:provider/:model', provWrite, wrap(async (req) => {
         if (!await registry.getModel(req.params.provider, req.params.model)) throw new AiError(404, 'ai.not_found', 'no such model');
-        return { model: await registry.upsertModel({ ...body(req), provider_key: req.params.provider, model_key: req.params.model }, actor(req)) };
+        const b = body(req);
+        const prev = await registry.getModel(req.params.provider, req.params.model);
+        const metadata = { ...(prev.metadata || {}), ...(b.metadata || {}) };
+        if (b.owner_override !== undefined) {
+            const override = b.owner_override;
+            if (override === null) {
+                delete metadata.owner_override;
+            } else {
+            if (!override || typeof override !== 'object' || !String(override.reason || '').trim()) throw new AiError(422, 'ai.invalid', 'owner_override requires a reason');
+            const supplied = override.cost;
+            const fields = ['in_per_mtok', 'out_per_mtok', 'cached_per_mtok'];
+            if (!supplied || typeof supplied !== 'object' || !fields.some((k) => supplied[k] != null) ||
+                fields.some((k) => supplied[k] != null && (!Number.isFinite(Number(supplied[k])) || Number(supplied[k]) < 0)))
+                throw new AiError(422, 'ai.invalid', 'owner_override cost fields must be non-negative numbers or null');
+            const price = Object.fromEntries(fields.filter((k) => supplied[k] != null).map((k) => [k, Number(supplied[k])]));
+            metadata.owner_override = { cost: price, reason: String(override.reason).trim().slice(0, 500), updated_at: new Date().toISOString() };
+            }
+        }
+        return { model: await registry.upsertModel({ ...b, metadata, provider_key: req.params.provider, model_key: req.params.model }, actor(req)) };
     }));
 
     // Versioned definitions
