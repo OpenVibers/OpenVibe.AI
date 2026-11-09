@@ -1,0 +1,21 @@
+{
+  "response": {
+    "results": [
+      {
+        "title": "Lantern",
+        "url": "https://example.org/article",
+        "description": "A new lantern",
+        "published_at": "2026-11-08T12:00:00Z"
+      }
+    ]
+  },
+  "request": {
+    "host": "openvibe.search",
+    "path": "/api/v1/search",
+    "method": "GET"
+  },
+  "expected": {
+    "title": "Lantern",
+    "cost": 0
+  }
+}

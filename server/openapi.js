@@ -21,6 +21,7 @@
  * server/runs.js decode(). Nothing is inferred.
  */
 const pkg = require('../package.json');
+const { paths: searchPaths } = require('./search/openapi');
 
 const MOUNT = '/api/v1';
 // The public base of this API (BASE_URL in production).
@@ -505,7 +506,7 @@ route('get', '/exchange/key-usage', {
 });
 route('get', '/exchange/search/engines', {
     operationId: 'exchangeSearchEngines', summary: 'The search engines behind web, image and icon search', tags: ['exchange'], security: [],
-    description: 'Public. Which engines answer each kind of search (web, images, icons) and whether each is configured here.',
+    description: 'Public. Engine IDs, kinds (web, images, icons, fetch), availability of shared keys, BYOK support, health, supported freshness filters, price_per_1000 in USD (null when variable), pricing_note, source URL and checked_on date. Personal key availability is private. Tariffs exclude free allowances and volume discounts.',
     responses: { 200: json('The engines', { type: 'object', required: ['engines'], properties: { engines: arrayOf({ type: 'object' }) } }) },
 });
 route('get', '/own-endpoints', {
@@ -867,7 +868,7 @@ function openapi() {
                 } },
             },
         },
-        paths: { ...Object.fromEntries(Object.entries(PATHS).sort(([a], [b]) => a.localeCompare(b)).map(([p, item]) => [MOUNT + p, item])) },
+        paths: { ...searchPaths, ...Object.fromEntries(Object.entries(PATHS).sort(([a], [b]) => a.localeCompare(b)).map(([p, item]) => [MOUNT + p, item])) },
     };
 }
 
@@ -886,7 +887,7 @@ route('get', '/community/sell', {
 
 /** The documented routes as "METHOD /api/v1/path": what the app must mount. */
 function routes() {
-    return Object.entries(PATHS).flatMap(([p, item]) => Object.keys(item).map((method) => `${method.toUpperCase()} ${MOUNT}${p}`)).sort();
+    return [...Object.entries(PATHS).flatMap(([p, item]) => Object.keys(item).map((method) => `${method.toUpperCase()} ${MOUNT}${p}`)), ...Object.entries(searchPaths).flatMap(([p, item]) => Object.keys(item).map(method => `${method.toUpperCase()} ${p}`))].sort();
 }
 
 /** Serve GET /openapi.json here; GET /api/v1/openapi.json redirects to it (308). */

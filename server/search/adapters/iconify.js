@@ -1,8 +1,13 @@
 'use strict';
+const { requestFor } = require('../transport');
 module.exports = {
     id: 'iconify',
+    price_per_1000: 0, byok: false, checked_on: '2026-11-09', source: 'https://iconify.design/docs/api/',
+    freshness: [],
+    hosts: ['api.iconify.design'],
     kinds: ['icons'],
-    async search(b, get) {
+    async search(b, { fetchImpl }) {
+        const get = requestFor(this.hosts, fetchImpl);
         const out = await get(
             'https://api.iconify.design/search?' +
                 new URLSearchParams({

@@ -1,0 +1,25 @@
+{
+  "response": {
+    "code": 200,
+    "data": [
+      {
+        "title": "Lantern",
+        "url": "https://example.org/article",
+        "description": "A new lantern",
+        "publishedTime": "2026-11-08T12:00:00Z",
+        "usage": {
+          "tokens": 10000
+        }
+      }
+    ]
+  },
+  "request": {
+    "host": "s.jina.ai",
+    "path": "/",
+    "method": "GET"
+  },
+  "expected": {
+    "title": "Lantern",
+    "cost": 0.0005
+  }
+}
