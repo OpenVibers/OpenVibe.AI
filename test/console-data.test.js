@@ -17,7 +17,7 @@ app.use(consoleDataRouter({
         async getProvider(key) { return key === 'openai' ? { key, base_url: 'https://api.openai.com/v1' } : null; },
         async upsertProvider(provider) { return provider; }, async audit(...args) { audit.push(args); },
     }, pool: {}, quotas: {}, cache: {}, runs: {}, auth,
-    ops: { async providerView(p) { return { key: p.key, has_key: true, secret_ref: p.secret_ref }; } },
+        ops: { async providerView(p) { return { key: p.key, credentials: 'configured', secret_ref: p.secret_ref }; } },
     vault: { async put(key, value) { saved.push([key, value]); } },
     settings: { providerKeys: { async setOrigin() {} } },
     fetchImpl: async () => new Response(JSON.stringify({ data: [] }), { status: 200, headers: { 'content-type': 'application/json' } }),
@@ -32,6 +32,16 @@ app.use(consoleDataRouter({
         const body = await read.text();
         assert.strictEqual(read.status, 200);
         assert.ok(!body.includes(secret));
+        const providerData = JSON.parse(body);
+        assert.strictEqual(providerData.presets.length, require('../server/providers/pool-providers').PROVIDERS.length);
+        assert.strictEqual(providerData.providers[0].key_present, true);
+        const added = providerData.presets.filter((p) => ['venice', 'abliteratedmodels', 'uplinkswitch', 'chutes', 'siliconflow', 'nebius', 'together', 'fireworks', 'groq', 'cerebras', 'sambanova', 'baseten', 'hyperbolic'].includes(p.key));
+        assert.ok(added.filter((p) => p.key !== 'together').every((p) => p.provider_access === 'UNVERIFIED'));
+        assert.strictEqual(providerData.presets.find((p) => p.key === 'together').provider_access, 'RESTRICTED');
+        const models = await fetch(`${base}/api/v1/admin/console/models`);
+        assert.deepStrictEqual(await models.json(), { models: [] });
+        const book = await fetch(`${base}/api/v1/admin/console/pricebook`);
+        assert.ok(Array.isArray((await book.json()).pending));
         const write = await fetch(`${base}/api/v1/admin/console/providers/openai/key`, {
             method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ api_key: secret }),
         });

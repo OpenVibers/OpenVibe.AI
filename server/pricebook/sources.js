@@ -108,6 +108,21 @@ const SOURCES = [
         kind: 'json',
         parse: parsers.openrouter,
     },
+    ...[
+        ['venice', 'https://api.venice.ai/api/v1/models'],
+        ['abliteratedmodels', 'https://api.abliteratedmodels.cc/v1/models'],
+        ['uplinkswitch', 'https://api.uplinkswitch.ai/v1/models'],
+        ['chutes', 'https://llm.chutes.ai/v1/models'],
+        ['siliconflow', 'https://api.siliconflow.com/v1/models'],
+        ['nebius', 'https://api.tokenfactory.nebius.com/v1/models'],
+        ['together', 'https://api.together.xyz/v1/models'],
+        ['fireworks', 'https://api.fireworks.ai/inference/v1/models'],
+        ['groq', 'https://api.groq.com/openai/v1/models'],
+        ['cerebras', 'https://api.cerebras.ai/public/v1/models'],
+        ['sambanova', 'https://api.sambanova.ai/v1/models'],
+        ['baseten', 'https://inference.baseten.co/v1/models'],
+        ['hyperbolic', 'https://api.hyperbolic.xyz/v1/models'],
+    ].map(([key, url]) => ({ key, provider: key, role: 'own', url, kind: 'json', parse: parsers.compatibleModels })),
 ];
 
 /** The listings that may change a price (the cross-reference is not one of them). */

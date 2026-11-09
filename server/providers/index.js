@@ -325,7 +325,13 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         const p = await registry.getProvider(providerKey);
         if (!p || isFreeProvider(p)) return null;
         const row = model ? await registry.getModel(providerKey, model) : null;
-        return rates.buildCards({ providerKey, model: model || null, row, pricing: config.pricing });
+        const markup = Number(p.metadata && p.metadata.markup_percent) || 0;
+        const override = row && row.metadata && row.metadata.owner_override && row.metadata.owner_override.cost;
+        const baseCost = row ? { ...row.cost, ...(override || {}) } : null;
+        const billable = row && override ? { ...row, cost: baseCost } : row;
+        const cards = rates.buildCards({ providerKey, model: model || null, row: billable, pricing: config.pricing });
+        if (!cards || markup <= 0) return cards;
+        return Object.fromEntries(Object.entries(cards).map(([kind, card]) => [kind, { ...card, unit_price_usd: Number(card.unit_price_usd) * (1 + markup / 100) }]));
     }
     async function priceFor(providerKey, model) {
         const cards = await rateCardsFor(providerKey, model);

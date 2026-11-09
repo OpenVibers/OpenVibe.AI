@@ -32,15 +32,23 @@ function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth,
             return { status: await ops.status(), counts24: await q.statusCounts(db, since), failures24: await q.failures(db, since), queue: runs.stats(), cache: await cache.stats() };
         }
         if (section === 'providers') {
-            const rows = await Promise.all((await registry.listProviders()).map(ops.providerView));
+            const rows = (await Promise.all((await registry.listProviders()).map(ops.providerView))).map((p) => ({
+                ...p, key_present: p.credentials === 'configured', preference_order: p.priority,
+                markup_percent: Number(p.metadata && p.metadata.markup_percent) || 0,
+                uncensored: Boolean(p.metadata && p.metadata.uncensored),
+            }));
+            const poolProviders = require('../providers/pool-providers').PROVIDERS;
             const estimates = creditGrants ? await Promise.all(['anthropic', 'openai'].map(async (provider) => ({
                 provider, grants: await creditGrants.list(provider), estimate: creditGrants.values().find((x) => x.provider === provider) || null,
                 preference: await creditGrants.preference(provider),
             }))) : [];
             const cookies = sessionCookies ? await sessionCookies.list('operator', 'owner') : [];
             const balances = sessionCookies ? await Promise.all(cookies.map((c) => sessionCookies.balance('operator', 'owner', c.id))) : [];
-            return { providers: rows, models: await registry.listModels(), credit_estimates: estimates, session_credentials: cookies, session_balances: balances };
+            return { providers: rows, models: (await registry.listModels()).map((m) => ({ ...m, accepted_price: m.cost,
+                owner_override: m.metadata && m.metadata.owner_override || null })), presets: poolProviders.map((p) => ({ key: p.key, display_name: p.display_name, base_url: p.base_url, default_model: p.default_model, provider_access: p.provider_access, uncensored: Boolean(p.uncensored), models: p.models })), credit_estimates: estimates, session_credentials: cookies, session_balances: balances };
         }
+        if (section === 'models') return { models: (await registry.listModels()).map((m) => ({ ...m, accepted_price: m.cost,
+            owner_override: m.metadata && m.metadata.owner_override || null })) };
         if (section === 'runs') {
             const { filters, form, bad } = q.parseRunFilters(req.query);
             const list = await q.listRuns(db, filters);
