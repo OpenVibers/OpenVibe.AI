@@ -19,6 +19,7 @@ const space = require('./space');
 const media = require('./media');
 const core = require('./core');
 const products = require('./products');
+const devblog = require('./devblog');
 const chat = require('./chat');
 const research = require('./research');
 const meme = require('./meme');
@@ -259,11 +260,11 @@ async function seed({ registry, quotas, config, env = process.env, db }) {
     await registry.seedVersioned('route', 'chat.member', { primary: { provider: 'shared', model: null }, fallbacks: [], options: {}, max_output_tokens: 600, response_format: 'text', timeout_ms: null, alias_of: 'default.chat' });
 
     // Templates, then workflows (workflows reference templates)
-    for (const t of [...live.templates, ...core.templates, ...products.templates, ...media.templates, ...chat.templates, ...space.templates, ...research.templates, ...meme.templates, ...changelog.templates]) {
+    for (const t of [...live.templates, ...core.templates, ...products.templates, ...devblog.templates, ...media.templates, ...chat.templates, ...space.templates, ...research.templates, ...meme.templates, ...changelog.templates]) {
         const { key, ...def } = t;
         await registry.seedVersioned('template', key, { description: null, default_route: null, owner: 'ai', visibility: 'internal', metadata: {}, ...def });
     }
-    for (const w of [...live.workflows, ...core.workflows, ...products.workflows, ...media.workflows, ...chat.workflows, ...space.workflows, ...research.workflows, ...meme.workflows, ...changelog.workflows]) {
+    for (const w of [...live.workflows, ...core.workflows, ...products.workflows, ...devblog.workflows, ...media.workflows, ...chat.workflows, ...space.workflows, ...research.workflows, ...meme.workflows, ...changelog.workflows]) {
         const { key, ...def } = w;
         await registry.seedVersioned('workflow', key, { description: null, default_route: null, cache_ttl_sec: null, metadata: {}, ...def });
     }

@@ -1,0 +1,11 @@
+{
+  "data": [
+    {
+      "id": "gpt-oss-120b",
+      "pricing": {
+        "input": 0.22,
+        "output": 0.59
+      }
+    }
+  ]
+}

@@ -490,6 +490,19 @@ function openrouter(json) {
     return out;
 }
 
+/** OpenAI-compatible providers' public model listings, when the listing includes provider pricing metadata. */
+function compatibleModels(json) {
+    const out = {};
+    for (const m of (json && (json.data || json.models)) || []) {
+        const p = (m && (m.pricing || m.metadata && m.metadata.pricing)) || null;
+        if (!p || !m.id) continue;
+        const pick = (...keys) => { for (const k of keys) if (p[k] != null) return num(p[k]); return null; };
+        const entry = { in: pick('input', 'prompt', 'input_tokens'), cached: pick('cached', 'cache_read', 'cached_input', 'cache_read_tokens'), out: pick('output', 'completion', 'output_tokens') };
+        if (Object.values(entry).some((v) => v != null)) out[String(m.id).trim().toLowerCase()] = entry;
+    }
+    return out;
+}
+
 /**
  * Refuseless publishes its model list but no price at all (its pricing page answers a bot check). The parser
  * reads the list and finds no price, so the price book leaves every price of that provider alone.
@@ -521,6 +534,6 @@ function refuseless(text) {
 
 module.exports = {
     leaf, num, money, price, markdownTables, htmlText, columnOf, normHead, leadingId, trailingId,
-    glm, abliteration, minimax, deepseek, qwen, kimi, deepinfra, novita, featherless, openrouter, refuseless,
+    glm, abliteration, minimax, deepseek, qwen, kimi, deepinfra, novita, featherless, openrouter, refuseless, compatibleModels,
     peakHours, weekdaySet, complementHours, offPeakBlocks, deepseekOffPeakBlocks,
 };

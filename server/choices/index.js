@@ -21,7 +21,7 @@ const built = (model = 'openvibe/auto') => ({ model, source: 'openvibe' });
 
 // The tasks the plan names, seeded once. A service registers its own with POST /api/v1/tasks.
 const SEEDS = [
-    ['blog.devblog.write', 'text', 'Write a named devblog from the team’s changes.', 'ai.generate'],
+    ['blog.devblog.write', 'text', 'Write a named devblog from the team’s changes.', 'content.devblog'],
     ['blog.devblog.art', 'image', 'Draw title art for a devblog.', 'ai.image'],
     ['wiki.article.write', 'text', 'Write a sourced wiki article.', 'ai.generate'],
     ['wiki.article.images', 'search', 'Find licensed pictures for a wiki article.', 'research.gather'],
@@ -105,6 +105,7 @@ function createChoices({ db, registry, preferences, credentials, machines, catal
             await db.prepare('INSERT INTO ai_tasks (name, service, kind, sentence, builtin, workflow, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (name) DO NOTHING')
                 .run(name, name.split('.')[0], kind, sentence, JSON.stringify(built(model)), workflow, iso(clock.now()));
         }
+        await db.prepare("UPDATE ai_tasks SET workflow = 'content.devblog' WHERE name = 'blog.devblog.write' AND workflow = 'ai.generate'").run();
         // Design's icon generator is the first consumer and what it already does becomes the owner's default:
         // signed out the cheapest good model, signed in Claude.
         await db.prepare('INSERT INTO ai_task_defaults (task, value, updated_by, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT (task) DO NOTHING')

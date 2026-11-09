@@ -116,7 +116,8 @@ function createRegistry(db, { clock = { now: () => Date.now() }, env = process.e
               timeout_ms = excluded.timeout_ms, priority = excluded.priority, billing_profile = excluded.billing_profile, pool_key = excluded.pool_key,
               provider_access = excluded.provider_access, metadata = excluded.metadata, origin = excluded.origin, updated_at = excluded.updated_at`)
             .run({ ...p, capabilities: JSON.stringify(p.capabilities), metadata: JSON.stringify(p.metadata), origin, t });
-        await audit(actor, prev ? 'provider.update' : 'provider.create', 'provider', p.key, { trace, metadata: { kind: p.kind, status: p.status, base_url: p.base_url, secret_ref: p.secret_ref, origin } });
+        await audit(actor, prev ? 'provider.update' : 'provider.create', 'provider', p.key, { trace, metadata: { kind: p.kind, status: p.status, base_url: p.base_url, secret_ref: p.secret_ref, origin,
+            provider_access: p.provider_access, priority: p.priority, markup_percent: Number(p.metadata && p.metadata.markup_percent) || 0, uncensored: Boolean(p.metadata && p.metadata.uncensored) } });
         return await getProvider(p.key);
     }
 
@@ -175,7 +176,8 @@ function createRegistry(db, { clock = { now: () => Date.now() }, env = process.e
                 terms.free_allowance ?? 0, terms.reset_period || 'month', terms.effective_from || null, terms.source || null, terms.verified_at || null,
                 sup.json === false ? 0 : 1, sup.tools ? 1 : 0, sup.streaming ? 1 : 0, sup.vision ? 1 : 0,
                 JSON.stringify(input.metadata || (prev && prev.metadata) || {}), t, t);
-        await audit(actor, prev ? 'model.update' : 'model.create', 'model', `${input.provider_key}/${input.model_key}`, { trace, metadata: { status, type } });
+        await audit(actor, prev ? 'model.update' : 'model.create', 'model', `${input.provider_key}/${input.model_key}`, { trace, metadata: { status, type,
+            owner_override_reason: input.metadata && input.metadata.owner_override && input.metadata.owner_override.reason || null } });
         return await getModel(input.provider_key, input.model_key);
     }
 
@@ -359,7 +361,7 @@ function createRegistry(db, { clock = { now: () => Date.now() }, env = process.e
         schemas.assertSchema(w.output_schema, 'output_schema');
         if (!Array.isArray(w.steps) || !w.steps.length) throw new AiError(422, 'ai.invalid', 'workflow needs at least one step');
         for (const s of w.steps) {
-            if (!s || !['llm', 'passthrough', 'complete', 'messages', 'transcribe', 'embed', 'image', 'media_analysis', 'research'].includes(s.kind)) throw new AiError(422, 'ai.invalid', 'step kind must be llm, passthrough, complete, messages, transcribe, embed, image, media_analysis or research');
+            if (!s || !['llm', 'passthrough', 'complete', 'messages', 'transcribe', 'embed', 'image', 'media_analysis', 'research', 'devblog'].includes(s.kind)) throw new AiError(422, 'ai.invalid', 'step kind must be llm, passthrough, complete, messages, transcribe, embed, image, media_analysis or research');
             if ((s.kind === 'llm' || (s.kind === 'media_analysis' && s.template)) && !(s.template && await latestAny('templates', s.template))) throw new AiError(422, 'ai.invalid', `step references unknown template ${s.template}`);
         }
         if (!['none', 'private', 'service'].includes(w.cache_mode)) throw new AiError(422, 'ai.invalid', 'cache_mode must be none, private or service');

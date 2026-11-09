@@ -46,7 +46,9 @@ function runsRouter({ choices = null, runs, registry, auth, config, log = consol
             if (!appMayRun(req.principal, workflowKey)) throw new AiError(403, 'capability.namespace_denied', `an app may only run its own app.${req.principal.projectKey}.* namespace, not ${workflowKey}`);
             return;
         }
-        if (!namespaceAllowed(req.principal, workflowKey)) throw new AiError(403, 'capability.namespace_denied', `this token may not run ${workflowKey}`);
+        // content.devblog is the Blog writer's public workflow name; it uses the existing blog grant.
+        const permissionKey = workflowKey === 'content.devblog' ? 'blog.devblog.write' : workflowKey;
+        if (!namespaceAllowed(req.principal, permissionKey)) throw new AiError(403, 'capability.namespace_denied', `this token may not run ${workflowKey}`);
     }
 
     /**
@@ -71,7 +73,9 @@ function runsRouter({ choices = null, runs, registry, auth, config, log = consol
         const run = await runs.explained(await runs.wait(created, waitMs));
         const status = !created.created ? 200 : (runs.TERMINAL.has(run.status) ? 201 : 202);
         if (status === 202) res.setHeader('Location', `/api/v1/runs/${run.id}`);
-        return res.status(status).json({ run, replayed: !created.created || undefined });
+        // The run's numbered sources with it: a product that files the output (a wiki draft) needs their URLs and
+        // licences to attach the citations its sentences used, without a second call.
+        return res.status(status).json({ run, citations: await runs.citations(run.id), replayed: !created.created || undefined });
     }
 
     /**

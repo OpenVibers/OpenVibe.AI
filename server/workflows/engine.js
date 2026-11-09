@@ -466,7 +466,11 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
             if (err && err.status === 422) throw new AiError(422, 'input.invalid', err.message);
             throw err;
         }
-        if (!output.sources.length && !output.images.length) throw new AiError(502, 'source.unavailable', `no source answered for "${output.query}"`, { providers: output.providers });
+        if (!output.sources.length && !output.images.length) {
+            // A writer already has its article's sources: web search finding nothing new is not a failed run.
+            if (Array.isArray(input.sources) && input.sources.length) output = { ...output, sources: input.sources };
+            else throw new AiError(502, 'source.unavailable', `no source answered for "${output.query}"`, { providers: output.providers });
+        }
         // Recorded like a provider call: DeepSeek's per-call price counts against the cost quotas and the daily usage.
         const exec = { provider: 'research', model: 'megasource', usage: { input: 0, output: 0, cached: 0 }, cost: Number(output.usage && output.usage.cost_usd) || 0, synthetic: false, fallbackUsed: false, explain: ctx.taskChoice ? {
             // The contract's explain needs an objective, a reason, what was selected and the candidates; a search
@@ -486,7 +490,21 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
         return { cited: [], gaps: gaps.slice(0, 20), read: (output && output.sources ? output.sources.length : 0) };
     }
 
-    const STEP = { llm: llmStep, passthrough: passthroughStep, complete: completeStep, messages: messagesStep, transcribe: transcribeStep, embed: embedStep, image: imageStep, media_analysis: mediaAnalysis.step, research: researchStep };
+    async function devblogStep(step, input, wf, run, ctx) {
+        const usage = { input: 0, output: 0, cached: 0 };
+        let cost = 0, savedUsd = 0, last;
+        const output = await require('./devblog').execute({ input, call: async (phase, payload) => {
+            last = await llmStep({ kind: 'llm', template: `content.devblog.${phase}`, output: 'json', operation: 'generate', params: { max_tokens: 6000, temperature: 0.3 } }, { payload: JSON.stringify(payload) }, wf, run, ctx);
+            const valid = schemas.validate(last.jsonSchema, last.output);
+            if (!valid.valid) throw new AiError(502, 'output.invalid', 'Invalid devblog agent response');
+            for (const key of Object.keys(usage)) usage[key] += last.exec.usage[key] || 0;
+            cost += last.exec.cost || 0; savedUsd += Number(last.exec.savedUsd) || 0;
+            return last.output;
+        } });
+        return { output, exec: { ...last.exec, usage, cost, savedUsd }, route: last.route };
+    }
+
+    const STEP = { devblog: devblogStep, llm: llmStep, passthrough: passthroughStep, complete: completeStep, messages: messagesStep, transcribe: transcribeStep, embed: embedStep, image: imageStep, media_analysis: mediaAnalysis.step, research: researchStep };
 
     /**
      * Run a workflow. ctx: { signal, logRequest, debugRaw, inputHash }
@@ -500,10 +518,22 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
         let saved = 0;
         let exec = null;
         let jsonSchema = null;
+        let researchOut = null;
         for (const step of wf.steps) {
             const fn = STEP[step.kind];
             if (!fn) throw new AiError(500, 'workflow.broken', `unknown step kind ${step.kind}`);
             last = await fn(step, input, wf, run, ctx);
+            // A research step feeds the steps after it: what it read joins input.sources, with the caller's own
+            // sources first and no URL twice, so the writer cites the numbered list it was shown.
+            if (step.kind === 'research' && last && last.output) {
+                researchOut = last.output;
+                const before = Array.isArray(input.sources) ? input.sources : [];
+                const seen = new Set(before.map((s) => s && s.url).filter(Boolean));
+                const added = (Array.isArray(last.output.sources) ? last.output.sources : []).filter((s) => s && s.url && !seen.has(s.url));
+                if (added.length) input = { ...input, sources: [...before, ...added] };
+                // The structured facts research read (Wikidata and the sources) fill a wiki article's infobox.
+                if (Array.isArray(last.output.facts) && last.output.facts.length) input = { ...input, facts: last.output.facts };
+            }
             if (last.exec) {
                 exec = last.exec;
                 usage.input += exec.usage.input || 0;
@@ -527,7 +557,16 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
         }));
         return {
             output: last.output, citations, jsonSchema,
-            grounding: wf.steps.some((s) => s.kind === 'research') ? researchGrounding(last.output) : groundingOf(last.output, sources.length, citeStep),
+            grounding: researchOut
+                ? (wf.steps.length === 1
+                    ? researchGrounding(researchOut)
+                    : (() => {
+                        // A workflow that researches and then writes: what was read, and what the answer cites.
+                        const read = researchGrounding(researchOut);
+                        const wrote = groundingOf(last.output, sources.length, citeStep);
+                        return { ...read, cited: wrote.cited, gaps: [...read.gaps, ...wrote.gaps].slice(0, 20) };
+                    })())
+                : groundingOf(last.output, sources.length, citeStep),
             synthetic: Boolean(exec && exec.synthetic),
             provider: exec ? exec.provider : null, model: exec ? exec.model : null, fallbackUsed: Boolean(exec && exec.fallbackUsed),
             ...(exec && exec.result && exec.result.label ? { contentPolicy: exec.result.policy || 'uncensored', label: exec.result.label } : {}),

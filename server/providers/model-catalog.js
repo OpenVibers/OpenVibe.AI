@@ -115,10 +115,21 @@ function availabilityOf(row, provider) {
     return 'available';
 }
 
+/** Owner price override and provider markup are the final retail rate, while the stored row remains the accepted base price. */
+function effectiveCost(row, provider) {
+    const override = row && row.metadata && row.metadata.owner_override && row.metadata.owner_override.cost;
+    const cost = { ...((row && row.cost) || {}), ...(override || {}) };
+    const markup = Number(provider && provider.metadata && provider.metadata.markup_percent) || 0;
+    if (markup > 0) for (const key of ['in_per_mtok', 'out_per_mtok', 'cached_per_mtok', 'cache_write_per_mtok'])
+        if (cost[key] != null) cost[key] = Number(cost[key]) * (1 + markup / 100);
+    return cost;
+}
+
 /** One registry model as an ai.model@1 catalog entry. Legacy fields stay for readers of the old shape. */
 function entryOf(row, provider) {
     const meta = (row && row.metadata) || {};
     const artifact = artifactOf(row, provider);
+    const cost = effectiveCost(row, provider);
     const out = {
         provider_key: row.provider_key,
         model_key: row.model_key,
@@ -129,10 +140,10 @@ function entryOf(row, provider) {
         context_window: row.context_window == null ? null : Number(row.context_window),
         max_output: row.max_output == null ? null : Number(row.max_output),
         cost: {
-            in_per_mtok: row.cost.in_per_mtok == null ? null : Number(row.cost.in_per_mtok),
-            out_per_mtok: row.cost.out_per_mtok == null ? null : Number(row.cost.out_per_mtok),
-            cached_per_mtok: row.cost.cached_per_mtok == null ? null : Number(row.cost.cached_per_mtok),
-            ...(row.cost.cache_write_per_mtok == null ? {} : { cache_write_per_mtok: Number(row.cost.cache_write_per_mtok) }),
+            in_per_mtok: cost.in_per_mtok == null ? null : Number(cost.in_per_mtok),
+            out_per_mtok: cost.out_per_mtok == null ? null : Number(cost.out_per_mtok),
+            cached_per_mtok: cost.cached_per_mtok == null ? null : Number(cost.cached_per_mtok),
+            ...(cost.cache_write_per_mtok == null ? {} : { cache_write_per_mtok: Number(cost.cache_write_per_mtok) }),
         },
         supports: { ...row.supports },
         metadata: meta,
@@ -152,7 +163,7 @@ function entryOf(row, provider) {
         if (meta.license) out.license = meta.license;
     }
     if (Number(row.context_window) > 0) out.context = Number(row.context_window);
-    const retail = retailRate(row);
+    const retail = retailRate({ ...row, cost });
     if (retail) out.retail_rate = retail;
     return out;
 }
