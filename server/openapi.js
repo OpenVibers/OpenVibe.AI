@@ -444,6 +444,32 @@ const exchangeModel = {
         offers: arrayOf(exchangeOffer),
     },
 };
+route('get', '/exchange/market', {
+    operationId: 'exchangeMarket', summary: 'Every own-page model and provider offer, enabled or not',
+    tags: ['exchange'], security: [], servers: [{ url: 'https://api.openvibe.exchange' }],
+    description: 'Public, cached 60 seconds. exchange.market@1 lists provider-page prices per million tokens, routing and preset flags, and model metadata with per-field sources. Metadata refreshes daily; a failed read retains the last copy marked stale. Observed prices may differ from approved routing prices.',
+    parameters: [query('limit', integer({ minimum: 1, maximum: 500, default: 100 })),
+        query('cursor', str(), 'Continue with next_cursor and the same filters'), query('maker', str()),
+        query('open_weights', { type: 'boolean' }), query('kind', str({ enum: ['chat', 'embedding', 'stt', 'image'] }))],
+    responses: { 200: json('Market offers with price and metadata provenance', {
+        type: 'object', required: ['$schema', 'generated_at', 'metadata', 'total_models', 'total_offers', 'offers', 'next_cursor'],
+        properties: {
+            $schema: { const: 'exchange.market@1' }, generated_at: str({ format: 'date-time' }),
+            total_models: integer({ minimum: 0 }), total_offers: integer({ minimum: 0 }), next_cursor: nullable('string'),
+            metadata: { type: 'object', properties: { source: str({ format: 'uri' }), checked_at: nullable('string', { format: 'date-time' }), stale: { type: 'boolean' } } },
+            offers: arrayOf({ type: 'object', properties: {
+                model: str(), provider: str(), provider_name: str(), provider_model: str(), name: str(), kind: str(),
+                price: { type: 'object', properties: { in: nullable('number'), out: nullable('number'), cached: nullable('number'), currency: { const: 'USD' }, per: { const: '1M tokens' } } },
+                price_source: nullable('string', { format: 'uri' }), price_checked_at: nullable('string'),
+                routed: { type: 'boolean' }, uncensored: { type: 'boolean' }, provider_access: str(),
+                maker: nullable('string'), context: nullable('number'), max_output: nullable('number'),
+                open_weights: nullable('boolean'), licence: nullable('string'), release_date: nullable('string'), knowledge_cutoff: nullable('string'),
+                modalities: { type: ['object', 'null'], properties: { input: arrayOf(str()), output: arrayOf(str()) } },
+                field_sources: { type: 'object', additionalProperties: str({ format: 'uri' }) },
+            } }),
+        },
+    }), ...errors([422]) },
+});
 route('get', '/exchange/catalog', {
     operationId: 'exchangeCatalog', summary: 'Every model and every offer that serves it', tags: ['exchange'], security: [],
     description: 'Public. The live offers: price in, out and cached per million tokens, measured p50/p95, uptime, requests, and the provider data policy. Speed and uptime are read from the last seven days of real runs (time to the first token where a receipt recorded one, else the answering attempt\'s total); cached answers are counted apart and excluded from speed, uptime and requests. Uptime is succeeded / (succeeded + failed); null when no data, never 0. A prepaid offer has no price (free: true); free_tier says whether the free allowance and the anonymous Try it may use an offer at all (a named AI_FREE_PROVIDERS source under the output price ceiling). Models carry a kind (chat, embedding, stt, image); chat lists must use kind "chat" and never mix embeddings or speech-to-text.',
