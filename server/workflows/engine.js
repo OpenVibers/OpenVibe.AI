@@ -153,6 +153,7 @@ function batchExec(b, result) {
 }
 
 function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spawnImpl, log = console, research = null }) {
+    pool = require('../effort/pool').wrapPool(pool);
     // One loopback reader for everything that streams media (server/media-proxy.js): transcripts and media.analyze.
     let proxy = null;
     const reader = () => proxy || (proxy = require('../media-proxy').createMediaProxy({ fetcher, log }));

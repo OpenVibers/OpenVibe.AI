@@ -261,6 +261,8 @@ function createCatalog({ db, registry, pool, env = process.env, clock = { now: (
         // What those offers actually did: real runs (cached answers counted apart), TTFT where recorded,
         // else the answering attempt's total latency.
         const measured = await seen.read({ days });
+        const shares = await require('../effort/analytics').cacheShares(db, clock);
+        for (const d of drafts) d.offer.cache_hit_share_7d = shares.get(`${d.providerKey}/${d.modelKey}`) ?? null;
         observed.fold(measured, drafts);
         // The router's own measurements win once they have 20 samples; until then the observed runs' numbers stay.
         const performance = await db.prepare('SELECT * FROM provider_metrics').all();

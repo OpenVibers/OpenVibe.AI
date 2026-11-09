@@ -45,6 +45,10 @@ function adminRouter({ config = {}, db, registry, pool, quotas, cache, runs, aut
     const view = async (p) => { const v = await ops.providerView(p); return v && { ...v, billing_profile: p.billing_profile, pool_key: p.pool_key }; };
     const body = (req) => (req.body && typeof req.body === 'object' ? req.body : {});
 
+    const agentDefaults = require('../effort/defaults').createDefaults({ db, registry });
+    r.get('/api/v1/agent-role-defaults', auth.requireCap(CAPS.configManage), wrap(async () => ({ roles: await agentDefaults.get() })));
+    r.put('/api/v1/agent-role-defaults/:role', auth.requireCap(CAPS.configManage), wrap(async (req) => ({ role: req.params.role, default: await agentDefaults.put(req.params.role, body(req), actor(req)) })));
+
     r.get('/api/v1/status', usageRead, wrap(async () => await ops.status()));
 
     // Providers

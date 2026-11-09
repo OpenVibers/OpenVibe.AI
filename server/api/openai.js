@@ -42,6 +42,7 @@
  * shape ({ error: { message, type, code } }) with the HTTP status the run's problem had.
  */
 const express = require('express');
+const { controls } = require('../effort/defaults');
 const { CAPS } = require('../auth');
 const { appAttribution } = require('../apps');
 const { credentialFor } = require('./credential');
@@ -201,7 +202,7 @@ function openaiRouter({ runs, auth, config, registry, presets = null, receipts =
         if (maxTokens != null) input.max_tokens = Math.max(1, Math.min(Number(maxTokens) || 1, 16000));
         // AI Exchange F: the caller's liability cap for the Balance hold (an OpenVibe extension, like x_openvibe).
         if (b.max_cost_usd != null) input.max_cost_usd = b.max_cost_usd;
-        let body = { workflow: 'ai.complete', input, idempotency_key: req.get('idempotency-key') || undefined };
+        let body = { ...controls(b), workflow: 'ai.complete', input, idempotency_key: req.get('idempotency-key') || undefined };
         // The preset's rules ride the run into the router.
         if (preset) body = { ...body, preset: { name: preset.name, scope: preset.scope, policy: preset.policy } };
         if (preset && preset.policy.adult && b.policy == null) body = { ...body, policy: 'uncensored' };

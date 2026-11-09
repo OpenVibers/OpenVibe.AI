@@ -1,0 +1,13 @@
+[
+  {"provider":"openai","kind":"openai","model":"gpt-5.5","effort":"max","applied":"max","fields":{"reasoning_effort":"xhigh"}},
+  {"provider":"openai","kind":"openai","model":"o3","effort":"max","applied":"high","fields":{"reasoning_effort":"high"}},
+  {"provider":"anthropic","kind":"anthropic","model":"claude-opus-5-5","effort":"high","applied":"high","fields":{"thinking":{"type":"adaptive"},"output_config":{"effort":"high"}}},
+  {"provider":"anthropic","kind":"anthropic","model":"claude-sonnet-5-5","effort":"low","applied":"low","fields":{"thinking":{"type":"adaptive"},"output_config":{"effort":"low"}}},
+  {"provider":"gemini","kind":"gemini","model":"gemini-3.1-pro-preview","effort":"max","applied":"high","fields":{"generationConfig":{"thinkingConfig":{"thinkingLevel":"HIGH"}}}},
+  {"provider":"gemini","kind":"gemini","model":"gemini-2.5-flash","effort":"medium","applied":"medium","fields":{"generationConfig":{"thinkingConfig":{"thinkingBudget":4096}}}},
+  {"provider":"qwen","kind":"openai","model":"qwen3.8-max","effort":"high","applied":"high","fields":{"enable_thinking":true,"thinking_budget":16384}},
+  {"provider":"qwen","kind":"openai","model":"qwen3.8-max","effort":"low","applied":"low","fields":{"enable_thinking":false}},
+  {"provider":"deepseek","kind":"openai","model":"deepseek-v4-flash","effort":"high","applied":"medium","fields":{"thinking":{"type":"enabled"}}},
+  {"provider":"deepseek","kind":"anthropic","model":"deepseek-v4-flash","effort":"low","applied":"low","fields":{"thinking":{"type":"disabled"}}},
+  {"provider":"unknown","kind":"openai","model":"llama-3","effort":"high","applied":null,"fields":{}}
+]
