@@ -96,7 +96,7 @@ npm run dev                 # http://localhost:4700
 npm test                    # stub provider, temp databases, local servers only — no network
 ```
 
-Node 22 (CI pins 22.22.1). Callers need an OpenVibe.Network service token with audience
+Link 22 (CI pins 22.22.1). Callers need an OpenVibe.Network service token with audience
 `openvibe.ai`; the Network public key is fetched from `/api/.well-known/jwks` (or pinned with
 `OV_NETWORK_PUBLIC_KEY`).
 
@@ -781,7 +781,7 @@ logged or stored.
 
 ### The CLI
 
-`openvibe-node exchange serve --model qwen3:32b --public-url https://…/v1` (OpenVibe Link) serves the local model
+`openvibe-link exchange serve --model qwen3:32b --public-url https://…/v1` (OpenVibe Link) serves the local model
 through an OpenAI-compatible listener and registers it on the existing endpoint-seller API with the person's
 `OPENVIBE_DEVELOPER_KEY`; Ctrl-C removes the offer. See that repo's README.
 

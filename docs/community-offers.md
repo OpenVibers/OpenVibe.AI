@@ -21,7 +21,7 @@ capacity per request — because the machine sees the prompt.
    hours, a credit price and an audience.
 4. **AI** (`server/community/`) reads `GET /internal/ai/offers`, verifies the machine, and places only opted-in requests.
 
-A second source needs no Node at all: a standalone OpenAI-compatible server is registered by its own address on the
+A second source needs no Link at all: a standalone OpenAI-compatible server is registered by its own address on the
 public seller API (see **Community endpoints** below) and joins the same list, verification and ledger.
 
 ## Opting in
@@ -133,5 +133,5 @@ list (models, price, hours, health; never an owner subject or machine id).
   buyer identity, the timeout/concurrency), canaries, fingerprint, free tier and self-dealing for an endpoint.
 - `node test/community-endpoint-api.test.js` — the seller API: the owner from the developer key, refusals, list and
   remove.
-- Network: `node test/run.js ai-offers`; Bot: `node test/community-ai.test.js`; Node: `python3 -m unittest discover -s
+- Network: `node test/run.js ai-offers`; Bot: `node test/community-ai.test.js`; Link: `python3 -m unittest discover -s
   plugins/ai/tests`.

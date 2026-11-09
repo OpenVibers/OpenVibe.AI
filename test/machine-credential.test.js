@@ -34,21 +34,21 @@ t.test('boot', async () => {
 });
 
 t.test('store a node credential: the machine, no key', async () => {
-    let r = await request(h.base, 'PUT', `/api/v1/credentials/${FRAN}`, { tok: chat, body: { provider: 'node', machine: MACHINE, api_key: 'sk-not-for-a-machine' } });
+    let r = await request(h.base, 'PUT', `/api/v1/credentials/${FRAN}`, { tok: chat, body: { provider: 'link', machine: MACHINE, api_key: 'sk-not-for-a-machine' } });
     assert.strictEqual(r.status, 422, 'no key for a machine');
-    r = await request(h.base, 'PUT', `/api/v1/credentials/${FRAN}`, { tok: chat, body: { provider: 'node', models: { chat: 'llama3.1:8b' } } });
+    r = await request(h.base, 'PUT', `/api/v1/credentials/${FRAN}`, { tok: chat, body: { provider: 'link', models: { chat: 'llama3.1:8b' } } });
     assert.strictEqual(r.status, 422, 'a node credential names its machine');
-    r = await request(h.base, 'PUT', `/api/v1/credentials/${FRAN}`, { tok: chat, body: { provider: 'node', machine: MACHINE, models: { chat: 'llama3.1:8b' } } });
+    r = await request(h.base, 'PUT', `/api/v1/credentials/${FRAN}`, { tok: chat, body: { provider: 'link', machine: MACHINE, models: { chat: 'llama3.1:8b' } } });
     assert.strictEqual(r.status, 200, r.text);
-    assert.deepStrictEqual([r.body.provider, r.body.machine, r.body.key_hint, r.body.models.chat], ['node', MACHINE, undefined, 'llama3.1:8b']);
+    assert.deepStrictEqual([r.body.provider, r.body.machine, r.body.key_hint, r.body.models.chat], ['link', MACHINE, undefined, 'llama3.1:8b']);
     const { validate } = require('openvibe-contracts');
     assert.ok(validate('ai.credential@1', r.body).valid, JSON.stringify(validate('ai.credential@1', r.body).errors));
     const row = await h.db.prepare('SELECT key_enc, machine FROM subject_credentials WHERE owner = ? AND subject = ?').get('chat', FRAN);
     assert.deepStrictEqual([row.key_enc, row.machine], ['', MACHINE], 'nothing sealed');
     // Any of their machines (contracts 0.221.0), kept for another person: never "anyone".
     const OTHER = 'usr_01JAB2C3D4E5F6G7H8J9K0MNP5';
-    assert.strictEqual((await request(h.base, 'PUT', `/api/v1/credentials/${OTHER}`, { tok: chat, body: { provider: 'node', machine: 'anyone', models: { chat: 'llama3.1:8b' } } })).status, 422);
-    r = await request(h.base, 'PUT', `/api/v1/credentials/${OTHER}`, { tok: chat, body: { provider: 'node', machine: 'any', models: { chat: 'llama3.1:8b' } } });
+    assert.strictEqual((await request(h.base, 'PUT', `/api/v1/credentials/${OTHER}`, { tok: chat, body: { provider: 'link', machine: 'anyone', models: { chat: 'llama3.1:8b' } } })).status, 422);
+    r = await request(h.base, 'PUT', `/api/v1/credentials/${OTHER}`, { tok: chat, body: { provider: 'link', machine: 'any', models: { chat: 'llama3.1:8b' } } });
     assert.deepStrictEqual([r.status, r.body.machine], [200, 'any'], r.text);
     assert.ok(validate('ai.credential@1', r.body).valid);
     assert.strictEqual((await request(h.base, 'DELETE', `/api/v1/credentials/${OTHER}`, { tok: chat })).status < 300, true);
@@ -76,7 +76,7 @@ t.test('a run with it goes to that machine as the person, costs nothing, and say
 
 t.test('an agent\'s loop on the person\'s machine (L55 C3): /v1/chat/completions passes the tools and the calls, and hands back the model\'s calls', async () => {
     const tools = [{ type: 'function', function: { name: 'web_search', description: 'Search the web', parameters: { type: 'object', properties: { q: { type: 'string' } } } } }];
-    const ask = (messages, extra = {}) => request(h.base, 'POST', '/v1/chat/completions', { tok: chat, headers: { 'x-openvibe-credential': `node:${FRAN}` }, body: { model: 'openvibe', messages, tools, tool_choice: 'auto', ...extra } });
+    const ask = (messages, extra = {}) => request(h.base, 'POST', '/v1/chat/completions', { tok: chat, headers: { 'x-openvibe-credential': `link:${FRAN}` }, body: { model: 'openvibe', messages, tools, tool_choice: 'auto', ...extra } });
     const first = [{ role: 'system', content: 'You are an agent.' }, { role: 'user', content: [{ type: 'text', text: 'What is a mutex?' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } }] }];
     let r = await ask(first);
     assert.strictEqual(r.status, 200, r.text);
@@ -99,7 +99,7 @@ t.test('an agent\'s loop on the person\'s machine (L55 C3): /v1/chat/completions
         { role: 'tool', content: 'A mutex is a lock.', tool_call_id: 'call_1' },
     ]);
     // Streamed, the whole answer arrives as one delta (the machine cannot stream).
-    const s2 = await request(h.base, 'POST', '/v1/chat/completions', { tok: chat, headers: { 'x-openvibe-credential': `node:${FRAN}` }, body: { model: 'openvibe', messages: first, tools, stream: true } });
+    const s2 = await request(h.base, 'POST', '/v1/chat/completions', { tok: chat, headers: { 'x-openvibe-credential': `link:${FRAN}` }, body: { model: 'openvibe', messages: first, tools, stream: true } });
     assert.match(s2.text, /"tool_calls":\[\{"index":0,"id":"call_1"/);
     assert.match(s2.text, /data: \[DONE\]/);
 });

@@ -69,7 +69,7 @@ const { CREDENTIAL_PROVIDERS, credentialProvider } = require('./console/presets'
 const SUBJECT_RE = /^usr_[0-9A-HJKMNP-TV-Z]{26}$/;
 /** The reserved owner of a key the person holds themselves (L36 Y1). */
 const SELF_OWNER = 'self';
-const LEGACY_PROVIDERS = ['openai', 'anthropic', 'node', 'deepseek', 'minimax', 'openrouter', 'custom'];
+const LEGACY_PROVIDERS = ['openai', 'anthropic', 'link', 'deepseek', 'minimax', 'openrouter', 'custom'];
 const PROVIDERS = [...new Set([...LEGACY_PROVIDERS, ...CREDENTIAL_PROVIDERS])];
 /** Where each provider answers when the person stored no base_url: the ONE table in server/console/presets.js. */
 const PROVIDER_BASE_URL = Object.fromEntries(CREDENTIAL_PROVIDERS
@@ -207,7 +207,7 @@ function createCredentials({ db, config, clock = { now: () => Date.now() }, fetc
     async function view(row) {
         return {
             subject: row.subject, owner: row.owner, provider: row.provider, base_url: row.base_url || null,
-            ...(row.provider === 'node' ? { machine: row.machine } : { key_hint: row.key_hint }),
+            ...(row.provider === 'link' ? { machine: row.machine } : { key_hint: row.key_hint }),
             models: JSON.parse(row.models || '{}'), budget_usd_per_day: row.budget_usd_day == null ? null : row.budget_usd_day,
             spent_usd_today: Math.round(await spentToday(row) * 1e6) / 1e6,
             created_at: row.created_at, updated_at: row.updated_at, last_used_at: row.last_used_at || null,
@@ -240,22 +240,22 @@ function createCredentials({ db, config, clock = { now: () => Date.now() }, fetc
         const at = iso(clock.now());
         const makeDefault = provider === null;
         const prev = await getRow(owner, subject, body.provider);
-        if (body.provider === 'node') {
+        if (body.provider === 'link') {
             // The person's own machine: nothing to seal. Bot checks it is theirs and that they turned it on, at each run.
             await db.tx(async () => {
-            if (makeDefault) await db.prepare('UPDATE subject_credentials SET is_default = false WHERE owner = ? AND subject = ? AND provider <> ?').run(owner, subject, 'node');
+            if (makeDefault) await db.prepare('UPDATE subject_credentials SET is_default = false WHERE owner = ? AND subject = ? AND provider <> ?').run(owner, subject, 'link');
             await db.prepare(`INSERT INTO subject_credentials (owner, subject, provider, base_url, machine, key_enc, key_hint, models, budget_usd_day, is_default, spend_key, created_at, updated_at)
-                        VALUES (?, ?, 'node', NULL, ?, '', '', ?, NULL, ?, ?, ?, ?)
+                        VALUES (?, ?, 'link', NULL, ?, '', '', ?, NULL, ?, ?, ?, ?)
                         ON CONFLICT(owner, subject, provider) DO UPDATE SET base_url = NULL, machine = excluded.machine, key_enc = '',
                           key_hint = '', models = excluded.models, budget_usd_day = NULL, is_default = subject_credentials.is_default OR excluded.is_default, updated_at = excluded.updated_at`)
                 .run(owner, subject, body.machine, JSON.stringify(body.models || {}), makeDefault,
-                    (prev && prev.spend_key) || (makeDefault ? providerKeyFor(owner, subject) : providerKeyFor(owner, subject, 'node')), prev ? prev.created_at : at, at);
+                    (prev && prev.spend_key) || (makeDefault ? providerKeyFor(owner, subject) : providerKeyFor(owner, subject, 'link')), prev ? prev.created_at : at, at);
             });
-            return await view(await getRow(owner, subject, 'node'));
+            return await view(await getRow(owner, subject, 'link'));
         }
         // The stored key stays for a change of models or budget; a new provider or endpoint needs the key again.
         const newKey = body.key != null ? String(body.key) : (body.api_key != null ? String(body.api_key) : null);
-        const sameEndpoint = prev && prev.provider !== 'node' && (prev.base_url || null) === (body.base_url || null);
+        const sameEndpoint = prev && prev.provider !== 'link' && (prev.base_url || null) === (body.base_url || null);
         if (newKey == null && !sameEndpoint) {
             throw new AiError(400, 'credential.key_required', prev ? 'enter the key again to change the provider or its address' : 'key is required the first time');
         }
@@ -340,7 +340,7 @@ function createCredentials({ db, config, clock = { now: () => Date.now() }, fetc
             if (found.refused) throw new AiError(403, 'ai.credential_not_allowed', allowHint(owner, provider));
             throw new AiError(404, 'credential.not_found', provider ? `no ${provider} credential stored for that subject` : 'no credential stored for that subject');
         }
-        if (r.provider === 'node') return;   // the person's own machine: no key, no spend
+        if (r.provider === 'link') return;   // the person's own machine: no key, no spend
         secretKey();
         if (r.budget_usd_day != null && r.budget_usd_day > 0 && await spentToday(r) >= r.budget_usd_day) {
             const tomorrow = new Date(iso(clock.now()).slice(0, 10) + 'T00:00:00.000Z').getTime() + 86400000;
@@ -366,7 +366,7 @@ function createCredentials({ db, config, clock = { now: () => Date.now() }, fetc
         await db.prepare('UPDATE subject_credentials SET last_used_at = ? WHERE owner = ? AND subject = ? AND provider = ?').run(iso(clock.now()), owner, subject, r.provider);
         const providerKey = r.spend_key || providerKeyFor(owner, subject);
         const hint = String(r.key_hint || '').slice(-4);
-        if (r.provider === 'node') return { providerKey, owner: r.owner, subject, provider: 'node', machine: r.machine, models: JSON.parse(r.models || '{}'), hint };
+        if (r.provider === 'link') return { providerKey, owner: r.owner, subject, provider: 'link', machine: r.machine, models: JSON.parse(r.models || '{}'), hint };
         return { providerKey, owner: r.owner, subject, provider: r.provider, base_url: r.base_url || PROVIDER_BASE_URL[r.provider] || null, apiKey: await openRow(r), models: JSON.parse(r.models || '{}'), hint };
     }
 
@@ -375,7 +375,7 @@ function createCredentials({ db, config, clock = { now: () => Date.now() }, fetc
     /** Every self row for one person, newest first. */
     async function selfRows(subject) {
         if (!SUBJECT_RE.test(String(subject))) return [];
-        return await db.prepare("SELECT * FROM subject_credentials WHERE owner = ? AND subject = ? AND provider <> 'node' ORDER BY provider").all(SELF_OWNER, subject);
+        return await db.prepare("SELECT * FROM subject_credentials WHERE owner = ? AND subject = ? AND provider <> 'link' ORDER BY provider").all(SELF_OWNER, subject);
     }
     async function listSelf(subject) {
         return (await selfRows(subject)).map(selfView);
@@ -396,12 +396,12 @@ function createCredentials({ db, config, clock = { now: () => Date.now() }, fetc
 
     /** A person's own credential for one provider (no key returned to the caller; server-side use only). */
     async function selfForRun(subject, provider) {
-        if (provider === 'node') {
+        if (provider === 'link') {
             // Their own computer (plan L55 C3): the machine and the model, no key. Only an app they allowed reaches it.
-            const n = await getRow(SELF_OWNER, subject, 'node');
+            const n = await getRow(SELF_OWNER, subject, 'link');
             if (!n) return null;
-            await db.prepare('UPDATE subject_credentials SET last_used_at = ? WHERE owner = ? AND subject = ? AND provider = ?').run(iso(clock.now()), SELF_OWNER, subject, 'node');
-            return { providerKey: n.spend_key || providerKeyFor(SELF_OWNER, subject, 'node'), owner: SELF_OWNER, subject, provider: 'node', machine: n.machine, models: JSON.parse(n.models || '{}'), hint: '' };
+            await db.prepare('UPDATE subject_credentials SET last_used_at = ? WHERE owner = ? AND subject = ? AND provider = ?').run(iso(clock.now()), SELF_OWNER, subject, 'link');
+            return { providerKey: n.spend_key || providerKeyFor(SELF_OWNER, subject, 'link'), owner: SELF_OWNER, subject, provider: 'link', machine: n.machine, models: JSON.parse(n.models || '{}'), hint: '' };
         }
         if (!CREDENTIAL_PROVIDERS.includes(provider)) return null;
         const r = await getRow(SELF_OWNER, subject, provider);
@@ -458,18 +458,18 @@ function createCredentials({ db, config, clock = { now: () => Date.now() }, fetc
      */
     async function getSelfNode(subject) {
         if (!SUBJECT_RE.test(String(subject))) return null;
-        const r = await getRow(SELF_OWNER, subject, 'node');
+        const r = await getRow(SELF_OWNER, subject, 'link');
         return r ? { machine: r.machine, model: (JSON.parse(r.models || '{}')).chat || null, last_used_at: r.last_used_at || null, updated_at: r.updated_at } : null;
     }
     async function putSelfNode(subject, { machine = 'any', model } = {}) {
         const m = String(model || '').trim();
         if (!m || m.length > 120 || /\s/.test(m)) throw new AiError(422, 'input.invalid', 'Name the model as your computer lists it, for example qwen3:8b.');
-        await put(SELF_OWNER, subject, { provider: 'node', machine, models: { chat: m } }, 'node');
+        await put(SELF_OWNER, subject, { provider: 'link', machine, models: { chat: m } }, 'link');
         return await getSelfNode(subject);
     }
     async function removeSelfNode(subject) {
         if (!SUBJECT_RE.test(String(subject))) return false;
-        return (await db.prepare('DELETE FROM subject_credentials WHERE owner = ? AND subject = ? AND provider = ?').run(SELF_OWNER, subject, 'node')).changes > 0;
+        return (await db.prepare('DELETE FROM subject_credentials WHERE owner = ? AND subject = ? AND provider = ?').run(SELF_OWNER, subject, 'link')).changes > 0;
     }
 
     async function removeSelf(subject, provider) {
@@ -578,7 +578,7 @@ function createCredentials({ db, config, clock = { now: () => Date.now() }, fetc
         const allowed = await grants.allowedProviders(subject, service);
         if (!allowed.length) return [];
         const have = new Set((await selfRows(subject)).map((r) => r.provider));
-        if (await getRow(SELF_OWNER, subject, 'node')) have.add('node');   // their own computer (L55 C3)
+        if (await getRow(SELF_OWNER, subject, 'link')) have.add('link');   // their own computer (L55 C3)
         if (allowed.includes('*')) return [...have].sort();
         return allowed.filter((p) => have.has(p)).sort();
     }
