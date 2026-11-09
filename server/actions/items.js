@@ -57,6 +57,8 @@ function runPage(id) {
     return `${PUBLIC_ORIGIN}/runs/${encodeURIComponent(id)}`;
 }
 
+// The shared code map (Contracts' ai.run-error@1, manifests/ai-run-error-codes.v1.json) is the source of truth; this
+// copy is what AI answers with until the Contracts release that carries the manifest is pinned here.
 const ERROR_WORDS = {
     'route.unavailable': ['No model could take this task.', 'Pick a model or add an AI key, then retry.', 'pick_model'],
     'provider.unavailable': ['The model provider is unavailable.', 'Retry when the provider is back.', 'retry'],
