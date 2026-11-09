@@ -371,6 +371,7 @@ function createPriceBook({ db, registry, config = {}, clock = { now: () => Date.
                     }
                     report.sources.push({ source: source.key, url: source.url, role: source.role, listed: Object.keys(prices).length });
                     if (source.role === 'cross-reference') { await crossCheck(prices, readings, report); continue; }
+                    await require('./market-store').recordMarketPrices(db, source, prices, checkedAt);
                     readings[source.provider] = prices;
                     await priceProvider(source, prices, report, checkedAt);
                 }

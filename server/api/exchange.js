@@ -48,6 +48,7 @@ function exchangeRouter({ db, registry, pool, quotas = null, env = process.env, 
         return hits.get(key)();
     };
     const all = () => allFor(null);
+    const market = require('../exchange/market').createMarket({ db, registry, catalog: all, config, clock });
     const usageByWindow = new Map();
     const r = express.Router();
 
@@ -147,6 +148,16 @@ function exchangeRouter({ db, registry, pool, quotas = null, env = process.env, 
         r.get('/v1/receipts/:id', read, readReceipt);
         r.get('/api/v1/receipts/:id', read, readReceipt);
     }
+
+    r.get('/api/v1/exchange/market', publicCache(60), async (req, res, next) => {
+        try {
+            // Validate before fetching or caching upstream data.
+            require('../exchange/market').pageMarket({ offers: [] }, req.query);
+        } catch (error) {
+            return http.sendProblem(res, 422, 'exchange.market_filter_invalid', { detail: error.message, ctx: req.ov });
+        }
+        try { res.json(await market.read(req.query)); } catch (error) { next(error); }
+    });
 
     r.get('/api/v1/exchange/catalog', publicCache(30), async (req, res, next) => {
         try {

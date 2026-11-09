@@ -1,0 +1,456 @@
+{
+  "openai": {
+    "id": "openai",
+    "models": {
+      "gpt-5.1": {
+        "id": "gpt-5.1",
+        "name": "GPT-5.1",
+        "description": "Sharper GPT-5 generation for coding, product work, and tool-assisted tasks",
+        "family": "gpt",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "none",
+              "low",
+              "medium",
+              "high"
+            ]
+          }
+        ],
+        "tool_call": true,
+        "structured_output": true,
+        "temperature": true,
+        "knowledge": "2024-09-30",
+        "release_date": "2025-11-13",
+        "last_updated": "2025-11-13",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": false,
+        "limit": {
+          "context": 400000,
+          "input": 272000,
+          "output": 128000
+        },
+        "experimental": {
+          "modes": {
+            "fast": {
+              "cost": {
+                "input": 2.5,
+                "output": 20,
+                "cache_read": 0.25
+              },
+              "provider": {
+                "body": {
+                  "service_tier": "priority"
+                }
+              }
+            },
+            "flex": {
+              "cost": {
+                "input": 0.625,
+                "output": 5,
+                "cache_read": 0.0625
+              },
+              "provider": {
+                "body": {
+                  "service_tier": "flex"
+                }
+              }
+            }
+          }
+        },
+        "cost": {
+          "input": 1.25,
+          "output": 10,
+          "cache_read": 0.125
+        }
+      },
+      "gpt-5-pro": {
+        "id": "gpt-5-pro",
+        "name": "GPT-5 Pro",
+        "description": "Higher-accuracy GPT-5 tier for tough analysis, coding reviews, and planning",
+        "family": "gpt-pro",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "high"
+            ]
+          }
+        ],
+        "tool_call": true,
+        "structured_output": true,
+        "temperature": false,
+        "knowledge": "2024-09-30",
+        "release_date": "2025-10-06",
+        "last_updated": "2025-10-06",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": false,
+        "limit": {
+          "context": 400000,
+          "input": 272000,
+          "output": 272000
+        },
+        "cost": {
+          "input": 15,
+          "output": 120
+        }
+      },
+      "gpt-4o": {
+        "id": "gpt-4o",
+        "name": "GPT-4o",
+        "description": "Omni-era GPT for multimodal chat, practical coding, and general assistants",
+        "family": "gpt",
+        "attachment": true,
+        "reasoning": false,
+        "tool_call": true,
+        "structured_output": true,
+        "temperature": true,
+        "knowledge": "2023-09",
+        "release_date": "2024-05-13",
+        "last_updated": "2024-08-06",
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": false,
+        "limit": {
+          "context": 128000,
+          "output": 16384
+        },
+        "experimental": {
+          "modes": {
+            "fast": {
+              "cost": {
+                "input": 4.25,
+                "output": 17,
+                "cache_read": 2.125
+              },
+              "provider": {
+                "body": {
+                  "service_tier": "priority"
+                }
+              }
+            }
+          }
+        },
+        "cost": {
+          "input": 2.5,
+          "output": 10,
+          "cache_read": 1.25
+        }
+      }
+    }
+  },
+  "deepinfra": {
+    "id": "deepinfra",
+    "models": {
+      "openai/gpt-oss-20b": {
+        "id": "openai/gpt-oss-20b",
+        "name": "GPT OSS 20B",
+        "description": "Open-weight GPT model for self-hosted reasoning and instruction-following workloads",
+        "family": "gpt-oss",
+        "attachment": false,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "medium",
+              "high"
+            ]
+          }
+        ],
+        "tool_call": true,
+        "structured_output": true,
+        "temperature": true,
+        "knowledge": "2024-06",
+        "release_date": "2025-08-05",
+        "last_updated": "2025-08-05",
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": true,
+        "limit": {
+          "context": 131072,
+          "output": 16384
+        },
+        "cost": {
+          "input": 0.03,
+          "output": 0.14
+        },
+        "canonical_model_id": "openai/gpt-oss-20b"
+      },
+      "openai/gpt-oss-120b": {
+        "id": "openai/gpt-oss-120b",
+        "name": "GPT OSS 120B",
+        "description": "Open-weight GPT model for self-hosted reasoning and instruction-following workloads",
+        "family": "gpt-oss",
+        "attachment": false,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "medium",
+              "high"
+            ]
+          }
+        ],
+        "tool_call": true,
+        "structured_output": true,
+        "temperature": true,
+        "knowledge": "2024-06",
+        "release_date": "2025-08-05",
+        "last_updated": "2025-08-05",
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": true,
+        "limit": {
+          "context": 131072,
+          "output": 16384
+        },
+        "cost": {
+          "input": 0.037,
+          "output": 0.17
+        },
+        "canonical_model_id": "openai/gpt-oss-120b"
+      },
+      "moonshotai/Kimi-K2.6": {
+        "id": "moonshotai/Kimi-K2.6",
+        "name": "Kimi K2.6",
+        "description": "Kimi multimodal agent model for visual understanding, coding, and planning",
+        "family": "kimi-k2",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "toggle"
+          }
+        ],
+        "tool_call": true,
+        "interleaved": {
+          "field": "reasoning_content"
+        },
+        "structured_output": true,
+        "temperature": true,
+        "knowledge": "2025-01",
+        "release_date": "2026-04-20",
+        "last_updated": "2026-04-20",
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "video"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": true,
+        "limit": {
+          "context": 262144,
+          "output": 16384
+        },
+        "cost": {
+          "input": 0.75,
+          "output": 3.5,
+          "cache_read": 0.15
+        },
+        "canonical_model_id": "moonshotai/kimi-k2.6"
+      }
+    }
+  },
+  "anthropic": {
+    "id": "anthropic",
+    "models": {
+      "claude-opus-4-5": {
+        "id": "claude-opus-4-5",
+        "name": "Claude Opus 4.5 (latest)",
+        "description": "Flagship Claude model for deep reasoning, coding, and long-horizon agents",
+        "family": "claude-opus",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "medium",
+              "high"
+            ]
+          },
+          {
+            "type": "budget_tokens",
+            "min": 1024
+          }
+        ],
+        "tool_call": true,
+        "structured_output": true,
+        "temperature": true,
+        "knowledge": "2025-05",
+        "release_date": "2025-11-24",
+        "last_updated": "2025-11-24",
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": false,
+        "limit": {
+          "context": 200000,
+          "output": 64000
+        },
+        "cost": {
+          "input": 5,
+          "output": 25,
+          "cache_read": 0.5,
+          "cache_write": 6.25
+        },
+        "canonical_model_id": "anthropic/claude-opus-4-5"
+      },
+      "claude-sonnet-4-6": {
+        "id": "claude-sonnet-4-6",
+        "name": "Claude Sonnet 4.6",
+        "description": "Claude workhorse for coding agents, careful analysis, and production cost control",
+        "family": "claude-sonnet",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "medium",
+              "high",
+              "max"
+            ]
+          },
+          {
+            "type": "budget_tokens",
+            "min": 1024
+          }
+        ],
+        "tool_call": true,
+        "structured_output": true,
+        "temperature": true,
+        "knowledge": "2025-08-31",
+        "release_date": "2026-02-17",
+        "last_updated": "2026-03-13",
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": false,
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "cost": {
+          "input": 3,
+          "output": 15,
+          "cache_read": 0.3,
+          "cache_write": 3.75
+        }
+      },
+      "claude-fable-5-1": {
+        "id": "claude-fable-5-1",
+        "name": "Claude Fable 5.1",
+        "description": "Claude model for demanding reasoning and long-horizon agentic work",
+        "family": "claude-fable",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        ],
+        "tool_call": true,
+        "structured_output": true,
+        "temperature": false,
+        "knowledge": "2026-06",
+        "release_date": "2026-09-01",
+        "last_updated": "2026-09-01",
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "open_weights": false,
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "cost": {
+          "input": 10,
+          "output": 50,
+          "cache_read": 0.25,
+          "cache_write": 12.5
+        },
+        "canonical_model_id": "anthropic/claude-fable-5-1"
+      }
+    }
+  }
+}
