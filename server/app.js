@@ -98,11 +98,21 @@ function createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys
     app.get('/api/ready', readiness.handler);
     // GET /openapi.json: the public OpenAPI 3.1 document (server/openapi.js); /api/v1/openapi.json redirects here.
     openapi.mount(app);
+    // Opaque Exchange keys are admitted only by the platform middleware; management keeps Network auth.
+    const baseAppOrCap = auth.appOrCap.bind(auth);
+    auth = { ...auth, appOrCap: (...caps) => {
+        const guard = baseAppOrCap(...caps);
+        return (req, res, next) => { if (req.exchangePrincipal) { req.principal = req.exchangePrincipal; return next(); } return guard(req, res, next); };
+    } };
+    const exchangePlatform = require('./platform/router').platform({ db, auth, clock, log });
+    app.use(exchangePlatform.keyMiddleware);
+    app.use(exchangePlatform.router);
     // OpenVibe.Exchange's read API (server/api/exchange.js): the public catalog and aggregate usage. Public on
     // purpose — the site and anyone comparing prices reads the same numbers the router ranks on.
     app.use(require('./api/exchange').exchangeRouter({ config, db, registry, pool, quotas, env, clock, presets, receipts, auth, log, ownEndpoints }));
     // A person's own endpoint (the Exchange remake, product line 6): the private rent's person API and its
     // OpenAI-compatible proxy. Only the owner's own Network user token reaches it; a service token never does.
+    app.use((req,_res,next) => { if (/^\/api\/v1\/exchange\/deployments(?:\/|$)/.test(req.path)) req.url = req.url.replace('/api/v1/exchange/deployments','/api/v1/own-endpoints'); next(); });
     if (ownEndpoints) app.use(require('./api/own-endpoints').createOwnEndpointsRouter({ endpoints: ownEndpoints, auth, config, clock, log }));
     // The public seller API: a standalone OpenAI-compatible server registered by its own https address with the
     // seller's developer key (the design's SDK gap). Its offers join the community router's trust and ledger.
