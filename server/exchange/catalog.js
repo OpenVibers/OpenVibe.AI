@@ -261,7 +261,7 @@ function createCatalog({ db, registry, pool, env = process.env, clock = { now: (
         // What those offers actually did: real runs (cached answers counted apart), TTFT where recorded,
         // else the answering attempt's total latency.
         const measured = await seen.read({ days });
-        observed.fold(measured, drafts);
+        const measuredStats = observed.fold(measured, drafts);
         // The router's own measurements win once they have 20 samples; until then the observed runs' numbers stay.
         const performance = await db.prepare('SELECT * FROM provider_metrics').all();
         for (const d of drafts) {
@@ -285,6 +285,17 @@ function createCatalog({ db, registry, pool, env = process.env, clock = { now: (
             m.requests_today = m.offers.reduce((n, o) => n + o.requests_today, 0);
             m.cached_7d = m.offers.reduce((n, o) => n + o.cached_7d, 0);
             m.cached_today = m.offers.reduce((n, o) => n + o.cached_today, 0);
+            // The model's own prompt-cache share over the same attempts, across its offers (null when no offer has
+            // enough attempts to measure one).
+            let tokensIn = 0, tokensCached = 0;
+            for (const d of drafts) {
+                if (!m.offers.includes(d.offer)) continue;
+                const s = measuredStats.get(d);
+                tokensIn += s.tokens_in;
+                tokensCached += s.tokens_cached;
+            }
+            m.cache_hit_share_7d = tokensIn > 0 && m.offers.some((o) => o.cache_hit_share_7d != null)
+                ? Math.min(1, Math.max(0, Math.round((tokensCached / tokensIn) * 10000) / 10000)) : null;
             const activity = new Map();
             for (const d of daysByModel.filter(d=>m.offers.some(o=>o.model===d.model_key))) activity.set(d.activity_day,(activity.get(d.activity_day)||0)+Number(d.requests));
             m.activity = [...activity].sort(([a],[b])=>a.localeCompare(b)).map(([day,requests])=>({day,requests}));
