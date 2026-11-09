@@ -73,7 +73,9 @@ function runsRouter({ choices = null, runs, registry, auth, config, log = consol
         const run = await runs.explained(await runs.wait(created, waitMs));
         const status = !created.created ? 200 : (runs.TERMINAL.has(run.status) ? 201 : 202);
         if (status === 202) res.setHeader('Location', `/api/v1/runs/${run.id}`);
-        return res.status(status).json({ run, replayed: !created.created || undefined });
+        // The run's numbered sources with it: a product that files the output (a wiki draft) needs their URLs and
+        // licences to attach the citations its sentences used, without a second call.
+        return res.status(status).json({ run, citations: await runs.citations(run.id), replayed: !created.created || undefined });
     }
 
     /**
