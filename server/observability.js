@@ -112,10 +112,10 @@ function registerAiGauges(registry, { runs, registry: ai, pool, balance = null, 
             const seen = new Set(rows.map((r) => `${r.provider_key}/${r.model_key || ''}`));
             const legacy = await db.prepare('SELECT provider_key, state, exhausted_at FROM provider_health').all().catch(() => []);
             return [
-                ...rows.map((r) => ({ labels: { provider: r.provider_key, model: r.model_key || '', class: r.failure_class || '' }, value: r.state === 'closed' ? 0 : 1 })),
+                ...rows.map((r) => ({ labels: { provider: r.provider_key, model: r.model_key || '', class: r.failure_class || '' }, value: r.state === 'open' ? 1 : 0 })),
                 ...(legacy || []).filter((h) => !seen.has(`${h.provider_key}/`)).map((h) => ({
                     labels: { provider: h.provider_key, model: '', class: h.state === 'closed' ? '' : (h.exhausted_at ? 'balance' : 'transient') },
-                    value: h.state === 'closed' ? 0 : 1,
+                    value: h.state === 'open' ? 1 : 0,
                 })),
             ];
         },

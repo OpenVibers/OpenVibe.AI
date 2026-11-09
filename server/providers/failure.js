@@ -70,14 +70,15 @@ function reasonForClass(failureClass) {
 const iso = (ms) => (Number.isFinite(Number(ms)) && Number(ms) > 0 ? new Date(Number(ms)).toISOString() : null);
 
 /**
- * A circuit's status, before the measured error rate is folded in.
- * `half_open` is still down to the catalogue: it is waiting for a real request to decide.
+ * A circuit's status, before the measured error rate is folded in. An open circuit is down; a
+ * half-open one is degraded, because the next real request may probe it and it is not yet serving
+ * normally (the same mapping the placement states use).
  */
 function circuitStatus(circuit) {
     if (!circuit || (circuit.state !== 'open' && circuit.state !== 'half_open')) return null;
     const failureClass = circuit.failure_class || (circuit.exhausted_at ? 'balance' : null);
     return {
-        status: 'down',
+        status: circuit.state === 'open' ? 'down' : 'degraded',
         status_reason: circuit.status_reason || reasonForClass(failureClass),
         status_since: iso(circuit.opened_at || circuit.status_since),
         status_class: failureClass,
