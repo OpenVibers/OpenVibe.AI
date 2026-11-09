@@ -1152,7 +1152,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                     attempts: [{ key: 'your machine', provider: 'link', model: result.model, why: 'your own machine', status: 'ok', error: null }],
                     openvibe: ownFacts } };
         } catch (err) {
-            if (ctx.logRequest) ctx.logRequest({ ...base, status: 'error', latency_ms: Date.now() - t0, error: String(err && err.message || err).slice(0, 500) });
+            if (ctx.logRequest) ctx.logRequest({ ...base, status: 'error', latency_ms: Date.now() - t0, error: String(err && err.message || err).slice(0, 500), error_class: classifyFailure(err)?.class || null });
             if (ctx.signal && ctx.signal.aborted) throw new AiError(409, 'run.cancelled', 'run was cancelled');
             throw err;
         }
@@ -1220,7 +1220,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             } catch (err) {
                 lastErr = err;
                 if (ctx.signal && ctx.signal.aborted) throw new AiError(409, 'run.cancelled', 'run was cancelled');
-                if (ctx.logRequest) ctx.logRequest({ ...base, status: err && err.code === 'provider.timeout' ? 'timeout' : 'error', latency_ms: Date.now() - t0, error: scrub(err && err.message || err).slice(0, 500) });
+                if (ctx.logRequest) ctx.logRequest({ ...base, status: err && err.code === 'provider.timeout' ? 'timeout' : 'error', latency_ms: Date.now() - t0, error: scrub(err && err.message || err).slice(0, 500), error_class: classifyFailure(err)?.class || null });
                 // L36 Y8: the provider refused the key (401/403). The key becomes failing and the event says so.
                 if (err && (err.status === 401 || err.status === 403) && typeof ctx.onCredentialFailed === 'function') {
                     await ctx.onCredentialFailed({ owner: cred.owner || null, subject: cred.subject || null, provider: cred.provider, providerKey: cred.providerKey, error: scrub(err.message) });
