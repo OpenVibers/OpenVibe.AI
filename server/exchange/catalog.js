@@ -17,6 +17,7 @@ const upstream = require('../providers/upstream');
 const observed = require('./observed');
 const privacy = require('./privacy');
 const { allowsOffer } = require('../free-tier');
+const { offerStatus } = require('../providers/failure');
 
 const FAMILY_BY_PREFIX = [
     ['deepseek', 'DeepSeek'], ['qwen', 'Qwen'], ['qwq', 'Qwen'], ['kimi', 'Kimi'], ['moonshot', 'Kimi'],
@@ -146,17 +147,35 @@ function createCatalog({ db, registry, pool, env = process.env, clock = { now: (
         const now = clock.now();
         const providers = await registry.listProviders();
         const byKey = new Map(providers.map((p) => [p.key, p]));
-        // The router's breaker state per provider (server/providers/index.js): an offer whose provider answered
-        // "insufficient balance" is exhausted until a call succeeds again, and the catalog says so rather than
-        // promising free capacity that cannot answer.
-        const healthRows = await db.prepare('SELECT provider_key, state, exhausted_at FROM provider_health').all().catch(() => []);
+        // The router's per-offer circuit (server/providers/index.js, migrations/0057) is the authority; a
+        // provider-level provider_health row is still read for a state written before it (or by a test).
+        // Measured failures are folded in below: over 5% of at least 10 requests in the last hour is degraded.
+        const circuits = await db.prepare('SELECT * FROM provider_circuits').all().catch(() => []);
+        const circuitBy = new Map((circuits || []).map((c) => [`${c.provider_key}/${c.model_key || ''}`, c]));
+        const healthRows = await db.prepare('SELECT provider_key, state, opened_at, exhausted_at FROM provider_health').all().catch(() => []);
         const healthByKey = new Map((healthRows || []).map((h) => [h.provider_key, h]));
-        const statusOf = (key) => {
-            const h = healthByKey.get(key);
-            if (!h || h.state === 'closed') return 'up';
-            if (h.state === 'open' && h.exhausted_at) return 'exhausted';
-            if (h.state === 'open') return 'down';
-            return 'degraded';
+        const hourAgo = new Date(now - 3600000).toISOString();
+        const measuredRows = await db.prepare(`SELECT provider_key, model_key,
+                COUNT(*)::bigint AS requests,
+                COUNT(*) FILTER (WHERE status IN ('error', 'timeout'))::bigint AS failures,
+                MIN(created_at) FILTER (WHERE status IN ('error', 'timeout')) AS first_error,
+                MIN(created_at) FILTER (WHERE error_class = 'balance') AS first_balance,
+                MIN(created_at) FILTER (WHERE error_class = 'auth') AS first_auth,
+                MAX(created_at) FILTER (WHERE status = 'ok') AS last_ok
+            FROM requests WHERE created_at >= ? AND status IN ('ok', 'error', 'timeout')
+            GROUP BY provider_key, model_key`).all(hourAgo).catch(() => []);
+        const measuredBy = new Map((measuredRows || []).map((r) => [`${r.provider_key}/${r.model_key || ''}`, r]));
+        const statusFor = (providerKey, modelKey) => {
+            const key = `${providerKey}/${modelKey || ''}`;
+            let circuit = circuitBy.get(key) || circuitBy.get(`${providerKey}/`) || null;
+            if (!circuit) {
+                const legacy = healthByKey.get(providerKey);
+                if (legacy && legacy.state && legacy.state !== 'closed') {
+                    circuit = { state: legacy.state, failure_class: legacy.exhausted_at ? 'balance' : null,
+                        opened_at: legacy.opened_at, status_reason: legacy.exhausted_at ? 'the provider says the account is out of credit' : null };
+                }
+            }
+            return offerStatus({ circuit, measured: measuredBy.get(key) || measuredBy.get(`${providerKey}/`) || null });
         };
         const upstreamByKey = new Map();
         for (const p of providers) upstreamByKey.set(p.key, upstream.upstreamOf(p));
@@ -194,6 +213,7 @@ function createCatalog({ db, registry, pool, env = process.env, clock = { now: (
             const checkedAt = laterOf(logged.get(`${row.provider_key}/${row.model_key}`), cards ? cards.out.verified_at : null);
             // The refusal rate of this offer, as the refusal job measured it.
             const refusal = refusalBy.get(`${row.provider_key}/${row.model_key}`) || null;
+            const health = statusFor(provider.key, row.model_key);
             const offer = {
                 provider: up.key,
                 provider_name: up.name,
@@ -208,8 +228,11 @@ function createCatalog({ db, registry, pool, env = process.env, clock = { now: (
                 // capacity with no per-token card): both its provider is a named AI_FREE_PROVIDERS source and its
                 // output price is at or below AI_FREE_MAX_OUTPUT_PRICE_USD_PER_MTOK.
                 free_tier: allowsOffer({ providerKey: provider.key, providerRecord: provider, outputPrice: price ? price.out : null }, freeUse),
-                // up | degraded | down | exhausted (out of balance), from the router's breaker.
-                status: statusOf(provider.key),
+                // up | degraded | down, measured from this offer's circuit and the last hour of requests.
+                status: health.status,
+                status_reason: health.status_reason,
+                status_since: health.status_since,
+                status_class: health.status_class,
                 // Rounded to the micro-dollar: a derived cached price was printed as 0.020000000000000004.
                 on_our_gpus: provider.key.startsWith('gpu.'),
                 fixed_price: row.metadata?.owner_fixed_price === true,

@@ -21,7 +21,12 @@ function createOps({ db, registry, pool, quotas, cache, runs }) {
         const today = new Date().toISOString().slice(0, 10);
         const spend = await db.prepare('SELECT COALESCE(SUM(cost_usd),0) cost, COALESCE(SUM(requests),0)::bigint requests FROM usage_daily WHERE day = ?').get(today);
         return {
-            providers: (await Promise.all((await registry.listProviders()).map(async p => ({ key: p.key, kind: p.kind, status: p.status, credentials: (await providerView(p)).credentials, health: (await pool.health(p.key)).state })))),
+            providers: (await Promise.all((await registry.listProviders()).map(async p => {
+                const h = await pool.health(p.key);
+                return { key: p.key, kind: p.kind, status: p.status, credentials: (await providerView(p)).credentials,
+                    health: h.state, failure_class: h.failure_class || null, status_reason: h.status_reason || null,
+                    status_since: h.status_since || null, circuits: h.circuits || [] };
+            }))),
             runs: counts, today: { day: today, requests: spend.requests, cost_usd: spend.cost },
             workflows: (await registry.listWorkflows()).length, templates: (await registry.listTemplates()).length, routes: (await registry.listRoutes()).length,
             inflight: runs.inflight.size, quotas: await quotas.counters(),

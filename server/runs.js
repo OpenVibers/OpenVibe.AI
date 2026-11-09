@@ -182,9 +182,9 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
     }
 
     const insReq = db.prepare(`INSERT INTO requests (run_id, seq, operation, provider_key, model_key, route_key, route_version, status, skip_reason, fallback, prompt_hash, input_hash, output_hash,
-        tokens_in, tokens_out, tokens_cached, tokens_estimated, cost_usd, latency_ms, error, debug_prompt, debug_response, created_at)
+        tokens_in, tokens_out, tokens_cached, tokens_estimated, cost_usd, latency_ms, error, error_class, debug_prompt, debug_response, created_at)
         VALUES (@run_id, @seq, @operation, @provider_key, @model_key, @route_key, @route_version, @status, @skip_reason, @fallback, @prompt_hash, @input_hash, @output_hash,
-        @tokens_in, @tokens_out, @tokens_cached, @tokens_estimated, @cost_usd, @latency_ms, @error, @debug_prompt, @debug_response, @created_at)`);
+        @tokens_in, @tokens_out, @tokens_cached, @tokens_estimated, @cost_usd, @latency_ms, @error, @error_class, @debug_prompt, @debug_response, @created_at)`);
 
     // ── Create ─────────────────────────────────────────────
     function validateRefs(body) {
@@ -874,7 +874,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                 run_id: id, seq: seq++, operation: e.operation, provider_key: e.provider_key, model_key: e.model_key || null, route_key: e.route_key || null, route_version: e.route_version || null,
                 status: e.status, skip_reason: e.skip_reason || null, fallback: e.fallback || 0, prompt_hash: e.prompt_hash || null, input_hash: row.input_hash, output_hash: e.output_hash || null,
                 tokens_in: e.tokens_in || 0, tokens_out: e.tokens_out || 0, tokens_cached: e.tokens_cached || 0, tokens_estimated: e.tokens_estimated || 0, cost_usd: e.cost_usd || 0,
-                latency_ms: e.latency_ms == null ? null : e.latency_ms, error: e.error || null,
+                latency_ms: e.latency_ms == null ? null : e.latency_ms, error: e.error || null, error_class: e.error_class || null,
                 debug_prompt: config.debugRawLog && opts.debug ? e.debug_prompt || null : null, debug_response: config.debugRawLog && opts.debug ? e.debug_response || null : null,
                 created_at: iso(clock.now()),
             });
@@ -1185,7 +1185,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
     }
 
     async function requestsFor(runId) {
-        return await db.prepare('SELECT id, seq, operation, provider_key, model_key, route_key, route_version, status, skip_reason, fallback, prompt_hash, input_hash, output_hash, tokens_in, tokens_out, tokens_cached, tokens_estimated, cost_usd, latency_ms, error, created_at FROM requests WHERE run_id = ? ORDER BY seq').all(runId);
+        return await db.prepare('SELECT id, seq, operation, provider_key, model_key, route_key, route_version, status, skip_reason, fallback, prompt_hash, input_hash, output_hash, tokens_in, tokens_out, tokens_cached, tokens_estimated, cost_usd, latency_ms, error, error_class, created_at FROM requests WHERE run_id = ? ORDER BY seq').all(runId);
     }
 
     /** Boot: runs interrupted by a restart are failed explicitly (retry is one call away). */

@@ -93,7 +93,7 @@ t.test('chat, embeddings, speech-to-text and image are separate kinds, and ?kind
     assert.strictEqual(bad.body.code, 'exchange.kind_invalid');
 });
 
-t.test('an out-of-balance provider is exhausted, and its free offer is not free now', async () => {
+t.test('an out-of-balance provider is down, with a plain reason, and its free offer is not free now', async () => {
     // A catalog of its own (the route's answer is cached for 30 s), over the same database and registry.
     const { createCatalog } = require('../server/exchange/catalog');
     const catalog = createCatalog({ db: h.db, registry: h.registry, pool: h.pool, env: h.env, config: h.config });
@@ -111,7 +111,10 @@ t.test('an out-of-balance provider is exhausted, and its free offer is not free 
     const after = await catalog.models({ days: 7 });
     const flash = flashOf(after);
     const offer = flash.offers.find((o) => o.provider === 'deepseek');
-    assert.strictEqual(offer.status, 'exhausted');
+    assert.strictEqual(offer.status, 'down');
+    assert.strictEqual(offer.status_reason, 'the provider says the account is out of credit');
+    assert.strictEqual(offer.status_class, 'balance');
+    assert.ok(offer.status_since, 'the catalogue says since when');
     assert.strictEqual(offer.free_tier, true, 'still a free-tier source by the rules');
     assert.strictEqual(offer.free_now, false, 'but not free right now');
     assert.strictEqual(flash.free_now, false);

@@ -28,6 +28,8 @@ const placement = require('openvibe-sdk/placement');
 const contracts = require('openvibe-contracts');
 const { AiError, providerSecret, sha256 } = require('../util');
 const { retryable, sleep, ProviderError, schemaInstruction, insufficientBalance } = require('./common');
+const { classifyFailure, reasonForClass, circuitStatus, offerStatus, iso } = require('./failure');
+const { createOwnerNotifier } = require('./owner-notify');
 const { sourcesOf, ceilingOf, allowsProvider, allowsCommunity } = require('../free-tier');
 const { createStubProvider } = require('./stub');
 const { createOpenAiProvider } = require('./openai');
@@ -216,7 +218,7 @@ function selfModelFor(cred, operation, req, ctx, prefs) {
     return { model, kind, why };
 }
 
-function createProviderPool({ db, registry, config, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, credentialFetch = null, machineModels = null, community = null, bench = null, variantEvidence = null, adultStatus = null, offPeak = null, creditGrants = null }) {
+function createProviderPool({ db, registry, config, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, credentialFetch = null, machineModels = null, community = null, bench = null, variantEvidence = null, adultStatus = null, offPeak = null, creditGrants = null, ownerNotify = null }) {
     // A person's own machine as their model (credential provider node, server/machines.js).
     const machines = machineModels || require('../machines').createMachineModels({ config, env, fetchImpl });
     const cache = new Map();          // key -> { stamp, adapter }
@@ -285,39 +287,263 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         return { record: p, adapter: a };
     }
 
-    // ── Circuit breaker ────────────────────────────────────
+    // ── Circuit breaker (per provider + model) ─────────────
+    // A provider can fail one offer while another offer on the same provider still answers, so the
+    // breaker is keyed by (provider, model). provider_health stays as the provider-level roll-up for
+    // the console, readiness and older callers; the per-offer rows are the authority.
     const getHealth = db.prepare('SELECT * FROM provider_health WHERE provider_key = ?');
     const putHealth = db.prepare(`INSERT INTO provider_health (provider_key, state, consecutive_failures, opened_at, exhausted_at, last_error, last_success_at, last_failure_at)
         VALUES (@provider_key, @state, @consecutive_failures, @opened_at, @exhausted_at, @last_error, @last_success_at, @last_failure_at)
         ON CONFLICT(provider_key) DO UPDATE SET state = excluded.state, consecutive_failures = excluded.consecutive_failures, opened_at = excluded.opened_at,
           exhausted_at = excluded.exhausted_at, last_error = excluded.last_error, last_success_at = excluded.last_success_at, last_failure_at = excluded.last_failure_at`);
-    async function health(key) {
-        const h = await getHealth.get(key) || { provider_key: key, state: 'closed', consecutive_failures: 0, opened_at: null, exhausted_at: null, last_error: null, last_success_at: null, last_failure_at: null };
-        if (h.state === 'open') {
-            // Out of balance: a long cooldown (10 minutes), so every request shares the same pause instead of each
-            // one retrying a provider that cannot answer until someone tops it up.
+    const getCircuit = db.prepare('SELECT * FROM provider_circuits WHERE provider_key = ? AND model_key = ?');
+    const listCircuits = db.prepare('SELECT * FROM provider_circuits WHERE provider_key = ? ORDER BY model_key');
+    const putCircuit = db.prepare(`INSERT INTO provider_circuits
+            (provider_key, model_key, state, failure_class, consecutive_failures, opened_at, retry_at, backoff_ms, key_stamp, last_error, last_success_at, last_failure_at, notified_at)
+        VALUES (@provider_key, @model_key, @state, @failure_class, @consecutive_failures, @opened_at, @retry_at, @backoff_ms, @key_stamp, @last_error, @last_success_at, @last_failure_at, @notified_at)
+        ON CONFLICT(provider_key, model_key) DO UPDATE SET
+            state = excluded.state, failure_class = excluded.failure_class, consecutive_failures = excluded.consecutive_failures,
+            opened_at = excluded.opened_at, retry_at = excluded.retry_at, backoff_ms = excluded.backoff_ms, key_stamp = excluded.key_stamp,
+            last_error = excluded.last_error, last_success_at = excluded.last_success_at, last_failure_at = excluded.last_failure_at, notified_at = excluded.notified_at`);
+    const putFailureCount = db.prepare(`INSERT INTO provider_failure_counts (provider_key, failure_class, count, updated_at)
+        VALUES (@provider_key, @failure_class, 1, @updated_at)
+        ON CONFLICT(provider_key, failure_class) DO UPDATE SET count = provider_failure_counts.count + excluded.count, updated_at = excluded.updated_at`);
+    const notifyOwner = ownerNotify || createOwnerNotifier({ config, env, fetchImpl, log });
+
+    /** The fingerprint of the provider's current key: a SHA-256, never the key itself. */
+    function stampFor(p) {
+        if (!p || p.auth_mode === 'none') return null;
+        const secret = providerSecret(p, env);
+        return secret ? sha256(secret) : null;
+    }
+    async function keyStamp(key) { return stampFor(await registry.getProvider(key)); }
+
+    /**
+     * A key change closes every circuit on its provider: a new key may answer where the old one was
+     * refused. The provider record's secret_ref alone is not enough (an env value can change under the
+     * same reference), so the resolved key's fingerprint is compared. Nothing about the key is stored.
+     */
+    async function resetForNewKey(key, stamp) {
+        const rows = await listCircuits.all(key);
+        if (!rows.length) return false;
+        if (rows.every((r) => (r.key_stamp || null) === (stamp || null))) return false;
+        await db.prepare('DELETE FROM provider_circuits WHERE provider_key = ?').run(key);
+        await db.prepare('DELETE FROM provider_health WHERE provider_key = ?').run(key);
+        await registry.audit('system', 'provider.circuit_reset', 'provider', key, { metadata: { reason: 'the provider key changed' } });
+        return true;
+    }
+
+    const CLOSED = Object.freeze({ state: 'closed', consecutive_failures: 0, opened_at: null, retry_at: null, backoff_ms: 0, failure_class: null, last_error: null, last_success_at: null, last_failure_at: null, notified_at: null });
+
+    /** One circuit row as the router and the admin API show it; an open row past retry_at is a half-open probe. */
+    function circuitView(row) {
+        if (!row) return { ...CLOSED, status: 'up', status_reason: null, status_since: null };
+        const state = row.state === 'open' && Number(row.retry_at || 0) <= clock.now() ? 'half_open' : row.state;
+        const failureClass = row.failure_class || (row.exhausted_at ? 'balance' : null);
+        const down = state !== 'closed';
+        return {
+            provider_key: row.provider_key, model_key: row.model_key || '',
+            state, failure_class: failureClass, consecutive_failures: Number(row.consecutive_failures) || 0,
+            opened_at: row.opened_at == null ? null : Number(row.opened_at),
+            retry_at: row.retry_at == null ? null : Number(row.retry_at),
+            backoff_ms: Number(row.backoff_ms) || 0,
+            exhausted_at: failureClass === 'balance' ? (row.opened_at == null ? null : Number(row.opened_at)) : null,
+            last_error: row.last_error || null,
+            last_success_at: row.last_success_at == null ? null : Number(row.last_success_at),
+            last_failure_at: row.last_failure_at == null ? null : Number(row.last_failure_at),
+            notified_at: row.notified_at == null ? null : Number(row.notified_at),
+            status: down ? 'down' : 'up',
+            status_reason: down ? reasonForClass(failureClass) : null,
+            status_since: down ? iso(row.opened_at) : null,
+        };
+    }
+
+    /** A legacy provider_health row (a direct insert, or a state from before 0057), still honoured. */
+    function legacyView(h, model = undefined) {
+        const failureClass = h.exhausted_at ? 'balance' : null;
+        let state = h.state;
+        if (state === 'open') {
             const cooldown = h.exhausted_at ? exhaustedCooldownMs() : config.breaker.cooldownMs;
-            if (clock.now() - (h.opened_at || 0) >= cooldown) return { ...h, state: 'half_open' };
+            if (clock.now() - (h.opened_at || 0) >= cooldown) state = 'half_open';
         }
-        return h;
+        const down = state !== 'closed';
+        return {
+            ...CLOSED, ...h, provider_key: h.provider_key, ...(model === undefined ? {} : { model_key: String(model || '') }),
+            state, failure_class: failureClass, consecutive_failures: Number(h.consecutive_failures) || 0,
+            opened_at: h.opened_at == null ? null : Number(h.opened_at),
+            exhausted_at: h.exhausted_at == null ? null : Number(h.exhausted_at),
+            status: down ? 'down' : 'up',
+            status_reason: down ? reasonForClass(failureClass) : null,
+            status_since: down ? iso(h.opened_at) : null,
+        };
     }
-    async function recordSuccess(key) {
-        const h = await health(key);
-        if (h.state !== 'closed') await registry.audit('system', 'provider.circuit_closed', 'provider', key, { metadata: { after_failures: h.consecutive_failures } });
-        await putHealth.run({ ...h, provider_key: key, state: 'closed', consecutive_failures: 0, opened_at: null, exhausted_at: null, last_success_at: clock.now() });
+
+    /** The provider-level roll-up of its offers, written where readiness and older callers read it. */
+    async function syncProviderHealth(key) {
+        const rows = await listCircuits.all(key);
+        if (!rows.length) { await db.prepare('DELETE FROM provider_health WHERE provider_key = ?').run(key); return; }
+        const open = rows.filter((r) => r.state === 'open');
+        const half = rows.filter((r) => r.state === 'half_open');
+        const state = open.length ? 'open' : half.length ? 'half_open' : 'closed';
+        const pick = open[0] || half[0] || rows[0];
+        const exhausted = rows.find((r) => r.failure_class === 'balance' && r.state !== 'closed');
+        const latest = rows.reduce((a, b) => (Number(b.last_failure_at || 0) > Number(a.last_failure_at || 0) ? b : a), rows[0]);
+        const success = Math.max(...rows.map((r) => Number(r.last_success_at) || 0)) || null;
+        const failure = Math.max(...rows.map((r) => Number(r.last_failure_at) || 0)) || null;
+        await putHealth.run({
+            provider_key: key, state, consecutive_failures: Math.max(...rows.map((r) => Number(r.consecutive_failures) || 0)),
+            opened_at: pick.opened_at == null ? null : Number(pick.opened_at),
+            exhausted_at: exhausted && exhausted.opened_at != null ? Number(exhausted.opened_at) : null,
+            last_error: latest.last_error || null, last_success_at: success, last_failure_at: failure,
+        });
     }
-    async function recordFailure(key, err) {
-        const h = await health(key);
-        const failures = (h.consecutive_failures || 0) + 1;
-        const exhausted = insufficientBalance(err);
-        // A balance answer opens the circuit at once (it will not recover on its own), not after failureThreshold.
-        const open = exhausted || h.state === 'half_open' || failures >= config.breaker.failureThreshold;
-        if (open && h.state !== 'open') await registry.audit('system', 'provider.circuit_opened', 'provider', key, { metadata: { failures, exhausted, error: String(err && err.message || err).slice(0, 200) } });
-        await putHealth.run({ ...h, provider_key: key, state: open ? 'open' : 'closed', consecutive_failures: failures,
-            opened_at: open ? clock.now() : h.opened_at, exhausted_at: exhausted ? clock.now() : (h.exhausted_at || null),
-            last_error: String(err && err.message || err).slice(0, 500), last_failure_at: clock.now() });
+
+    /**
+     * The health of one offer (model given) or of the provider as a whole (model omitted).
+     * A provider-level answer carries every offer's circuit in `circuits`.
+     */
+    async function health(key, model = undefined, { stamp } = {}) {
+        const current = stamp !== undefined ? stamp : await keyStamp(key);
+        await resetForNewKey(key, current);
+        if (model !== undefined) {
+            const row = await getCircuit.get(key, String(model || ''));
+            if (row) return circuitView(row);
+            // Once a provider has per-offer rows, a model without one has no failure of its own: another
+            // model's open circuit must not take it away. provider_health is only a legacy fallback.
+            if ((await listCircuits.all(key)).length) {
+                return { ...CLOSED, provider_key: key, model_key: String(model || ''), status: 'up', status_reason: null, status_since: null };
+            }
+            const legacy = await getHealth.get(key);
+            return legacy && legacy.state !== 'closed' ? legacyView(legacy, model) : { ...CLOSED, provider_key: key, model_key: String(model || ''), status: 'up', status_reason: null, status_since: null };
+        }
+        const rows = await listCircuits.all(key);
+        if (rows.length) {
+            const views = rows.map(circuitView);
+            const open = views.find((v) => v.state === 'open');
+            const half = views.find((v) => v.state === 'half_open');
+            const pick = open || half || views[0];
+            return {
+                ...pick, provider_key: key, model_key: undefined,
+                state: open ? 'open' : half ? 'half_open' : 'closed',
+                consecutive_failures: Math.max(...views.map((v) => v.consecutive_failures || 0)),
+                last_error: views.reduce((a, b) => (Number(b.last_failure_at || 0) > Number(a.last_failure_at || 0) ? b : a), views[0]).last_error,
+                last_success_at: Math.max(...views.map((v) => Number(v.last_success_at) || 0)) || null,
+                last_failure_at: Math.max(...views.map((v) => Number(v.last_failure_at) || 0)) || null,
+                circuits: views,
+            };
+        }
+        const legacy = await getHealth.get(key);
+        return legacy ? legacyView(legacy) : { ...CLOSED, provider_key: key, status: 'up', status_reason: null, status_since: null, circuits: [] };
     }
-    async function resetHealth(key) { await db.prepare('DELETE FROM provider_health WHERE provider_key = ?').run(key); }
+
+    async function recordSuccess(key, model = '', { stamp } = {}) {
+        const modelKey = String(model || '');
+        const row = await getCircuit.get(key, modelKey);
+        const wasOpen = row && row.state && row.state !== 'closed';
+        if (wasOpen) await registry.audit('system', 'provider.circuit_closed', 'provider', key, { metadata: { after_failures: Number(row.consecutive_failures) || 0, model: modelKey } });
+        const current = stamp !== undefined ? stamp : await keyStamp(key);
+        const prev = row || {};
+        await putCircuit.run({
+            provider_key: key, model_key: modelKey, state: 'closed', failure_class: null, consecutive_failures: 0,
+            opened_at: null, retry_at: null, backoff_ms: 0, key_stamp: current,
+            last_error: prev.last_error || null, last_success_at: clock.now(), last_failure_at: prev.last_failure_at || null, notified_at: null,
+        });
+        await syncProviderHealth(key);
+    }
+
+    /**
+     * Record one failed attempt. Every class is counted (ai_provider_failures_total); only balance, auth
+     * and a run of transient failures touch the circuit. rate_limit and request failures move this
+     * request on without taking the offer away from anyone else.
+     */
+    async function recordFailure(key, model = '', err, { stamp } = {}) {
+        const failure = classifyFailure(err);
+        if (!failure) return null;
+        const now = clock.now();
+        // Our own policy refusing an answer is not the provider failing: it produced one.
+        const counts = err && err.code !== 'policy.floor_refused';
+        if (counts) await putFailureCount.run({ provider_key: key, failure_class: failure.class, updated_at: now });
+        if (!['balance', 'auth', 'transient'].includes(failure.class)) return { ...failure, opened: false };
+
+        const modelKey = String(model || '');
+        const current = stamp !== undefined ? stamp : await keyStamp(key);
+        await resetForNewKey(key, current);
+        const row = await getCircuit.get(key, modelKey) || { state: 'closed' };
+        const failures = (Number(row.consecutive_failures) || 0) + 1;
+        const wasOpen = row.state === 'open' || row.state === 'half_open';
+        // A failure after retry_at is the half-open probe failing: the pause starts again from now.
+        const probing = row.state === 'half_open' || (row.state === 'open' && Number(row.retry_at || 0) <= now);
+        let state = 'closed';
+        let openedAt = null;
+        let retryAt = null;
+        let backoff = 0;
+        let notified = row.notified_at == null ? null : Number(row.notified_at);
+
+        if (failure.class === 'balance' || failure.class === 'auth') {
+            state = 'open';
+            openedAt = wasOpen && !probing && row.opened_at ? Number(row.opened_at) : now;
+            retryAt = openedAt + exhaustedCooldownMs();
+            if (!wasOpen) notified = null;
+        } else if (wasOpen || failures >= config.breaker.failureThreshold) {
+            state = 'open';
+            const initial = config.breaker.transientBackoffMs;
+            const max = config.breaker.transientMaxMs;
+            backoff = wasOpen ? Math.min(max, Math.max(initial, (Number(row.backoff_ms) || initial) * 2)) : initial;
+            openedAt = wasOpen && !probing && row.opened_at ? Number(row.opened_at) : now;
+            retryAt = now + backoff;
+        }
+
+        if (state === 'open' && !wasOpen) {
+            await registry.audit('system', 'provider.circuit_opened', 'provider', key, {
+                metadata: { failures, failure_class: failure.class, model: modelKey, error: String(failure.message || err && err.message || err).slice(0, 200) },
+            });
+        }
+        const saved = {
+            provider_key: key, model_key: modelKey, state,
+            failure_class: failure.class, consecutive_failures: failures,
+            opened_at: openedAt, retry_at: retryAt, backoff_ms: backoff, key_stamp: current,
+            last_error: String(failure.message || err && err.message || err || '').slice(0, 500),
+            last_success_at: row.last_success_at == null ? null : Number(row.last_success_at),
+            last_failure_at: now, notified_at: notified,
+        };
+        await putCircuit.run(saved);
+        await syncProviderHealth(key);
+        if (state === 'open' && (failure.class === 'balance' || failure.class === 'auth') && !notified) {
+            const sent = await alertOwner(key, modelKey, failure.class);
+            if (sent) {
+                saved.notified_at = now;
+                await putCircuit.run(saved);
+            }
+        }
+        return { ...failure, opened: state === 'open', state, opened_at: openedAt, retry_at: retryAt, backoff_ms: backoff };
+    }
+
+    /** One owner message per open balance/auth circuit, with the provider's own class, never a request body. */
+    async function alertOwner(key, model, failureClass) {
+        const offer = model ? `${key}/${model}` : key;
+        const title = failureClass === 'balance' ? 'A provider is out of credit' : 'A provider key was refused';
+        const message = failureClass === 'balance'
+            ? `${offer} says its account is out of credit. OpenVibe.AI is using the other offers until it is topped up.`
+            : `${offer} refused its key. OpenVibe.AI is using the other offers until the key is replaced.`;
+        return await notifyOwner({ title, message });
+    }
+
+    /** At boot: an open balance/auth circuit that was never announced (a crash before the push) is announced once. */
+    async function notifyOpenCircuits() {
+        const rows = await db.prepare("SELECT * FROM provider_circuits WHERE state = 'open' AND failure_class IN ('balance', 'auth') AND notified_at IS NULL").all();
+        let sent = 0;
+        for (const row of rows) {
+            if (!await alertOwner(row.provider_key, row.model_key, row.failure_class)) continue;
+            await db.prepare('UPDATE provider_circuits SET notified_at = ? WHERE provider_key = ? AND model_key = ?').run(clock.now(), row.provider_key, row.model_key);
+            sent++;
+        }
+        return sent;
+    }
+
+    async function resetHealth(key) {
+        await db.prepare('DELETE FROM provider_circuits WHERE provider_key = ?').run(key);
+        await db.prepare('DELETE FROM provider_health WHERE provider_key = ?').run(key);
+    }
 
     // ── Pricing: platform.rate-card@1 per metric (server/providers/rate-cards.js; models row -> AI_PRICING_JSON -> flat) ──
     /** The { in, cached, out } rate cards for a provider + model, or null for a provider that is never billed. */
@@ -688,7 +914,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             const entry = await adapter(c.provider);
             const p = entry && entry.record;
             const modelId = c.model || (p && p.default_model) || null;
-            const why = await skipReason(p, entry && entry.adapter, features);
+            const why = await skipReason(p, entry && entry.adapter, features, modelId);
             const offered = appOffered(ctx, p);
             const access = accessOffered(p);
             const policyOk = p ? await policyAllows(registry, p, modelId, ctx.contentPolicy || 'standard') : false;
@@ -850,13 +1076,17 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         return { order, ranked: view, reasons, keepOrder };
     }
 
-    async function skipReason(p, a, features) {
+    async function skipReason(p, a, features, model = undefined) {
         if (!p || !a) return 'unknown_provider';
         if (p.status !== 'active') return 'disabled';
         if (p.auth_mode !== 'none' && !credentialNotRequired(p) && !providerSecret(p, env)) return 'no_credentials';
         if (features.some(f => !a.supports(f))) return 'unsupported';
-        const h = await health(p.key);
-        if (h.state === 'open') return h.exhausted_at ? 'exhausted' : 'circuit_open';
+        const h = await health(p.key, model, { stamp: stampFor(p) });
+        if (h.state === 'open') {
+            if (h.failure_class === 'balance' || h.exhausted_at) return 'exhausted';
+            if (h.failure_class === 'auth') return 'key_refused';
+            return 'circuit_open';
+        }
         return null;
     }
 
@@ -1228,7 +1458,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                     if (price && Number(price.out) > freeCeiling) { why.push('over_price_ceiling'); freeCeilingSkipped = true; }
                     else {
                         if (!accessOffered(p)) why.push(`provider_access ${modelCatalog.accessOf(p)}`);
-                        const skip = await skipReason(p, entry && entry.adapter, features);
+                        const skip = await skipReason(p, entry && entry.adapter, features, offer.model);
                         if (skip) why.push(skip);
                     }
                 }
@@ -1441,9 +1671,9 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                     continue;
                 }
             }
-            const why = await skipReason(p, a, features);
+            const why = await skipReason(p, a, features, model);
             if (why) {
-                if (why === 'exhausted' || why === 'circuit_open') resting = true;
+                if (why === 'exhausted' || why === 'circuit_open' || why === 'key_refused') resting = true;
                 statFor(c.provider).skipped++;
                 tried.push({ provider: c.provider, skipped: why });
                 attempts.push({ key: 'openvibe', provider: c.provider, model, why: chosen || 'the router chose it', status: 'skipped', error: why });
@@ -1575,7 +1805,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                         : await costOnTier({ providerKey: c.provider, model: result.model || model, usage, tier: ranOn, p });
                     const cost = priced.cost;
                     statFor(c.provider).ok++;
-                    await recordSuccess(c.provider);
+                    await recordSuccess(c.provider, model);
                     if (ctx.logRequest) {
                         ctx.logRequest({
                             ...base, model_key: result.model || model, status: 'ok', output_hash: sha256(result.json || result.text || result.vectors || result.segments || result.images || ''),
@@ -1610,7 +1840,8 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                     }
                     await recordEvidence({ provider: c.provider, model, ok: false, timeout: Boolean(err && err.code === 'provider.timeout'), latencyMs: Date.now() - t0 });
                     statFor(c.provider).failures++;
-                    if (ctx.logRequest) ctx.logRequest({ ...base, status: err && err.code === 'provider.timeout' ? 'timeout' : 'error', latency_ms: Date.now() - t0, error: String(err && err.message || err).slice(0, 500) });
+                    const failure = classifyFailure(err);
+                    if (ctx.logRequest) ctx.logRequest({ ...base, status: err && err.code === 'provider.timeout' ? 'timeout' : 'error', latency_ms: Date.now() - t0, error: String(err && err.message || err).slice(0, 500), error_class: failure ? failure.class : null });
                     // A stream that broke off still delivers what the upstream had already said (the guard's held tail
                     // included), unless that tail itself breaks the floor.
                     if (streamed && floorGuard) {
@@ -1623,8 +1854,9 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                     if (streamed && err && err.code === 'policy.floor_refused') throw new AiError(403, 'policy.floor_refused', err.detail || err.message, { rule: err.rule, policy: contentPolicy });
                     if (streamed) throw new AiError(502, 'provider.stream_broken', `the answer broke off after it began streaming: ${String(err && err.message || err).slice(0, 200)}`, { tried: [...tried, { provider: c.provider, error: String(err && err.message || err).slice(0, 200) }], explain });
                     // A timed-out image may still be generated and billed upstream: never pay for it twice.
-                    // An insufficient-balance answer is never retried: the same provider cannot answer until it is topped up.
-                    if (insufficientBalance(err)) resting = true;
+                    // An insufficient-balance or refused-key answer is never retried: the offer cannot answer
+                    // until it is topped up or the key is replaced.
+                    if (failure && (failure.class === 'balance' || failure.class === 'auth')) resting = true;
                     // BA1: the provider refused the tier we asked for (a Flex tier with no capacity, or a
                     // model that does not serve it). The same run goes once more on the standard tier: the
                     // refusal is counted and logged above, and it produced no tokens, so nothing is billed
@@ -1644,14 +1876,12 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             } finally {
                 if (local) localActive--;
             }
-            // A request the provider rejected as malformed is the caller's fault, not a sign the
-            // provider is unhealthy; a 429 is capacity, not health either, and moves on without
-            // opening the circuit. Neither must take a shared provider away from other callers.
             if (lastErr && lastErr.code === 'media.unreadable') unreadable = lastErr;
-            // An insufficient-balance 429 is not ordinary capacity: it must open the long exhausted circuit.
-            if (insufficientBalance(lastErr) || (!callerFault(lastErr) && !rateLimited(lastErr))) await recordFailure(c.provider, lastErr);
-            tried.push({ provider: c.provider, error: String(lastErr && lastErr.message || lastErr).slice(0, 200) });
-            attempts.push({ key: 'openvibe', provider: c.provider, model: lastErr && lastErr.model || model, why: chosen || (fallback ? 'the next network provider after an earlier attempt failed' : 'the first network offer for this route'), status: lastErr && lastErr.code === 'provider.timeout' ? 'timeout' : 'failed', error: String(lastErr && lastErr.message || lastErr).slice(0, 300) });
+            // classifyFailure decides what a failure means: balance/auth open at once, a run of transient
+            // failures opens for a doubling backoff, a 429 or a malformed request never opens a circuit.
+            const failedAs = await recordFailure(c.provider, model, lastErr);
+            tried.push({ provider: c.provider, error: String(lastErr && lastErr.message || lastErr).slice(0, 200), error_class: failedAs && failedAs.class });
+            attempts.push({ key: 'openvibe', provider: c.provider, model: lastErr && lastErr.model || model, why: chosen || (fallback ? 'the next network provider after an earlier attempt failed' : 'the first network offer for this route'), status: lastErr && lastErr.code === 'provider.timeout' ? 'timeout' : 'failed', error: String(lastErr && lastErr.message || lastErr).slice(0, 300), error_class: failedAs && failedAs.class });
             log.warn(`[ai] ${operation} via ${c.provider}/${model || '-'} failed: ${lastErr && lastErr.message}`);
         }
         explain.selected = null;
@@ -1687,7 +1917,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         throw new AiError(503, 'provider.unavailable', 'no provider on this route could answer', { tried, explain });
     }
 
-    return { adapter, health, resetHealth, execute, executeWithCredential, offers, benchView, priceFor, costOf, rateCardsFor, providerStates, stats, statFor, candidates, machines, routingEvidence };
+    return { adapter, health, resetHealth, notifyOpenCircuits, execute, executeWithCredential, offers, benchView, priceFor, costOf, rateCardsFor, providerStates, stats, statFor, candidates, machines, routingEvidence };
 }
 
 module.exports = { createProviderPool, createFloorGuard, policyAllows, machineMessages, machineTools };

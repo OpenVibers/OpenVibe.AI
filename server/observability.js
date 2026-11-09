@@ -102,6 +102,33 @@ function registerAiGauges(registry, { runs, registry: ai, pool, balance = null, 
         name: 'ai_provider_circuit', help: 'Circuit-breaker state of each active provider (1 = the current state)', labelNames: ['provider', 'state'],
         collect: async () => (await providerView(ai, pool)).flatMap(p => CIRCUIT_STATES.map(state => ({ labels: { provider: p.key, state }, value: p.circuit === state ? 1 : 0 }))),
     });
+    // The measured per-offer breaker (migrations/0057): 1 while the offer is open (including the wait for a
+    // half-open probe), 0 while it serves. The class is why it opened: balance, auth or transient.
+    registry.gauge({
+        name: 'ai_provider_circuit_open', help: 'Open circuit per provider and model (1 = open or waiting for a probe)', labelNames: ['provider', 'model', 'class'],
+        collect: async () => {
+            if (!db) return [];
+            const rows = await db.prepare('SELECT provider_key, model_key, state, failure_class FROM provider_circuits').all().catch(() => []);
+            const seen = new Set(rows.map((r) => `${r.provider_key}/${r.model_key || ''}`));
+            const legacy = await db.prepare('SELECT provider_key, state, exhausted_at FROM provider_health').all().catch(() => []);
+            return [
+                ...rows.map((r) => ({ labels: { provider: r.provider_key, model: r.model_key || '', class: r.failure_class || '' }, value: r.state === 'closed' ? 0 : 1 })),
+                ...(legacy || []).filter((h) => !seen.has(`${h.provider_key}/`)).map((h) => ({
+                    labels: { provider: h.provider_key, model: '', class: h.state === 'closed' ? '' : (h.exhausted_at ? 'balance' : 'transient') },
+                    value: h.state === 'closed' ? 0 : 1,
+                })),
+            ];
+        },
+    });
+    // Why attempts failed, by provider and class, counted in the database so a restart keeps the total.
+    registry.gauge({
+        name: 'ai_provider_failures_total', help: 'Failed provider attempts by provider and failure class (balance, auth, rate_limit, transient, request)', labelNames: ['provider', 'class'],
+        collect: async () => {
+            if (!db) return [];
+            const rows = await db.prepare('SELECT provider_key, failure_class, count FROM provider_failure_counts').all().catch(() => []);
+            return (rows || []).map((r) => ({ labels: { provider: r.provider_key, class: r.failure_class }, value: Number(r.count) || 0 }));
+        },
+    });
     registry.gauge({
         name: 'ai_provider_credentials_missing', help: 'Active providers whose secret reference does not resolve (1 = missing)', labelNames: ['provider'],
         collect: async () => (await providerView(ai, pool)).filter(p => p.credentials !== 'not_required').map(p => ({ labels: { provider: p.key }, value: p.credentials === 'missing' ? 1 : 0 })),
