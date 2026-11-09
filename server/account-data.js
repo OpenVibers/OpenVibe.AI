@@ -39,6 +39,9 @@ const TABLES = [
     // L36 Y3: how the person's runs route (only_my_keys, free_first, the price ceiling and the defaults). Their own
     // settings, so they go with the account; the row holds no key.
     { table: 'ai_person_preferences', subject: 'subject', file: 'ai-preferences.json', columns: ['preferences', 'created_at', 'updated_at'], order: 'created_at' },
+    // The person's saved model for each AI task (rich-content plan §1): their own setting, and the row holds a model
+    // name and a source, never a key.
+    { table: 'ai_task_choices', subject: 'subject', file: 'ai-task-choices.json', columns: ['task', 'choice', 'updated_at'], order: 'updated_at' },
     // L55 C3: the apps the person allowed to use their own key. Names only: no key, no hint, no material of any kind.
     { table: 'ai_key_grants', subject: 'subject', file: 'key-grants.json', columns: ['service', 'provider', 'created_at'], order: 'created_at' },
     // Memory M2a: the rows are deleted by owner here; the decrypted items are added by extraExport below. The text is

@@ -32,7 +32,7 @@ const { AiError, sendError } = require('../util');
 const { CAPS, namespaceAllowed, appOrCap } = require('../auth');
 const { appMayRun, appAttribution, DIRECT_OPS } = require('../apps');
 
-function runsRouter({ runs, registry, auth, config, log = console }) {
+function runsRouter({ choices = null, runs, registry, auth, config, log = console }) {
     const r = express.Router();
     const create = auth.personOrCap(CAPS.runCreate);
     const read = auth.personOrCap(CAPS.runRead, CAPS.runCreate, CAPS.usageRead);
@@ -62,6 +62,7 @@ function runsRouter({ runs, registry, auth, config, log = console }) {
 
     async function createAndRespond(req, res, body, waitMs) {
         if (req.principal.kind === 'app') body = appBody(req.principal, body, req.body);
+        if (body.task && !body.workflow) { const task = await choices?.task(String(body.task)); if (!task) throw new AiError(404, 'task.not_found', 'unknown task'); body = { ...body, workflow: task.workflow }; }
         checkNamespace(req, String(body.workflow || ''));
         const idem = body.idempotency_key || req.ov.idempotencyKey || undefined;
         // BA1: the caller's wait goes with the run, so a background run answers inside it (a Flex tier that is
@@ -79,6 +80,7 @@ function runsRouter({ runs, registry, auth, config, log = console }) {
      */
     async function createAndStream(req, res, body, waitMs) {
         if (req.principal.kind === 'app') body = appBody(req.principal, body, req.body);
+        if (body.task && !body.workflow) { const task = await choices?.task(String(body.task)); if (!task) throw new AiError(404, 'task.not_found', 'unknown task'); body = { ...body, workflow: task.workflow }; }
         checkNamespace(req, String(body.workflow || ''));
         const idem = body.idempotency_key || req.ov.idempotencyKey || undefined;
         let opened = false;
