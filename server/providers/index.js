@@ -904,12 +904,12 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             const out = completing
                 ? { completion: { choices: [{ index: 0, message, finish_reason: result.finish || (message.tool_calls ? 'tool_calls' : 'stop') }], system_fingerprint: null }, text: result.text, json: null, model: result.model, usage }
                 : { text: result.text, json: null, model: result.model, usage };
-            return { result: out, provider: cred.providerKey, providerKind: 'node', model: result.model, fallbackUsed: false, usage, cost: 0, latencyMs: latency, synthetic: false, tried: [], startedAt: t0,
+            return { result: out, provider: cred.providerKey, providerKind: 'link', model: result.model, fallbackUsed: false, usage, cost: 0, latencyMs: latency, synthetic: false, tried: [], startedAt: t0,
                 explain: { objective: 'own-machine', reasons: [cred.machine === 'any' ? 'the fastest of the person\'s own machines that answered, by their choice' : 'the person\'s own machine, by their choice'],
                     paid_by: 'your machine',
-                    selected: { provider: 'node', machine: result.machine || cred.machine, model: result.model },
-                    candidates: (result.tried || []).map((x) => ({ provider: 'node', machine: x.machine, skipped: x.error })),
-                    attempts: [{ key: 'your machine', provider: 'node', model: result.model, why: 'your own machine', status: 'ok', error: null }],
+                    selected: { provider: 'link', machine: result.machine || cred.machine, model: result.model },
+                    candidates: (result.tried || []).map((x) => ({ provider: 'link', machine: x.machine, skipped: x.error })),
+                    attempts: [{ key: 'your machine', provider: 'link', model: result.model, why: 'your own machine', status: 'ok', error: null }],
                     openvibe: ownFacts } };
         } catch (err) {
             if (ctx.logRequest) ctx.logRequest({ ...base, status: 'error', latency_ms: Date.now() - t0, error: String(err && err.message || err).slice(0, 500) });
@@ -919,7 +919,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
     }
 
     async function executeWithCredential(cred, operation, req, ctx = {}) {
-        if (cred.provider === 'node') return await executeOnMachine(cred, operation, req, ctx);
+        if (cred.provider === 'link') return await executeOnMachine(cred, operation, req, ctx);
         // Text operations are all chat completions on the person's provider (templated workflows use generate).
         // A project's own provider (ADR-056 secret, ai.complete) passes a Chat Completions request through as written.
         // The OpenAI-format providers: a Chat Completions request is passed through as written (Codes C3: OpenRouter

@@ -820,7 +820,7 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
     async function payerOf({ row, providerKey, opts }) {
         if (opts.credential_subject) {
             const cred = await credentials.get(row.requester_id, opts.credential_subject, opts.credential_provider || null).catch(() => null);
-            if (cred && cred.provider === 'node') return { paid_by: 'own_machine', detail: cred.machine || 'node', provider: 'node' };
+            if (cred && cred.provider === 'link') return { paid_by: 'own_machine', detail: cred.machine || 'link', provider: 'link' };
             const name = (cred && cred.provider) || 'own';
             const hint = cred && cred.key_hint ? String(cred.key_hint) : '';
             return { paid_by: 'own_key', detail: hint ? `${name} ...${hint}` : name, provider: name };

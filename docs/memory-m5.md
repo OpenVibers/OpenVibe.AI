@@ -102,7 +102,7 @@ forwards the person's token, the method, the body and `If-Match` to AI, and keep
   another account without carrying anyone's identity, and a profile is derived from the notes and rebuilt.
 - The round trip is proved in `test/memory-m5.test.js`: export A's store, import it as B, and compare text, kind,
   scope and source; importing the same file again changes nothing.
-- The Link writes and reads the same file (`openvibe-node memory export|import`); Codes offers a download and an
+- The Link writes and reads the same file (`openvibe-link memory export|import`); Codes offers a download and an
   import form. The format is the contract, not either client.
 
 ## Tests

@@ -47,7 +47,7 @@ function dataPolicyOf(record) {
  */
 function labelFor({ record = null, credential = null } = {}) {
     // A person's own machine (a Link credential): the prompt never left their hardware.
-    if (credential && credential.provider === 'node') {
+    if (credential && credential.provider === 'link') {
         return { label: 'private', retention: 'none', training: false, region: null, trust: 'own_machine', known: true, source: 'your own machine' };
     }
     // The host's own deployment (the local models OpenVibe runs itself): nothing leaves the machine it manages.
