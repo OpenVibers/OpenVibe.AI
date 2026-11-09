@@ -375,7 +375,7 @@ function createCredentials({ db, config, clock = { now: () => Date.now() }, fetc
     /** Every self row for one person, newest first. */
     async function selfRows(subject) {
         if (!SUBJECT_RE.test(String(subject))) return [];
-        return await db.prepare("SELECT * FROM subject_credentials WHERE owner = ? AND subject = ? AND provider <> 'link' ORDER BY provider").all(SELF_OWNER, subject);
+        return await db.prepare("SELECT * FROM subject_credentials WHERE owner = ? AND subject = ? AND provider <> 'link' AND provider NOT LIKE 'search-%' ORDER BY provider").all(SELF_OWNER, subject);
     }
     async function listSelf(subject) {
         return (await selfRows(subject)).map(selfView);
@@ -595,8 +595,46 @@ function createCredentials({ db, config, clock = { now: () => Date.now() }, fetc
         return (await grants.allows(subject, owner, provider)) ? { service: owner, subject, provider } : null;
     }
 
+    // Search providers share the existing encrypted owner/subject/provider store. A distinct
+    // namespace keeps the model credential contracts and model routing unchanged.
+    function searchProvider(engine) {
+        const { adapters, credentialId } = require('./search');
+        const a = adapters.find(a => a.id === engine && a.byok);
+        if (!a) throw new AiError(404, 'credential.not_found', 'Unknown search engine');
+        return 'search-' + credentialId(a);
+    }
+    async function putSearch(subject, engine, body) {
+        if (!SUBJECT_RE.test(String(subject))) throw new AiError(400, 'input.invalid', 'subject must be a usr_ subject');
+        const provider = searchProvider(engine);
+        if (!body || typeof body.key !== 'string' || body.key.length < 8 || body.key.length > 400 || Object.keys(body).some(k => k !== 'key'))
+            throw new AiError(422, 'input.invalid', 'A key of 8–400 characters is required');
+        const at = iso(clock.now());
+        await db.prepare(`INSERT INTO subject_credentials
+            (owner, subject, provider, key_enc, key_hint, models, is_default, spend_key, status, models_count, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, '{}', false, ?, 'untested', 0, ?, ?)
+            ON CONFLICT(owner, subject, provider) DO UPDATE SET key_enc = excluded.key_enc,
+            key_hint = excluded.key_hint, status = 'untested', updated_at = excluded.updated_at`)
+            .run(SELF_OWNER, subject, provider, seal(body.key, aadFor(SELF_OWNER, subject, provider)), hintOf(body.key), providerKeyFor(SELF_OWNER, subject, provider), at, at);
+        // Saving a search key never spends a query to test it.
+        return { engine, stored: true };
+    }
+    async function listSearch(subject) {
+        return (await db.prepare("SELECT provider, updated_at FROM subject_credentials WHERE owner = ? AND subject = ? AND provider LIKE 'search-%'").all(SELF_OWNER, subject))
+            .map(r => ({ engine: r.provider.slice(7), updated_at: r.updated_at }));
+    }
+    async function removeSearch(subject, engine) {
+        await db.prepare('DELETE FROM subject_credentials WHERE owner = ? AND subject = ? AND provider = ?').run(SELF_OWNER, subject, searchProvider(engine));
+        return { engine, removed: true };
+    }
+    async function searchForRun(subject, engine) {
+        const r = await getRow(SELF_OWNER, subject, searchProvider(engine));
+        if (!r) return null;
+        return { apiKey: await openRow(r) };
+    }
+
     return {
         put, get, remove, admit, forRun, spentToday, providerKeyFor,
+        putSearch, listSearch, removeSearch, searchForRun,
         listSelf, hasSelf, selfForRun, selfForAllRuns, putSelf, removeSelf, testSelf, balanceSelf, markFailed, getSelfNode, putSelfNode, removeSelfNode,
         allowedProvidersWithKey, consentUse,
     };

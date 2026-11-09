@@ -1,8 +1,13 @@
 'use strict';
+const { requestFor } = require('../transport');
 module.exports = {
     id: 'openverse',
+    price_per_1000: 0, byok: false, checked_on: '2026-11-09', source: 'https://api.openverse.org/',
+    freshness: [],
+    hosts: ['api.openverse.org'],
     kinds: ['images'],
-    async search(b, get) {
+    async search(b, { fetchImpl }) {
+        const get = requestFor(this.hosts, fetchImpl);
         const q = new URLSearchParams({
             q: b.q,
             page_size: String(b.limit),

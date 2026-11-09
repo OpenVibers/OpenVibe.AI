@@ -1,0 +1,34 @@
+{
+  "response": {
+    "results": [
+      {
+        "alt_description": "Cat",
+        "urls": {
+          "full": "https://images.example.org/cat.jpg",
+          "thumb": "https://images.example.org/thumb.jpg"
+        },
+        "width": 2400,
+        "height": 1600,
+        "user": {
+          "name": "Alex",
+          "links": {
+            "html": "https://unsplash.com/@alex"
+          }
+        },
+        "links": {
+          "html": "https://example.org/article",
+          "download_location": "https://api.unsplash.com/photos/cat/download"
+        }
+      }
+    ]
+  },
+  "request": {
+    "host": "api.unsplash.com",
+    "path": "/search/photos",
+    "method": "GET"
+  },
+  "expected": {
+    "title": "Cat",
+    "cost": 0
+  }
+}

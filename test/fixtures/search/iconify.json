@@ -1,0 +1,16 @@
+{
+  "response": {
+    "icons": [
+      "demo:cat-line"
+    ]
+  },
+  "request": {
+    "host": "api.iconify.design",
+    "path": "/search",
+    "method": "GET"
+  },
+  "expected": {
+    "title": "demo:cat-line",
+    "cost": 0
+  }
+}

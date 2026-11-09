@@ -127,6 +127,18 @@ function meRouter({ credentials, preferences, grants, auth, registry, config, cl
         try { await registry.audit(personOf(req), action, 'credential', personOf(req), { trace: req.ov && req.ov.traceId, metadata }); } catch { /* audit never breaks the person's request */ }
     };
 
+    r.get('/api/v1/me/search-credentials', guard, run(async req => ({ engines: await credentials.listSearch(personOf(req)) })));
+    r.put('/api/v1/me/search-credentials/:engine', guard, run(async req => {
+        const out = await credentials.putSearch(personOf(req), req.params.engine, req.body);
+        await audit(req, 'credential.search.put', { engine: out.engine });
+        return out;
+    }));
+    r.delete('/api/v1/me/search-credentials/:engine', guard, run(async req => {
+        const out = await credentials.removeSearch(personOf(req), req.params.engine);
+        await audit(req, 'credential.search.delete', { engine: out.engine });
+        return out;
+    }));
+
     r.get('/api/v1/me/credentials', guard, run(async (req) => ({ credentials: [...(await credentials.listSelf(personOf(req))).map((c) => ({ ...c, id: c.provider, kind: 'api_key', label: c.provider, created: c.created_at, last_used: c.last_used_at || null })), ...(sessionCookies ? await sessionCookies.list('self', personOf(req)) : [])] })));
     if (sessionCookies) {
         r.post('/api/v1/me/credentials', guard, run(async (req) => {

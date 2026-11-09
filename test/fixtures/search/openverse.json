@@ -1,0 +1,27 @@
+{
+  "response": {
+    "results": [
+      {
+        "title": "Cat",
+        "url": "https://images.example.org/cat.jpg",
+        "thumbnail": "https://images.example.org/thumb.jpg",
+        "width": 2400,
+        "height": 1600,
+        "license": "by",
+        "creator": "Alex",
+        "foreign_landing_url": "https://example.org/article",
+        "attribution": "Cat \u2014 Alex (CC BY)",
+        "license_url": "https://creativecommons.org/licenses/by/4.0/"
+      }
+    ]
+  },
+  "request": {
+    "host": "api.openverse.org",
+    "path": "/v1/images/",
+    "method": "GET"
+  },
+  "expected": {
+    "title": "Cat",
+    "cost": 0
+  }
+}

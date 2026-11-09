@@ -1,0 +1,41 @@
+{
+  "response": {
+    "query": {
+      "pages": {
+        "1": {
+          "title": "Cat",
+          "imageinfo": [
+            {
+              "url": "https://images.example.org/cat.jpg",
+              "thumburl": "https://images.example.org/thumb.jpg",
+              "width": 2400,
+              "height": 1600,
+              "descriptionurl": "https://example.org/article",
+              "mime": "image/jpeg",
+              "extmetadata": {
+                "LicenseShortName": {
+                  "value": "CC BY 4.0"
+                },
+                "Artist": {
+                  "value": "<b>Alex</b>"
+                },
+                "LicenseUrl": {
+                  "value": "https://creativecommons.org/licenses/by/4.0/"
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "request": {
+    "host": "commons.wikimedia.org",
+    "path": "/w/api.php",
+    "method": "GET"
+  },
+  "expected": {
+    "title": "Cat",
+    "cost": 0
+  }
+}
