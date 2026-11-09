@@ -13,6 +13,7 @@
 const { ProviderError, postJson, schemaInstruction } = require('./common');
 const usage = require('./usage');
 
+const effortPolicy = require('../effort/providers');
 const DEFAULT_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
 const TEXT_OPS = ['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich'];
 
@@ -48,6 +49,7 @@ function createGeminiProvider(record, { apiKey = '', fetchImpl = globalThis.fetc
             generationConfig.responseSchema = req.json.schema;
         }
         if (Object.keys(generationConfig).length) body.generationConfig = generationConfig;
+        effortPolicy.apply(body, req, { kind: 'gemini' });
         const url = `${baseUrl}/models/${encodeURIComponent(model(req))}:generateContent`;
         const j = await postJson(url, apiKey ? { 'x-goog-api-key': apiKey } : {}, body, { signal: req.signal, timeoutMs: req.timeoutMs, fetchImpl });
         const parts = (j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts) || [];
@@ -72,7 +74,7 @@ function createGeminiProvider(record, { apiKey = '', fetchImpl = globalThis.fetc
         generate,
     };
     for (const op of TEXT_OPS) if (op !== 'chat') adapter[op] = chat;
-    return adapter;
+    return effortPolicy.wrapAdapter(adapter, { ...record, base_url: baseUrl });
 }
 
 module.exports = { createGeminiProvider, DEFAULT_BASE_URL };

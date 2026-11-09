@@ -14,6 +14,7 @@
 const { postJson, ProviderError, deadline, describeAbort, schemaInstruction } = require('./common');
 const { sseFrames } = require('./stream');
 const usageParser = require('./usage');
+const effortPolicy = require('../effort/providers');
 
 const DEFAULT_BASE_URL = 'https://api.anthropic.com/v1';
 const TEXT_OPS = ['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich'];
@@ -30,7 +31,8 @@ const isCurrentClaude = (model) => CURRENT_CLAUDE.test(String(model || ''));
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 
 /** jsonMode: 'format' (structured outputs), 'tool' (a forced tool, older models) or 'prose' (the schema in the system prompt). */
-function buildBody({ model, system, messages, image, json, maxTokens, temperature, effort }, jsonMode) {
+function buildBody(req, jsonMode) {
+    const { model, system, messages, image, json, maxTokens, temperature, effort } = req;
     const current = isCurrentClaude(model);
     const mode = json ? (jsonMode || (current ? 'format' : 'tool')) : null;
     const body = { model, max_tokens: Math.max(1, maxTokens) };
@@ -56,7 +58,7 @@ function buildBody({ model, system, messages, image, json, maxTokens, temperatur
         body.tools = [{ name: json.name || 'result', description: json.description || 'Return the result.', input_schema: json.schema }];
         body.tool_choice = { type: 'tool', name: json.name || 'result' };
     }
-    return body;
+    return effortPolicy.apply(body, req, { kind: 'anthropic', key: 'anthropic' });
 }
 
 /** The caller's Messages API body, with the routed model and only the fields they set. */
@@ -70,7 +72,7 @@ function messagesBody(req) {
         const tc = body.tool_choice;
         if (tc && (tc.type === 'tool' || tc.type === 'any')) body.tool_choice = { type: 'auto', ...(tc.disable_parallel_tool_use ? { disable_parallel_tool_use: true } : {}) };
     }
-    return body;
+    return effortPolicy.apply(body, req, { kind: 'anthropic', key: 'anthropic' });
 }
 
 const usageOf = (message) => usageParser.anthropicUsage((message && message.usage) || {});
@@ -202,7 +204,7 @@ function createAnthropicProvider(record, { apiKey = '', fetchImpl = globalThis.f
 
     const adapter = { key: record.key, kind: 'anthropic', supports: (f) => caps.has(f) || (f === 'messages' && caps.has('chat')), chat, messages };
     for (const op of TEXT_OPS) if (op !== 'chat') adapter[op] = chat;
-    return adapter;
+    return effortPolicy.wrapAdapter(adapter, { ...record, base_url: baseUrl });
 }
 
 module.exports = { createAnthropicProvider, buildBody, messagesBody, isCurrentClaude, DEFAULT_BASE_URL };

@@ -79,6 +79,8 @@ function buildReceipt({ run, explain = null, usage = {}, price = null, privacy =
     const paidBy = (payer && payer.paid_by) || 'openvibe_key';
     const byok = paidBy === 'own_key' || paidBy === 'own_machine';
     return {
+        ...require('../effort/receipt').receiptEffort(run, explain),
+        ...(parseJson(run.options, {}).effort_policy?.kind ? { kind: parseJson(run.options, {}).effort_policy.kind } : {}),
         id: receiptId(run.id),
         run_id: run.id,
         created_at: createdAt || new Date().toISOString(),
