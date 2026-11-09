@@ -486,7 +486,21 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
         return { cited: [], gaps: gaps.slice(0, 20), read: (output && output.sources ? output.sources.length : 0) };
     }
 
-    const STEP = { llm: llmStep, passthrough: passthroughStep, complete: completeStep, messages: messagesStep, transcribe: transcribeStep, embed: embedStep, image: imageStep, media_analysis: mediaAnalysis.step, research: researchStep };
+    async function devblogStep(step, input, wf, run, ctx) {
+        const usage = { input: 0, output: 0, cached: 0 };
+        let cost = 0, savedUsd = 0, last;
+        const output = await require('./devblog').execute({ input, call: async (phase, payload) => {
+            last = await llmStep({ kind: 'llm', template: `content.devblog.${phase}`, output: 'json', operation: 'generate', params: { max_tokens: 6000, temperature: 0.3 } }, { payload: JSON.stringify(payload) }, wf, run, ctx);
+            const valid = schemas.validate(last.jsonSchema, last.output);
+            if (!valid.valid) throw new AiError(502, 'output.invalid', 'Invalid devblog agent response');
+            for (const key of Object.keys(usage)) usage[key] += last.exec.usage[key] || 0;
+            cost += last.exec.cost || 0; savedUsd += Number(last.exec.savedUsd) || 0;
+            return last.output;
+        } });
+        return { output, exec: { ...last.exec, usage, cost, savedUsd }, route: last.route };
+    }
+
+    const STEP = { devblog: devblogStep, llm: llmStep, passthrough: passthroughStep, complete: completeStep, messages: messagesStep, transcribe: transcribeStep, embed: embedStep, image: imageStep, media_analysis: mediaAnalysis.step, research: researchStep };
 
     /**
      * Run a workflow. ctx: { signal, logRequest, debugRaw, inputHash }

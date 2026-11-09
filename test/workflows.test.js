@@ -14,6 +14,7 @@ const SRC = (n) => Array.from({ length: n }, (_, i) => ({ source_type: 'news.art
 const PASS = { role: 'chat', kind: 'chat_global', system: [{ text: 'You summarize chat.', cache: true }], user: 'Summarize: hi all', max_tokens: 80 };
 
 const EXAMPLES = {
+    'content.devblog': require('./fixtures/devblog').input,
     'meme.caption': { format: 'Two choices', topic: 'choosing whether to fix the bug before lunch' },
     'ai.messages': { max_tokens: 64, messages: [{ role: 'user', content: 'Say hello' }] },
     'live.translate': { text: 'こんにちは、みなさん', from: 'ja', to: 'en', context: 'chat' },
@@ -140,6 +141,7 @@ t.test('every workflow runs end to end on the stub and returns schema-valid outp
         const r = await request(h.base, 'POST', '/api/v1/runs?wait=10000', { tok, body: { workflow: w.key, input: EXAMPLES[w.key] } });
         assert.strictEqual(r.status, 201, `${w.key}: ${r.status} ${r.text.slice(0, 300)}`);
         const run = r.body.run;
+        if (w.key === 'content.devblog') { assert.strictEqual(run.status, 'failed', 'synthetic prose fails the evidence gate'); continue; }
         assert.strictEqual(run.status, 'succeeded', `${w.key}: ${JSON.stringify(run.error)}`);
         // Research calls no model: it reads (here, the canned web of test/fixtures/research-fetch.js) and is never synthetic.
         const reads = w.steps.some((s) => s.kind === 'research');
