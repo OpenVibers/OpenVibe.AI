@@ -11,6 +11,7 @@ const poolSeed = require('../providers/pool-seed');
 /** Read-only JSON read models for Exchange's owner console. Every query is bounded and the query module redacts runs. */
 function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, gpus = null, abuse = null, priceBook = null, creditGrants = null, sessionCookies = null, vault = null, settings = null, config = {}, log = console }) {
     const r = express.Router();
+    const supply = require('../platform/supply').createSupply({ db, registry, clock });
     const json = express.json({ limit: '64kb' });
     const read = auth.requireCap(CAPS.usageRead);
     const write = auth.requireCap(CAPS.providerManage);
@@ -25,6 +26,7 @@ function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth,
     };
     r.get('/api/v1/admin/console/:section', read, wrap(async (req) => {
         const section = req.params.section;
+        if (section === 'supply') return supply.report();
         if (section === 'overview') {
             const since = new Date(clock.now() - 86400000).toISOString();
             return { status: await ops.status(), counts24: await q.statusCounts(db, since), failures24: await q.failures(db, since), queue: runs.stats(), cache: await cache.stats() };
@@ -72,6 +74,8 @@ function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth,
         if (!gpus) throw new AiError(409, 'ai.conflict', 'GPU quotes are off on this host');
         return await gpus.preview(String(req.params.model), { strategy: req.query.strategy || undefined });
     }));
+    r.post('/api/v1/admin/console/supply/quotes', json, write, wrap(async req => ({ recorded: await require('../pricebook/gpus').recordGpuQuotes(db, JSON.stringify(req.body.quotes)), dry_run: true })));
+    r.post('/api/v1/admin/console/supply', json, write, wrap(req => supply.save(req.body || {}, actor(req))));
     r.post('/api/v1/admin/console/providers/:key/key', json, write, wrap(async (req) => {
         if (!vault || !settings) throw new AiError(503, 'vault.unavailable', 'provider keys cannot be stored on this host');
         const provider = await registry.getProvider(req.params.key);

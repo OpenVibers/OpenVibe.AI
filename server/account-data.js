@@ -26,6 +26,8 @@ const PERSON_RUN = `on_behalf_of IS NOT NULL AND on_behalf_of::jsonb ->> 'type' 
 const RUN_COLUMNS = 'id, workflow_key, workflow_version, template_key, template_version, route_key, status, model_key, provider_key, input, output, citations_count, error_code, error_detail, tokens_in, tokens_out, cost_usd, created_at, started_at, finished_at';
 
 const TABLES = [
+    { table: 'exchange_api_keys', subject: 'owner', file: 'exchange-keys.json', columns: ['id','name','prefix','monthly_cap_usd','allowed_models','created_at','revoked_at'], erase: { keep: 'extraErase deletes key usage and cap rows before deleting keys' } },
+    { table: 'exchange_supply_settings', subject: 'actor', file: null, erase: { keep: 'owner pricing decisions are the operator audit trail' } },
     { table: 'console_sessions', subject: 'subject', file: 'console-sessions.json', columns: ['username', 'created_at', 'expires_at', 'revoked_at'], order: 'created_at' },
     { table: 'person_sessions', subject: 'subject', file: 'person-sessions.json', columns: ['username', 'created_at', 'expires_at', 'revoked_at'], order: 'created_at' },
     { table: 'subject_credentials', subject: 'subject', file: 'provider-credentials.json', order: 'updated_at',
@@ -85,11 +87,14 @@ const TABLES = [
 /** The runs AI made for the person, with their input and their answer. */
 async function extraExport(db, subject) {
     const runs = await db.many(`SELECT ${RUN_COLUMNS} FROM runs WHERE ${PERSON_RUN} ORDER BY created_at DESC LIMIT 5000`, [subject]);
-    return runs.length ? [{ name: 'runs.json', content: runs }] : [];
+    const usage = await db.many('SELECT u.day,u.model,u.tokens_in,u.tokens_out,u.cost_usd,u.status FROM exchange_key_usage u JOIN exchange_api_keys k ON k.id=u.key_id WHERE k.owner=$1 ORDER BY u.day DESC LIMIT 5000', [subject]);
+    return [...(runs.length ? [{ name: 'runs.json', content: runs }] : []), { name:'exchange-key-usage.json', content:usage }];
 }
 
 /** The person's runs go, with the rows that hang under them (the requests, the citations, the cached answers). */
 async function extraErase(t, subjects, counts) {
+    for (const table of ['exchange_key_usage','exchange_key_months']) counts.add(counts.erased, table, await t.exec(`DELETE FROM ${table} WHERE key_id IN (SELECT id FROM exchange_api_keys WHERE owner = ANY($1::text[]))`, [subjects]));
+    counts.add(counts.erased, 'exchange_api_keys', await t.exec('DELETE FROM exchange_api_keys WHERE owner = ANY($1::text[])', [subjects]));
     // A private GPU rent is stopped and anonymized now; its Billing hold and money stay until the reconciler
     // gives the instance back and settles the seconds (the table's erase is a keep for that reason).
     counts.add(counts.erased, 'own_endpoints', await t.exec(`UPDATE own_endpoints

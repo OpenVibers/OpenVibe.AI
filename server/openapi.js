@@ -468,6 +468,43 @@ route('get', '/exchange/endpoints', {
         models: arrayOf({ type: 'object', properties: { key: str(), display_name: str(), context_window: integer(), vram_mb: integer(), gpu_names: arrayOf(str()) } }),
     } }) },
 });
+const exchangeKey = {
+    type: 'object', required: ['id', 'name', 'prefix', 'monthly_cap_usd', 'allowed_models', 'created_at'],
+    properties: {
+        id: str({ pattern: '^xkey_' }), name: str({ maxLength: 80 }), prefix: str({ description: 'The first ten characters of the secret (ovx_…), to tell keys apart' }),
+        monthly_cap_usd: { type: 'number', minimum: 0 }, allowed_models: arrayOf(str()), created_at: str({ format: 'date-time' }),
+        revoked_at: nullable('string', { format: 'date-time' }),
+    },
+};
+route('get', '/exchange/keys', {
+    operationId: 'listExchangeKeys', summary: 'Your Exchange API keys', tags: ['exchange'], security: [{ bearer: [] }],
+    description: 'Only a person (a usr_ subject). Never the secrets: each key shows its prefix, monthly cap, allowed models and whether it was revoked.',
+    responses: { 200: json('The keys, newest first', { type: 'object', required: ['keys'], properties: { keys: arrayOf(exchangeKey) } }), ...errors([401, 403]) },
+});
+route('post', '/exchange/keys', {
+    operationId: 'createExchangeKey', summary: 'Make an Exchange API key with a monthly cap and allowed models', tags: ['exchange'], security: [{ bearer: [] }],
+    description: 'Only a person. The secret (ovx_…) is in this answer only; it is stored as a digest. A run with the key is refused once the month\'s cap is spent, and for a model not in allowed_models.',
+    requestBody: body({ type: 'object', required: ['name', 'monthly_cap_usd', 'allowed_models'], properties: {
+        name: str({ minLength: 1, maxLength: 80 }), monthly_cap_usd: { type: 'number', minimum: 0 }, allowed_models: arrayOf(str({ maxLength: 200 })),
+    } }),
+    responses: { 201: json('The key and its secret, shown once', { type: 'object', required: ['key', 'secret'], properties: { key: exchangeKey, secret: str({ pattern: '^ovx_' }) } }), 422: problem, ...errors([401, 403]) },
+});
+route('delete', '/exchange/keys/{id}', {
+    operationId: 'revokeExchangeKey', summary: 'Revoke an Exchange API key', tags: ['exchange'], security: [{ bearer: [] }],
+    description: 'Only its owner. Runs with the key are refused from now on; its usage stays in the history.',
+    parameters: [path('id', str({ pattern: '^xkey_' }))],
+    responses: { 200: json('Revoked', { type: 'object', required: ['id', 'revoked'], properties: { id: str(), revoked: { type: 'boolean' } } }), 404: problem, ...errors([401, 403]) },
+});
+route('get', '/exchange/key-usage', {
+    operationId: 'exchangeKeyUsage', summary: 'What your Exchange keys spent, by day, key and model', tags: ['exchange'], security: [{ bearer: [] }],
+    description: 'Only a person. One row per day, key, model and status (settled, reserved, unresolved): requests, tokens and dollars. Private to the owner.',
+    responses: { 200: json('The usage rows', { type: 'object', required: ['rows'], properties: { rows: arrayOf({ type: 'object' }) } }), ...errors([401, 403]) },
+});
+route('get', '/exchange/search/engines', {
+    operationId: 'exchangeSearchEngines', summary: 'The search engines behind web, image and icon search', tags: ['exchange'], security: [],
+    description: 'Public. Which engines answer each kind of search (web, images, icons) and whether each is configured here.',
+    responses: { 200: json('The engines', { type: 'object', required: ['engines'], properties: { engines: arrayOf({ type: 'object' }) } }) },
+});
 route('get', '/own-endpoints', {
     operationId: 'listOwnEndpoints', summary: 'The caller\'s private endpoints', tags: ['exchange'], security: [{ bearer: [] }],
     description: 'Only the person themselves: a Network user token (audience openvibe.network or openvibe.ai) whose subject is usr_…. A service, app, module or node token is refused whatever capabilities it holds. A private endpoint is never registered as an offer, so no router and no catalogue sees it.',
