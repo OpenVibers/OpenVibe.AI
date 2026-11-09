@@ -85,10 +85,11 @@ const { createKeys } = require('../server/platform/keys');
         assert.equal(preset.status, 200, preset.text);
         assert.equal(seen.at(-1).messages[0].content, 'fixture system');
         assert.equal(await presets.get('another-owner', 'writer'), null);
-        const legacy = await post('/v1/completions', { model: 'fixture/good', prompt: 'hello' }, 'legacy-request-001');
+        const legacy = await post('/v1/completions', { model: '@preset/writer', prompt: 'hello' }, 'legacy-request-001');
         assert.equal(legacy.status, 200, legacy.text);
         assert.equal(legacy.body.object, 'text_completion');
         assert.equal(legacy.body.choices[0].text, 'fixture answer');
+        assert.equal(seen.at(-1).messages[0].content, 'fixture system', 'legacy conversion preserves the saved system prompt');
         const embeddings = await post('/v1/embeddings', { model: 'fixture/embed', input: ['hello', 'world'] }, 'embedding-request-001');
         assert.equal(embeddings.status, 200, embeddings.text);
         assert.deepEqual(embeddings.body.data[0].embedding, [1, 2]);
@@ -111,7 +112,7 @@ const { createKeys } = require('../server/platform/keys');
             ['/v1/messages', msgBody, 'messages-request-001'],
             ['/v1/embeddings', { model: 'fixture/embed', input: ['hello', 'world'] }, 'embedding-request-001'],
             ['/v1/images/generations', { model: 'fixture/image', prompt: 'fixture' }, 'image-request-001'],
-            ['/v1/completions', { model: 'fixture/good', prompt: 'hello' }, 'legacy-request-001'],
+            ['/v1/completions', { model: '@preset/writer', prompt: 'hello' }, 'legacy-request-001'],
         ]) {
             const replayed = await post(path, input, idem);
             assert.equal(replayed.status, 200, replayed.text);

@@ -71,7 +71,7 @@ function compatExtra({ runs, auth, config, log }) {
             }
             return write(chunk, ...args);
         };
-        req.body = { ...req.body, messages: [{ role: 'user', content: req.body.prompt }] };
+        req.body = { ...req.body, messages: [...(req.body.messages || []), { role: 'user', content: req.body.prompt }] };
         delete req.body.prompt;
         req.url = '/v1/chat/completions';
         next();
