@@ -28,7 +28,7 @@ assert.strictEqual(base.low_power, false, 'the run\'s own input is not changed')
 
 // The run cache keys on it; a recording's words are kept two weeks.
 const runs = fs.readFileSync(path.join(__dirname, '..', 'server', 'runs.js'), 'utf8');
-assert.match(runs, /const keyInput = CACHE_INPUT\[wf\.key\] \? sha256\(stableStringify\(CACHE_INPUT\[wf\.key\]\(input\)\)\) : inputHash;/);
+assert.match(runs, /const keyInput = CACHE_INPUT\[wf\.key\] \? sha256\(\{ input: CACHE_INPUT\[wf\.key\]\(input\), effortPolicy \}\) : inputHash;/);
 assert.match(runs, /cache\.keyFor\(\{[^}]*inputHash: keyInput \}\)/);
 const wf = live.workflows.find((w) => w.key === 'live.media.transcribe');
 assert.strictEqual(wf.cache_mode, 'private', 'still scoped to the requester');

@@ -184,9 +184,9 @@ function runsRouter({ choices = null, runs, registry, auth, config, log = consol
         r.post(`/api/v1/${op}`, DIRECT_OPS.includes(`ai.${op}`) ? createApp : create, async (req, res) => {
             try {
                 const body = req.body || {};
-                const { idempotency_key: idem, target, attribution, on_behalf_of: obo, options, route, ...input } = body;
+                const { idempotency_key: idem, target, attribution, on_behalf_of: obo, options, route, effort, agent_role, ladder_id, rung, kind, ...input } = body;
                 const wait = req.query.wait != null ? Math.max(0, Math.min(Number(req.query.wait) || 0, config.runs.maxWaitMs)) : config.runs.maxWaitMs;
-                await createAndRespond(req, res, { workflow: `ai.${op}`, input, idempotency_key: idem, target, attribution, on_behalf_of: obo, options, route }, wait);
+                await createAndRespond(req, res, { workflow: `ai.${op}`, input, idempotency_key: idem, target, attribution, on_behalf_of: obo, options, route, effort, agent_role, ladder_id, rung, kind }, wait);
             } catch (err) { sendError(res, err, req.ov, log); }
         });
     }

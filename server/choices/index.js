@@ -64,11 +64,13 @@ function choice(value) {
 function defaultValue(value) {
     const keys = value && typeof value === 'object' && !Array.isArray(value) ? Object.keys(value) : [];
     if (!value || typeof value !== 'object' || Array.isArray(value)
-        || keys.some((k) => !['signed_out', 'signed_in', 'fallbacks', 'image_model', 'search_engines', 'max_cost_usd'].includes(k))
+        || keys.some((k) => !['signed_out', 'signed_in', 'fallbacks', 'image_model', 'search_engines', 'max_cost_usd', 'effort'].includes(k))
         || (value.fallbacks != null && !Array.isArray(value.fallbacks))) {
         throw new AiError(422, 'defaults.invalid', 'invalid task defaults');
     }
+    if (value.effort !== undefined && !['low', 'medium', 'high', 'max'].includes(value.effort)) throw new AiError(422, 'defaults.invalid', 'task default effort must be low|medium|high|max');
     const out = {
+        ...(value.effort !== undefined ? { effort: value.effort } : {}),
         signed_out: choice(value.signed_out),
         signed_in: choice(value.signed_in),
         fallbacks: (value.fallbacks || []).map(choice),
