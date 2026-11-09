@@ -8,6 +8,7 @@ const nodeHttp = require('http');
 const { boot, request, token, suite, ALL } = require('./helpers');
 const schemas = require('../server/schemas');
 const { KIND_TO_WORKFLOW } = require('../server/workflows/live');
+require('../server/api/runs'); // the run route this test posts to (and its citations beside the run)
 
 const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
 const SRC = (n) => Array.from({ length: n }, (_, i) => ({ source_type: 'news.article', source_id: `a${i}`, title: `Source ${i}`, url: `https://example.org/${i}`, content: `Fact number ${i} happened on day ${i}.`, published_at: '2026-09-20' }));
@@ -177,6 +178,7 @@ t.test('grounding: cited sources, the output\'s own gaps, or a gap written for i
 
 t.test('citations index only the provided sources', async () => {
     const r = await request(h.base, 'POST', '/api/v1/runs?wait=5000', { tok, body: { workflow: 'news.summarize_story', input: { sources: SRC(2) } } });
+    assert.ok(Array.isArray(r.body.citations) && r.body.citations.length === 2, 'the run answer carries its numbered sources');
     const seen = JSON.stringify(r.body.run.output).match(/"citations":\[([0-9,]*)\]/g) || [];
     for (const m of seen) for (const n of m.replace(/\D+/g, ' ').trim().split(' ').filter(Boolean)) assert.ok(Number(n) < 2, `citation ${n} out of range`);
 });
