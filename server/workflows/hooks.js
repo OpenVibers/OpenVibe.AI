@@ -332,6 +332,7 @@ const PREPARE = {
     'content.wiki'(input) {
         const outline = (Array.isArray(input.outline) ? input.outline : []).map((h) => clean(h, 300)).filter(Boolean).slice(0, 30);
         const pages = (Array.isArray(input.pages) ? input.pages : []).map((t) => clean(t, 200)).filter(Boolean).slice(0, 60);
+        const facts = (Array.isArray(input.facts) ? input.facts : []).map((f) => ({ label: clean(f && f.label, 80), value: clean(f && f.value, 400) })).filter((f) => f.label && f.value).slice(0, 40);
         return {
             vars: {
                 ...input,
@@ -340,6 +341,7 @@ const PREPARE = {
                 instruction: input.instruction ? clean(input.instruction, 4000) : '',
                 outline_block: outline.map((h, i) => `${i + 1}. ${h}`).join('\n'),
                 pages_block: pages.map((t) => `- ${t}`).join('\n'),
+                facts_block: facts.map((f) => `- ${f.label}: ${f.value}`).join('\n'),
                 sources_block: sourcesBlock(input.sources),
                 source_count: (input.sources || []).length,
             },

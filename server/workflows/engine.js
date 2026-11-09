@@ -483,6 +483,8 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
                 const seen = new Set(before.map((s) => s && s.url).filter(Boolean));
                 const added = (Array.isArray(last.output.sources) ? last.output.sources : []).filter((s) => s && s.url && !seen.has(s.url));
                 if (added.length) input = { ...input, sources: [...before, ...added] };
+                // The structured facts research read (Wikidata and the sources) fill a wiki article's infobox.
+                if (Array.isArray(last.output.facts) && last.output.facts.length) input = { ...input, facts: last.output.facts };
             }
             if (last.exec) {
                 exec = last.exec;
