@@ -1366,7 +1366,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             const ratingEvidence = require('../bench/evidence');
             let ratings = [];
             if (bench && ['quality', 'value'].includes(ctx.compatRouting.policy.sort)) {
-                for (const kind of bench.kindCandidates(route, operation === 'messages' ? 'complete' : operation)) {
+                for (const kind of bench.kindCandidates(operation === 'messages' ? { ...route, capability: 'complete' } : route, operation)) {
                     ratings = await bench.list(kind, bench.categoryFor(route));
                     if (ratings.length) break;
                 }

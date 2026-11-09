@@ -290,6 +290,8 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
                 for (const row of rows) {
                     const provider = providers.get(row.provider_key);
                     if (!provider || row.status !== 'active' || provider.status !== 'active') continue;
+                    const wantedType = base.capability === 'embed' ? 'embedding' : base.capability === 'image' ? 'image' : 'chat';
+                    if (row.type !== wantedType && !(wantedType === 'chat' && row.type === 'vision')) continue;
                     if (!modelCatalog.managedAccessAllowed(provider) || provider.metadata?.hidden || provider.metadata?.synthetic) continue;
                     if (!dynamic && require('../exchange/catalog').canonicalOf(row, provider) !== entry.model && row.metadata?.id !== entry.model) continue;
                     if (row.metadata?.hidden || row.metadata?.synthetic || row.metadata?.restricted || row.metadata?.byok) continue;

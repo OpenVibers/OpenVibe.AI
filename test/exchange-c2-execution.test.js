@@ -99,7 +99,10 @@ const { createKeys } = require('../server/platform/keys');
         const paidImage = await post('/v1/images/generations', { model: 'fixture/paid-image', prompt: 'must not run' });
         assert.equal(paidImage.status, 503, paidImage.text);
         assert.equal(seen.length, beforePaidImage, 'paid image capacity cannot bypass missing per-image accounting');
-        const msgBody = { model: 'fixture/claude', provider: { only: ['anthfixture'] }, max_tokens: 32, messages: body.messages, usage: { include: true } };
+        await h.db.prepare(`INSERT INTO bench_evidence(kind_id,category,model,provider,rating,ci_lower,ci_upper,games,provisional,updated_at)
+            SELECT kind_id,category,'claude','anthfixture',rating,ci_lower,ci_upper,games,provisional,updated_at
+            FROM bench_evidence WHERE model = 'good' AND provider = 'fixture'`).run();
+        const msgBody = { model: 'fixture/claude', provider: { only: ['anthfixture'], sort: 'quality' }, max_tokens: 32, messages: body.messages, usage: { include: true } };
         const message = await post('/v1/messages', msgBody, 'messages-request-001');
         assert.equal(message.status, 200, message.text);
         assert.equal(message.body.usage.provider, 'anthfixture');
