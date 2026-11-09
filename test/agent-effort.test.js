@@ -100,8 +100,8 @@ t.test('owner role policy is audited; reviewer stays in a different family; auto
         assert.strictEqual((await resolve({ effort: 'auto', agent_role: 'worker' }, {}, defs)).effort_resolved, 'high');
         assert.strictEqual((await resolve({ effort: 'auto' }, { metadata: { effort: 'low' } }, defs)).effort_resolved, 'low');
         const defaultsValue = require('../server/choices').defaultValue({ signed_out: { model: 'openvibe/auto', source: 'openvibe' }, signed_in: { model: 'openvibe/auto', source: 'openvibe' }, effort: 'low' });
-        await h.db.prepare('INSERT INTO ai_task_defaults (task, value, updated_by, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(task) DO UPDATE SET value = excluded.value').run('blog.devblog.write', JSON.stringify(defaultsValue), 'test', new Date().toISOString());
-        const created = await h.runs.create({ task: 'blog.devblog.write', input: { prompt: 'task effort' }, effort: 'auto' }, { sub: 'svc:live', subject: { type: 'service', id: 'live' } });
+        await h.db.prepare('INSERT INTO ai_task_defaults (task, value, updated_by, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(task) DO UPDATE SET value = excluded.value').run('design.icon', JSON.stringify(defaultsValue), 'test', new Date().toISOString());
+        const created = await h.runs.create({ task: 'design.icon', input: { messages: [{ role: 'user', content: 'Draw an icon' }] }, effort: 'auto' }, { sub: 'svc:live', subject: { type: 'service', id: 'live' } });
         await created.promise;
         const saved = await h.db.prepare('SELECT options FROM runs WHERE id = ?').get(created.run.id);
         assert.strictEqual(JSON.parse(saved.options).effort_policy.effort_resolved, 'low');
