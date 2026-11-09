@@ -419,6 +419,8 @@ function createGpuProvisioner({
     async function register(spec, row) {
         const base = String(row.endpoint || '').replace(/\/+$/, '') + '/v1';
         if (!/^https?:\/\/\S+$/i.test(base)) throw new AiError(502, 'gpu.no_endpoint', 'the instance has no usable endpoint');
+        const fixedRow = await db.prepare('SELECT settings FROM exchange_supply_settings WHERE model = ?').get(spec.model_key);
+        const fixed = fixedRow ? JSON.parse(fixedRow.settings) : null;
         const price = money.usdPerMillionTokens(toNano(row.hourly_nano), spec.throughput_tokens_per_hour);
         const gpu = {
             marketplace: row.marketplace,
@@ -444,7 +446,7 @@ function createGpuProvisioner({
             priority: 40,
             billing_profile: 'metered',
             provider_access: 'OWN_DEPLOYMENT',
-            metadata: { gpu },
+            metadata: { gpu, owner_fixed_price: Boolean(fixed), open_weights: true },
         }, { actor: 'service:ai', origin: 'gpu' });
         await registry.upsertModel({
             provider_key: spec.provider_key,
@@ -454,14 +456,14 @@ function createGpuProvisioner({
             status: 'active',
             context_window: spec.context_window,
             cost: {
-                in_per_mtok: price,
-                out_per_mtok: price,
-                cached_per_mtok: price,
-                source: PRICE_SOURCE[row.marketplace] || 'urn:openvibe:ai:unverified:gpu',
+                in_per_mtok: fixed ? fixed.input_per_million : price,
+                out_per_mtok: fixed ? fixed.output_per_million : price,
+                cached_per_mtok: fixed ? fixed.input_per_million : price,
+                source: fixed ? 'urn:openvibe:owner-fixed-price' : PRICE_SOURCE[row.marketplace] || 'urn:openvibe:ai:unverified:gpu',
                 verified_at: iso(now()).slice(0, 10),
             },
             supports: { json: false, tools: false, streaming: true, vision: false },
-            metadata: { gpu },
+            metadata: { gpu, owner_fixed_price: Boolean(fixed), open_weights: true },
         }, { actor: 'service:ai' });
         return base;
     }

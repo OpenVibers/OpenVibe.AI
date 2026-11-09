@@ -72,7 +72,7 @@ const excluded = (key) => {
         assert.strictEqual(doc.openapi, '3.1.0');
         assert.ok(doc.paths && typeof doc.paths === 'object', 'paths is an object');
         assert.strictEqual(doc.info.title, 'OpenVibe.AI API');
-        assert.deepStrictEqual(doc.servers, [{ url: 'https://openvibe.ai' }]);
+        assert.deepStrictEqual(doc.servers, [{ url: 'https://ai.openvibe.services' }], 'the API\'s real public base');
         const documented = Object.entries(doc.paths).flatMap(([p, item]) => Object.keys(item).map((m) => `${m.toUpperCase()} ${p}`)).sort();
         assert.ok(documented.length > 0, 'paths is not empty');
         for (const [p, item] of Object.entries(doc.paths)) {

@@ -211,6 +211,8 @@ function createCatalog({ db, registry, pool, env = process.env, clock = { now: (
                 // up | degraded | down | exhausted (out of balance), from the router's breaker.
                 status: statusOf(provider.key),
                 // Rounded to the micro-dollar: a derived cached price was printed as 0.020000000000000004.
+                on_our_gpus: provider.key.startsWith('gpu.'),
+                fixed_price: row.metadata?.owner_fixed_price === true,
                 price: price ? { in: usd6(price.in), out: usd6(price.out), cached: usd6(price.cached), per: '1M tokens', currency: 'USD' } : null,
                 // Where the number came from and when someone checked it; null when nobody recorded it.
                 price_source: cards && cards.out.source && !String(cards.out.source).startsWith('urn:openvibe:ai:unverified:') ? cards.out.source : null,
@@ -238,6 +240,7 @@ function createCatalog({ db, registry, pool, env = process.env, clock = { now: (
                     variant: (row.metadata && row.metadata.variant) || null,
                     uncensored: UNCENSORED.test(`${canonical} ${(row.metadata && row.metadata.variant) || ''}`) || Boolean(row.metadata && row.metadata.uncensored === true),
                     type: row.type,
+                    open_weights: row.metadata?.open_weights === true,
                     context: num(row.context_window),
                     max_output: num(row.max_output),
                     capabilities: capabilitiesOf(row),
@@ -259,7 +262,17 @@ function createCatalog({ db, registry, pool, env = process.env, clock = { now: (
         // else the answering attempt's total latency.
         const measured = await seen.read({ days });
         observed.fold(measured, drafts);
+        // The router's own measurements win once they have 20 samples; until then the observed runs' numbers stay.
+        const performance = await db.prepare('SELECT * FROM provider_metrics').all();
+        for (const d of drafts) {
+            const p = performance.find((m) => m.provider_key === d.providerKey && m.model_key === d.modelKey);
+            if (p && Number(p.ttft_samples) >= 20) d.offer.speed.ttft_ms = Number(p.ttft_ms);
+            if (p && Number(p.decode_samples) >= 20) d.offer.speed.tokens_per_second = Number(p.decode_tps);
+            d.offer.error_rate = d.offer.uptime == null ? null : 1 - d.offer.uptime;
+        }
 
+        const daysByModel = await db.prepare("SELECT model_key,substr(created_at,1,10) AS activity_day,COUNT(*)::int requests FROM runs WHERE created_at >= ? AND synthetic=0 AND status='succeeded' GROUP BY model_key,substr(created_at,1,10)").all(new Date(now-7*86400000).toISOString());
+        const firstTokens = measured.latencies.map(r=>r.ttft_ms == null ? NaN : Number(r.ttft_ms)).filter(Number.isFinite).sort((a,b)=>a-b);
         let models = [...groups.values()];
         if (kind) models = models.filter((m) => m.kind === kind);
         for (const m of models) {
@@ -272,6 +285,9 @@ function createCatalog({ db, registry, pool, env = process.env, clock = { now: (
             m.requests_today = m.offers.reduce((n, o) => n + o.requests_today, 0);
             m.cached_7d = m.offers.reduce((n, o) => n + o.cached_7d, 0);
             m.cached_today = m.offers.reduce((n, o) => n + o.cached_today, 0);
+            const activity = new Map();
+            for (const d of daysByModel.filter(d=>m.offers.some(o=>o.model===d.model_key))) activity.set(d.activity_day,(activity.get(d.activity_day)||0)+Number(d.requests));
+            m.activity = [...activity].sort(([a],[b])=>a.localeCompare(b)).map(([day,requests])=>({day,requests}));
             m.community = m.offers.some((o) => o.trust === 'community');
             m.priced = m.offers.some((o) => o.price);
             // Free right now: a free-tier offer whose provider can answer (not exhausted, not down).
@@ -295,6 +311,7 @@ function createCatalog({ db, registry, pool, env = process.env, clock = { now: (
         }
         return {
             generated_at: new Date(now).toISOString(),
+            median_ttft_ms: firstTokens.length >= 20 ? firstTokens[Math.floor(firstTokens.length/2)] : null,
             window_days: days,
             ...(kind ? { kind } : {}),
             count: models.length,
