@@ -21,7 +21,7 @@ const templates = [
     input_schema: { type: 'object' }, output_schema, system_prompt: rules, user_prompt: `${instruction}\n{{payload}}`, default_route: 'background.json' }));
 const workflows = [{ key: 'content.devblog', name: 'Draft a devblog from merged changes', namespace: 'blog',
     input_schema: { ...obj({ site: str(80), from: str(10), to: str(10), sources: SOURCES(1, 200), stories: arr({ type: 'object' }, 1, 8), screenshots: arr(obj({ media_id: str(80), alt: str(300), caption: str(500), source: { type: 'integer', minimum: 0 } }), 0, 24), voice: str(6000) }) },
-    output_schema: obj({ title: str(80), summary: str(2000), names: arr(str(80), 5, 5), blocks: { type: 'object' }, checks: arr(str(500), 0, 30), steps: arr(str(100), 1, 10) }),
+    output_schema: obj({ title: str(80), summary: str(2000), names: arr(str(80), 5, 5), blocks: { type: 'object' }, citations: arr({ type: 'integer', minimum: 0 }, 1, 200), checks: arr(str(500), 0, 30), steps: arr(str(100), 1, 10) }),
     steps: [{ kind: 'devblog', cite: true }], default_route: 'background.json', cache_mode: 'none',
     metadata: { seed: true, draft: true, task: 'blog.devblog.write', tools: ['changelog.stories', 'site.screenshot', 'facts.check'], max_model_calls: 5 } }];
 const SLOP = /\b(unleashed|supercharged|level up|game changer|next level)\b/i;
@@ -58,7 +58,7 @@ async function execute({ input, call }) {
     for (let attempt = 0; attempt < 2; attempt++) {
         const checked = await call('check', { input, draft }); steps.push('Checking claims');
         const issues = [...issuesOf(draft, input), ...(checked.issues || [])];
-        if (!issues.length) return { title: draft.title, summary: draft.summary.text, names: draft.names, blocks: blocksOf(draft, input), checks: [], steps };
+        if (!issues.length) return { title: draft.title, summary: draft.summary.text, names: draft.names, blocks: blocksOf(draft, input), citations: [...new Set([draft.summary, ...draft.sections.flatMap(s => s.paragraphs)].flatMap(p => p.citations))], checks: [], steps };
         if (attempt === 1) throw new AiError(422, 'devblog.check_failed', 'The draft still has unsupported claims or invalid structure; no post was filed');
         draft = await call('revise', { input, draft, issues }); steps.push('Revising unsupported claims');
     }

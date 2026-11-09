@@ -33,6 +33,7 @@ t.test('registered task uses Blog grant, keeps model provenance and accounts for
         const r = await request(h.base, 'POST', '/api/v1/runs?wait=10000', { tok, body: { task: 'blog.devblog.write', choice: { model: 'http-seam/writer-local', source: 'openvibe' }, input } });
         assert.equal(r.status, 201, r.text); assert.equal(r.body.run.status, 'succeeded', r.text);
         assert.equal(r.body.run.workflow.key, 'content.devblog'); assert.equal(r.body.run.output.title, draft.title);
+        assert.deepEqual(r.body.run.output.citations, [0]);
         assert.equal(seam.calls, 3); assert.equal(r.body.run.provenance.model, 'writer-local');
         const denied = await request(h.base, 'POST', '/api/v1/runs', { tok: token('wiki', ALL, { ns: ['wiki.*'] }), body: { workflow: 'content.devblog', input } });
         assert.equal(denied.status, 403);
