@@ -28,8 +28,9 @@ function bucketFor(status) {
  * Cancel and retry are not offered: Network has no AI decide route, and AI would need a delegated
  * person principal to authorize them.
  */
-function actionsFor() {
-    return ['open'];
+function actionsFor(bucket) {
+    // A failed run can be run again; the authority that owns it does the work.
+    return bucket === 'failed' ? ['open', 'retry'] : ['open'];
 }
 
 /** Plain text (no HTML or Markdown), single line, at most `max` characters. */
