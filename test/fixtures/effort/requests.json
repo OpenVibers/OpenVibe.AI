@@ -141,5 +141,17 @@
         "effort": "max"
       }
     }
+  },
+  {
+    "provider": "deepseek",
+    "kind": "openai",
+    "model": "deepseek-flash",
+    "effort": "low",
+    "applied": "low",
+    "fields": {
+      "thinking": {
+        "type": "disabled"
+      }
+    }
   }
 ]

@@ -3,11 +3,11 @@ const { AiError, parseJson } = require('../util');
 const { checkEffort } = require('./providers');
 const ROLES = ['router', 'gate', 'assessor', 'worker', 'subagent', 'reviewer'];
 const BASE = {
-    router: { model: 'deepseek/deepseek-v4-flash', effort: 'low' },
-    gate: { model: 'deepseek/deepseek-v4-flash', effort: 'low' },
-    assessor: { model: 'deepseek/deepseek-v4-flash', effort: 'medium' },
-    worker: { model: 'deepseek/deepseek-v4-flash', effort: 'medium' },
-    subagent: { model: 'deepseek/deepseek-v4-flash', effort: 'low' },
+    router: { model: 'deepseek/deepseek-flash', effort: 'low' },
+    gate: { model: 'deepseek/deepseek-flash', effort: 'low' },
+    assessor: { model: 'deepseek/deepseek-flash', effort: 'medium' },
+    worker: { model: 'deepseek/deepseek-flash', effort: 'medium' },
+    subagent: { model: 'deepseek/deepseek-flash', effort: 'low' },
     reviewer: { model: 'anthropic/claude-sonnet-5-5', effort: 'high' },
 };
 const modelsOf = (v) => v.model ? [v.model] : v.choice_order;

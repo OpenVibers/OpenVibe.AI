@@ -38,7 +38,7 @@ function control({ kind, key = '', model = '', base_url = '' }, effort) {
         return { applied: effort, fields: { ...(!only ? { enable_thinking: effort !== 'low' } : {}), ...(only || effort !== 'low' ? { thinking_budget: { low: 1024, medium: 4096, high: 16384, max: 32768 }[effort] } : {}) } };
     }
     // https://api-docs.deepseek.com/guides/thinking_mode/
-    if (['openai', 'anthropic'].includes(kind) && /deepseek/.test(source) && /^deepseek-(v[34]|chat|reasoner)/.test(m)) {
+    if (['openai', 'anthropic'].includes(kind) && /deepseek/.test(source) && /^deepseek-(v[34]|chat|reasoner|flash|pro)/.test(m)) {
         return { applied: effort === 'low' ? 'low' : 'medium', fields: { thinking: { type: effort === 'low' ? 'disabled' : 'enabled' } } };
     }
     return { applied: null, fields: {} };

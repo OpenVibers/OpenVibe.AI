@@ -40,7 +40,7 @@ from that order; existing route admission, provider access, cost caps and billin
 apply. Explicit model pins take precedence. Unavailable role models fail explicitly.
 
 Router/gate and subagent start low, assessor/worker medium, reviewer high. The worker
-starts on DeepSeek V4 Flash and the reviewer on Claude Sonnet 5.5. Setting a Claude
+starts on the seeded DeepSeek Flash route (`deepseek/deepseek-flash`) and the reviewer on Claude Sonnet 5.5. Setting a Claude
 worker without a saved reviewer switches the default reviewer to OpenAI. A saved
 reviewer may not share a provider family with any worker choice. Updates and before/after
 audit records share one transaction, serialized to prevent conflicting role updates.

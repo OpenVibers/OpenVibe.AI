@@ -87,6 +87,9 @@ t.test('routes retain requested effort and ladder; invalid effort never creates 
 t.test('owner role policy is audited; reviewer stays in a different family; auto reads defaults', async () => {
     const h = await boot();
     try {
+        const initial = await createDefaults({ db: h.db, registry: h.registry }).get();
+        assert.strictEqual(initial.worker.model, 'deepseek/deepseek-flash');
+        assert.strictEqual(initial.worker.model, `deepseek/${(await h.registry.getProvider('deepseek')).default_model}`, 'worker default matches the seeded provider even while it is disabled');
         const admin = token('network', ['ai.config.manage']);
         assert.strictEqual((await request(h.base, 'GET', '/api/v1/agent-role-defaults', { tok: token('live', ALL) })).status, 403);
         const put = await request(h.base, 'PUT', '/api/v1/agent-role-defaults/worker', { tok: admin, body: { model: 'anthropic/claude-opus-5-5', effort: 'high' } });
