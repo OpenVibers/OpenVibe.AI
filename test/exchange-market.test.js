@@ -36,6 +36,8 @@ t.test('routing belongs to a provider offer; metadata joins dated names, prices 
     const offers = buildOffers({ metadata: { entries }, catalogue: { models: [{ offers:[{provider:p.key, model:m.model_key}] }] },
         providers: [{ ...p, status:'disabled', secret_ref:'must-not-be-exported', metadata:{account_id:'private-account'} }] });
     const offer = offers.find(o => o.provider === p.key && o.provider_model === m.model_key);
+    const aliasOnly = buildOffers({ catalogue: { models: [{ offers: [{ provider: p.key, model: m.model_key + '-latest' }] }] } });
+    assert.strictEqual(aliasOnly.find(o => o.provider === p.key && o.provider_model === m.model_key).routed, false, 'metadata aliases must not mark an unrouted endpoint as routed');
     assert(offer.routed); assert.strictEqual(offer.context,m.context_window); assert.strictEqual(offer.max_output,42);
     assert.strictEqual(offer.licence,'Apache-2.0'); assert.strictEqual(offer.field_sources.licence,'https://models.dev/api.json');
     assert.strictEqual(offer.field_sources.context,m.source); assert.strictEqual(offer.price.in,m.cost.in_per_mtok);
