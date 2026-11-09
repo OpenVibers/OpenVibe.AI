@@ -1368,7 +1368,10 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             const ratingEvidence = require('../bench/evidence');
             let ratings = [];
             if (bench && ['quality', 'value'].includes(ctx.compatRouting.policy.sort)) {
-                for (const kind of bench.kindCandidates(operation === 'messages' ? { ...route, capability: 'complete' } : route, operation)) {
+                // Messages shares completion ratings; this is a provider method, not a public capability.
+                const ratingOperation = operation === 'messages' ? 'complete' : operation;
+                const ratingRoute = operation === 'messages' ? { ...route, capability: ratingOperation } : route;
+                for (const kind of bench.kindCandidates(ratingRoute, ratingOperation)) {
                     ratings = await bench.list(kind, bench.categoryFor(route));
                     if (ratings.length) break;
                 }
