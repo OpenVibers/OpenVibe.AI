@@ -21,6 +21,7 @@ const core = require('./core');
 const products = require('./products');
 const chat = require('./chat');
 const research = require('./research');
+const meme = require('./meme');
 const poolSeed = require('../providers/pool-seed');
 const { resolveSecret } = require('../util');
 
@@ -203,6 +204,8 @@ async function seed({ registry, quotas, config, env = process.env, db }) {
     // admin adds as kind anthropic. The others are skipped as unsupported, never converted.
     await registry.seedVersioned('route', 'default.messages', pool(120000, { constraints: { objective: 'correctness', latency_class: 'interactive' }, max_output_tokens: 8192 }));
     await registry.seedVersioned('route', 'default.json', pool(60000, { options: { temperature: 0.3 }, max_output_tokens: 2400, response_format: 'json' }));
+    // Meme captions need fluency, not factual precision; choose the cheapest eligible JSON route by default.
+    await registry.seedVersioned('route', 'meme.caption', pool(30000, { constraints: { objective: 'cheapest', latency_class: 'interactive' }, options: { temperature: 0.85 }, max_output_tokens: 700, response_format: 'json' }));
     await registry.seedVersioned('route', 'default.embedding', pool(30000, { 'capability': 'embed', constraints: { objective: 'balanced' } }));
     // media.analyze (WS-O task 5): the local model when there is one; the paid route is used only under a media.paid budget.
     // Both are background work (BA1): nobody watches a VOD's overview arrive, so the route says it may wait.
@@ -255,11 +258,11 @@ async function seed({ registry, quotas, config, env = process.env, db }) {
     await registry.seedVersioned('route', 'chat.member', { primary: { provider: 'shared', model: null }, fallbacks: [], options: {}, max_output_tokens: 600, response_format: 'text', timeout_ms: null, alias_of: 'default.chat' });
 
     // Templates, then workflows (workflows reference templates)
-    for (const t of [...live.templates, ...core.templates, ...products.templates, ...media.templates, ...chat.templates, ...space.templates, ...research.templates]) {
+    for (const t of [...live.templates, ...core.templates, ...products.templates, ...media.templates, ...chat.templates, ...space.templates, ...research.templates, ...meme.templates]) {
         const { key, ...def } = t;
         await registry.seedVersioned('template', key, { description: null, default_route: null, owner: 'ai', visibility: 'internal', metadata: {}, ...def });
     }
-    for (const w of [...live.workflows, ...core.workflows, ...products.workflows, ...media.workflows, ...chat.workflows, ...space.workflows, ...research.workflows]) {
+    for (const w of [...live.workflows, ...core.workflows, ...products.workflows, ...media.workflows, ...chat.workflows, ...space.workflows, ...research.workflows, ...meme.workflows]) {
         const { key, ...def } = w;
         await registry.seedVersioned('workflow', key, { description: null, default_route: null, cache_ttl_sec: null, metadata: {}, ...def });
     }
