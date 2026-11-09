@@ -100,7 +100,7 @@ t.test('an ok attempt that produced no output is a failure, not a success', asyn
     const offer = flash(await catalog());
     assert.strictEqual(offer.requests_7d, 20);
     assert.strictEqual(offer.uptime, 0, '20 ok-but-empty Flash attempts are 20 failures');
-    assert.deepStrictEqual(offer.speed, { p50_ms: null, p95_ms: null }, 'an empty attempt is not a speed sample');
+    assert.deepStrictEqual(offer.speed, { p50_ms: null, p95_ms: null, ttft_ms: null, tokens_per_second: null }, 'an empty attempt is not a speed sample');
 });
 
 t.test('8 successes and 0 real failures are 100% only once 20 samples exist', async () => {
@@ -112,7 +112,7 @@ t.test('8 successes and 0 real failures are 100% only once 20 samples exist', as
     let offer = flash(await catalog());
     assert.strictEqual(offer.requests_7d, 8);
     assert.strictEqual(offer.uptime, null, '8 answers is below the 20-sample floor');
-    assert.deepStrictEqual(offer.speed, { p50_ms: null, p95_ms: null });
+    assert.deepStrictEqual(offer.speed, { p50_ms: null, p95_ms: null, ttft_ms: null, tokens_per_second: null });
 
     for (let i = 0; i < 12; i++) {
         const id = await insertRun();
@@ -121,7 +121,7 @@ t.test('8 successes and 0 real failures are 100% only once 20 samples exist', as
     offer = flash(await catalog());
     assert.strictEqual(offer.requests_7d, 20);
     assert.strictEqual(offer.uptime, 1);
-    assert.deepStrictEqual(offer.speed, { p50_ms: 100, p95_ms: 100 });
+    assert.deepStrictEqual(offer.speed, { p50_ms: 100, p95_ms: 100, ttft_ms: null, tokens_per_second: null });
 });
 
 t.run();

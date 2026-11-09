@@ -14,6 +14,7 @@ function createKeys({ db, clock = { now: () => Date.now() } }) {
         allowed_models: JSON.parse(r.allowed_models),
         created_at: r.created_at,
         revoked_at: r.revoked_at,
+        expires_at: r.expires_at || null,
     });
     async function list(owner) {
         return (
@@ -42,11 +43,13 @@ function createKeys({ db, clock = { now: () => Date.now() } }) {
                 'ai.invalid',
                 'A name, nonnegative monthly cap and allowed model list are required',
             );
+        const expires = b.expires_at == null ? null : Date.parse(b.expires_at);
+        if (expires !== null && (!Number.isFinite(expires) || expires <= clock.now())) throw new AiError(422, 'ai.invalid', 'expires_at must be a future timestamp');
         const secret = 'ovx_' + randomBytes(32).toString('base64url');
         const id = 'xkey_' + randomUUID();
         await db
             .prepare(
-                'INSERT INTO exchange_api_keys(id,owner,name,digest,prefix,monthly_cap_usd,allowed_models,created_at) VALUES(?,?,?,?,?,?,?,?)',
+                'INSERT INTO exchange_api_keys(id,owner,name,digest,prefix,monthly_cap_usd,allowed_models,created_at,expires_at) VALUES(?,?,?,?,?,?,?,?,?)',
             )
             .run(
                 id,
@@ -57,6 +60,7 @@ function createKeys({ db, clock = { now: () => Date.now() } }) {
                 b.monthly_cap_usd,
                 JSON.stringify(b.allowed_models),
                 iso(),
+                expires === null ? null : new Date(expires).toISOString(),
             );
         return { key: (await list(owner)).find((k) => k.id === id), secret };
     }
@@ -73,9 +77,9 @@ function createKeys({ db, clock = { now: () => Date.now() } }) {
         if (!/^ovx_[A-Za-z0-9_-]{43}$/.test(secret)) return null;
         return db
             .prepare(
-                'SELECT * FROM exchange_api_keys WHERE digest = ? AND revoked_at IS NULL',
+                'SELECT * FROM exchange_api_keys WHERE digest = ? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)',
             )
-            .get(hash(secret));
+            .get(hash(secret), iso());
     }
     /**
      * A hold for one call against the key's monthly cap: the call's own ceiling (`limit`, its max_cost_usd) or
@@ -84,6 +88,11 @@ function createKeys({ db, clock = { now: () => Date.now() } }) {
      * hung up) and gives the rest of the hold back. Search calls (`free`) take no hold and skip the model list.
      */
     async function reserve(key, model, free = false, limit = null) {
+        // Re-read the credential: a previously resolved key may have expired or been revoked.
+        const active = await db.prepare(
+            'SELECT id FROM exchange_api_keys WHERE id = ? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)',
+        ).get(key.id, iso());
+        if (!active) throw new AiError(401, 'token.invalid', 'Invalid, expired or revoked Exchange key');
         const allowed = JSON.parse(key.allowed_models);
         if (!free && allowed.length && !allowed.includes(model))
             throw new AiError(403, 'exchange.model_denied', 'This model is not allowed by this key');
@@ -108,10 +117,11 @@ function createKeys({ db, clock = { now: () => Date.now() } }) {
                     )
                     UPDATE exchange_key_months x SET reserved = x.reserved + m.take FROM m
                     WHERE x.key_id = m.key_id AND x.month = m.month
-                      AND EXISTS (SELECT 1 FROM exchange_api_keys k WHERE k.id = x.key_id AND k.revoked_at IS NULL)
+                      AND EXISTS (SELECT 1 FROM exchange_api_keys k WHERE k.id = x.key_id AND k.revoked_at IS NULL
+                        AND (k.expires_at IS NULL OR k.expires_at::timestamptz > GREATEST(?::timestamptz, clock_timestamp())))
                     RETURNING m.take AS take`,
                 )
-                .get(want, key.monthly_cap_usd, key.id, month);
+                .get(want, key.monthly_cap_usd, key.id, month, iso());
             if (!row)
                 throw new AiError(429, 'exchange.key_cap', "This key's monthly cap is spent");
             amount = Number(row.take);
