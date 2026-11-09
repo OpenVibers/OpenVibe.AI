@@ -35,6 +35,7 @@ const schemas = require('../schemas');
 const { PREPARE, POSTPROCESS } = require('./hooks');
 const modelCatalog = require('../providers/model-catalog');
 const { buildBody, buildCompleteBody } = require('../providers/openai');
+const { PROVIDERS: ENGINES } = require('../research');
 
 /** The last user message's text, for the queue's own record of what one item asks (never sent as-is). */
 function lastUserText(messages) {
@@ -429,19 +430,52 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
 
     /** research: no model call. A developer app's run leaves the paid web search out (its DeepSeek calls are ours). */
     async function researchStep(step, input, wf, run, ctx) {
-        let output;
+        let output, answered = null, engineIndex = 0, candidates = [];
         try {
             // Search's own web ladder calls this endpoint for DeepSeek and Wikipedia. It must not be asked back
             // (Search -> AI research -> Search): every other caller gets the fabric first, Search keeps DeepSeek.
             const fromSearch = ctx.requesterType === 'service' && ctx.requesterId === 'search';
-            output = await megasource().gather(input, { signal: ctx.signal, allowPaid: !ctx.appRun, allowFabric: !fromSearch });
+            if (ctx.taskChoice?.task.kind === 'search') {
+                // A search task runs the engines its choice names, in order: the owner's saved order when the owner's
+                // default won, else the chosen engine and the task's fallbacks. A disabled engine is never called, and
+                // DeepSeek (the one paid engine) is skipped under a cost ceiling, which has no per-run bound for it.
+                const plan = ctx.taskChoice;
+                if (plan.choice.source !== 'openvibe') throw new AiError(422, 'choice.unsupported', 'search uses OpenVibe search engines only');
+                const engineOf = (model) => String(model).replace(/^search\//, '');
+                const asked = engineOf(plan.choice.model);
+                const ordered = plan.why === 'owner' && plan.search_engines.length
+                    ? plan.search_engines.filter((e) => e.enabled).map((e) => e.engine)
+                    : [...new Set([asked, ...plan.fallbacks.map((c) => engineOf(c.model))])];
+                if (!ordered.length) throw new AiError(422, 'choice.unavailable', 'no search engine is enabled for this task');
+                candidates = ordered.map((engine) => ({
+                    provider: engine, model: `search/${engine}`,
+                    eligible: engine !== 'deepseek' || plan.max_cost_usd == null,
+                    excluded_reason: engine === 'deepseek' && plan.max_cost_usd != null ? 'cost ceiling has no per-run bound' : null,
+                }));
+                const images = plan.task.kind === 'search' && plan.task.name !== 'search.web';
+                for (const engine of ordered) {
+                    if (ENGINES.includes(engine) === false) throw new AiError(422, 'choice.unavailable', `unknown search engine ${engine}`);
+                    if (engine === 'deepseek' && plan.max_cost_usd != null) continue;
+                    const got = await megasource().gather({ ...input, providers: [engine], images }, { signal: ctx.signal, allowPaid: !ctx.appRun && plan.max_cost_usd == null, allowFabric: false });
+                    if (images ? got.images.length : got.sources.length) { output = got; answered = engine; engineIndex = ordered.indexOf(engine); break; }
+                    output = got;
+                }
+                if (answered == null) throw new AiError(402, 'choice.cost_ceiling', 'no enabled search engine answered within this task’s ceiling');
+            } else output = await megasource().gather(input, { signal: ctx.signal, allowPaid: !ctx.appRun, allowFabric: !fromSearch });
         } catch (err) {
             if (err && err.status === 422) throw new AiError(422, 'input.invalid', err.message);
             throw err;
         }
         if (!output.sources.length && !output.images.length) throw new AiError(502, 'source.unavailable', `no source answered for "${output.query}"`, { providers: output.providers });
         // Recorded like a provider call: DeepSeek's per-call price counts against the cost quotas and the daily usage.
-        const exec = { provider: 'research', model: 'megasource', usage: { input: 0, output: 0, cached: 0 }, cost: Number(output.usage && output.usage.cost_usd) || 0, synthetic: false, fallbackUsed: false, explain: null };
+        const exec = { provider: 'research', model: 'megasource', usage: { input: 0, output: 0, cached: 0 }, cost: Number(output.usage && output.usage.cost_usd) || 0, synthetic: false, fallbackUsed: false, explain: ctx.taskChoice ? {
+            // The contract's explain needs an objective, a reason, what was selected and the candidates; a search
+            // task's candidates are its engines, and the one that answered is the selection.
+            objective: 'exact',
+            reasons: [`search task ${ctx.taskChoice.task.name}: ${answered} answered`],
+            selected: `search/${answered}`, candidates,
+            task_choice: { task: ctx.taskChoice.task.name, requested: ctx.taskChoice.choice, answered: { model: `search/${answered}`, source: 'openvibe' }, why: ctx.taskChoice.why, fallback_index: engineIndex },
+        } : null };
         return { output, exec };
     }
 

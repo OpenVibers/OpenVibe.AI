@@ -14,8 +14,22 @@ const DEFAULTS = Object.freeze({
     only_my_keys: false,
     free_first: true,
     price_ceiling_usd_per_mtok: null,
-    defaults: Object.freeze({ text: 'auto', code: 'auto', vision: 'auto', image: 'auto' }),
+    defaults: Object.freeze({ text: 'auto', code: 'auto', vision: 'auto', image: 'auto', search: 'auto' }),
 });
+
+/** ai.me-preferences@1, with `defaults.search` checked here while the pinned schema predates it. */
+function validatePreferences(body) {
+    const schema = contracts.schema('ai.me-preferences@1');
+    if (!schema) return null;
+    const defaults = body && body.defaults;
+    const knowsSearch = Boolean(schema.properties && schema.properties.defaults && schema.properties.defaults.properties && schema.properties.defaults.properties.search);
+    if (knowsSearch || !defaults || typeof defaults !== 'object') return contracts.validate('ai.me-preferences@1', body);
+    const { search, ...rest } = defaults;
+    const out = contracts.validate('ai.me-preferences@1', { ...body, defaults: rest });
+    if (search == null) return out;
+    if (typeof search === 'string' && search.length && search.length <= 120) return out;
+    return { valid: false, errors: [{ path: '/defaults/search', message: 'must be a model id or auto (1-120 characters)' }] };
+}
 
 /** The same rules ai.me-preferences@1 states, for a service whose contracts pin predates 0.257.0. */
 function manualPreferences(body) {
@@ -27,6 +41,7 @@ function manualPreferences(body) {
     for (const k of ['text', 'code', 'vision', 'image']) {
         if (typeof d[k] !== 'string' || !d[k].length || d[k].length > 120) return `defaults.${k} must be a model id or auto (1-120 characters)`;
     }
+    if (d.search != null && (typeof d.search !== 'string' || !d.search.length || d.search.length > 120)) return 'defaults.search must be a model id or auto (1-120 characters)';
     return null;
 }
 
@@ -48,8 +63,10 @@ function createPreferences({ db, clock = { now: () => Date.now() } }) {
 
     async function put(subject, body) {
         // ai.me-preferences@1 arrives with openvibe-contracts 0.257.0; before that pin the shape is checked here.
+        // defaults.search arrives with the AI-choices release: a pin that predates it has no `search` property, so
+        // that one field is checked here and the rest against the schema it does carry.
         let v = null;
-        try { v = contracts.schema('ai.me-preferences@1') ? contracts.validate('ai.me-preferences@1', body) : null; } catch { v = null; }
+        try { v = validatePreferences(body); } catch { v = null; }
         const manual = v ? null : manualPreferences(body);
         if ((v && !v.valid) || manual) throw new AiError(422, 'input.invalid', 'body does not match ai.me-preferences@1', { errors: v ? v.errors : [{ path: '', message: manual }] });
         const value = {
@@ -58,7 +75,7 @@ function createPreferences({ db, clock = { now: () => Date.now() } }) {
             price_ceiling_usd_per_mtok: body.price_ceiling_usd_per_mtok == null ? null : Number(body.price_ceiling_usd_per_mtok),
             defaults: {
                 text: String(body.defaults.text), code: String(body.defaults.code),
-                vision: String(body.defaults.vision), image: String(body.defaults.image),
+                vision: String(body.defaults.vision), image: String(body.defaults.image), search: String(body.defaults.search || 'auto'),
             },
         };
         const at = iso(clock.now());

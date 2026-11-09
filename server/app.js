@@ -22,7 +22,7 @@ const pkg = require('../package.json');
 const { adminRoutes } = require('openvibe-shared/config');
 const ownerInputs = require('./owner-inputs');
 
-function createApp({ searchFetch = null, config, db, registry, pool, quotas, cache, runs, auth, keys, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, credentials = null, preferences = null, grants = null, vault = null, settings = null, benchEvents = null, runBudgets = null, memory = null, memoryImport = null, memoryServices = null, memorySharing = null, community = null, endpoints = null, webhooks = null, presets = null, receipts = null, balance = null, creditGrants = null, sessionCookies = null, gpus = null, abuse = null, priceBook = null, ownEndpoints = null, refusal = null, batches = null }) {
+function createApp({ choices = null, searchFetch = null, config, db, registry, pool, quotas, cache, runs, auth, keys, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, credentials = null, preferences = null, grants = null, vault = null, settings = null, benchEvents = null, runBudgets = null, memory = null, memoryImport = null, memoryServices = null, memorySharing = null, community = null, endpoints = null, webhooks = null, presets = null, receipts = null, balance = null, creditGrants = null, sessionCookies = null, gpus = null, abuse = null, priceBook = null, ownEndpoints = null, refusal = null, batches = null }) {
     const app = express();
     // /.well-known/agent.json (openvibe-shared/agent-layer, SEO-2): what this site serves, for agents.
     require('openvibe-shared/agent-layer').mount(app, { descriptor: require('./agent-descriptor') });
@@ -214,7 +214,7 @@ function createApp({ searchFetch = null, config, db, registry, pool, quotas, cac
 
     // Operator actions shared by the admin API and the operator console (one implementation, one audit row).
     const ops = createOps({ db, registry, pool, quotas, cache, runs });
-    app.use(runsRouter({ runs, registry, auth, config, log }));
+    app.use(runsRouter({ choices, runs, registry, auth, config, log }));
     app.use(actionsRouter({ runs, registry, auth, log }));
     // The OpenAI-compatible endpoint (POST /v1/chat/completions, GET /v1/models): runs of ai.complete.
     app.use(require('./api/routing-preview').routingPreview({ auth, registry, log }));
@@ -240,7 +240,7 @@ function createApp({ searchFetch = null, config, db, registry, pool, quotas, cac
     // The person's own AI settings (L36 Y1/Y3): their keys under owner `self`, and their routing preferences. Only
     // the person's Network token or their AI site session (same origin) reaches them; a service token is refused.
     if (credentials && preferences && grants) {
-        app.use(require('./me').meRouter({ credentials, preferences, grants, auth, registry, config, clock, log, personSessions, sessionCookies, sendError: (res, err, ctx) => sendError(res, err, ctx, log) }));
+        app.use(require('./me').meRouter({ choices, credentials, preferences, grants, auth, registry, config, clock, log, personSessions, sessionCookies, sendError: (res, err, ctx) => sendError(res, err, ctx, log) }));
     }
     // The person's human settings moved to Exchange; keep the JSON API here for first-party clients.
     app.use('/you', (req, res) => res.redirect(301, `${config.exchangeUrl}/privacy/keys${req.originalUrl.includes('?') ? req.originalUrl.slice(req.originalUrl.indexOf('?')) : ''}`));
