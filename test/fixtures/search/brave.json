@@ -1,0 +1,23 @@
+{
+  "response": {
+    "web": {
+      "results": [
+        {
+          "title": "Lantern",
+          "url": "https://example.org/article",
+          "description": "A new lantern",
+          "page_age": "2026-11-08T12:00:00Z"
+        }
+      ]
+    }
+  },
+  "request": {
+    "host": "api.search.brave.com",
+    "path": "/res/v1/web/search",
+    "method": "GET"
+  },
+  "expected": {
+    "title": "Lantern",
+    "cost": 0.005
+  }
+}

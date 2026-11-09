@@ -1,0 +1,21 @@
+{
+  "response": {
+    "results": [
+      {
+        "title": "Lantern",
+        "url": "https://example.org/article",
+        "content": "A new lantern",
+        "published_date": "2026-11-08T12:00:00Z"
+      }
+    ]
+  },
+  "request": {
+    "host": "api.tavily.com",
+    "path": "/search",
+    "method": "POST"
+  },
+  "expected": {
+    "title": "Lantern",
+    "cost": 0.008
+  }
+}

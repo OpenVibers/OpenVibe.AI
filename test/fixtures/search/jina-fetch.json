@@ -1,0 +1,11 @@
+{
+  "code": 200,
+  "data": {
+    "title": "Lantern",
+    "url": "https://example.org/article",
+    "content": "# Lantern\nA new lantern",
+    "usage": {
+      "tokens": 2000
+    }
+  }
+}

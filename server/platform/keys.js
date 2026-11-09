@@ -81,11 +81,11 @@ function createKeys({ db, clock = { now: () => Date.now() } }) {
      * A hold for one call against the key's monthly cap: the call's own ceiling (`limit`, its max_cost_usd) or
      * DEFAULT_HOLD_USD, never more than what is left this month. Holds add up, so calls run side by side while their
      * holds fit under the cap; settle() charges what the call cost (the hold when the cost is unknown, e.g. the client
-     * hung up) and gives the rest of the hold back. Search calls (`free`) take no hold and skip the model list.
+     * hung up) and gives the rest of the hold back. Free search calls take no hold; paid search holds its ceiling. Search skips the model list.
      */
-    async function reserve(key, model, free = false, limit = null) {
+    async function reserve(key, model, free = false, limit = null, search = false) {
         const allowed = JSON.parse(key.allowed_models);
-        if (!free && allowed.length && !allowed.includes(model))
+        if (!free && !search && allowed.length && !allowed.includes(model))
             throw new AiError(403, 'exchange.model_denied', 'This model is not allowed by this key');
         const month = iso().slice(0, 7),
             day = iso().slice(0, 10),
