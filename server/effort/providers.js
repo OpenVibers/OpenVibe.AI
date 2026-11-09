@@ -15,9 +15,9 @@ function control({ kind, key = '', model = '', base_url = '' }, effort) {
     const m = String(model).replace(/^models\//, '').toLowerCase();
     const source = `${key} ${base_url}`.toLowerCase();
     // https://developers.openai.com/api/docs/guides/reasoning?api-mode=chat
-    if (kind === 'openai' && /openai|api\.openai\.com/.test(source) && /^(gpt-[56]|o[134])/.test(m) && !/chat|non-reasoning/.test(m)) {
+    if (['openai', 'responses'].includes(kind) && /openai|api\.openai\.com/.test(source) && /^(gpt-[56]|o[134])/.test(m) && !/chat|non-reasoning/.test(m)) {
         const native = effort !== 'max' ? effort : /^gpt-6/.test(m) ? 'max' : /^gpt-5\.[2-9]/.test(m) ? 'xhigh' : 'high';
-        return { applied: effort === 'max' && native === 'high' ? 'high' : effort, fields: { reasoning_effort: native } };
+        return { applied: effort === 'max' && native === 'high' ? 'high' : effort, fields: kind === 'responses' ? { reasoning: { effort: native } } : { reasoning_effort: native } };
     }
     // https://platform.claude.com/docs/en/build-with-claude/thinking
     // https://platform.claude.com/docs/en/build-with-claude/effort

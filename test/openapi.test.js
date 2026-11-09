@@ -56,6 +56,7 @@ const LEFT_OUT = [
 ];
 const excluded = (key) => {
     const p = key.split(' ')[1];
+    if (key === 'GET /api/v1/me/ladders/{id}') return false; // read-only accounting, no credential fields
     return LEFT_OUT.some((prefix) => p === prefix || p.startsWith(`${prefix}/`));
 };
 

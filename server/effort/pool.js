@@ -13,9 +13,10 @@ function wrapPool(pool) {
             if (policy && policy.role_default && !ctx.exact && !ctx.routePin && ctx.taskChoice?.why !== 'run') {
                 const offered = await pool.offers(route, operation, ctx);
                 const choices = modelsOf(policy.role_default);
-                const chosen = choices.map(id => offered.find(o => `${o.provider}/${o.model}` === id)).find(Boolean);
+                const selected = choices.map(id => offered.find(o => `${o.provider}/${o.model}` === id)).filter(Boolean);
+                const chosen = selected[0];
                 if (!chosen) throw new AiError(503, 'role.model_unavailable', 'no model from this role default is offered by the route');
-                runCtx = { ...ctx, taskChoice: null, policy: 'exact', exact: { id: `${chosen.provider}/${chosen.model}`, offers: [{ provider: chosen.provider, model: chosen.model }] } };
+                runCtx = { ...ctx, taskChoice: null, policy: 'exact', exact: { id: `${chosen.provider}/${chosen.model}`, offers: selected.map(o => ({ provider: o.provider, model: o.model })) } };
             }
             const result = await pool.execute(route, operation, { ...request, ...(policy ? { effort: policy.effort_resolved } : {}) }, runCtx);
             return { ...result, explain: { ...(result.explain || {}), effort_applied: result.result && result.result.effortApplied || null } };

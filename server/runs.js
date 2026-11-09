@@ -713,7 +713,7 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
             const money = usageRecord.moneyOf({ prices, tokens, paidBy: payer.paid_by, feeRate: (config.usage && config.usage.feeRate) || 0 });
             const rec = usageRecord.recordOf({
                 system: 'ai', run_id: row.id, subject: subjectOf(row), attribution: attributionOf(row), surface: row.workflow_key || '',
-                provider: payer.provider || provider || null, model: model || null, effort: opts.effort || null,
+                provider: payer.provider || provider || null, model: model || null, effort: parseJson(row.explain, {})?.effort_applied || opts.effort || null,
                 paid_by: payer.paid_by, paid_by_detail: payer.detail,
                 input: tokens.input, output: tokens.output, reasoning: tokens.reasoning, cache_read: tokens.cache_read,
                 cache_write: tokens.cache_write, cache_write_ttl: usage.cache_write_ttl || null,
@@ -781,7 +781,7 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
             const paidBy = (payer && payer.paid_by) || 'openvibe_key';
             const feeRate = paidBy === 'openvibe_key' ? Number((config.usage && config.usage.feeRate) || 0) : 0;
             const opts = parseJson(row.options, {});
-            if (row.service_tier === 'batch' && opts.effort_policy && answerProvider) {
+            if ((row.service_tier === 'batch' || row.status === 'failed') && opts.effort_policy && answerProvider && !Object.hasOwn(explain || {}, 'effort_applied')) {
                 const record = await registry.getProvider(answerProvider);
                 if (record) explain = { ...(explain || {}), effort_applied: require('./effort/providers').control({ ...record, model: answerModel }, opts.effort_policy.effort_resolved).applied };
             }

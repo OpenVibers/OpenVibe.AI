@@ -1,13 +1,13 @@
 # Agent effort, defaults and accounting
 
 S1 is [Contracts PR 396](https://github.com/OpenVibers/OpenVibe.Contracts/pull/396),
-version 0.380.0. This PR pins its green commit SHA because neither PR is to be merged
+version 0.381.0. This PR pins its green commit SHA because neither PR is to be merged
 or tagged by this job. Reconcile the pin to the eventual release when merging.
 
 POST `/v1/chat/completions`, `/v1/messages`, `/api/v1/chat`, `/api/v1/generate` and
 `/api/v1/runs` accept `effort: auto|low|medium|high|max`. Other direct text operations
 also accept it. Omission means auto. Auto uses the selected `agent_role` default,
-or the workflow's `metadata.effort`, or medium. Receipts record the request and the
+or the owner's task-default `effort`, then the workflow's `metadata.effort`, then medium. Receipts record the request and the
 portable level actually applied; unsupported controls record null. Cache and
 idempotency identities include the resolved policy, so changing effort cannot reuse
 an answer computed with another policy. Ordinary provider fallback keeps that policy.
@@ -17,7 +17,7 @@ OpenVibe choices rather than provider-defined effort presets:
 
 | Provider | Native request | Source |
 | --- | --- | --- |
-| OpenAI reasoning models | `reasoning_effort`: low/medium/high; max becomes max on GPT-6, xhigh on GPT-5.2+, high on older reasoning models | [Reasoning](https://developers.openai.com/api/docs/guides/reasoning?api-mode=chat) |
+| OpenAI reasoning models | `reasoning_effort` (or Responses `reasoning.effort`): low/medium/high; max becomes max on GPT-6, xhigh on GPT-5.2+, high on older reasoning models | [Reasoning](https://developers.openai.com/api/docs/guides/reasoning?api-mode=chat) |
 | Current Claude | `thinking: {type: adaptive}`, `output_config.effort`; Opus/Sonnet 5.5 refuse `budget_tokens` | [Thinking](https://platform.claude.com/docs/en/build-with-claude/thinking), [effort](https://platform.claude.com/docs/en/build-with-claude/effort) |
 | Gemini 3/4 | `generationConfig.thinkingConfig.thinkingLevel`; max clamps to HIGH; Gemini 3 Pro medium clamps to HIGH | [Thinking](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/thinking) |
 | Gemini 2.5 | `thinkingBudget`: 1024 / 4096 / 16384 / 24576 tokens (Pro max 32768) | [Thinking](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/thinking) |
@@ -56,7 +56,7 @@ receipts from the last 30 days with current offer prices. Kind is an exact optio
 receipt label. Effort cohorts use requested effort, or applied effort for auto/legacy
 receipts. No account or receipt identities are returned.
 
-The range is the 25th–75th percentiles of observed input/output/cache token counts
+The range is the 25th–75th percentiles of observed input/output/reasoning/cache token counts
 priced at each answering route's current prices, excluding historical charges/fees.
 When input_tokens is supplied, each sample scales by its output/input and cache/input
 ratios. This is empirical usage, not a guaranteed quote or a price cap.

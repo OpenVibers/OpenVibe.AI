@@ -9,7 +9,7 @@ const { createAnalytics } = require('../server/effort/analytics');
 const { createReceipts } = require('../server/exchange/receipts');
 const cases = require('./fixtures/effort/requests.json');
 const t = suite('agent-effort');
-const factories = { openai: createOpenAiProvider, anthropic: createAnthropicProvider, gemini: createGeminiProvider };
+const factories = { openai: createOpenAiProvider, anthropic: createAnthropicProvider, gemini: createGeminiProvider, responses: require('../server/providers/responses').createResponsesProvider };
 const answer = { choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }], usage: { prompt_tokens: 100, completion_tokens: 10 }, type: 'message', role: 'assistant', content: [{ type: 'text', text: 'ok' }], candidates: [{ content: { parts: [{ text: 'ok' }] } }] };
 
 t.test('native request fixtures cover chat and compatible routes without network calls', async () => {
@@ -46,7 +46,7 @@ t.test('streamed OpenAI and Anthropic calls carry the same effort controls', asy
             ? 'data: {"choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":1}}\n\ndata: [DONE]\n\n'
             : 'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"usage":{"input_tokens":2}}}\n\nevent: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":"ok"}}\n\nevent: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n';
         const a = factories[kind]({ key: kind }, { fetchImpl: async (_url, opts) => { sent = JSON.parse(opts.body); return new Response(text, { headers: { 'Content-Type': 'text/event-stream' } }); } });
-        const result = await a[kind === 'openai' ? 'complete' : 'messages']({ model: kind === 'openai' ? 'gpt-5.5' : 'claude-sonnet-5-5', effort: 'high', messages: [{ role: 'user', content: 'hi' }], openai: { messages: [{ role: 'user', content: 'hi' }] }, maxTokens: 128, onDelta: () => {} });
+        const result = await a[kind === 'openai' ? 'complete' : 'messages']({ model: kind === 'openai' ? 'gpt-5.5' : 'claude-sonnet-5-5', effort: 'high', messages: [{ role: 'user', content: 'hi' }], openai: { messages: [{ role: 'user', content: 'hi' }] }, maxTokens: 128, timeoutMs: 3000, onDelta: () => {} });
         assert.strictEqual(sent.stream, true);
         assert.strictEqual(kind === 'openai' ? sent.reasoning_effort : sent.output_config.effort, 'high');
         assert.strictEqual(result.effortApplied, 'high');
@@ -96,6 +96,12 @@ t.test('owner role policy is audited; reviewer stays in a different family; auto
         assert.strictEqual(roles.reviewer.model, 'openai/gpt-5.5');
         assert.strictEqual((await resolve({ effort: 'auto', agent_role: 'worker' }, {}, defs)).effort_resolved, 'high');
         assert.strictEqual((await resolve({ effort: 'auto' }, { metadata: { effort: 'low' } }, defs)).effort_resolved, 'low');
+        const defaultsValue = require('../server/choices').defaultValue({ signed_out: { model: 'openvibe/auto', source: 'openvibe' }, signed_in: { model: 'openvibe/auto', source: 'openvibe' }, effort: 'low' });
+        await h.db.prepare('INSERT INTO ai_task_defaults (task, value, updated_by, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(task) DO UPDATE SET value = excluded.value').run('blog.devblog.write', JSON.stringify(defaultsValue), 'test', new Date().toISOString());
+        const created = await h.runs.create({ task: 'blog.devblog.write', input: { prompt: 'task effort' }, effort: 'auto' }, { sub: 'svc:live', subject: { type: 'service', id: 'live' } });
+        await created.promise;
+        const saved = await h.db.prepare('SELECT options FROM runs WHERE id = ?').get(created.run.id);
+        assert.strictEqual(JSON.parse(saved.options).effort_policy.effort_resolved, 'low');
         const audits = await h.registry.listAudit({ action: 'agent.role-default.update' });
         assert.strictEqual(audits.length, 1);
         const invalid = await request(h.base, 'PUT', '/api/v1/agent-role-defaults/reviewer', { tok: admin, body: { model: 'anthropic/claude-sonnet-5-5', effort: 'high' } });
@@ -121,17 +127,17 @@ t.test('estimate has a 20-receipt floor, current prices, token scaling, kind and
         for (let i = 0; i < 20; i++) {
             const id = `run_estimate_${i}`;
             await h.db.prepare('INSERT INTO runs SELECT (jsonb_populate_record(NULL::runs, ?::jsonb)).*').run(JSON.stringify({ ...row, id, synthetic: 0, status: 'succeeded', idempotency_key: null, receipt_id: null }));
-            await receipts.record({ id: `rcpt_sample_${i}`, run_id: id, created_at: new Date(now).toISOString(), offer: { provider: 'openai', model: 'gpt-5.5' }, effort_applied: 'high', kind: 'codes.ticket', usage: { tokens_in: 100, tokens_out: 20, tokens_cached: 50 }, cost_usd: 99 });
+            await receipts.record({ id: `rcpt_sample_${i}`, run_id: id, created_at: new Date(now).toISOString(), offer: { provider: 'openai', model: 'gpt-5.5' }, effort_applied: 'high', kind: 'codes.ticket', usage: { tokens_in: 100, tokens_out: 20, tokens_reasoning: 10, tokens_cached: 50 }, cost_usd: 99 });
             if (i === 18) { const result = await analytics.estimate(q); assert.strictEqual(result.n, 19); assert.strictEqual(result.low_usd, null); now += 31000; }
         }
         const result = await analytics.estimate(q);
         assert.strictEqual(result.n, 20);
-        assert.strictEqual(result.low_usd, 0.00062);
-        assert.strictEqual(result.high_usd, 0.00062);
+        assert.strictEqual(result.low_usd, 0.00078);
+        assert.strictEqual(result.high_usd, 0.00078);
         assert.strictEqual((await analytics.estimate({ ...q, kind: 'other' })).n, 0);
         now += 31 * 86400000;
         assert.strictEqual((await analytics.estimate(q)).n, 0);
-        const qrow = await h.db.prepare('SELECT id FROM requests WHERE run_id = ? LIMIT 1').get(row.id);
+        const qrow = await h.db.prepare("SELECT id FROM requests WHERE run_id = ? AND status = 'ok' LIMIT 1").get(row.id);
         assert.ok(qrow);
         await h.db.prepare('UPDATE requests SET tokens_in = 100, tokens_cached = 25 WHERE id = ?').run(qrow.id);
         const shares = await require('../server/effort/analytics').cacheShares(h.db, { now: () => Date.now() });

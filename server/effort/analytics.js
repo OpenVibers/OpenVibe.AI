@@ -46,7 +46,7 @@ function createAnalytics({ db, catalog, registry = null, pool = null, clock = { 
               AND (?::text IS NULL OR a.body::jsonb->>'kind' = ?)
         ), tokens AS (
             SELECT b, (b->'usage'->>'tokens_in')::numeric ti,
-                (b->'usage'->>'tokens_out')::numeric tout,
+                ((b->'usage'->>'tokens_out')::numeric + COALESCE((b->'usage'->>'tokens_reasoning')::numeric, 0)) tout,
                 COALESCE((b->'usage'->>'tokens_cached')::numeric, 0) tc
             FROM samples
         ), costs AS (
