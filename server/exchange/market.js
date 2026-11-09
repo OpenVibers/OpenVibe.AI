@@ -54,7 +54,7 @@ function buildOffers({ providers = [], rows = [], changes = [], catalogue = {}, 
             price: { in: num(row.cost?.in_per_mtok), out: num(row.cost?.out_per_mtok), cached: num(row.cost?.cached_per_mtok), currency: 'USD', per: '1M tokens' },
             price_source: webUrl(row.cost?.source), price_checked_at: row.cost?.verified_at || facts.checked || null,
             routed: routed.some(o => o.provider === p.key && bare(o.model) === bare(row.model_key)),
-            uncensored: seed?.m.uncensored === true || seed?.p.uncensored === true,
+            uncensored: seed?.m.uncensored === true || presets.find(preset => preset.key === p.key)?.uncensored === true,
             provider_access: p.provider_access || 'UNVERIFIED', field_sources: {},
         };
         // Pending price changes are the latest observed own-page price, even before the router

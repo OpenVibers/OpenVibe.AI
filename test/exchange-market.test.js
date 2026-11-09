@@ -22,6 +22,8 @@ t.test('production presets and recorded pages include disabled and unregistered 
     const page = pageMarket(snapshot, { limit: 500 });
     assert.strictEqual(page.total_models, 52); assert.strictEqual(page.total_offers, 61); assert(offers.every(o => !o.routed));
     assert(offers.some(o => o.price.in === null)); assert(offers.some(o => o.uncensored));
+    const providerFlag = buildOffers({ observations: [{ provider_key: 'refuseless', model_key: 'new-fixture-model', price: { in: null, out: null, cached: null }, source: 'https://refuseless.com', checked_at: '2026-11-09' }] });
+    assert.strictEqual(providerFlag.find(o => o.provider_model === 'new-fixture-model').uncensored, true, 'new models retain their provider preset flag');
     const first = pageMarket(snapshot, { limit: 3 }); const second = pageMarket(snapshot, { limit: 3, cursor: first.next_cursor });
     assert.deepStrictEqual([...first.offers,...second.offers], offers.slice(0,6));
     assert.throws(() => pageMarket(snapshot,{limit:'no'})); assert.throws(() => pageMarket(snapshot,{cursor:'bad'}));
