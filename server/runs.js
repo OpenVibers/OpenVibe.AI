@@ -119,7 +119,7 @@ function routePinRequest(value, principal, wf) {
     return { provider, model };
 }
 
-function createRuns({ db, registry, engine, cache, quotas, config, clock = { now: () => Date.now() }, log = console, userModules = null, credentials = null, preferences: personPreferences = null, tiers = null, projectSecrets = null, pool = null, runBudgets = null, credits = null, community = null, presets = null, receipts = null, abuse = null, webhooks = null, batchWaiting = null, batch = null }) {
+function createRuns({ choices = null, db, registry, engine, cache, quotas, config, clock = { now: () => Date.now() }, log = console, userModules = null, credentials = null, preferences: personPreferences = null, tiers = null, projectSecrets = null, pool = null, runBudgets = null, credits = null, community = null, presets = null, receipts = null, abuse = null, webhooks = null, batchWaiting = null, batch = null }) {
     const inflight = new Map();     // run id -> { controller, promise, release, caller }
     // BA2: the runs that wait for a provider's own batch API: they are created at once and finish later.
     const deferred = new Map();     // run id -> { controller, scope, ctx, input, hold, resolveDone }
@@ -154,6 +154,8 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             // for and the class the run really ran in); nothing else about the run changes.
             latency_clamped: (parseJson(r.options, {}) || {}).latency_clamped || null,
             usage: { tokens_in: r.tokens_in, tokens_out: r.tokens_out, cost_usd: r.cost_usd, attempts: r.attempts, usage_sample_ids: r.usage_sample_ids || (r.usage_sample_id ? [r.usage_sample_id] : null) },
+            choice: (parseJson(r.options, {}) || {}).task_choice?.choice || null,
+            answered: parseJson(r.explain, null)?.task_choice?.answered || null,
             explain: parseJson(r.explain, null),
             citations_count: r.citations_count,
             grounding: parseJson(r.grounding, null),
@@ -210,7 +212,9 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
      */
     async function create(body, principal, { trace = null, requestId = null, retryOf = null, onDelta = null, onRoute = null, abuse: requestAbuse = null, discount = null, exact = null, costCheck = null, communityOfferId = null, callerWaitMs = 0 } = {}) {
         if (!body || typeof body !== 'object') throw new AiError(400, 'input.invalid', 'JSON body required');
-        const wfKey = String(body.workflow || '');
+        const namedTask = choices && body.task ? await choices.task(String(body.task)) : null;
+        if (body.task && !namedTask) throw new AiError(404, 'task.not_found', 'unknown task');
+        const wfKey = String(body.workflow || namedTask?.workflow || '');
         const wf = body.version ? await registry.getWorkflow(wfKey, Number(body.version)) : await registry.activeWorkflow(wfKey);
         if (!wf) throw new AiError(404, 'workflow.not_found', `no active workflow ${wfKey}${body.version ? ` v${body.version}` : ''}`);
         if (body.version && !['active', 'deprecated'].includes(wf.status)) throw new AiError(409, 'workflow.inactive', `${wfKey} v${wf.version} is ${wf.status}`);
@@ -237,7 +241,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         if (Buffer.byteLength(inputJson) > config.runs.maxInputBytes) throw new AiError(413, 'input.too_large', `input is larger than ${config.runs.maxInputBytes} bytes`);
         const v = schemas.validate(wf.input_schema, input);
         if (!v.valid) throw new AiError(422, 'input.invalid', `input does not match ${wf.key} v${wf.version}`, { errors: v.errors });
-        const inputHash = sha256(inputJson);
+        const inputHash = sha256(body.choice || body.task ? { input: inputJson, choice: body.choice || null, task: body.task || null } : inputJson);
         const requester = principal.subject;
         // A developer app (ADR-014): the requester IS its project, the run is metered with the project's
         // id on every Billing reading, and a sandbox run may use free/local capacity only (server/providers).
@@ -345,6 +349,12 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         }
         const runPerson = personOwnToken ? requester.id : personSubject;
         const personPays = Boolean(runPerson) && personOwnToken;
+        if (body.choice && !choices) throw new AiError(503, 'choice.unavailable', 'task choices are unavailable');
+        if (body.choice && (pinned || body.credential || projectProvider)) throw new AiError(422, 'choice.invalid', 'choice cannot be combined with another routing control');
+        const taskChoice = choices && (namedTask || body.choice || await choices.task(wf.key))
+            ? await choices.resolve(namedTask ? namedTask.name : wf.key, { subject: runPerson, choice: body.choice }) : null;
+        if (taskChoice && app && taskChoice.choice.source !== 'openvibe') throw new AiError(403, 'capability.denied', 'app runs use OpenVibe supply');
+
         // The calling service's own budget (a run token's registered budget): with it, a run for a named person may
         // use paid capacity, counted against that budget; without it, only free capacity serves the run.
         const tokenBudget = runBudgets && principal.jti ? await runBudgets.spent(principal.jti) : null;
@@ -361,7 +371,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             && (Boolean(runPerson) || (anonymousTryIt && wf.key === 'ai.complete'));
         // The injected run record names the person a user runs for, so preferences and cache scope follow them.
         if (runPerson && !personSubject) body = { ...body, on_behalf_of: { type: 'user', id: runPerson } };
-        const selfKeys = Boolean(credentials && runPerson && credentialSubject === null && !projectProvider && !pinned && await credentials.hasSelf(runPerson));
+        const selfKeys = taskChoice?.choice.source === 'machines' || Boolean((!taskChoice || taskChoice.choice.source !== 'openvibe') && credentials && runPerson && credentialSubject === null && !projectProvider && !pinned && await credentials.hasSelf(runPerson));
         // The budget a Codes run token carries (Codes C3): a run that is over its budget is refused before
         // any provider call. The budget lives here, not in the token, so the holder of the token cannot raise it.
         if (runBudgets && principal.jti) {
@@ -372,7 +382,8 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         // field on the OpenAI and Messages routes and an input/option field on the direct ones; parsed as an exact
         // decimal into integer nano-USD, never through a float (0.000000001 is one nano, 0.0000000011 rounds up).
         const rawMaxCost = body.max_cost_usd != null ? body.max_cost_usd : options.max_cost_usd != null ? options.max_cost_usd : input.max_cost_usd;
-        const maxCostNano = rawMaxCost == null ? null : parseCostUsd(rawMaxCost);
+        let maxCostNano = rawMaxCost == null ? null : parseCostUsd(rawMaxCost);
+        if (taskChoice?.max_cost_usd != null) { const cap = parseCostUsd(taskChoice.max_cost_usd); maxCostNano = maxCostNano == null || cap < maxCostNano ? cap : maxCostNano; }
         const ctx = {
             requesterType: requester.type, requesterId: requester.id,
             ...(principal.jti ? { runJti: principal.jti } : {}),
@@ -429,10 +440,10 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             target: body.target ? JSON.stringify(body.target) : null, target_key: ctx.targetKey,
             input: null, input_hash: inputHash, idempotency_key: idem, trace_id: trace, request_id: requestId, retry_of: retryOf,
             latency_class: latencyClass,
-            options: JSON.stringify({ cache: options.cache !== false && credentialSubject === null && !projectProvider && !pinned && !selfKeys && !communityOptIn, debug: Boolean(options.debug), input_retained: kept.full,
+            options: JSON.stringify({ ...(taskChoice ? { task_choice: taskChoice } : {}), cache: options.cache !== false && credentialSubject === null && !projectProvider && !pinned && !selfKeys && !communityOptIn, debug: Boolean(options.debug), input_retained: kept.full,
                 ...(options.latency_clamped ? { latency_clamped: options.latency_clamped } : {}),
                 ...(credentialSubject !== null ? { credential_subject: credentialSubject } : {}), ...(credentialProvider !== null ? { credential_provider: credentialProvider } : {}),
-                ...(selfKeys ? { self_subject: runPerson } : {}),
+                ...((selfKeys || taskChoice && runPerson) ? { self_subject: runPerson } : {}),
                 ...(runPerson ? { person_pays: personPays } : {}),
                 ...(projectProvider ? { project_provider: projectProvider } : {}), ...(pinned ? { pinned_offer: pinned } : {}),
                 ...(communityOptIn ? { community: true } : {}), ...(prefer ? { prefer } : {}),
@@ -446,7 +457,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
         // and another model's answer under the same prompt would silently break the pin. A run that may use the
         // person's own key is never cached either: their key must be used, and the answer is theirs, not the scope's.
         // A community or adult-tier answer cannot be reused by a request without the same policy.
-        const scope = options.cache === false || credentialSubject !== null || projectProvider || pinned || selfKeys || communityOptIn || contentPolicy !== 'standard' ? null : cache.scopeFor(wf.cache_mode, ctx);
+        const scope = taskChoice || options.cache === false || credentialSubject !== null || projectProvider || pinned || selfKeys || communityOptIn || contentPolicy !== 'standard' ? null : cache.scopeFor(wf.cache_mode, ctx);
         let cacheKey = null;
         if (scope) {
             // Some workflows key the cache on less than their whole input (hooks.js CACHE_INPUT: a signed URL's signature).
@@ -957,6 +968,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
                 communityFree,
                 ...(ctx.routePin ? { routePin: ctx.routePin } : {}),
                 // L37: the soft preference the caller made (provider, and a model if it named one).
+                taskChoice: opts.task_choice || null, choiceBudget: { used: 0 },
                 prefer: opts.prefer || null,
                 // The routing preset's rules (server/exchange/constraints.js): the router filters the offers with
                 // them, and a hard max_price no offer fits refuses the run before any provider is called.
@@ -1135,6 +1147,7 @@ function createRuns({ db, registry, engine, cache, quotas, config, clock = { now
             workflow: row.workflow_key, input: parseJson(row.input, {}), target: parseJson(row.target, null) || undefined,
             attribution: parseJson(row.attribution, null) || undefined, on_behalf_of: parseJson(row.on_behalf_of, null) || undefined,
             route: opts.pinned_offer || undefined,
+            ...(opts.task_choice ? { task: opts.task_choice.task.name, choice: opts.task_choice.choice } : {}),
             options: { ...opts, cache: false },
         }, principal, { trace, requestId, retryOf: id });
     }
