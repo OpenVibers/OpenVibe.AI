@@ -189,7 +189,7 @@ t.test("AI text may describe people: no looks ban in the public prose prompts", 
     const prompt = tp('live.streamer.overview').user_prompt;
     assert.match(prompt, /public description/);
     assert.doesNotMatch(prompt, /Never describe anyone's appearance|never about what people look like/);
-    assert.match(prompt, /never guess pronouns/);
+    assert.doesNotMatch(prompt, /pronoun/i, 'no pronoun rules (owner, 11-09)');
     assert.doesNotMatch(tp('live.media.overview').user_prompt, /Never describe anyone's appearance/);
     assert.doesNotMatch(tp('live.stream.describe_frame').user_prompt, /never mention anyone's body/);
     assert.doesNotMatch(tp('live.stream.summarize').user_prompt, /never about what people look like/);
@@ -205,7 +205,8 @@ t.test('The Rundown: the segment prompt lists the lines and known topics; its ou
     const seg = tp('live.rundown.segment');
     assert.strictEqual(seg.default_route, 'background.creative', 'BA1: nobody watches a rundown arrive, so it runs in the background');
     assert.match(seg.system_prompt, /announcer or character lines/);
-    assert.match(seg.system_prompt, /never guess a pronoun/);
+    assert.doesNotMatch(seg.system_prompt, /pronoun/i, 'no pronoun rules (owner, 11-09)');
+    assert.match(seg.system_prompt, /call people by their name\./);
     assert.match(seg.system_prompt, /never a sentence they read out from an article/, 'a line read aloud is not theirs');
     assert.match(seg.system_prompt, /never "the streamer" or "Streamer"/);
     assert.match(seg.system_prompt, /theatrical one-liners in another/, 'a game character\'s English lines in a Greek stream are not the streamer');
