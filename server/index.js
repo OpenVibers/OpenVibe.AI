@@ -119,6 +119,8 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     // The Exchange's routing presets and the receipts of the answered requests (server/exchange/).
     const presets = require('./exchange/presets').createPresets({ db, clock, log });
     const receipts = require('./exchange/receipts').createReceipts({ db, clock, log });
+    const choices = require('./choices').createChoices({ db, registry, preferences, credentials, machines, adultStatus, ratings: require('./choices/ratings').createRatings({ fetchImpl, clock }), clock, catalog: require('./exchange/catalog').createCatalog({ db, registry, pool, config, env, clock }) });
+    await choices.seed();
     const projectSecrets = require('./project-secrets').createProjectSecrets({ config, env, fetchImpl });
     ensureCredits();
     // A stable facade: the store may create the Credits manager after boot (AI_CREDITS turned on live), and the runs
@@ -149,7 +151,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
     // BA3: the runs and the batcher need each other (a batch-class run is created first, then queued), so
     // the runs hold this facade and the batcher fills it in below, before any request can arrive.
     const batchRef = {};
-    const runs = createRuns({ db, registry, engine, cache, quotas, config, clock, log, userModules, credentials, preferences, tiers, projectSecrets, pool, runBudgets, credits: creditsRef, community, presets, receipts, abuse, webhooks, batch: batchRef,
+    const runs = createRuns({ choices, db, registry, engine, cache, quotas, config, clock, log, userModules, credentials, preferences, tiers, projectSecrets, pool, runBudgets, credits: creditsRef, community, presets, receipts, abuse, webhooks, batch: batchRef,
         // BA2: a run that waits for a provider's batch answer is not interrupted by a restart: it stays
         // queued until the batcher finishes it (the provider is still working on it).
         batchWaiting: async (runId) => {
@@ -203,7 +205,7 @@ async function start({ config, db: givenDb = null, clock = { now: () => Date.now
         clientSecret: env.OV_OAUTH_CLIENT_SECRET, fetch: fetchImpl,
     }) : null;
     const benchEvents = createBenchEvents({ bench, accountData, accountSend, config, log, fetchImpl, clientSecret: env.OV_OAUTH_CLIENT_SECRET });
-    const app = createApp({ config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, grants, vault, settings, benchEvents, runBudgets, memory, memoryImport, memoryServices, memorySharing, community, endpoints, webhooks, presets, receipts, balance, creditGrants, sessionCookies, gpus, abuse, priceBook, ownEndpoints, refusal, batches });
+    const app = createApp({ choices, config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, grants, vault, settings, benchEvents, runBudgets, memory, memoryImport, memoryServices, memorySharing, community, endpoints, webhooks, presets, receipts, balance, creditGrants, sessionCookies, gpus, abuse, priceBook, ownEndpoints, refusal, batches });
     let jwks = null;
     let keyLoaded = Promise.resolve(null);
     if (!keys.pinned && config.nodeEnv !== 'test') {

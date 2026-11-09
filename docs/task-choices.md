@@ -1,0 +1,15 @@
+# Tasks and model choices
+
+`GET /api/v1/tasks` lists registered tasks. A service with `ai.workflow.manage` registers its own namespace with `POST /api/v1/tasks`: `{name, kind, sentence, default: {model, source}, workflow?}`. The task may use its own workflow or a general AI workflow.
+
+`GET /api/v1/choices?task=design.icon` returns the resolved choice, its reason, the owner's recommendation, and options grouped under `openvibe`, `keys`, and `machines`. Personal options require the person's token. Measurements come from Exchange's catalogue and Report; missing prices, speed or quality remain null. Price estimates for text assume 1,000 input and 1,000 output tokens. Adult models require Network's existing adult confirmation and the run still enforces the content floor.
+
+`PUT /api/v1/me/choices/:task` accepts `{model, source, machine?}`. Source is `openvibe`, `keys`, or `machines`; only machines name a `dev_…` machine or `any`. A service token cannot save choices for a person. A saved choice is the person's across every first-party site: a site session token may write it from that site's own origin (the origins come from the service manifests in Contracts, never a hard-coded list), and Exchange proxies the person's session for the rest. No provider secrets leave AI.
+
+`POST /api/v1/runs` accepts either `{task, input, choice?}` or a workflow with `choice`. Resolution is run choice, saved task choice, kind preference, owner defaults, then the built-in. The response records `choice` and `answered`; explain includes the task, resolution reason and fallback index. Chosen runs bypass the answer cache. Retry retains their task and choice. Personal-machine calls use the existing machine transport and ownership checks in `server/machines.js`.
+
+`GET|PUT /api/v1/admin/task-defaults` requires a verified person with admin or owner role, never a service's manage capability. PUT accepts `{defaults: [{task, value}]}`. Each value has `signed_out`, `signed_in`, `fallbacks`, `image_model`, `search_engines: [{engine, enabled}]`, and `max_cost_usd`. Changes and their before/after values commit with the audit entry. Reads cache for 60 seconds; writes invalidate this process immediately.
+
+Owner fallback order is preserved. No fallback occurs after a stream emits text or a content-policy refusal. A finite ceiling reserves conservative token upper bounds across model steps and retries before dispatch; unknown prices are refused. Managed images have no per-image rate card in the current router, so a finite image ceiling fails closed until such a card exists. Own keys and machines are not charged to OpenVibe.
+
+The seeded Design task uses `ai.chat`: signed out uses `openvibe/cheapest`, signed in uses `anthropic/claude-opus-5-5`, with cheapest as fallback. Search tasks run configured engines in order and skip disabled ones. DeepSeek is excluded under a finite ceiling because its research pipeline has no complete per-run price bound. Search engines currently use managed supply; key and machine sources are for model tasks.

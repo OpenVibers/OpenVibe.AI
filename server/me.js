@@ -24,7 +24,7 @@
  * The key is never returned (a four-character hint only), never logged and never put in an error.
  */
 const express = require('express');
-const { http } = require('openvibe-contracts');
+const { http, services } = require('openvibe-contracts');
 const { verifyUserToken } = require('openvibe-sdk/auth');
 const { AiError } = require('./util');
 const { bearer } = require('./auth');
@@ -41,6 +41,13 @@ function audiencesOf(claims) {
 }
 
 /**
+ * Every first-party site's origin, from Contracts' service manifests. A person's saved choice is theirs on any of
+ * our sites (Design's Draw it, Blog's editor, Chat), so a site's own session token may write it from its own origin.
+ * A service outside the manifests is never trusted.
+ */
+const SITE_ORIGINS = new Set((services.manifests || []).map((m) => m.publicOrigin).filter(Boolean).map((u) => { try { return new URL(u).origin; } catch { return null; } }).filter(Boolean));
+
+/**
  * The same-origin check for the person-session cookie (the console's csrfOk rule, without a form token).
  * A write with neither Origin nor Sec-Fetch-Site is refused: a site can make a bare request with the cookie, so the
  * absence of both is not proof of same-origin. A read may keep the old rule (it returns hints and settings only).
@@ -53,6 +60,7 @@ function sameOrigin(req, config, { write = false } = {}) {
     if (origin) {
         try {
             const actual = new URL(origin).origin;
+            if (req.path.startsWith('/api/v1/me/choices/') && SITE_ORIGINS.has(actual)) return true;
             return [config.baseUrl, config.exchangeUrl].some((base) => {
                 try { return actual === new URL(base).origin; } catch { return false; }
             });
@@ -61,7 +69,7 @@ function sameOrigin(req, config, { write = false } = {}) {
     return true;
 }
 
-function meRouter({ credentials, preferences, grants, auth, registry, config, clock = { now: () => Date.now() }, log = console, personSessions = null, sessionCookies = null, sendError }) {
+function meRouter({ choices = null, credentials, preferences, grants, auth, registry, config, clock = { now: () => Date.now() }, log = console, personSessions = null, sessionCookies = null, sendError }) {
     const r = express.Router();
 
     /** Authenticate a person, never a principal. Sets req.principal = { kind: 'user', subject }. */
@@ -93,8 +101,11 @@ function meRouter({ credentials, preferences, grants, auth, registry, config, cl
                 // request came from Exchange (which holds the user's token in its httpOnly session),
                 // or when the person minted an AI-audience token directly. No service token can enter this route.
                 const audiences = audiencesOf(claims);
+                // A person's saved choice is theirs across our sites, so a site session may write it from that site's
+                // own origin; every other setting is Exchange's.
+                const siteChoice = req.path.startsWith('/api/v1/me/choices/') && req.get('origin') && SITE_ORIGINS.has(new URL(req.get('origin')).origin);
                 const exchangeWrite = audiences.includes('openvibe.network') && sameOrigin(req, config, { write: true })
-                    && req.get('origin') && new URL(req.get('origin')).origin === new URL(config.exchangeUrl).origin;
+                    && req.get('origin') && (new URL(req.get('origin')).origin === new URL(config.exchangeUrl).origin || siteChoice);
                 if (write && !audiences.includes(WRITE_AUDIENCE) && !exchangeWrite) {
                     return http.sendProblem(res, 403, 'capability.denied', { detail: 'a write needs a user token for audience openvibe.ai; a site session token may only read these settings', ctx });
                 }
@@ -126,6 +137,21 @@ function meRouter({ credentials, preferences, grants, auth, registry, config, cl
         if (!registry) return;
         try { await registry.audit(personOf(req), action, 'credential', personOf(req), { trace: req.ov && req.ov.traceId, metadata }); } catch { /* audit never breaks the person's request */ }
     };
+
+    if (choices) {
+        const reply = fn => async (req, res) => { try { res.set('Cache-Control', 'private, no-store').json(await fn(req)); } catch (err) { sendError(res, err, req.ov); } };
+        const optional = async (req, res, next) => { const token = bearer(req); if (!token) return next(); try { const service = await auth.verify(token); if (service?.ok) return next(); } catch {} return guard(req, res, next); };
+        const admin = (req, res, next) => ['admin', 'owner'].includes(req.principal?.claims?.role) ? next() : res.status(403).json({ code: 'role.admin_required', detail: 'An admin role is required.' });
+        r.get('/api/v1/tasks', reply(async () => ({ tasks: await choices.tasks() })));
+        r.post('/api/v1/tasks', auth.requireCap('ai.workflow.manage'), reply(async req => {
+            if (req.principal.subject.type !== 'service') throw new AiError(403, 'capability.denied', 'only services register tasks');
+            return { task: await choices.register(req.body, req.principal.subject.id) };
+        }));
+        r.get('/api/v1/choices', optional, reply(req => choices.get(String(req.query.task || ''), { subject: req.principal?.subject?.id || null })));
+        r.put('/api/v1/me/choices/:task', guard, reply(async req => ({ choice: await choices.save(personOf(req), req.params.task, req.body) })));
+        r.get('/api/v1/admin/task-defaults', guard, admin, reply(async () => ({ tasks: await choices.tasks(), defaults: await choices.defaults() })));
+        r.put('/api/v1/admin/task-defaults', guard, admin, reply(async req => ({ defaults: await choices.putDefaults(req.body, personOf(req)) })));
+    }
 
     r.get('/api/v1/me/credentials', guard, run(async (req) => ({ credentials: [...(await credentials.listSelf(personOf(req))).map((c) => ({ ...c, id: c.provider, kind: 'api_key', label: c.provider, created: c.created_at, last_used: c.last_used_at || null })), ...(sessionCookies ? await sessionCookies.list('self', personOf(req)) : [])] })));
     if (sessionCookies) {
