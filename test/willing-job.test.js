@@ -12,7 +12,8 @@ const { createWillingnessJob } = require('../server/willing/job');
 const { createAbliterationTax, scorePair } = require('../server/willing/abliteration');
 const { PROMPTS, OBJECTIVE } = require('../server/willing');
 
-const t = H.suite('willing-jobs');
+const { suite } = H;
+const t = suite('willing-jobs');
 const ADULT = 'usr_01JAB2C3D4E5F6G7H8J9K0MNPQ';
 const PRICE = { in: { unit_price_usd: 1, source: 'https://example.test/prices' }, out: { unit_price_usd: 2, source: 'https://example.test/prices' } };
 const pool = { rateCardsFor: async () => PRICE };
@@ -27,12 +28,6 @@ function answer(item) {
 (async () => {
     const h = await H.boot();
     const service = H.token('test', H.ALL);
-    let failures = 0;
-    async function check(name, fn) {
-        try { await fn(); process.stdout.write(`  ✓ ${name}\n`); }
-        catch (e) { failures++; process.stdout.write(`  ✗ ${name}\n      ${(e.stack || String(e)).split('\n').slice(0, 8).join('\n      ')}\n`); }
-    }
-    try {
         await H.request(h.base, 'POST', '/api/v1/providers', { tok: service, body: {
             key: 'up', kind: 'openai', base_url: 'http://127.0.0.1:9/v1', auth_mode: 'none', default_model: 'base-1',
             capabilities: ['chat'], provider_access: 'UNVERIFIED', billing_profile: 'metered',
@@ -44,7 +39,7 @@ function answer(item) {
             } });
         }
 
-        await check('the willingness dry run lists every offer and its estimated cost, and is off by default', async () => {
+        t.test('the willingness dry run lists every offer and its estimated cost, and is off by default', async () => {
             const job = createWillingnessJob({ db: h.db, registry: h.registry, pool, config: { willingness: { enabled: true, budgetUsd: 10, adultSubject: ADULT, outputTokens: 64 } }, adultFor: async () => true, measure: async () => { throw new Error('must not run'); } });
             const plan = await job.plan();
             assert.strictEqual(plan.adult, true);
@@ -64,7 +59,7 @@ function answer(item) {
             assert.strictEqual(skipped.skipped, 'disabled');
         });
 
-        await check('the willingness run needs a budget and an adult account for an uncensored offer', async () => {
+        t.test('the willingness run needs a budget and an adult account for an uncensored offer', async () => {
             let called = 0;
             const broke = createWillingnessJob({ db: h.db, registry: h.registry, pool, config: { willingness: { enabled: true, budgetUsd: 0, adultSubject: ADULT } }, adultFor: async () => true, measure: async () => { called++; return { attempts: 1, refusals: 0, hedges: 0 }; } });
             const r = await broke.runOnce({ force: true });
@@ -78,7 +73,7 @@ function answer(item) {
             assert.strictEqual(called, 0);
         });
 
-        await check('the willingness run stores n, the refusal rate, the hedge rate and both intervals', async () => {
+        t.test('the willingness run stores n, the refusal rate, the hedge rate and both intervals', async () => {
             const job = createWillingnessJob({ db: h.db, registry: h.registry, pool, config: { willingness: { enabled: true, budgetUsd: 100, adultSubject: ADULT } }, adultFor: async () => true, measure: async ({ probes }) => ({ attempts: probes.length, refusals: 6, hedges: 2 }) });
             const report = await job.runOnce({ force: true });
             assert.ok(report.measured >= 2, JSON.stringify(report));
@@ -93,7 +88,7 @@ function answer(item) {
             assert.ok(Number(row.hedge_ci_lower) < Number(row.hedge_rate) && Number(row.hedge_ci_upper) > Number(row.hedge_rate));
         });
 
-        await check('the tax dry run lists both sides of every pair, and the run stores the difference', async () => {
+        t.test('the tax dry run lists both sides of every pair, and the run stores the difference', async () => {
             const tax = createAbliterationTax({ db: h.db, pool, config: { abliterationTax: { enabled: true, budgetUsd: 100, adultSubject: ADULT, outputTokens: 64 } }, adultFor: async () => true, ask: async ({ side, item }) => (side === 'abliterated' && OBJECTIVE.indexOf(item) < 5 ? 'not the answer' : answer(item)) });
             const plan = await tax.plan();
             assert.strictEqual(plan.adult, true);
@@ -113,7 +108,7 @@ function answer(item) {
             assert.ok(Number(row.ci_lower) < -0.25 && Number(row.ci_upper) > -0.25);
         });
 
-        await check('scorePair compares only the items both sides answered', () => {
+        t.test('scorePair compares only the items both sides answered', () => {
             const items = OBJECTIVE.slice(0, 4);
             const base = [answer(items[0]), answer(items[1]), null, answer(items[3])];
             const abl = [answer(items[0]), 'wrong', answer(items[2]), answer(items[3])];
@@ -124,7 +119,5 @@ function answer(item) {
             assert.ok(s.difference < 0);
             assert.ok(s.ci_lower <= s.difference && s.difference <= s.ci_upper);
         });
-    } finally { await h.stop(); }
-    process.stdout.write(failures ? `willing-jobs: ${failures} failed\n` : 'willing-jobs: all passed\n');
-    process.exit(failures ? 1 : 0);
+    await t.run();
 })();

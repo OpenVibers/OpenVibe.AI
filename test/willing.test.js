@@ -9,11 +9,12 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const H = require('./helpers');
+const { suite } = H;
 const floor = require('../server/policy/floor');
 const willing = require('../server/willing');
 const { classifyRefusal, classifyHedge, wilson, differenceInterval, scoreObjective } = willing;
 
-const t = H.suite('willing');
+const t = suite('willing');
 
 function scoreFixtures(file, classify, key, label) {
     const data = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'willing', file), 'utf8'));
