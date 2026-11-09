@@ -464,7 +464,14 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
         }
         if (!output.sources.length && !output.images.length) throw new AiError(502, 'source.unavailable', `no source answered for "${output.query}"`, { providers: output.providers });
         // Recorded like a provider call: DeepSeek's per-call price counts against the cost quotas and the daily usage.
-        const exec = { provider: 'research', model: 'megasource', usage: { input: 0, output: 0, cached: 0 }, cost: Number(output.usage && output.usage.cost_usd) || 0, synthetic: false, fallbackUsed: false, explain: ctx.taskChoice ? { task_choice: { task: ctx.taskChoice.task.name, requested: ctx.taskChoice.choice, answered: { model: `search/${answered || 'none'}`, source: 'openvibe' }, why: ctx.taskChoice.why, fallback_index: engineIndex } } : null };
+        const exec = { provider: 'research', model: 'megasource', usage: { input: 0, output: 0, cached: 0 }, cost: Number(output.usage && output.usage.cost_usd) || 0, synthetic: false, fallbackUsed: false, explain: ctx.taskChoice ? {
+            // The contract's explain needs an objective, a reason, what was selected and the candidates; a search
+            // task's candidates are its engines, and the one that answered is the selection.
+            objective: 'exact', policy: 'exact',
+            reasons: [`search task ${ctx.taskChoice.task.name}: ${answered} answered`],
+            selected: `search/${answered}`, candidates: [],
+            task_choice: { task: ctx.taskChoice.task.name, requested: ctx.taskChoice.choice, answered: { model: `search/${answered}`, source: 'openvibe' }, why: ctx.taskChoice.why, fallback_index: engineIndex },
+        } : null };
         return { output, exec };
     }
 
