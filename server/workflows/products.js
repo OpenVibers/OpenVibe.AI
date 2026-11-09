@@ -107,6 +107,7 @@ const workflows = [
         input_schema: OBJ({
             title: STR(300), topic: STR(300), space: STR(200), instruction: STR(4000),
             outline: ARR(STR(300), 30), pages: ARR(STR(200), 60), query: STR(200),
+            lang: { type: 'string', pattern: '^[a-z]{2,3}$' },
             sources: SOURCES(0),
         }, ['title']),
         output_schema: OBJ({
