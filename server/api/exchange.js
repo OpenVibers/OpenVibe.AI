@@ -35,8 +35,16 @@ function memo(fn, ttlMs, clock) {
     };
 }
 
-function exchangeRouter({ db, registry, pool, quotas = null, env = process.env, clock = { now: () => Date.now() }, config = null, presets, receipts, auth, log = console, ownEndpoints = null }) {
-    const catalog = createCatalog({ db, registry, pool, env, clock, config });
+function exchangeRouter({ db, registry, pool, quotas = null, env = process.env, clock = { now: () => Date.now() }, config = null, presets, receipts, auth, log = console, ownEndpoints = null, fetchImpl = globalThis.fetch, fidelity = null, share = null }) {
+    // Bench's provider-fidelity read (stage B5): optional and fail-soft. Off in tests, where no Bench runs.
+    const fidelitySource = fidelity || require('../exchange/fidelity').createFidelitySource({
+        url: config && config.bench ? config.bench.url : null, fetchImpl, clock, log,
+        timeoutMs: 2500, enabled: !config || config.nodeEnv !== 'test',
+    });
+    const catalog = createCatalog({ db, registry, pool, env, clock, config, fidelity: fidelitySource });
+    const trafficShare = share || require('../exchange/share').createShare({
+        db, clock, log, k: config && config.trafficShare ? config.trafficShare.k : 20,
+    });
     const usage = createUsage({ db, clock });
     // The price book's log: what a price was, what it became and when it was read.
     const priceStore = require('../pricebook/store').createPriceStore({ db, clock });
@@ -48,7 +56,7 @@ function exchangeRouter({ db, registry, pool, quotas = null, env = process.env, 
         return hits.get(key)();
     };
     const all = () => allFor(null);
-    const market = require('../exchange/market').createMarket({ db, registry, catalog: all, config, clock });
+    const market = require('../exchange/market').createMarket({ db, registry, catalog: all, config, clock, fidelity: fidelitySource });
     const usageByWindow = new Map();
     const r = express.Router();
 
@@ -242,6 +250,20 @@ function exchangeRouter({ db, registry, pool, quotas = null, env = process.env, 
                 })),
             });
         } catch (err) { return next(err); }
+    });
+
+    // Stage B8: the share of requests and tokens each model and each app category carried in a completed
+    // week. Aggregated only: cells below k requests are withheld, opt-outs are excluded, and no person, app
+    // or prompt is ever named.
+    r.get('/api/v1/exchange/share', publicCache(300), async (req, res, next) => {
+        try {
+            const week = req.query.week == null || req.query.week === '' ? null : String(req.query.week);
+            const out = await trafficShare.read({ week });
+            return res.json(out);
+        } catch (err) {
+            if (err && err.name === 'ShareError') return http.sendProblem(res, err.status, err.code, { detail: err.detail, ctx: req.ov });
+            return next(err);
+        }
     });
 
     r.get('/api/v1/exchange/usage', publicCache(60), async (req, res, next) => {
