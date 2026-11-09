@@ -133,12 +133,14 @@ function healthText(h, { breaker = {}, now = Date.now() } = {}) {
     const st = (h && h.state) || 'closed';
     if (st === 'closed') return { text: h && h.consecutive_failures ? `Working (${h.consecutive_failures} error${h.consecutive_failures === 1 ? '' : 's'} in a row so far)` : 'Working', cls: 'ok' };
     if (st === 'half_open') return { text: 'Testing again: the next request tries it once', cls: 'warn' };
-    const cooldown = h.exhausted_at ? Number(breaker.exhaustedCooldownMs || 600000) : Number(breaker.cooldownMs || 60000);
-    const at = h.opened_at ? new Date(Number(h.opened_at) + cooldown) : null;
+    const cooldown = h.exhausted_at ? Number(breaker.exhaustedCooldownMs || 900000) : Number(breaker.cooldownMs || 30000);
+    const at = h.retry_at ? new Date(Number(h.retry_at)) : h.opened_at ? new Date(Number(h.opened_at) + cooldown) : null;
     const hhmm = at && Number.isFinite(at.getTime()) ? `${at.toISOString().slice(11, 16)} UTC` : 'soon';
-    const why = h.exhausted_at ? 'the provider says the account is out of balance' : `${h.consecutive_failures || 1} error${(h.consecutive_failures || 1) === 1 ? '' : 's'} in a row`;
+    const why = h.status_reason || (h.failure_class === 'balance' || h.exhausted_at ? 'the provider says the account is out of credit'
+        : h.failure_class === 'auth' ? 'the key was refused'
+        : `${h.consecutive_failures || 1} error${(h.consecutive_failures || 1) === 1 ? '' : 's'} in a row`);
     void now;
-    return { text: `Paused after ${why}; tries again at ${hhmm}`, cls: 'bad' };
+    return { text: `Paused: ${why}; tries again at ${hhmm}`, cls: 'bad' };
 }
 /** Where a provider's key comes from, in words: entered here, the server's settings file, not set or not needed. */
 function keyText(p, hint) {

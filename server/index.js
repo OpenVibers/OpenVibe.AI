@@ -32,7 +32,7 @@ const { AiError } = require('./util');
 const { gracefulStop, telemetry } = require('openvibe-sdk/service');
 const { createPgTelemetrySink, startTelemetryRetention } = require('openvibe-sdk/telemetry');
 
-async function start({ searchFetch = null, config, db: givenDb = null, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, listen = true, credentialFetch = null, valkey = null, research = null, machineModels = null, variantEvidence = null, community: givenCommunity = null, communityEndpoints: givenEndpoints = null, webhooks: givenWebhooks = null, abuse: givenAbuse = null, memoryTransport = null, memoryLookup = null } = {}) {
+async function start({ searchFetch = null, config, db: givenDb = null, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, listen = true, credentialFetch = null, valkey = null, research = null, machineModels = null, variantEvidence = null, community: givenCommunity = null, communityEndpoints: givenEndpoints = null, webhooks: givenWebhooks = null, abuse: givenAbuse = null, memoryTransport = null, memoryLookup = null, ownerNotify = null } = {}) {
     config = config || load(env);
     schemas.configure(config.schemaCache);
     // PostgreSQL (ADR-035): opened and migrated here unless the caller (a test) hands in a migrated handle.
@@ -88,7 +88,9 @@ async function start({ searchFetch = null, config, db: givenDb = null, clock = {
     const offPeak = require('./pricebook/offpeak').createOffPeak({ db, clock });
     const creditGrants = require('./providers/credit-grants').createCreditGrants({ db, env, fetchImpl, clock });
     const sessionCookies = require('./session-cookies').createSessionCookies({ db, config, clock });
-    const pool = createProviderPool({ db, registry, config, clock, fetchImpl, env, log, credentialFetch, machineModels: machines, community, bench, variantEvidence, adultStatus, offPeak, creditGrants });
+    const pool = createProviderPool({ db, registry, config, clock, fetchImpl, env, log, credentialFetch, machineModels: machines, community, bench, variantEvidence, adultStatus, offPeak, creditGrants, ownerNotify });
+    // An open balance/auth circuit that was persisted by an earlier process is announced once (notified_at dedupes).
+    if (listen && config.nodeEnv !== 'test') pool.notifyOpenCircuits().catch((err) => log.warn(`[ai] owner alerts: ${err && err.message}`));
     // The hourly provider balance probe (server/providers/balance.js): a gauge for the operator alert, started
     // only when the service listens (never in tests) and off under a restore drill.
     const balance = require('./providers/balance').createBalanceProbe({ registry, config, env, fetchImpl, clock, log });
