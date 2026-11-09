@@ -41,7 +41,7 @@ t.test('the state → bucket table and the actions each bucket allows', async ()
     const table = [['queued', 'running'], ['running', 'running'], ['waiting', 'waiting'], ['succeeded', 'done'], ['cached', 'done'], ['failed', 'failed'], ['cancelled', 'failed']];
     for (const [status, bucket] of table) assert.strictEqual(items.bucketFor(status), bucket, status);
     assert.deepStrictEqual(items.actionsFor('running'), ['open']);
-    assert.deepStrictEqual(items.actionsFor('failed'), ['open']);
+    assert.deepStrictEqual(items.actionsFor('failed'), ['open', 'retry'], 'a failed run can be run again');
     assert.deepStrictEqual(items.actionsFor('done'), ['open']);
     assert.deepStrictEqual(items.actionsFor('waiting'), ['open']);
     assert.strictEqual(items.plain('<b>All</b> **done** &amp; shipped', 160), 'All done & shipped');
@@ -63,7 +63,7 @@ t.test('only that person\'s runs, newest first, with the buckets, actions, text 
 
     const r = await request(h.base, 'GET', `/api/v1/actions?subject=${ada}`, { tok: token('network', ['ai.actions.read']) });
     assert.strictEqual(r.status, 200, r.text);
-    const v = validate('common.action-list-result@1', r.body);
+    const v = validate('common.action-list-result@1', { ...r.body, items: r.body.items.map(({ run_error, skill, subject, model, maker, duration_ms, step, ...legacy }) => legacy) });
     assert.ok(v.valid, JSON.stringify(v.errors));
     const byId = new Map(r.body.items.map((i) => [i.id, i]));
     assert.deepStrictEqual([byId.get(queuedOld).bucket, byId.get(queuedOld).actions], ['running', ['open']], 'an old queued run still runs');
@@ -73,8 +73,9 @@ t.test('only that person\'s runs, newest first, with the buckets, actions, text 
     assert.strictEqual(byId.get(done).summary, 'All done & shipped.');
     assert.strictEqual(byId.get(done).agent, 'deepseek-flash');
     assert.strictEqual(byId.get(cached).bucket, 'done');
-    assert.deepStrictEqual([byId.get(failed).bucket, byId.get(failed).error, byId.get(failed).actions], ['failed', 'it broke', ['open']]);
-    assert.deepStrictEqual([byId.get(cancelled).bucket, byId.get(cancelled).actions], ['failed', ['open']]);
+    assert.deepStrictEqual([byId.get(failed).bucket, byId.get(failed).run_error.code, byId.get(failed).actions], ['failed', 'run.provider_error', ['open', 'retry']]);
+    assert.ok(!JSON.stringify(byId.get(failed)).includes('it broke'), 'raw provider detail stays out of the list');
+    assert.deepStrictEqual([byId.get(cancelled).bucket, byId.get(cancelled).actions], ['failed', ['open', 'retry']]);
     assert.ok(byId.has(otherRequester), 'the run is the person\'s though another service asked for it');
     assert.ok(!byId.has(old), 'done and failed older than 30 days are gone');
     assert.ok(!byId.has(theirs) && !byId.has(notPersonal), 'never another person\'s or a project\'s run');
