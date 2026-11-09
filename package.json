@@ -29,7 +29,7 @@
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "iovalkey": "^0.4.0",
-    "openvibe-contracts": "https://codeload.github.com/OpenVibers/OpenVibe.Contracts/tar.gz/8ed8d249d67a350b30dc5a7d8ca2af7deeab95f9",
+    "openvibe-contracts": "https://codeload.github.com/OpenVibers/OpenVibe.Contracts/tar.gz/ded08afe91f4e69ebea4c55bdcbd14e60ae8e92c",
     "openvibe-sdk": "https://codeload.github.com/OpenVibers/OpenVibe.SDK/tar.gz/refs/tags/v0.125.0",
     "openvibe-shared": "https://codeload.github.com/OpenVibers/OpenVibe.Shared/tar.gz/refs/tags/v4.177.0",
     "pg": "^8.23.0"
