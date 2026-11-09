@@ -109,7 +109,7 @@ function tokenCosts({ market = null, models = [], catalog = null } = {}) {
                         reliability: reading.reliability == null ? null : number(reading.reliability),
                         observed_at: reading.observed_at,
                         stale: Boolean(reading.stale),
-                        is_cheapest: Boolean(best && best.provider === reading.provider && best.hourly_usd === reading.hourly_usd && best.observed_at === reading.observed_at),
+                        is_cheapest: Boolean(!reading.stale && best && best.provider === reading.provider && best.hourly_usd === reading.hourly_usd && best.observed_at === reading.observed_at),
                         source: reading.source,
                         throughput_tokens_per_hour: throughput,
                         throughput_source: THROUGHPUT_SOURCE,

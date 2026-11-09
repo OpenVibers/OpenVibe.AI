@@ -52,11 +52,16 @@ t.test('the saved provider pages parse into the same reading shape', async () =>
     assert.ok(vast4090.reliability > 0 && vast4090.reliability <= 1);
     assert.match(vast4090.note, /storage/);
     assert.equal(lowest(bid, 'rtx-4090', 'spot').hourly_usd, 0.1466667);
+    const offer = { num_gpus: 1, gpu_name: 'RTX 4090', gpu_ram: 24576, dph_total: 1 };
+    for (const reliability of [null, undefined, '']) {
+        assert.strictEqual(marketLib.parseVast({ offers: [{ ...offer, reliability }] }, 'on_demand')[0].reliability, null);
+    }
+    assert.strictEqual(marketLib.parseVast({ offers: [{ ...offer, reliability: 0 }] }, 'on_demand')[0].reliability, 0);
 
     const runpod = marketLib.lowest(marketLib.parseRunpod(fixture('runpod-pricing.html')));
-    assert.equal(runpod.find((r) => r.gpu_key === 'h100' && r.kind === 'on_demand').hourly_usd, 2.89);
-    assert.equal(runpod.find((r) => r.gpu_key === 'h100' && r.kind === 'spot').hourly_usd, 1.99);
-    assert.equal(runpod.find((r) => r.gpu_key === 'rtx-4090' && r.kind === 'on_demand').hourly_usd, 0.89);
+    assert.equal(runpod.find((r) => r.gpu_key === 'h100' && r.kind === 'on_demand').hourly_usd, 1.99);
+    assert.ok(runpod.every((r) => r.kind === 'on_demand'), 'Community Cloud is not a spot quote');
+    assert.equal(runpod.find((r) => r.gpu_key === 'rtx-4090' && r.kind === 'on_demand').hourly_usd, 0.34);
 
     const salad = marketLib.lowest(marketLib.parseSalad(fixture('salad-pricing.html')));
     assert.equal(salad.find((r) => r.gpu_key === 'rtx-4090' && r.kind === 'on_demand').hourly_usd, 0.44);
@@ -87,10 +92,11 @@ t.test('the cache keeps the lowest reading per provider, card and kind', async (
     assert.equal(g('rtx-4090').on_demand.provider, 'vast');
     assert.equal(g('rtx-4090').on_demand.hourly_usd, 0.13590148148148148);
     assert.equal(g('rtx-4090').spot.hourly_usd, 0.1466667);
-    assert.equal(g('h100').on_demand.provider, 'tensordock');
+    assert.equal(g('h100').on_demand.provider, 'runpod');
     assert.equal(g('h100').spot.provider, 'vast');
     assert.equal(g('h100').spot.hourly_usd, 0.6666666666666666);
-    assert.ok(g('h200').on_demand && g('h200').spot);
+    assert.ok(g('h200').on_demand);
+    assert.strictEqual(g('h200').spot, null, 'the source has no H200 spot quote');
     assert.equal(await market.due(), false, 'a fresh read is not due again');
     now += 7 * 60 * 60 * 1000;
     assert.equal(await market.due(), true, 'the six-hour interval makes the next read due');
@@ -115,6 +121,9 @@ t.test('a source that fails keeps its last reading, marked stale', async () => {
     assert.equal(h200.on_demand.hourly_usd, before.hourly_usd);
     assert.equal(h200.on_demand.stale, true);
     assert.ok(h200.readings.length > 0, 'the last rows were not deleted');
+    const stale = structuredClone(goodReport);
+    for (const gpu of stale.gpus) for (const reading of gpu.readings) reading.stale = true;
+    assert.ok(tokenCosts({ market: stale, catalog }).every((row) => !row.is_cheapest), 'stale readings cannot claim the fresh price floor');
 });
 
 t.test('the implied per-token cost uses the catalog throughput and the cheapest comparable API', async () => {
@@ -125,7 +134,7 @@ t.test('the implied per-token cost uses the catalog throughput and the cheapest 
     ];
     // RunPod is stale from the previous test; the 3090 and 4090 rows are Vast and fresh.
     const rows = tokenCosts({ market: goodReport, models, catalog });
-    assert.equal(rows.length, 26, 'both models, both fitting cards, both kinds and every provider reading');
+    assert.equal(rows.length, 22, 'both models, both fitting cards, both kinds and every provider reading');
     const row = (key, gpu, kind, provider) => rows.find((r) => r.model_key === key && r.gpu === gpu && r.kind === kind && r.provider === provider);
     const p = row('deepseek-r1-32b', 'RTX 4090', 'on_demand', 'vast');
     assert.equal(p.is_cheapest, true);
@@ -151,13 +160,13 @@ t.test('the admin API exposes both to the GPUs and supply console sections', asy
     const gpus = await request(h.base, 'GET', '/api/v1/admin/console/gpus', { tok: read });
     assert.equal(gpus.status, 200, gpus.text);
     assert.equal(gpus.body.market.sources.length, 5);
-    assert.equal(gpus.body.token_costs.length, 26);
+    assert.equal(gpus.body.token_costs.length, 22);
     assert.ok(gpus.body.state && Array.isArray(gpus.body.state.models));
     const supply = await request(h.base, 'GET', '/api/v1/admin/console/supply', { tok: read });
     assert.equal(supply.status, 200, supply.text);
     assert.equal(supply.body.dry_run, true);
     assert.equal(supply.body.market.read_at, gpus.body.market.read_at);
-    assert.equal(supply.body.token_costs.length, 26);
+    assert.equal(supply.body.token_costs.length, 22);
 });
 
 t.test('close', async () => {

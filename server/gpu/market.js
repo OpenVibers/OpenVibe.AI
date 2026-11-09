@@ -68,6 +68,7 @@ function usd(value) {
 }
 
 function reliabilityOf(value) {
+    if (value == null || value === '') return null;
     const n = Number(value);
     return Number.isFinite(n) && n >= 0 && n <= 1 ? n : null;
 }
@@ -117,7 +118,7 @@ function parseVast(bytes, kind) {
     return out;
 }
 
-/** RunPod's public table: the secure column is the on-demand hour, the community column is the cheaper tier. */
+/** RunPod publishes on-demand rates for both Secure and Community Cloud; neither column is a spot quote. */
 function parseRunpod(html) {
     const out = [];
     for (const chunk of String(html).split(/class="gpu_table-row"/).slice(1)) {
@@ -130,12 +131,12 @@ function parseRunpod(html) {
         const on = reading(target, 'on_demand', secure, {
             note: 'secure cloud (verified hosts)', variant: name.trim(), source: 'https://www.runpod.io/pricing',
         });
-        const spot = reading(target, 'spot', community, {
-            note: 'community cloud (third-party hosts, cheaper and less reliable; not RunPod spot)',
+        const communityRate = reading(target, 'on_demand', community, {
+            note: 'community cloud on-demand (third-party hosts; no spot quote published)',
             variant: name.trim(), source: 'https://www.runpod.io/pricing',
         });
         if (on) out.push(on);
-        if (spot) out.push(spot);
+        if (communityRate) out.push(communityRate);
     }
     return out;
 }

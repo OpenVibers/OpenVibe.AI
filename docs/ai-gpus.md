@@ -96,7 +96,7 @@ providers' own pages by `server/gpu/market.js` (migration `0061_gpu_market_price
 | Source | Public page | What it publishes |
 | --- | --- | --- |
 | Vast.ai | `POST https://console.vast.ai/api/v0/bundles/` | the offer search (on demand and the minimum interruptible bid), with region and reliability |
-| RunPod | `https://www.runpod.io/pricing` | the secure (on demand) and community (cheaper, less reliable) columns |
+| RunPod | `https://www.runpod.io/pricing` | the Secure and Community Cloud on-demand columns (neither is a spot quote) |
 | Salad | `https://salad.com/pricing/` | High (never preempted) and Lowest (most interruptible) priority tiers |
 | TensorDock | `https://www.tensordock.com/` | the public "from" prices for its most popular enterprise cards |
 | CloudRift | `https://www.cloudrift.ai/pricing` | on-demand rates; H100 and H200 are quoted on request |
