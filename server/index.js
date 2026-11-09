@@ -57,6 +57,9 @@ async function start({ searchFetch = null, config, db: givenDb = null, clock = {
     // API key and a monthly cap in the owner settings (ai.gpus). The reconciler rents, health-checks and
     // scales the instances to zero; it never spends past the cap.
     const gpus = require('./gpu/provisioner').createGpuProvisioner({ db, registry, settings, clock, fetchImpl, env, log });
+    // The public GPU marketplace prices (server/gpu/market.js): a due-based public-page reader for the console's
+    // supply view. It never signs in or rents; a failed source keeps its last reading, marked stale.
+    const gpuMarket = require('./gpu/market').createGpuMarket({ db, config, clock, fetchImpl, log });
     const vault = require('./vault').createVault({ settings, clock, log });
     await require('./vault').migrate({ db, config, settings, log }).catch((err) => log.warn(`[Vault] migration failed: ${err.message}`));
     await vault.load().catch((err) => log.warn(`[Vault] ${err.message}`));
@@ -209,7 +212,7 @@ async function start({ searchFetch = null, config, db: givenDb = null, clock = {
         clientSecret: env.OV_OAUTH_CLIENT_SECRET, fetch: fetchImpl,
     }) : null;
     const benchEvents = createBenchEvents({ bench, accountData, accountSend, config, log, fetchImpl, clientSecret: env.OV_OAUTH_CLIENT_SECRET });
-    const app = createApp({ choices, searchFetch, config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, grants, vault, settings, benchEvents, runBudgets, memory, memoryImport, memoryServices, memorySharing, community, endpoints, webhooks, presets, receipts, balance, creditGrants, sessionCookies, gpus, abuse, priceBook, ownEndpoints, refusal, willingness, abliterationTax, batches });
+    const app = createApp({ choices, searchFetch, config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, grants, vault, settings, benchEvents, runBudgets, memory, memoryImport, memoryServices, memorySharing, community, endpoints, webhooks, presets, receipts, balance, creditGrants, sessionCookies, gpus, gpuMarket, abuse, priceBook, ownEndpoints, refusal, willingness, abliterationTax, batches });
     let jwks = null;
     let keyLoaded = Promise.resolve(null);
     if (!keys.pinned && config.nodeEnv !== 'test') {
@@ -263,6 +266,8 @@ async function start({ searchFetch = null, config, db: givenDb = null, clock = {
     if (listen && config.nodeEnv !== 'test' && memorySharing) memorySharing.start();
     // The price book reads the providers' listings once a week; it never starts in test mode or under a drill.
     if (listen && config.priceBook && config.priceBook.enabled) priceBook.start();
+    // The public GPU price reader: public pages only, due-based, off in tests and under a drill.
+    if (listen && config.gpuMarket && config.gpuMarket.enabled) gpuMarket.start();
     // The refusal job asks the offers the same questions once a week; it never starts in test mode (the
     // tests drive it by hand) and never under a restore drill.
     if (listen && config.refusal && config.refusal.enabled) refusal.start();
@@ -311,6 +316,7 @@ async function start({ searchFetch = null, config, db: givenDb = null, clock = {
         memoryJobs.stop();
         if (memorySharing) memorySharing.stop();
         priceBook.stop();
+        gpuMarket.stop();
         refusal.stop();
         willingness.stop();
         abliterationTax.stop();
@@ -332,7 +338,7 @@ async function start({ searchFetch = null, config, db: givenDb = null, clock = {
         if (!givenDb) await db.close();
     }
 
-    return { config, db, registry, pool, quotas, tiers, cache, fetcher, engine, runs, keys, keyLoaded, auth, app, server, bench, benchEvents, memory, memoryJobs, memoryServices, memorySharing, priceBook, refusal, willingness, abliterationTax, batches, batcher, credits: creditsRef, settings, vault, community, endpoints, webhooks, gpus, abuse, ownEndpoints, close };
+    return { config, db, registry, pool, quotas, tiers, cache, fetcher, engine, runs, keys, keyLoaded, auth, app, server, bench, benchEvents, memory, memoryJobs, memoryServices, memorySharing, priceBook, refusal, willingness, abliterationTax, batches, batcher, credits: creditsRef, settings, vault, community, endpoints, webhooks, gpus, gpuMarket, abuse, ownEndpoints, close };
 }
 
 if (require.main === module) {

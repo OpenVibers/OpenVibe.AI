@@ -23,6 +23,13 @@ t.test('the builder\'s prompt: the SDK reference, and the current files when cha
     assert.match(sys, /OV\.fn\(name, body\)/);
     assert.match(sys, /never request\.user or request\.ov/, 'the visitor is on ov, not on the request');
     assert.ok(!/There is no server code/.test(sys));
+    assert.match(sys, /design\.component@1/, 'the registry is named as the interface vocabulary');
+    const withComponents = render(sys, { components: 'sheet — A modal task surface. Web: kit.sheet()' });
+    assert.match(withComponents, /mark each major part with data-ov-component/);
+    assert.match(withComponents, /sheet — A modal task surface/);
+    assert.ok(!/\{\{#components\}\}/.test(withComponents), 'the section is rendered away');
+    const prepWithRegistry = PREPARE['space.app.build']({ prompt: 'a pizza poll', components: 'sheet — A modal task surface.' });
+    assert.strictEqual(prepWithRegistry.vars.components, 'sheet — A modal task surface.');
     const prep = PREPARE['space.app.build']({ prompt: 'a poll about pizza' });
     assert.ok(prep.jsonSchema && prep.jsonSchema.properties.files && !/maxLength|maxItems/.test(JSON.stringify(prep.jsonSchema)), 'the model answers in the uncapped, non-strict schema');
     const fresh = render(tpl('space.app.build').user_prompt, prep.vars);

@@ -446,6 +446,21 @@ function load(env = process.env) {
             thresholdPct: Number(env.AI_PRICE_BOOK_THRESHOLD_PCT || 20) / 100,
         },
 
+        // ── Public GPU marketplace prices (server/gpu/market.js) ──
+        // The small job that reads Vast.ai, RunPod, Salad, TensorDock and CloudRift's public pages for the cards the
+        // provisioner uses (and the next sizes up). It never signs in, rents or stops anything. The readings are
+        // cached in gpu_market_prices; a failed source keeps its last rows, marked stale. Off under a drill and in
+        // test mode, where tests replay saved pages.
+        gpuMarket: {
+            enabled: bool(env.AI_GPU_MARKET, !bool(env.AI_DRILL, false) && nodeEnv !== 'test'),
+            // How long a reading stays fresh, and how often the job looks whether a refresh is due.
+            intervalMs: Math.max(3600000, int(env.AI_GPU_MARKET_INTERVAL_MS, 6 * 60 * 60 * 1000)),
+            tickMs: Math.max(60000, int(env.AI_GPU_MARKET_TICK_MS, 60 * 60 * 1000)),
+            firstTickMs: Math.max(1000, int(env.AI_GPU_MARKET_FIRST_TICK_MS, 2 * 60 * 1000)),
+            staleMs: Math.max(3600000, int(env.AI_GPU_MARKET_STALE_MS, 12 * 60 * 60 * 1000)),
+            timeoutMs: Math.max(1000, int(env.AI_GPU_MARKET_TIMEOUT_MS, 20000)),
+        },
+
         // ── Hourly provider balance probe (server/providers/balance.js) ──
         // Each active provider with a balance API (DeepSeek today) is asked GET <origin>/user/balance and the reading
         // is exposed as ai_provider_balance_usd{provider} on GET /metrics. Off under a restore drill (AI_DRILL=1).

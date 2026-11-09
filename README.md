@@ -844,9 +844,11 @@ through an OpenAI-compatible listener and registers it on the existing endpoint-
   is a space's own AI (`OV.ai.ask` in the space SDK): the maker's instructions under the platform's rules, on route
   `space.ask` (an alias of `default.chat`), on behalf of the visitor, so it counts against their daily allowance.
 
-  `overview.source` says which (`local_model`, `paid`, `extractive`), and `gaps` lists what is missing (no local
-  model, no speech-to-text, no budget). The output is not cached: callers keep it. Live's grant names
-  `media.analyze`.
+  The builder's prompt can carry OpenVibe.Design's public `design.component@1` registry in a `components` input
+  (Space reads and caches it): the definitions are then the interface vocabulary and the answer marks each major
+  part with `data-ov-component`. `overview.source` says which (`local_model`, `paid`, `extractive`), and `gaps`
+  lists what is missing (no local model, no speech-to-text, no budget). The output is not cached: callers keep it.
+  Live's grant names `media.analyze`.
 - **Direct operations** — `ai.chat|generate|summarize|classify|extract|enrich|embed|image`.
 
 ## MegaSource research
@@ -1082,7 +1084,7 @@ Part of the [OpenVibe network](https://openvibe.network). Built in the open by [
 <!-- versions:start -->
 - openvibe-contracts: v0.375.0
 - openvibe-sdk: v0.125.0
-- openvibe-shared: v4.178.0
+- openvibe-shared: v4.179.0
 <!-- versions:end -->
 
 ### Exchange search engines

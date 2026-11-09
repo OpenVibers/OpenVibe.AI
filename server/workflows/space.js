@@ -60,6 +60,10 @@ const templates = [
             SDK_REFERENCE,
             FUNCTIONS_REFERENCE,
             '',
+            '{{#components}}The OpenVibe component registry (design.component@1) is your interface vocabulary. Build the interface from these parts, keep their anatomy, states and keyboard behaviour, and mark each major part with data-ov-component="<name>":',
+            '{{components}}',
+            '{{/components}}',
+            '',
             'How you build:',
             '- Prefer ONE self-contained index.html with inline <style> and <script>. Use more files only when asked; never more than 6, and index.html is always one of them.',
             '- Make it work completely: real logic, no placeholders, no "TODO", no lorem ipsum. Handle loading, empty and error states, and the signed-out visitor (show what works without signing in and a clear "Sign in with OpenVibe" button for the rest).',
@@ -99,7 +103,7 @@ const workflows = [
     {
         key: 'space.app.build', name: 'Space: build or change a space', namespace: 'space',
         description: 'From what a person asks for (and the current files when changing a space): name, description, AI instructions, the SDK features used, and the files.',
-        input_schema: OBJ({ prompt: STR(4000), name: STR(40), current: ARR(FILE, MAX_FILES) }, ['prompt']),
+        input_schema: OBJ({ prompt: STR(4000), name: STR(40), current: ARR(FILE, MAX_FILES), components: STR(20000) }, ['prompt']),
         output_schema: OBJ({ name: STR(40), description: STR(400), instructions: STR(4000), capabilities: ARR({ type: 'string', enum: CAPABILITIES }, 4), files: ARR(FILE, MAX_FILES) }),
         steps: [{ kind: 'llm', template: 'space.app.build', operation: 'generate', output: 'json', prepare: 'space.app.build', postprocess: 'space.app.build', params: { max_tokens: 16000, timeout_ms: 180000 } }],
         default_route: 'space.build', cache_mode: 'none', metadata: { seed: true },
@@ -155,7 +159,7 @@ const uncapped = (schema) => JSON.parse(JSON.stringify(schema, (k, v) => (k === 
 const PREPARE = {
     'space.app.build'(input) {
         const current = (input.current || []).map((f) => `--- ${f.path} ---\n${f.content}`).join('\n\n');
-        return { vars: { prompt: input.prompt, name: input.name || '', current }, jsonSchema: uncapped(workflows.find((w) => w.key === 'space.app.build').output_schema) };
+        return { vars: { prompt: input.prompt, name: input.name || '', current, components: input.components || '' }, jsonSchema: uncapped(workflows.find((w) => w.key === 'space.app.build').output_schema) };
     },
 };
 // A JSON answer that came back as text (a fenced block, or prose around the object).

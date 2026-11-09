@@ -449,6 +449,7 @@ const exchangeOffer = {
         requests_7d: integer({ minimum: 0 }), requests_today: integer({ minimum: 0 }),
         cached_7d: integer({ minimum: 0, description: 'Cached answers (no provider call) in the window, counted apart from requests_7d' }),
         cached_today: integer({ minimum: 0 }),
+        cache_hit_share_7d: nullable('number', { minimum: 0, maximum: 1, description: 'Of the prompt tokens this offer\'s attempts reported in the window, the share the provider served from its own prompt cache (0.4 is 40 %). Null below 20 attempts or with no reported input tokens, never 0.' }),
         data_policy: nullable('object', { properties: { trains: nullable('boolean'), retention_days: nullable('integer'), region: nullable('string'), anonymized: nullable('boolean', { description: 'The provider says the request is anonymised before the model sees it' }) } }),
         refusal_rate: nullable('number', { minimum: 0, maximum: 1, description: 'The share of the published probe set this offer refused (0.75 is three probes out of four). null when nobody measured this offer, never 0.' }),
         refusal_measured_on: nullable('string', { description: 'The day the refusal rate was measured' }),
@@ -465,6 +466,7 @@ const exchangeModel = {
         modalities: arrayOf(str()), description: nullable('string'),
         requests_7d: integer({ minimum: 0 }), requests_today: integer({ minimum: 0 }),
         cached_7d: integer({ minimum: 0 }), cached_today: integer({ minimum: 0 }), community: { type: 'boolean' },
+        cache_hit_share_7d: nullable('number', { minimum: 0, maximum: 1, description: 'The prompt-cache share over this model\'s offers in the window (cached prompt tokens / reported prompt tokens). Null when no offer has enough attempts to measure one.' }),
         offers: arrayOf(exchangeOffer),
     },
 };
