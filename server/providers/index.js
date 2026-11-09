@@ -511,13 +511,23 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         await putCircuit.run(saved);
         await syncProviderHealth(key);
         if (state === 'open' && (failure.class === 'balance' || failure.class === 'auth') && !notified) {
-            const sent = await alertOwner(key, modelKey, failure.class);
-            if (sent) {
-                saved.notified_at = now;
-                await putCircuit.run(saved);
-            }
+            await announceOnce(key, modelKey, failure.class, now);
         }
         return { ...failure, opened: state === 'open', state, opened_at: openedAt, retry_at: retryAt, backoff_ms: backoff };
+    }
+
+    /**
+     * Announce an open circuit at most once: the database row is claimed before the push, so two
+     * requests that fail together cannot both send. A failed push releases the claim for a later try.
+     */
+    async function announceOnce(key, model, failureClass, at = clock.now()) {
+        const claimed = await db.prepare('UPDATE provider_circuits SET notified_at = ? WHERE provider_key = ? AND model_key = ? AND notified_at IS NULL')
+            .run(at, key, String(model || ''));
+        if (!claimed || !claimed.changes) return false;
+        if (await alertOwner(key, model, failureClass)) return true;
+        await db.prepare('UPDATE provider_circuits SET notified_at = NULL WHERE provider_key = ? AND model_key = ? AND notified_at = ?')
+            .run(key, String(model || ''), at);
+        return false;
     }
 
     /** One owner message per open balance/auth circuit, with the provider's own class, never a request body. */
@@ -535,9 +545,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         const rows = await db.prepare("SELECT * FROM provider_circuits WHERE state = 'open' AND failure_class IN ('balance', 'auth') AND notified_at IS NULL").all();
         let sent = 0;
         for (const row of rows) {
-            if (!await alertOwner(row.provider_key, row.model_key, row.failure_class)) continue;
-            await db.prepare('UPDATE provider_circuits SET notified_at = ? WHERE provider_key = ? AND model_key = ?').run(clock.now(), row.provider_key, row.model_key);
-            sent++;
+            if (await announceOnce(row.provider_key, row.model_key, row.failure_class)) sent++;
         }
         return sent;
     }
