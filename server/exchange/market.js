@@ -28,7 +28,8 @@ function buildOffers({ providers = [], rows = [], changes = [], catalogue = {}, 
         if (publicKeys.has(row.provider_key) && (ownUrls.has(row.cost?.source) || ownUrls.has(row.metadata?.price_book?.source))) records.set(recordKey(row.provider_key, row.model_key), row);
     }
     for (const observed of observations) {
-        const key = [...records.keys()].find(k => {
+        const exactKey = recordKey(observed.provider_key, observed.model_key);
+        const key = records.has(exactKey) ? exactKey : [...records.keys()].find(k => {
             const r = records.get(k);
             return r.provider_key === observed.provider_key && bare(r.model_key) === bare(observed.model_key);
         }) || recordKey(observed.provider_key, observed.model_key);
@@ -54,7 +55,7 @@ function buildOffers({ providers = [], rows = [], changes = [], catalogue = {}, 
             provider_model: row.model_key, name: row.display_name || row.model_key, kind: kindOf(row),
             price: { in: num(row.cost?.in_per_mtok), out: num(row.cost?.out_per_mtok), cached: num(row.cost?.cached_per_mtok), currency: 'USD', per: '1M tokens' },
             price_source: webUrl(row.cost?.source), price_checked_at: row.cost?.verified_at || facts.checked || null,
-            routed: routed.some(o => o.provider === p.key && bare(o.model) === bare(row.model_key)),
+            routed: routed.some(o => o.provider === p.key && String(o.model).toLowerCase() === String(row.model_key).toLowerCase()),
             uncensored: seed?.m.uncensored === true || presets.find(preset => preset.key === p.key)?.uncensored === true,
             provider_access: p.provider_access || 'UNVERIFIED', field_sources: {},
         };
