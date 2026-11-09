@@ -1,0 +1,11 @@
+{
+  "data": [
+    {
+      "id": "uncensored",
+      "pricing": {
+        "input": 0.15,
+        "output": 0.5
+      }
+    }
+  ]
+}

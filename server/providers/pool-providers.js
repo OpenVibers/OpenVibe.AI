@@ -45,9 +45,10 @@
 
 /** The day the prices, the privacy labels and the model lists below were read. */
 const CHECKED = '2026-11-06';
+const NEW_CHECKED = '2026-11-09';
 
 /** The keys of the ten providers, in the order the router should prefer them when the price is equal. */
-const PROVIDER_KEYS = ['qwen', 'kimi', 'glm', 'minimax', 'deepinfra', 'novita', 'featherless', 'refuseless', 'abliteration', 'openrouter'];
+const PROVIDER_KEYS = ['qwen', 'kimi', 'glm', 'minimax', 'deepinfra', 'novita', 'featherless', 'refuseless', 'abliteration', 'openrouter', 'venice', 'abliteratedmodels', 'uplinkswitch', 'chutes', 'siliconflow', 'nebius', 'together', 'fireworks', 'groq', 'cerebras', 'sambanova', 'baseten', 'hyperbolic'];
 
 /**
  * What a provider says it does with a prompt.
@@ -635,6 +636,42 @@ const PROVIDERS = [
         // the key. No model is seeded here: a price we did not read from OpenRouter is not one of ours to publish.
         models: [],
     },
+    ...[
+        ['venice', 'Venice AI', 'https://api.venice.ai/api/v1', 'venice-uncensored-1-2', 'https://docs.venice.ai/overview/pricing', 'PRIVATE', 'UNVERIFIED', { in: 0.20, cached: null, out: 0.90 }, 131072, true],
+        ['abliteratedmodels', 'abliteratedmodels.cc', 'https://api.abliteratedmodels.cc/v1', 'uncensored', 'https://abliteratedmodels.cc/es/', 'UNKNOWN', 'UNVERIFIED', { in: 0.15, cached: null, out: 0.50 }, 100000, true],
+        ['uplinkswitch', 'UplinkSwitch', 'https://api.uplinkswitch.ai/v1', 'abliterated', 'https://uplinkswitch.ai/acceptable-use', 'UNKNOWN', 'UNVERIFIED', { in: null, cached: null, out: null }, null, true],
+        ['chutes', 'Chutes', 'https://llm.chutes.ai/v1', 'Qwen/Qwen3-32B-TEE', 'https://www.chutes.ai/pricing', 'UNKNOWN', 'UNVERIFIED', { in: 0.104, cached: null, out: 0.416 }, 40960, false],
+        ['siliconflow', 'SiliconFlow', 'https://api.siliconflow.com/v1', 'Qwen/Qwen3-32B', 'https://docs.siliconflow.com/', 'UNKNOWN', 'UNVERIFIED', { in: null, cached: null, out: null }, null, false],
+        ['nebius', 'Nebius Token Factory', 'https://api.tokenfactory.nebius.com/v1', 'Qwen/Qwen3-30B-A3B-Instruct-2507', 'https://nebius.com/services/token-factory/models/qwen-models-inference', 'UNKNOWN', 'UNVERIFIED', { in: 0.10, cached: null, out: 0.30 }, 262144, false],
+        ['together', 'Together AI', 'https://api.together.xyz/v1', 'openai/gpt-oss-120b', 'https://www.together.ai/pricing', 'UNKNOWN', 'RESTRICTED', { in: 0.15, cached: null, out: 0.60 }, 131072, false],
+        ['fireworks', 'Fireworks AI', 'https://api.fireworks.ai/inference/v1', 'accounts/fireworks/models/gpt-oss-120b', 'https://fireworks.ai/models', 'UNKNOWN', 'UNVERIFIED', { in: 0.15, cached: null, out: 0.60 }, 131072, false],
+        ['groq', 'Groq', 'https://api.groq.com/openai/v1', 'openai/gpt-oss-120b', 'https://console.groq.com/docs/model/openai/gpt-oss-120b', 'UNKNOWN', 'UNVERIFIED', { in: 0.15, cached: 0.075, out: 0.60 }, 131072, false],
+        ['cerebras', 'Cerebras', 'https://api.cerebras.ai/v1', 'gpt-oss-120b', 'https://api.cerebras.ai/public/v1/models', 'UNKNOWN', 'UNVERIFIED', { in: null, cached: null, out: null }, 131072, false],
+        ['sambanova', 'SambaNova', 'https://api.sambanova.ai/v1', 'gpt-oss-120b', 'https://cloud.sambanova.ai/plans/pricing', 'UNKNOWN', 'UNVERIFIED', { in: 0.22, cached: null, out: 0.59 }, 131072, false],
+        ['baseten', 'Baseten', 'https://inference.baseten.co/v1', 'openai/gpt-oss-120b', 'https://www.baseten.co/pricing/', 'UNKNOWN', 'UNVERIFIED', { in: null, cached: null, out: null }, 131072, false],
+        ['hyperbolic', 'Hyperbolic', 'https://api.hyperbolic.xyz/v1', 'openai/gpt-oss-120b', 'https://docs.hyperbolic.xyz/docs/hyperbolic-ai-inference-pricing', 'UNKNOWN', 'UNVERIFIED', { in: null, cached: null, out: null }, 131072, false],
+    ].map(([key, display_name, base_url, model_key, source, privacyLabel, provider_access, prices, context_window, uncensored]) => {
+        const privateTier = privacyLabel === 'PRIVATE';
+        return {
+            key, display_name, base_url, default_model: model_key, timeout_ms: 60000,
+            capabilities: ['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich', 'json', 'tools'],
+            provider_access, priority: 40, ...(uncensored ? { uncensored: true } : {}),
+            privacy: privacy({ label: privateTier ? 'private' : 'anonymized', terms_url: privateTier ? source : null,
+                wording: privateTier ? 'Venice states prompts and generations are never stored or logged, and are not used to train future models for this model.' : 'Retention and training commitments were not confirmed on the provider page; unknown.' }),
+            data_policy: policy({ trains: privateTier ? false : null, retention: privateTier ? 'none' : null,
+                retention_note: privateTier ? 'zero data retention stated for this model' : null, terms: privateTier ? source : null,
+                resale: 'UNVERIFIED; owner must verify resale rights before enabling managed access' }),
+            models: [{ model_key, display_name: model_key, family: uncensored ? 'abliterated' : key,
+                context_window, cost: { in_per_mtok: prices.in, cached_per_mtok: prices.cached, out_per_mtok: prices.out },
+                source, checked: NEW_CHECKED, supports: { json: true, tools: true, streaming: true, vision: false },
+                quantization: null, refusal_rate: null, ...(uncensored ? { uncensored: true } : {}),
+                note: prices.in == null || prices.out == null ? 'Provider price not confirmed from its own price listing; kept null pending pricebook review.' : null },
+            ...(key === 'chutes' ? [{ model_key: 'unsloth/Mistral-Nemo-Instruct-2407-TEE', display_name: 'Mistral Nemo Instruct 2407 TEE', family: 'mistral', context_window: 131072,
+                cost: { in_per_mtok: 0.0245, cached_per_mtok: null, out_per_mtok: 0.0978 }, source, checked: NEW_CHECKED,
+                supports: { json: true, tools: true, streaming: true, vision: false }, quantization: null, refusal_rate: null }] : []),
+            ],
+        };
+    }),
 ];
 
 const byKey = new Map(PROVIDERS.map((p) => [p.key, p]));

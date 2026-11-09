@@ -561,7 +561,13 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         const p = await registry.getProvider(providerKey);
         if (!p || isFreeProvider(p)) return null;
         const row = model ? await registry.getModel(providerKey, model) : null;
-        return rates.buildCards({ providerKey, model: model || null, row, pricing: config.pricing });
+        const markup = Number(p.metadata && p.metadata.markup_percent) || 0;
+        const override = row && row.metadata && row.metadata.owner_override && row.metadata.owner_override.cost;
+        const baseCost = row ? { ...row.cost, ...(override || {}) } : null;
+        const billable = row && override ? { ...row, cost: baseCost } : row;
+        const cards = rates.buildCards({ providerKey, model: model || null, row: billable, pricing: config.pricing });
+        if (!cards || markup <= 0) return cards;
+        return Object.fromEntries(Object.entries(cards).map(([kind, card]) => [kind, { ...card, unit_price_usd: Number(card.unit_price_usd) * (1 + markup / 100) }]));
     }
     async function priceFor(providerKey, model) {
         const cards = await rateCardsFor(providerKey, model);
@@ -1117,7 +1123,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
      */
     async function executeOnMachine(cred, operation, req, ctx = {}) {
         const completing = operation === 'complete';
-        if (!completing && !['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich'].includes(operation)) throw new AiError(422, 'credential.unsupported', `a person's own machine answers text only, not ${operation}`);
+        if (!completing && !['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich', 'image'].includes(operation)) throw new AiError(422, 'credential.unsupported', `a person's own machine answers text only, not ${operation}`);
         if (req.image) throw new AiError(422, 'credential.unsupported', 'a person\'s own machine reads no pictures yet');
         const wanted = ctx.role || roleOfRoute(ctx.routeKey);
         const model = (wanted && cred.models[wanted]) || cred.models.chat;
@@ -1170,7 +1176,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         const messaging = operation === 'messages';
         const anthropicFormat = PROVIDER_KIND[cred.provider] === 'anthropic' || cred.provider === 'anthropic' || cred.provider === 'custom';
         if (messaging && !anthropicFormat) throw new AiError(422, 'credential.unsupported', `the ${cred.provider} credential does not speak the Messages API`);
-        if (!messaging && !completing && !['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich'].includes(operation)) throw new AiError(422, 'credential.unsupported', `a person's own key is used for text only, not ${operation}`);
+        if (!messaging && !completing && !['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich', 'image'].includes(operation)) throw new AiError(422, 'credential.unsupported', `a person's own key is used for text only, not ${operation}`);
         const guardedFetch = credentialFetch || require('./guarded-fetch').guardedFetch;
         // The person's model for this role: the run's input.role, else the Live role its route names (live.director).
         const wanted = ctx.role || roleOfRoute(ctx.routeKey);
@@ -1198,7 +1204,8 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         const timeoutMs = Math.max(1000, Math.min(req.timeoutMs || 60000, 120000));
         // The person's own key (BYOK) is never a managed resale offer: the disclosure says CUSTOMER_BYOK.
         const ownFacts = { resolved_model: `${cred.provider}/${model}`, revision: null, deployment: cred.providerKey, provider_access: 'CUSTOMER_BYOK', rate_version: null, policy: 'byok', fallback_reason: null };
-        const call = messaging ? a.messages : completing ? a.complete : a.chat;
+        const call = operation === 'image' ? a.image : messaging ? a.messages : completing ? a.complete : a.chat;
+        if (typeof call !== 'function') throw new AiError(422, 'credential.unsupported', 'this provider cannot generate images');
         let streamed = false;
         const onDelta = (completing || messaging) && typeof req.onDelta === 'function' ? (d) => { streamed = true; req.onDelta(d); } : null;
         let lastErr = null;
@@ -1287,6 +1294,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
     }
 
     async function execute(route, operation, req, ctx = {}) {
+        if (ctx.taskChoice) return require('../choices/execute').executeChoice({ execute, registry, poolRates: rateCardsFor, maxAttempts: config.providerRetries + 1, route, operation, req, ctx });
         const contentPolicy = ctx.contentPolicy || 'standard';
         const refuseFloor = (r) => new AiError(403, 'policy.floor_refused', r.detail, { rule: r.rule, policy: contentPolicy });
         if (ctx.credential) {

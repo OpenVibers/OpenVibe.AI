@@ -32,7 +32,7 @@ const { AiError, sendError } = require('../util');
 const { CAPS, namespaceAllowed, appOrCap } = require('../auth');
 const { appMayRun, appAttribution, DIRECT_OPS } = require('../apps');
 
-function runsRouter({ runs, registry, auth, config, log = console }) {
+function runsRouter({ choices = null, runs, registry, auth, config, log = console }) {
     const r = express.Router();
     const create = auth.personOrCap(CAPS.runCreate);
     const read = auth.personOrCap(CAPS.runRead, CAPS.runCreate, CAPS.usageRead);
@@ -46,7 +46,9 @@ function runsRouter({ runs, registry, auth, config, log = console }) {
             if (!appMayRun(req.principal, workflowKey)) throw new AiError(403, 'capability.namespace_denied', `an app may only run its own app.${req.principal.projectKey}.* namespace, not ${workflowKey}`);
             return;
         }
-        if (!namespaceAllowed(req.principal, workflowKey)) throw new AiError(403, 'capability.namespace_denied', `this token may not run ${workflowKey}`);
+        // content.devblog is the Blog writer's public workflow name; it uses the existing blog grant.
+        const permissionKey = workflowKey === 'content.devblog' ? 'blog.devblog.write' : workflowKey;
+        if (!namespaceAllowed(req.principal, permissionKey)) throw new AiError(403, 'capability.namespace_denied', `this token may not run ${workflowKey}`);
     }
 
     /**
@@ -62,6 +64,7 @@ function runsRouter({ runs, registry, auth, config, log = console }) {
 
     async function createAndRespond(req, res, body, waitMs) {
         if (req.principal.kind === 'app') body = appBody(req.principal, body, req.body);
+        if (body.task && !body.workflow) { const task = await choices?.task(String(body.task)); if (!task) throw new AiError(404, 'task.not_found', 'unknown task'); body = { ...body, workflow: task.workflow }; }
         checkNamespace(req, String(body.workflow || ''));
         const idem = body.idempotency_key || req.ov.idempotencyKey || undefined;
         // BA1: the caller's wait goes with the run, so a background run answers inside it (a Flex tier that is
@@ -70,7 +73,9 @@ function runsRouter({ runs, registry, auth, config, log = console }) {
         const run = await runs.explained(await runs.wait(created, waitMs));
         const status = !created.created ? 200 : (runs.TERMINAL.has(run.status) ? 201 : 202);
         if (status === 202) res.setHeader('Location', `/api/v1/runs/${run.id}`);
-        return res.status(status).json({ run, replayed: !created.created || undefined });
+        // The run's numbered sources with it: a product that files the output (a wiki draft) needs their URLs and
+        // licences to attach the citations its sentences used, without a second call.
+        return res.status(status).json({ run, citations: await runs.citations(run.id), replayed: !created.created || undefined });
     }
 
     /**
@@ -79,6 +84,7 @@ function runsRouter({ runs, registry, auth, config, log = console }) {
      */
     async function createAndStream(req, res, body, waitMs) {
         if (req.principal.kind === 'app') body = appBody(req.principal, body, req.body);
+        if (body.task && !body.workflow) { const task = await choices?.task(String(body.task)); if (!task) throw new AiError(404, 'task.not_found', 'unknown task'); body = { ...body, workflow: task.workflow }; }
         checkNamespace(req, String(body.workflow || ''));
         const idem = body.idempotency_key || req.ov.idempotencyKey || undefined;
         let opened = false;

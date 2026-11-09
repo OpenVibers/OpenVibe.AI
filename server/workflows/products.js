@@ -17,6 +17,9 @@ const STR = (n) => ({ type: 'string', maxLength: n });
 const OBJ = (props, required) => ({ type: 'object', additionalProperties: false, required: required || Object.keys(props), properties: props });
 const ARR = (items, max = 20) => ({ type: 'array', items, maxItems: max });
 const CLAIM = OBJ({ text: STR(600), citations: CITES });
+// A sentence with at least one source: the wiki writer's promise, checked by the output schema.
+const CITED = { ...CITES, minItems: 1 };
+const SENTENCE = OBJ({ text: STR(2000), citations: CITED });
 // What a wiki page is about (wiki.generate_space): the wiki's own page groups follow from it.
 const PAGE_KINDS = ['overview', 'character', 'person', 'episode', 'season', 'work', 'place', 'group', 'object', 'concept', 'event', 'production', 'reception', 'list', 'other'];
 
@@ -37,6 +40,8 @@ const templates = [
         'Topic: {{topic}}{{#audience}}\nAudience: {{audience}}{{/audience}}\nPages at most: {{max_pages}}\n\n'),
     productTemplate('wiki.generate_page', 'Wiki: write a page', 'Write one page of the wiki from the numbered sources, encyclopedic and engaging, the way a well-kept wiki reads. `summary`: one or two plain sentences saying what the subject is. `lead`: the opening paragraph or two, in Markdown. `sections`: follow the requested outline where the sources support it (skip or merge headings they do not), each with a `heading` and a Markdown `body` of one or more full paragraphs (a list where it reads better), each citing its sources; about 500 to 1500 words in all when the sources allow, shorter when they do not. Link other pages of this wiki, and only titles from the list of pages, as [[Exact Title]] the first time each is mentioned. `infobox`: up to twelve key facts as `label` and `value` (for example First appearance, Voiced by, Created by, Release date, Location), each cited; the Wikidata facts are good material. `images`: up to three pictures from the numbered list of pictures that clearly show this page\'s subject, judged by their title and description (never a picture of something or someone else, and none when no picture fits), each with its `index`, a short factual `caption`, and `section`: the heading it illustrates, or lead for the page\'s main picture. Never write source numbers or "[n]" in the text.', 'wiki.write',
         'Page title: {{title}}\nWiki topic: {{topic}}{{#outline}}\nRequested outline: {{json outline}}{{/outline}}\n\nPages of this wiki (link only these, as [[Title]]):\n{{pages_block}}\n\n{{#images_block}}Pictures (by number):\n{{images_block}}\n\n{{/images_block}}'),
+    productTemplate('content.wiki', 'Wiki: write or improve an article', 'Write or improve one wiki article from the numbered sources — the sources the article already cites, then what web search found. Every sentence of the article must cite the source numbers it rests on in its `citations` array (integers, e.g. [0, 2]); a sentence with no source does not go in. `lead` is the opening sentences; `sections` are the article\'s headings, each with its sentences; `infobox` is up to twelve key facts as label, type (text, number, date, url, boolean, page, media), value and citations, taken from the structured facts (Wikidata and the sources) and never guessed. `summary` is one or two plain sentences saying what the subject is. Link other pages of this wiki only as [[Exact Title]] from the list of pages. Never write source numbers or "[n]" in the text itself: the citations arrays carry them. encyclopedic and plain, the way a well-kept wiki reads.', 'wiki.write',
+        'Article: {{title}}\nWiki: {{space}}\nTopic: {{topic}}{{#instruction}}\nRequest: {{instruction}}{{/instruction}}{{#outline_block}}\nOutline to follow where the sources support it:\n{{outline_block}}{{/outline_block}}{{#pages_block}}\nPages of this wiki (link only these, as [[Title]]):\n{{pages_block}}{{/pages_block}}{{#facts_block}}\nStructured facts (use them for the infobox; cite their source):\n{{facts_block}}{{/facts_block}}\n\n'),
     productTemplate('blog.draft_post', 'Blog: draft a post', 'Draft a blog post in Markdown for the brief. Claims of fact must cite sources; opinion and framing need none. If there are no sources, write only what needs no facts and list the facts you would need in gaps.', 'background.json',
         'Topic: {{topic}}{{#brief}}\nBrief: {{brief}}{{/brief}}{{#tone}}\nTone: {{tone}}{{/tone}}{{#audience}}\nAudience: {{audience}}{{/audience}}\n\n'),
     productTemplate('blog.write_digest', 'Blog: write a desk digest', 'Write one digest post for an OpenVibe.Blog desk from the numbered sources (the items its sources published in the period). Pick the items a reader of this desk would most want to know about, about twelve at most, and skip routine, minor or duplicate ones. Group them into two to five sections, most important first. Each section is a list of short paragraphs, one story per paragraph, two to four plain sentences saying what happened and why it matters to this desk\'s readers, exactly as the sources state it; each paragraph lists the numbers of the sources it rests on in its `citations`. Never write source numbers, "(Source n)" or brackets in the text itself. Neutral and readable: no opinion stated as fact, no hype, no advice, no predictions. Name prices, dates and numbers only as the sources give them. List in gaps only what a reader would miss (an item you could not make sense of, a missing date or price). title: a headline naming the one or two biggest stories, at most 90 characters, without the words digest, desk, roundup or snapshot and without a date. dek: one sentence about the period.', 'background.json',
@@ -94,6 +99,29 @@ const workflows = [
         }),
         default_route: 'wiki.write',
         steps: [{ kind: 'llm', template: 'wiki.generate_page', operation: 'generate', output: 'json', prepare: 'wiki.page', cite: true, params: { max_tokens: 7000, temperature: 0.4, timeout_ms: 170000 } }],
+    },
+    {
+        // The wiki writer (rich-content plan §5): research, then every sentence cited and the infobox from facts.
+        // OpenVibe.Wiki files the answer as a pending proposal; the workflow itself never publishes.
+        key: 'content.wiki', name: 'Write or improve a wiki article', namespace: 'wiki',
+        input_schema: OBJ({
+            title: STR(300), topic: STR(300), space: STR(200), instruction: STR(4000),
+            outline: ARR(STR(300), 30), pages: ARR(STR(200), 60), query: STR(200),
+            lang: { type: 'string', pattern: '^[a-z]{2,3}$' },
+            sources: SOURCES(0),
+        }, ['title']),
+        output_schema: OBJ({
+            title: STR(300), summary: STR(500),
+            lead: ARR(SENTENCE, 12),
+            sections: ARR(OBJ({ heading: STR(160), sentences: ARR(SENTENCE, 40) }), 14),
+            infobox: ARR(OBJ({ label: STR(80), type: { enum: ['text', 'number', 'date', 'url', 'boolean', 'page', 'media'] }, value: STR(500), citations: CITED }), 14),
+            citations: CITES, gaps: GAPS,
+        }),
+        default_route: 'wiki.write',
+        steps: [
+            { kind: 'research' },
+            { kind: 'llm', template: 'content.wiki', operation: 'generate', output: 'json', prepare: 'content.wiki', cite: true, params: { max_tokens: 8000, temperature: 0.4, timeout_ms: 180000 } },
+        ],
     },
     {
         key: 'blog.draft_post', name: 'Draft a blog post', namespace: 'blog',

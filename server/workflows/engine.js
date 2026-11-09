@@ -35,6 +35,7 @@ const schemas = require('../schemas');
 const { PREPARE, POSTPROCESS } = require('./hooks');
 const modelCatalog = require('../providers/model-catalog');
 const { buildBody, buildCompleteBody } = require('../providers/openai');
+const { PROVIDERS: ENGINES } = require('../research');
 
 /** The last user message's text, for the queue's own record of what one item asks (never sent as-is). */
 function lastUserText(messages) {
@@ -429,19 +430,56 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
 
     /** research: no model call. A developer app's run leaves the paid web search out (its DeepSeek calls are ours). */
     async function researchStep(step, input, wf, run, ctx) {
-        let output;
+        let output, answered = null, engineIndex = 0, candidates = [];
         try {
             // Search's own web ladder calls this endpoint for DeepSeek and Wikipedia. It must not be asked back
             // (Search -> AI research -> Search): every other caller gets the fabric first, Search keeps DeepSeek.
             const fromSearch = ctx.requesterType === 'service' && ctx.requesterId === 'search';
-            output = await megasource().gather(input, { signal: ctx.signal, allowPaid: !ctx.appRun, allowFabric: !fromSearch });
+            if (ctx.taskChoice?.task.kind === 'search') {
+                // A search task runs the engines its choice names, in order: the owner's saved order when the owner's
+                // default won, else the chosen engine and the task's fallbacks. A disabled engine is never called, and
+                // DeepSeek (the one paid engine) is skipped under a cost ceiling, which has no per-run bound for it.
+                const plan = ctx.taskChoice;
+                if (plan.choice.source !== 'openvibe') throw new AiError(422, 'choice.unsupported', 'search uses OpenVibe search engines only');
+                const engineOf = (model) => String(model).replace(/^search\//, '');
+                const asked = engineOf(plan.choice.model);
+                const ordered = plan.why === 'owner' && plan.search_engines.length
+                    ? plan.search_engines.filter((e) => e.enabled).map((e) => e.engine)
+                    : [...new Set([asked, ...plan.fallbacks.map((c) => engineOf(c.model))])];
+                if (!ordered.length) throw new AiError(422, 'choice.unavailable', 'no search engine is enabled for this task');
+                candidates = ordered.map((engine) => ({
+                    provider: engine, model: `search/${engine}`,
+                    eligible: engine !== 'deepseek' || plan.max_cost_usd == null,
+                    excluded_reason: engine === 'deepseek' && plan.max_cost_usd != null ? 'cost ceiling has no per-run bound' : null,
+                }));
+                const images = plan.task.kind === 'search' && plan.task.name !== 'search.web';
+                for (const engine of ordered) {
+                    if (ENGINES.includes(engine) === false) throw new AiError(422, 'choice.unavailable', `unknown search engine ${engine}`);
+                    if (engine === 'deepseek' && plan.max_cost_usd != null) continue;
+                    const got = await megasource().gather({ ...input, providers: [engine], images }, { signal: ctx.signal, allowPaid: !ctx.appRun && plan.max_cost_usd == null, allowFabric: false });
+                    if (images ? got.images.length : got.sources.length) { output = got; answered = engine; engineIndex = ordered.indexOf(engine); break; }
+                    output = got;
+                }
+                if (answered == null) throw new AiError(402, 'choice.cost_ceiling', 'no enabled search engine answered within this task’s ceiling');
+            } else output = await megasource().gather(input, { signal: ctx.signal, allowPaid: !ctx.appRun, allowFabric: !fromSearch });
         } catch (err) {
             if (err && err.status === 422) throw new AiError(422, 'input.invalid', err.message);
             throw err;
         }
-        if (!output.sources.length && !output.images.length) throw new AiError(502, 'source.unavailable', `no source answered for "${output.query}"`, { providers: output.providers });
+        if (!output.sources.length && !output.images.length) {
+            // A writer already has its article's sources: web search finding nothing new is not a failed run.
+            if (Array.isArray(input.sources) && input.sources.length) output = { ...output, sources: input.sources };
+            else throw new AiError(502, 'source.unavailable', `no source answered for "${output.query}"`, { providers: output.providers });
+        }
         // Recorded like a provider call: DeepSeek's per-call price counts against the cost quotas and the daily usage.
-        const exec = { provider: 'research', model: 'megasource', usage: { input: 0, output: 0, cached: 0 }, cost: Number(output.usage && output.usage.cost_usd) || 0, synthetic: false, fallbackUsed: false, explain: null };
+        const exec = { provider: 'research', model: 'megasource', usage: { input: 0, output: 0, cached: 0 }, cost: Number(output.usage && output.usage.cost_usd) || 0, synthetic: false, fallbackUsed: false, explain: ctx.taskChoice ? {
+            // The contract's explain needs an objective, a reason, what was selected and the candidates; a search
+            // task's candidates are its engines, and the one that answered is the selection.
+            objective: 'exact',
+            reasons: [`search task ${ctx.taskChoice.task.name}: ${answered} answered`],
+            selected: `search/${answered}`, candidates,
+            task_choice: { task: ctx.taskChoice.task.name, requested: ctx.taskChoice.choice, answered: { model: `search/${answered}`, source: 'openvibe' }, why: ctx.taskChoice.why, fallback_index: engineIndex },
+        } : null };
         return { output, exec };
     }
 
@@ -452,7 +490,21 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
         return { cited: [], gaps: gaps.slice(0, 20), read: (output && output.sources ? output.sources.length : 0) };
     }
 
-    const STEP = { llm: llmStep, passthrough: passthroughStep, complete: completeStep, messages: messagesStep, transcribe: transcribeStep, embed: embedStep, image: imageStep, media_analysis: mediaAnalysis.step, research: researchStep };
+    async function devblogStep(step, input, wf, run, ctx) {
+        const usage = { input: 0, output: 0, cached: 0 };
+        let cost = 0, savedUsd = 0, last;
+        const output = await require('./devblog').execute({ input, call: async (phase, payload) => {
+            last = await llmStep({ kind: 'llm', template: `content.devblog.${phase}`, output: 'json', operation: 'generate', params: { max_tokens: 6000, temperature: 0.3 } }, { payload: JSON.stringify(payload) }, wf, run, ctx);
+            const valid = schemas.validate(last.jsonSchema, last.output);
+            if (!valid.valid) throw new AiError(502, 'output.invalid', 'Invalid devblog agent response');
+            for (const key of Object.keys(usage)) usage[key] += last.exec.usage[key] || 0;
+            cost += last.exec.cost || 0; savedUsd += Number(last.exec.savedUsd) || 0;
+            return last.output;
+        } });
+        return { output, exec: { ...last.exec, usage, cost, savedUsd }, route: last.route };
+    }
+
+    const STEP = { devblog: devblogStep, llm: llmStep, passthrough: passthroughStep, complete: completeStep, messages: messagesStep, transcribe: transcribeStep, embed: embedStep, image: imageStep, media_analysis: mediaAnalysis.step, research: researchStep };
 
     /**
      * Run a workflow. ctx: { signal, logRequest, debugRaw, inputHash }
@@ -466,10 +518,22 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
         let saved = 0;
         let exec = null;
         let jsonSchema = null;
+        let researchOut = null;
         for (const step of wf.steps) {
             const fn = STEP[step.kind];
             if (!fn) throw new AiError(500, 'workflow.broken', `unknown step kind ${step.kind}`);
             last = await fn(step, input, wf, run, ctx);
+            // A research step feeds the steps after it: what it read joins input.sources, with the caller's own
+            // sources first and no URL twice, so the writer cites the numbered list it was shown.
+            if (step.kind === 'research' && last && last.output) {
+                researchOut = last.output;
+                const before = Array.isArray(input.sources) ? input.sources : [];
+                const seen = new Set(before.map((s) => s && s.url).filter(Boolean));
+                const added = (Array.isArray(last.output.sources) ? last.output.sources : []).filter((s) => s && s.url && !seen.has(s.url));
+                if (added.length) input = { ...input, sources: [...before, ...added] };
+                // The structured facts research read (Wikidata and the sources) fill a wiki article's infobox.
+                if (Array.isArray(last.output.facts) && last.output.facts.length) input = { ...input, facts: last.output.facts };
+            }
             if (last.exec) {
                 exec = last.exec;
                 usage.input += exec.usage.input || 0;
@@ -493,7 +557,16 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
         }));
         return {
             output: last.output, citations, jsonSchema,
-            grounding: wf.steps.some((s) => s.kind === 'research') ? researchGrounding(last.output) : groundingOf(last.output, sources.length, citeStep),
+            grounding: researchOut
+                ? (wf.steps.length === 1
+                    ? researchGrounding(researchOut)
+                    : (() => {
+                        // A workflow that researches and then writes: what was read, and what the answer cites.
+                        const read = researchGrounding(researchOut);
+                        const wrote = groundingOf(last.output, sources.length, citeStep);
+                        return { ...read, cited: wrote.cited, gaps: [...read.gaps, ...wrote.gaps].slice(0, 20) };
+                    })())
+                : groundingOf(last.output, sources.length, citeStep),
             synthetic: Boolean(exec && exec.synthetic),
             provider: exec ? exec.provider : null, model: exec ? exec.model : null, fallbackUsed: Boolean(exec && exec.fallbackUsed),
             ...(exec && exec.result && exec.result.label ? { contentPolicy: exec.result.policy || 'uncensored', label: exec.result.label } : {}),

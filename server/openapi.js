@@ -63,6 +63,8 @@ const runBody = (required = []) => ({
     type: 'object', ...(required.length ? { required } : {}),
     properties: {
         workflow: str({ description: 'The workflow key, e.g. ai.generate' }), version: integer({ minimum: 1 }),
+        task: str({ description: 'A registered task (GET /api/v1/tasks); its workflow runs with the task’s resolved choice. Required instead of workflow when no workflow is named.' }),
+        choice: ref('Choice'),
         input: { type: 'object' }, idempotency_key: str({ minLength: 8, maxLength: 128 }),
         target: { type: 'object' }, attribution: { type: 'object' }, on_behalf_of: ref('SubjectRef'),
         options: { type: 'object', description: 'cache, debug, and the latency class: latency (interactive | background | batch); a batch-class run also takes deadline_hours (1-72, the default is 24)' }, route: { type: 'object', description: '{ provider, model } — one offer from GET /api/v1/routes?operation=…' },
@@ -80,6 +82,28 @@ const PATHS = {};
 function route(method, p, operation) {
     (PATHS[p] = PATHS[p] || {})[method] = operation;
 }
+
+// ── AI tasks and choices (rich-content plan §1) ──────────────────────────────────────────────
+route('get', '/tasks', {
+    operationId: 'listTasks', summary: 'The task catalogue: every named piece of AI work', tags: ['choices'], security: [],
+    description: 'Public. A task names its service, its kind (text, code, vision, image, search), one sentence and its built-in default choice. A service registers its own with POST /api/v1/tasks.',
+    responses: { 200: json('The catalogue', { type: 'object', required: ['tasks'], properties: { tasks: arrayOf(ref('Task')) } }), ...errors([429]) },
+});
+route('post', '/tasks', {
+    operationId: 'registerTask', summary: 'Register a task in the caller’s own namespace', tags: ['choices'], security: SERVICE,
+    description: 'ai.workflow.manage. Only a service token registers tasks, and only under its own namespace: the workflow is the service’s own or a general AI workflow (ai.generate, ai.complete, ai.image, research.gather). A registration is audited.',
+    requestBody: body({ type: 'object', required: ['name', 'kind', 'sentence', 'default'], properties: {
+        name: str({ pattern: '^[a-z][a-z0-9_-]*\\.[a-z0-9_.-]{1,100}$' }), kind: str({ enum: ['text', 'code', 'vision', 'image', 'search'] }),
+        sentence: str({ maxLength: 300 }), default: ref('Choice'), workflow: str(),
+    } }),
+    responses: { 200: json('The registered task', { type: 'object', required: ['task'], properties: { task: ref('Task') } }), 422: problem, ...errors([400, 401, 403]) },
+});
+route('get', '/choices', {
+    operationId: 'getChoice', summary: 'The resolved model for a task, and the options to choose from', tags: ['choices'], security: [],
+    description: 'The person\'s own token is optional: with none, the signed-out default resolves. Returns the choice, why that step picked it (run, saved, kind, owner, builtin), the owner\'s recommendation and the options grouped by source (openvibe, keys, machines). Price is an estimate for one run; a missing measurement stays null, never zero.',
+    parameters: [query('task', str({ pattern: '^[a-z][a-z0-9_-]*\\.[a-z0-9_.-]{1,100}$' }), 'The task (design.icon). Omitted, the route answers 404.')],
+    responses: { 200: json('The resolved choice and the options', ref('ChoiceView')), 401: problem, 404: problem, 422: problem, ...errors([429]) },
+});
 
 // ── The apps a person allows to use their own key (L55 C3) ───────────────────────────────────
 route('get', '/allowed-keys/{subject}', {
@@ -448,6 +472,32 @@ const exchangeModel = {
         offers: arrayOf(exchangeOffer),
     },
 };
+route('get', '/exchange/market', {
+    operationId: 'exchangeMarket', summary: 'Every own-page model and provider offer, enabled or not',
+    tags: ['exchange'], security: [], servers: [{ url: 'https://api.openvibe.exchange' }],
+    description: 'Public, cached 60 seconds. exchange.market@1 lists provider-page prices per million tokens, routing and preset flags, and model metadata with per-field sources. Metadata refreshes daily; a failed read retains the last copy marked stale. Observed prices may differ from approved routing prices.',
+    parameters: [query('limit', integer({ minimum: 1, maximum: 500, default: 100 })),
+        query('cursor', str(), 'Continue with next_cursor and the same filters'), query('maker', str()),
+        query('open_weights', { type: 'boolean' }), query('kind', str({ enum: ['chat', 'embedding', 'stt', 'image'] }))],
+    responses: { 200: json('Market offers with price and metadata provenance', {
+        type: 'object', required: ['$schema', 'generated_at', 'metadata', 'total_models', 'total_offers', 'offers', 'next_cursor'],
+        properties: {
+            $schema: { const: 'exchange.market@1' }, generated_at: str({ format: 'date-time' }),
+            total_models: integer({ minimum: 0 }), total_offers: integer({ minimum: 0 }), next_cursor: nullable('string'),
+            metadata: { type: 'object', properties: { source: str({ format: 'uri' }), checked_at: nullable('string', { format: 'date-time' }), stale: { type: 'boolean' } } },
+            offers: arrayOf({ type: 'object', properties: {
+                model: str(), provider: str(), provider_name: str(), provider_model: str(), name: str(), kind: str(),
+                price: { type: 'object', properties: { in: nullable('number'), out: nullable('number'), cached: nullable('number'), currency: { const: 'USD' }, per: { const: '1M tokens' } } },
+                price_source: nullable('string', { format: 'uri' }), price_checked_at: nullable('string'),
+                routed: { type: 'boolean' }, uncensored: { type: 'boolean' }, provider_access: str(),
+                maker: nullable('string'), context: nullable('number'), max_output: nullable('number'),
+                open_weights: nullable('boolean'), licence: nullable('string'), release_date: nullable('string'), knowledge_cutoff: nullable('string'),
+                modalities: { type: ['object', 'null'], properties: { input: arrayOf(str()), output: arrayOf(str()) } },
+                field_sources: { type: 'object', additionalProperties: str({ format: 'uri' }) },
+            } }),
+        },
+    }), ...errors([422]) },
+});
 route('get', '/exchange/catalog', {
     operationId: 'exchangeCatalog', summary: 'Every model and every offer that serves it', tags: ['exchange'], security: [],
     description: 'Public. The live offers: measured status (up/degraded/down, with a plain reason and since when), price in, out and cached per million tokens, measured p50/p95, uptime, requests, and the provider data policy. Speed and uptime are read from the last seven days of real runs (time to the first token where a receipt recorded one, else the answering attempt\'s total); cached answers are counted apart and excluded from speed, uptime and requests. Uptime is succeeded / (succeeded + failed); null when no data, never 0. A prepaid offer has no price (free: true); free_tier says whether the free allowance and the anonymous Try it may use an offer at all (a named AI_FREE_PROVIDERS source under the output price ceiling). Models carry a kind (chat, embedding, stt, image); chat lists must use kind "chat" and never mix embeddings or speech-to-text.',
@@ -749,7 +799,7 @@ function openapi() {
             contact: { name: 'OpenVibers', url: 'https://github.com/OpenVibers/OpenVibe.AI', email: 'contact@openvibe.network' },
         },
         servers: [{ url: SITE }],
-        tags: ['runs', 'operations', 'actions', 'exchange', 'presets', 'receipts'].map((name) => ({ name })),
+        tags: ['runs', 'operations', 'actions', 'choices', 'exchange', 'presets', 'receipts'].map((name) => ({ name })),
         components: {
             securitySchemes: {
                 bearer: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT', description: 'A Network service or user token for audience openvibe.ai carrying the route\'s capability (ai.run.create, ai.run.read, ai.actions.read)' },
@@ -757,6 +807,26 @@ function openapi() {
             },
             schemas: {
                 SubjectRef: { type: 'object', required: ['type', 'id'], properties: { type: str(), id: str() } },
+                Choice: { type: 'object', required: ['model', 'source'], additionalProperties: false, properties: {
+                    model: str({ pattern: '^[a-zA-Z0-9._:/@+\\-]{1,200}$' }),
+                    source: str({ enum: ['openvibe', 'keys', 'machines'], description: 'OpenVibe’s supply, the person’s own key, or one of their machines through OpenVibe Link' }),
+                    machine: str({ pattern: '^(any|dev_[0-9A-HJKMNP-TV-Z]{26})$', description: 'only a machine choice names one' }),
+                } },
+                Task: { type: 'object', required: ['name', 'kind', 'sentence', 'default'], properties: {
+                    name: str(), service: str(), kind: str({ enum: ['text', 'code', 'vision', 'image', 'search'] }),
+                    sentence: str(), default: ref('Choice'), workflow: str(),
+                } },
+                ChoiceView: { type: 'object', required: ['task', 'choice', 'why', 'options'], properties: {
+                    task: ref('Task'), choice: ref('Choice'), recommended: ref('Choice'),
+                    why: str({ enum: ['run', 'saved', 'kind', 'owner', 'builtin'], description: 'which resolution step picked the choice' }),
+                    options: { type: 'object', properties: { openvibe: arrayOf(ref('ChoiceOption')), keys: arrayOf(ref('ChoiceOption')), machines: arrayOf(ref('ChoiceOption')) } },
+                    fallbacks: arrayOf(ref('Choice')), max_cost_usd: nullable('number'), adult: { type: 'boolean' },
+                } },
+                ChoiceOption: { type: 'object', required: ['model', 'source', 'name'], properties: {
+                    model: str(), source: str({ enum: ['openvibe', 'keys', 'machines'] }), name: str(), maker: nullable('string'),
+                    price_estimate_usd: nullable('number', { description: 'an estimate for one run (1,000 input and 1,000 output tokens); null when no price was measured' }),
+                    speed_ms: nullable('number'), quality: nullable('number'), adult: { type: 'boolean' }, machine: str(), machine_name: str(),
+                } },
                 WorkflowRef: { type: 'object', required: ['key', 'version'], properties: { key: str(), version: integer() } },
                 Run: { type: 'object', required: ['id', 'status', 'workflow'], properties: {
                     id: str(), status: { type: 'string', enum: ['queued', 'running', 'succeeded', 'failed', 'cancelled'] },
@@ -770,6 +840,8 @@ function openapi() {
                     latency_clamped: nullable('object', { description: '{ asked, used }: the class the caller asked for and the class the run really took' }),
                     usage: { type: 'object', properties: { tokens_in: nullable('integer'), tokens_out: nullable('integer'), cost_usd: nullable('number'), attempts: nullable('integer'), usage_sample_ids: nullable(arrayOf(str())) } },
                     explain: nullable('object'), citations_count: nullable('integer'), grounding: nullable('object'),
+                    choice: nullable('object', { description: 'the choice the run was started with (a task run or an explicit choice)' }),
+                    answered: nullable('object', { description: '{ model, source, machine? }: what actually answered' }),
                     retry_of: nullable('string'), idempotency_key: nullable('string'), trace_id: nullable('string'),
                     created_at: str({ format: 'date-time' }), started_at: nullable('string', { format: 'date-time' }), finished_at: nullable('string', { format: 'date-time' }),
                 } },

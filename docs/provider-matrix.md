@@ -45,9 +45,50 @@
 | Prime Intellect | REST / custom | `http` | No | `UNVERIFIED` | Terms URL returned 404. | https://www.primeintellect.ai/terms (404) | 2026-11-03 |
 | Self-hosted vLLM / SGLang / llama.cpp / Ollama | OpenAI-compatible | `openai` / `http` | N/A | `OWN_DEPLOYMENT` | Open-source runtimes deployed on OpenVibe-owned or customer-authorized infrastructure; no upstream resale constraint. | Various OS licenses | 2026-11-03 |
 
+## Pool presets added 2026-11-09
+
+These presets are seeded disabled in practice until the owner adds a provider key. Commercial access remains `UNVERIFIED` until an executed agreement explicitly permits managed resale; Together stays `RESTRICTED` because its current terms prohibit resale without authorization. `null` privacy facts mean the provider did not state them on the pages checked. A listed price is the provider's own published list price per 1M tokens, not an aggregator quote.
+
+| Provider | Base URL | Privacy facts confirmed | Access default | Own provider listing / terms |
+|---|---|---|---|---|
+| Venice AI | `https://api.venice.ai/api/v1` | Venice Uncensored 1.2: private, zero retention, not used for training | `UNVERIFIED` | [Model page and price](https://docs.venice.ai/models/venice-uncensored-1-2) |
+| abliteratedmodels.cc | `https://api.abliteratedmodels.cc/v1` | Retention and training unstated; its own site says lawful adult and fictional content is allowed, with minor sexual content excluded | `UNVERIFIED` | [Provider model and pricing](https://abliteratedmodels.cc/) |
+| UplinkSwitch | `https://api.uplinkswitch.ai/v1` | Adult content between fictional adults permitted for 18+ where legal; no retention facts confirmed | `UNVERIFIED` | [Acceptable use](https://uplinkswitch.ai/acceptable-use) |
+| Chutes | `https://llm.chutes.ai/v1` | Retention/training unstated; TEE flag is not treated as a retention promise | `UNVERIFIED` | [Pricing](https://www.chutes.ai/pricing) |
+| SiliconFlow | `https://api.siliconflow.com/v1` | Retention/training unstated | `UNVERIFIED` | [Provider docs](https://docs.siliconflow.com/) |
+| Nebius Token Factory | `https://api.tokenfactory.nebius.com/v1` | Retention/training unstated | `UNVERIFIED` | [Model pricing](https://nebius.com/services/token-factory/models/qwen-models-inference) |
+| Together AI | `https://api.together.xyz/v1` | Retention/training unstated here; terms prohibit resale absent authorization | `RESTRICTED` | [Terms](https://www.together.ai/terms-of-service) |
+| Fireworks AI | `https://api.fireworks.ai/inference/v1` | Retention/training unstated | `UNVERIFIED` | [Model catalog](https://fireworks.ai/models) |
+| Groq | `https://api.groq.com/openai/v1` | Retention/training unstated | `UNVERIFIED` | [Model pricing and limits](https://console.groq.com/docs/model/openai/gpt-oss-120b) |
+| Cerebras | `https://api.cerebras.ai/v1` | Retention/training unstated | `UNVERIFIED` | [Public model catalog](https://api.cerebras.ai/public/v1/models) |
+| SambaNova | `https://api.sambanova.ai/v1` | Retention/training unstated | `UNVERIFIED` | [Pricing](https://cloud.sambanova.ai/plans/pricing) |
+| Baseten | `https://inference.baseten.co/v1` | Retention/training unstated | `UNVERIFIED` | [Pricing](https://www.baseten.co/pricing/) |
+| Hyperbolic | `https://api.hyperbolic.xyz/v1` | Retention/training unstated | `UNVERIFIED` | [Inference pricing](https://docs.hyperbolic.xyz/docs/hyperbolic-ai-inference-pricing) |
+
+## Cheapest confirmed open-weight prices
+
+These are the lowest prices confirmed among the listed provider-owned source pages; an unpriced provider is not assumed to cost more. Cached prices are `—` when the provider does not publish one.
+
+| Model / tier | Cheapest confirmed provider | Input / cached / output USD per 1M tokens | Context | Provider source | Checked |
+|---|---|---:|---:|---|---|
+| GPT-OSS 120B | DeepInfra | $0.037 / — / $0.17 | 131,072 | [DeepInfra model list](https://api.deepinfra.com/v1/models) | 2026-11-06 |
+| DeepSeek V4 Flash | DeepInfra | $0.09 / $0.018 / $0.18 | 1,048,576 | [DeepInfra model list](https://api.deepinfra.com/v1/models) | 2026-11-06 |
+| DeepSeek V4.1 Flash 1017 | DeepInfra | $0.20 / $0.006 / $0.60 | 1,048,576 | [DeepInfra model list](https://api.deepinfra.com/v1/models) | 2026-11-06 |
+| Qwen3.8-Max | DeepInfra | $1.65 / $0.206 / $4.951 | 256,000 | [DeepInfra model list](https://api.deepinfra.com/v1/models) | 2026-11-06 |
+| Qwen3-14B | DeepInfra or Featherless (tie) | $0.12 / — / $0.24 | 32,768 | [DeepInfra model list](https://api.deepinfra.com/v1/models), [Featherless model list](https://api.featherless.ai/v1/models) | 2026-11-06 |
+| Qwen3-30B-A3B-Instruct-2507 | Nebius Token Factory | $0.10 / — / $0.30 | 262,144 | [Nebius model pricing](https://nebius.com/services/token-factory/models/qwen-models-inference) | 2026-11-09 |
+| Qwen3-32B TEE | Chutes | $0.104 / — / $0.416 | 40,000 | [Chutes pricing](https://www.chutes.ai/pricing) | 2026-11-09 |
+| Llama 3.1 8B Instruct | Featherless | $0.05 / — / $0.08 | 32,768 | [Featherless model list](https://api.featherless.ai/v1/models) | 2026-11-06 |
+| GLM-5.3 | DeepInfra | $0.90 / $0.20 / $4.00 | 1,048,576 | [DeepInfra model list](https://api.deepinfra.com/v1/models) | 2026-11-06 |
+| Kimi K3.1 Pro | Kimi or Novita (tie) | $2.00 / $0.20 / $10.00 | 1,048,576 | [Moonshot pricing](https://platform.kimi.ai/docs/pricing/chat), [Novita model list](https://api.novita.ai/v3/openai/models) | 2026-11-06 |
+| Mistral Nemo Instruct 2407 TEE | Chutes | $0.0245 / — / $0.0978 | 131,072 | [Chutes pricing](https://www.chutes.ai/pricing) | 2026-11-09 |
+| Qwen3.8 Flash | Alibaba Model Studio | $0.15 / — / $0.47 | 1,048,576 | [Alibaba pricing](https://www.alibabacloud.com/help/en/model-studio/model-pricing) | 2026-11-06 |
+| Uncensored API (`uncensored`) | abliteratedmodels.cc | $0.15 / — / $0.50 | 100,000 | [Provider pricing](https://abliteratedmodels.cc/) | 2026-11-09 |
+| Venice Uncensored 1.2 | Venice AI | $0.20 / — / $0.90 | 131,072 | [Venice model page](https://docs.venice.ai/models/venice-uncensored-1-2) | 2026-11-09 |
+
 ## Notes
 
 1. **BYOK in OpenVibe.AI today**: `server/credentials.js` and `server/console/presets.js` support stored credentials for `anthropic`, `openai`, `gemini`, `deepseek`, `mistral`, `xai`, `groq`, `cerebras`, `together`, `fireworks`, `openrouter`, `minimax`, and `custom`. Any OpenAI-compatible provider can also be reached via the `openai` adapter with a custom `base_url` and `x_openvibe.provider` / credential.
 2. **Managed resale is blocked by default**. Only `OWN_DEPLOYMENT` and `AUTHORIZED_WHOLESALE` (with executed agreement) may be used for paid managed routes. `CUSTOMER_BYOK` is allowed where the customer is billed directly by the upstream.
 3. **Unknown providers** are listed as `UNVERIFIED`. Before enabling any paid forwarding, obtain current terms, an executed commercial agreement, and legal review.
-4. Prices are **not** recorded in this matrix per PLAN instructions; they must be obtained as live quotes from official sources and versioned in `platform.rate-card@1` before use.
+4. The comparison above records the lowest confirmed list price from provider-owned pages; these are not resale quotes. Managed prices still follow the accepted model price plus the owner-set markup, and commercial eligibility stays gated by `access_mode`.

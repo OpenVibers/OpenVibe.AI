@@ -8,9 +8,22 @@ const http = require('http');
 const { suite } = require('./helpers');
 const { createRegistry } = require('../server/registry');
 const catalog = require('../server/providers/catalog');
+const modelCatalog = require('../server/providers/model-catalog');
 const { testDb } = require('./db');
 
 const t = suite('model-catalog');
+
+t.test('owner override and provider markup publish the same retail rate the router bills', () => {
+    const row = { provider_key: 'groq', model_key: 'openai/gpt-oss-120b', display_name: 'GPT-OSS 120B', type: 'chat', status: 'active',
+        context_window: 131072, max_output: 65536, cost: { in_per_mtok: 0.15, cached_per_mtok: 0.075, out_per_mtok: 0.6 },
+        supports: { json: true, tools: true, streaming: true, vision: false }, metadata: { owner_override: { cost: { in_per_mtok: 0.2 }, reason: 'Owner checked negotiated rate' } } };
+    const provider = { key: 'groq', status: 'active', metadata: { markup_percent: 10 } };
+    const entry = modelCatalog.entryOf(row, provider);
+    assert.ok(Math.abs(entry.cost.in_per_mtok - 0.22) < 1e-12);
+    assert.ok(Math.abs(entry.cost.cached_per_mtok - 0.0825) < 1e-12);
+    assert.ok(Math.abs(entry.cost.out_per_mtok - 0.66) < 1e-12);
+    assert.strictEqual(entry.retail_rate.input_nano_usd_per_m, '220000000');
+});
 
 function server(handler) {
     return new Promise((resolve) => {

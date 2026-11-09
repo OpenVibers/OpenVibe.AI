@@ -39,3 +39,27 @@ It requires the same operator capability as provider configuration. The parser r
 days) and missing throughput never cause a rent proposal. Recording listings does not rent anything or contact providers.
 
 Migration 0052 is expand-only. These changes need money/security review before deployment; this PR does not deploy.
+
+## Public market observations
+
+`GET https://api.openvibe.exchange/api/v1/exchange/market` returns
+`exchange.market@1` with a 60-second public/process cache. The existing nginx
+`/api/v1/exchange/` prefix serves this read. `limit` is 1–500 (default 100);
+`next_cursor` continues a page with the same filters (`maker`, `open_weights`,
+`kind`). Counts describe the filtered offers; model counts use Report's normalized
+model identity (maker prefix and date/channel suffix removed).
+
+The feed combines provider presets, pricebook-owned registry rows and every
+own-page observation in `exchange_market_prices`, including disabled and
+unregistered models. The weekly pricebook writes observations without enabling
+models or approving routing prices. Unknown prices stay null; a pending routing
+price change can already be the provider's current advertised price. OpenRouter
+cross-reference prices do not become another provider's own-page prices.
+
+Model metadata comes from https://models.dev/api.json (MIT), refreshed on the
+first read each day. `exchange_model_metadata` persists the last successful copy;
+failed refreshes retain it with `metadata.stale: true` and retry no more than once
+per minute. Every known metadata field carries its own source URL. Provider-page
+facts take precedence over models.dev. Tests disable live refresh and inject
+recorded responses. The market projects public fields explicitly; credentials,
+account ids, internal provider metadata and price-change actors are never returned.
