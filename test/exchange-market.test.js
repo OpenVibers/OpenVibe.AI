@@ -43,6 +43,8 @@ t.test('routing belongs to a provider offer; metadata joins dated names, prices 
     const page = pageMarket({offers},{maker:'qwen',open_weights:'true',kind:'chat'}); assert(page.offers.includes(offer));
     const latest = buildOffers({ changes: [{ provider_key:p.key, model_key:m.model_key, field:'in_per_mtok', new_price:9, source:m.source, checked_at:'2026-11-09', status:'pending', actor:'private-actor' }] }).find(o => o.provider === p.key && o.provider_model === m.model_key);
     assert.strictEqual(latest.price.in,9); assert.strictEqual(latest.price_checked_at,'2026-11-09');
+    const privateRows = buildOffers({ providers: [{ key:'private-provider', provider_access:'UNVERIFIED' }], rows: [{ provider_key:'private-provider', model_key:'private-model', cost:{source:m.source} }] });
+    assert(!privateRows.some(o => o.provider === 'private-provider'), 'private endpoints cannot impersonate a pricebook provider by reusing its URL');
     assert(!JSON.stringify(offers).includes('private-account')); assert(!JSON.stringify(offers).includes('secret_ref'));
     assert.strictEqual(lookupMetadata(entries,m.model_key+'-latest','qwen').licence,'Apache-2.0');
 });

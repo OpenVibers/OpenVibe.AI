@@ -9,7 +9,8 @@ const num = (v) => v == null || v === '' || !Number.isFinite(Number(v)) || Numbe
 const webUrl = (v) => typeof v === 'string' && /^https:\/\//.test(v) ? v : null;
 
 function buildOffers({ providers = [], rows = [], changes = [], catalogue = {}, metadata = {}, observations = [], presets = PROVIDERS }) {
-    const byProvider = new Map(providers.map((p) => [p.key, p]));
+    const publicKeys = new Set([...presets.map(p => p.key), ...SOURCES.filter(s => s.role === 'own').map(s => s.provider)]);
+    const byProvider = new Map(providers.filter(p => publicKeys.has(p.key)).map((p) => [p.key, p]));
     const seeds = new Map();
     const ownUrls = new Set(SOURCES.filter(s => s.role === 'own').map(s => s.url));
     for (const p of presets) for (const m of p.models || []) {
@@ -24,7 +25,7 @@ function buildOffers({ providers = [], rows = [], changes = [], catalogue = {}, 
         cost: { ...m.cost, source: m.source, verified_at: m.checked }, metadata: m,
     }]));
     for (const row of rows) {
-        if (ownUrls.has(row.cost?.source) || ownUrls.has(row.metadata?.price_book?.source)) records.set(recordKey(row.provider_key, row.model_key), row);
+        if (publicKeys.has(row.provider_key) && (ownUrls.has(row.cost?.source) || ownUrls.has(row.metadata?.price_book?.source))) records.set(recordKey(row.provider_key, row.model_key), row);
     }
     for (const observed of observations) {
         const key = [...records.keys()].find(k => {
