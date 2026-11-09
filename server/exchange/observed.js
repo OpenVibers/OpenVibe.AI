@@ -95,6 +95,18 @@ function createObserved({ db, clock = { now: () => Date.now() } }) {
         WHERE r.status = 'cached'
           AND r.created_at::timestamptz >= ?::timestamptz AND r.created_at::timestamptz <= ?::timestamptz
         GROUP BY 1, 2, 3, 4`);
+    // The prompt tokens provider attempts reported, and how many of them the provider served from its own prompt
+    // cache (server/providers/*.js record usage.cached per attempt). Only attempts that reached the provider count;
+    // a cached answer made no call and is not a sample here.
+    const tokenRows = db.prepare(`SELECT q.provider_key AS provider_key, q.model_key AS model_key,
+            SUM(COALESCE(q.tokens_in, 0))::bigint AS tokens_in,
+            SUM(COALESCE(q.tokens_cached, 0))::bigint AS tokens_cached
+        FROM requests q
+        JOIN runs r ON r.id = q.run_id
+        WHERE q.status = 'ok'
+          AND r.status IN ('succeeded', 'failed')
+          AND r.created_at::timestamptz >= ?::timestamptz AND r.created_at::timestamptz <= ?::timestamptz
+        GROUP BY 1, 2`);
     const latencyRows = db.prepare(`SELECT q.provider_key AS provider_key,
             q.model_key AS model_key,
             q.latency_ms, rc.body->>'ttft_ms' AS ttft_ms
@@ -115,16 +127,16 @@ function createObserved({ db, clock = { now: () => Date.now() } }) {
         const span = Math.max(1, Number(days) || 7);
         const from = new Date(now - span * DAY_MS).toISOString();
         const to = new Date(now).toISOString();
-        const [attempts, cached, latencies] = await Promise.all([
-            attemptRows.all(from, to), cachedRows.all(from, to), latencyRows.all(from, to),
+        const [attempts, cached, latencies, tokens] = await Promise.all([
+            attemptRows.all(from, to), cachedRows.all(from, to), latencyRows.all(from, to), tokenRows.all(from, to),
         ]);
-        return { from, to, today: dayOf(now), runs: [...attempts, ...cached], latencies };
+        return { from, to, today: dayOf(now), runs: [...attempts, ...cached], latencies, tokens };
     }
 
     return { read };
 }
 
-const EMPTY = () => ({ succeeded: 0, failed: 0, cached: 0, succeeded_today: 0, failed_today: 0, cached_today: 0, p50: null, p95: null });
+const EMPTY = () => ({ succeeded: 0, failed: 0, cached: 0, succeeded_today: 0, failed_today: 0, cached_today: 0, tokens_in: 0, tokens_cached: 0, p50: null, p95: null });
 
 /**
  * Fold the measured rows into the catalog's offers. `drafts` are `{ providerKey, modelKey, offer }`,
@@ -169,6 +181,13 @@ function fold(observed, drafts) {
         const value = Number.isFinite(ttft) && ttft >= 0 ? ttft : (Number.isFinite(total) && total >= 0 ? total : null);
         if (value != null) samples.get(d).push(value);
     }
+    for (const row of observed.tokens || []) {
+        const d = pick(row.provider_key, row.model_key);
+        if (!d) continue;
+        const s = stats.get(d);
+        s.tokens_in += Number(row.tokens_in) || 0;
+        s.tokens_cached += Number(row.tokens_cached) || 0;
+    }
     for (const [d, values] of samples) {
         const s = stats.get(d);
         s.p50 = percentile(values, 0.5);
@@ -185,6 +204,10 @@ function fold(observed, drafts) {
         d.offer.requests_today = s.succeeded_today + s.failed_today;
         d.offer.cached_7d = s.cached;
         d.offer.cached_today = s.cached_today;
+        // The share of the prompt tokens these attempts reported that the provider served from its own prompt cache
+        // (0.4 is 40 %), from the cached token counts each attempt records. null below 20 attempts and when no
+        // attempt reported input tokens: a missing measurement is not zero.
+        d.offer.cache_hit_share_7d = enough && s.tokens_in > 0 ? Math.round((s.tokens_cached / s.tokens_in) * 10000) / 10000 : null;
     }
     return stats;
 }

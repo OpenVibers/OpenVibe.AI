@@ -188,7 +188,16 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
         const vars = prep.vars || {};
         // The person's ai.preferences (runs on their behalf; server/user-modules.js), after the template's own rules.
         const asked = preferenceLines(ctx && ctx.preferences);
-        const system = [render(template.system_prompt, vars).trim(), asked].filter(Boolean).join('\n\n');
+        const rules = render(template.system_prompt, vars).trim();
+        const system = [rules, asked].filter(Boolean).join('\n\n');
+        // Two system blocks, not one: the template's rules are the same for every run of this version, while a
+        // person's preferences change per person and whenever they edit them. The cache breakpoint sits on the rules
+        // block only (Anthropic's cache_control on the last stable block; tools → system → messages, so everything
+        // before it is the cached prefix), and an OpenAI-compatible endpoint joins the blocks back into one message.
+        // Anthropic, "Prompt caching": a breakpoint goes on the last block that stays identical, because a block
+        // that changes every request writes a fresh entry and never hits.
+        // https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+        const systemBlocks = rules ? [{ text: rules, cache: true }, ...(asked ? [{ text: `\n\n${asked}` }] : [])] : [];
         const user = render(template.user_prompt, vars);
         const routeKey = step.route || template.default_route || wf.default_route || 'default.chat';
         const route = await routeFor(routeKey);
@@ -204,7 +213,7 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
         const image = step.image && input[step.image] ? await fetcher.loadImage({ ...input[step.image], max_width: input[step.image].max_width || step.image_max_width || 1024 }, { signal: ctx.signal }) : null;
         const p = { ...(route.options || {}), ...(step.params || {}), ...(prep.params || {}) };
         const req = {
-            system: system ? [{ text: system, cache: true }] : [],
+            system: systemBlocks,
             messages: [{ role: 'user', content: user }],
             image,
             json: jsonSchema ? { name: (template.metadata && template.metadata.json_name) || 'result', schema: jsonSchema, strict: !prep.jsonSchema } : null,

@@ -23,9 +23,9 @@ async function insertRun({ id = uid('run'), status = 'succeeded', provider = nul
     return id;
 }
 async function insertRequest({ runId, provider = 'deepseek', model = 'deepseek-flash', status = 'ok', operation = 'chat',
-    tokensOut = 7, latency = 100, created = at(0), seqNo = 0 }) {
-    await h.db.prepare(`INSERT INTO requests (run_id, seq, operation, provider_key, model_key, status, tokens_out, latency_ms, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(runId, seqNo, operation, provider, model, status, tokensOut, latency, created);
+    tokensOut = 7, tokensIn = 0, tokensCached = 0, latency = 100, created = at(0), seqNo = 0 }) {
+    await h.db.prepare(`INSERT INTO requests (run_id, seq, operation, provider_key, model_key, status, tokens_in, tokens_out, tokens_cached, latency_ms, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(runId, seqNo, operation, provider, model, status, tokensIn, tokensOut, tokensCached, latency, created);
 }
 async function reset() {
     await h.db.prepare('DELETE FROM requests').run();
@@ -122,6 +122,36 @@ t.test('8 successes and 0 real failures are 100% only once 20 samples exist', as
     assert.strictEqual(offer.requests_7d, 20);
     assert.strictEqual(offer.uptime, 1);
     assert.deepStrictEqual(offer.speed, { p50_ms: 100, p95_ms: 100 });
+});
+
+t.test('the prompt-cache share comes from the cached token counts of real attempts', async () => {
+    await reset();
+    // 20 attempts of 1,000 prompt tokens; half reported 500 of them served from the provider's prompt cache.
+    for (let i = 0; i < 20; i++) {
+        const id = await insertRun();
+        await insertRequest({ runId: id, tokensIn: 1000, tokensCached: i < 10 ? 500 : 0 });
+    }
+    const offer = flash(await catalog());
+    assert.strictEqual(offer.cache_hit_share_7d, 0.25, '5,000 cached of 20,000 prompt tokens');
+    assert.strictEqual(offer.cached_7d, 0, 'a provider-side cache hit is not a cached answer');
+    const model = (await catalog()).models.find((x) => x.slug === 'deepseek/deepseek-flash');
+    assert.strictEqual(model.cache_hit_share_7d, 0.25);
+});
+
+t.test('below 20 attempts, or with no reported input tokens, the share is null, never 0', async () => {
+    await reset();
+    for (let i = 0; i < 5; i++) {
+        const id = await insertRun();
+        await insertRequest({ runId: id, tokensIn: 100, tokensCached: 100 });
+    }
+    assert.strictEqual(flash(await catalog()).cache_hit_share_7d, null, '5 attempts is below the floor');
+
+    await reset();
+    for (let i = 0; i < 20; i++) {
+        const id = await insertRun();
+        await insertRequest({ runId: id });
+    }
+    assert.strictEqual(flash(await catalog()).cache_hit_share_7d, null, 'no attempt reported input tokens');
 });
 
 t.run();

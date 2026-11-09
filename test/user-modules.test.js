@@ -56,6 +56,13 @@ t.test("a run on A's behalf follows A's preferences; history off keeps no input 
     assert.strictEqual(r.body.run.status, 'succeeded', r.text);
     const sys = systemOf();
     assert.ok(sys.includes('casual style') && sys.includes('Keep it short.') && sys.includes('a night-shift worker'), sys);
+    // The template's rules are one cached block; the person's preferences follow in a block of their own, after the
+    // cache breakpoint, so editing them leaves the cached prompt prefix intact.
+    const blocks = seam.last.system;
+    assert.ok(Array.isArray(blocks) && blocks.length === 2, `two system blocks, got ${JSON.stringify(blocks).slice(0, 200)}`);
+    assert.strictEqual(blocks[0].cache, true, 'the stable rules block carries the cache marker');
+    assert.ok(!blocks[0].text.includes('casual style'), 'the preferences are not inside the cached block');
+    assert.ok(!blocks[1].cache && blocks[1].text.includes('casual style'), 'the preferences are a separate, uncached block after it');
     const row = await h.db.prepare('SELECT input, cache_key, options FROM runs WHERE id = ?').get(r.body.run.id);
     assert.strictEqual(row.input, 'null'); assert.strictEqual(row.cache_key, null);
     assert.strictEqual(JSON.parse(row.options).history, false);
