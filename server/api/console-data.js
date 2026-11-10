@@ -3,7 +3,7 @@
 const express = require('express');
 const q = require('../console/queries');
 const { CAPS } = require('../auth');
-const { AiError } = require('../util');
+const { AiError, providerSecret } = require('../util');
 const providerPresets = require('../console/presets');
 const providerCatalog = require('../providers/catalog');
 const poolSeed = require('../providers/pool-seed');
@@ -11,7 +11,7 @@ const gpuCatalog = require('../gpu/catalog');
 const { tokenCosts } = require('../gpu/token-cost');
 
 /** Read-only JSON read models for Exchange's owner console. Every query is bounded and the query module redacts runs. */
-function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, gpus = null, gpuMarket = null, abuse = null, priceBook = null, creditGrants = null, sessionCookies = null, vault = null, settings = null, config = {}, log = console }) {
+function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, gpus = null, gpuMarket = null, abuse = null, priceBook = null, creditGrants = null, sessionCookies = null, vault = null, settings = null, config = {}, log = console }) {
     const r = express.Router();
     const supply = require('../platform/supply').createSupply({ db, registry, clock });
     // The public marketplace readings and the per-token cost they imply, added to both console sections. Data only:
@@ -41,8 +41,14 @@ function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth,
             return { status: await ops.status(), counts24: await q.statusCounts(db, since), failures24: await q.failures(db, since), queue: runs.stats(), cache: await cache.stats() };
         }
         if (section === 'providers') {
+            const hints = vault && vault.hints ? await vault.hints() : new Map();
             const rows = (await Promise.all((await registry.listProviders()).map(ops.providerView))).map((p) => ({
                 ...p, key_present: p.credentials === 'configured', preference_order: p.priority,
+                key_state: p.auth_mode === 'none' ? { source: 'not_required', hint: null, set_at: null }
+                    : { source: hints.has(p.key) ? 'stored' : p.credentials === 'configured' ? 'environment' : 'missing',
+                        hint: hints.get(p.key)?.hint || (providerSecret(p, env) ? `…${providerSecret(p, env).slice(-4)}` : null),
+                        set_at: hints.get(p.key)?.updated_at || null },
+                last_check: p.metadata?.last_check || null,
                 markup_percent: Number(p.metadata && p.metadata.markup_percent) || 0,
                 uncensored: Boolean(p.metadata && p.metadata.uncensored),
             }));
@@ -106,9 +112,32 @@ function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth,
         if (value.length < 8 || value.length > 400) throw new AiError(422, 'ai.invalid', 'the provider key must be 8-400 characters');
         const who = { actor: actor(req), trace: req.ov && req.ov.traceId };
         await vault.put(provider.key, value, who);
-        await registry.upsertProvider({ key: provider.key, secret_ref: `vault:${provider.key}` }, { ...who, origin: 'admin' });
+        await registry.upsertProvider({ key: provider.key, secret_ref: `vault:${provider.key}`, metadata: { ...provider.metadata, last_check: null } }, { ...who, origin: 'admin' });
         await registry.audit(who.actor, 'provider.key_replaced', 'provider', provider.key, { trace: who.trace });
         return { ok: true, provider: provider.key };
+    }));
+    r.delete('/api/v1/admin/console/providers/:key/key', write, wrap(async (req) => {
+        if (!vault || !settings) throw new AiError(503, 'vault.unavailable', 'provider keys cannot be stored on this host');
+        const provider = await registry.getProvider(req.params.key);
+        if (!provider) throw new AiError(404, 'ai.not_found', 'no such provider');
+        const who = { actor: actor(req), trace: req.ov && req.ov.traceId };
+        // Disable first: a request racing the store deletion must not fall back to an environment key.
+        await registry.upsertProvider({ key: provider.key, status: 'disabled', secret_ref: null,
+            metadata: { ...provider.metadata, last_check: null } }, { ...who, origin: 'admin' });
+        await vault.remove(provider.key);
+        await registry.audit(who.actor, 'provider.key_removed', 'provider', provider.key, { trace: who.trace });
+        return { ok: true, provider: provider.key };
+    }));
+    r.post('/api/v1/admin/console/providers/:key/check', write, wrap(async (req) => {
+        const provider = await registry.getProvider(req.params.key);
+        if (!provider) throw new AiError(404, 'ai.not_found', 'no such provider');
+        const { checkProvider } = require('../providers/check');
+        const result = await checkProvider(provider, { env, now: clock.now,
+            fetchImpl: fetchImpl === globalThis.fetch ? require('../providers/guarded-fetch').guardedFetch : fetchImpl });
+        // A check does not enable a provider or overwrite settings changed while its request was in flight.
+        const current = await registry.getProvider(provider.key);
+        if (current.updated_at === provider.updated_at) await registry.upsertProvider({ key: provider.key, metadata: { ...current.metadata, last_check: result } }, { actor: actor(req), origin: 'admin' });
+        return { provider: provider.key, ...result };
     }));
     r.post('/api/v1/admin/console/providers', json, write, wrap(async (req) => {
         if (!vault || !settings) throw new AiError(503, 'vault.unavailable', 'provider keys cannot be stored on this host');

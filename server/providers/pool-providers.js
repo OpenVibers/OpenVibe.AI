@@ -616,6 +616,7 @@ const PROVIDERS = [
     },
     {
         key: 'openrouter', keys_url: 'https://openrouter.ai/settings/keys',
+        check_endpoint: 'https://openrouter.ai/api/v1/key',
         docs_url: 'https://openrouter.ai/docs/api-reference/overview',
         display_name: 'OpenRouter (the last fallback)',
         base_url: 'https://openrouter.ai/api/v1',
@@ -699,6 +700,7 @@ const PROVIDERS = [
         auth_header: 'x-subscription-token', models_endpoint: null, capabilities: ['web-search', 'image-search'],
         search_adapters: ['brave', 'brave-images'], docs_url: 'https://api-dashboard.search.brave.com/documentation/services/web-search' },
     { key: 'tavily', display_name: 'Tavily', kind: 'http', base_url: 'https://api.tavily.com', models_endpoint: null,
+        check_endpoint: 'https://api.tavily.com/usage',
         capabilities: ['web-search'], search_adapters: ['tavily'], docs_url: 'https://docs.tavily.com/documentation/api-reference/endpoint/search' },
     { key: 'exa', display_name: 'Exa', kind: 'http', base_url: 'https://api.exa.ai', auth_mode: 'x-api-key', models_endpoint: null,
         capabilities: ['web-search'], search_adapters: ['exa'], docs_url: 'https://docs.exa.ai/reference/search' },

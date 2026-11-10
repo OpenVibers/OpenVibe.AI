@@ -29,6 +29,7 @@ function recordOf(p) {
         metadata: {
             catalog: 'pool-providers',
             api_family: p.api_family, models_endpoint: p.models_endpoint,
+            check_endpoint: p.check_endpoint || null,
             auth_header: p.auth_header || null, docs_url: p.docs_url || null,
             search_adapters: p.search_adapters || [],
             data_policy: p.data_policy,
@@ -97,7 +98,10 @@ async function seedPoolProviders({ registry, actor = 'system', env = process.env
         } else if (prev.origin === 'catalog') {
             const defaults = recordOf(p);
             const configured = prev.auth_mode === 'none' || Boolean(providerSecret(prev, env));
-            if (configured && prev.base_url !== p.base_url) defaults.metadata.models_endpoint = prev.base_url ? `${prev.base_url.replace(/\/+$/, '')}/models` : null;
+            if (configured && prev.base_url !== p.base_url) {
+                defaults.metadata.models_endpoint = prev.base_url ? `${prev.base_url.replace(/\/+$/, '')}/models` : null;
+                defaults.metadata.check_endpoint = null;
+            }
             const metadata = { ...defaults.metadata, ...prev.metadata };
             if (!configured && prev.base_url !== p.base_url) {
                 metadata.models_endpoint = defaults.metadata.models_endpoint;
@@ -116,8 +120,11 @@ async function seedPoolProviders({ registry, actor = 'system', env = process.env
         } else {
             out.skipped.push(p.key);
             const protocol = recordOf(p).metadata;
-            if (prev.base_url !== p.base_url) protocol.models_endpoint = prev.base_url ? `${prev.base_url.replace(/\/+$/, '')}/models` : null;
-            const additions = Object.fromEntries(Object.entries(protocol).filter(([k]) => ['api_family', 'models_endpoint', 'auth_header', 'docs_url', 'search_adapters'].includes(k) && prev.metadata[k] === undefined));
+            if (prev.base_url !== p.base_url) {
+                protocol.models_endpoint = prev.base_url ? `${prev.base_url.replace(/\/+$/, '')}/models` : null;
+                protocol.check_endpoint = null;
+            }
+            const additions = Object.fromEntries(Object.entries(protocol).filter(([k]) => ['api_family', 'models_endpoint', 'check_endpoint', 'auth_header', 'docs_url', 'search_adapters'].includes(k) && prev.metadata[k] === undefined));
             if (Object.keys(additions).length) await registry.upsertProvider({ key: p.key, metadata: { ...prev.metadata, ...additions } }, { actor, origin: prev.origin });
         }
         for (const m of p.models) {
