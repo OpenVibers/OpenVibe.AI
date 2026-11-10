@@ -54,7 +54,7 @@ async function postJson(url, headers, body, { signal, timeoutMs = 30000, fetchIm
  * failure: the provider is exhausted until someone tops it up (server/providers/index.js opens its
  * circuit for the long cooldown and never retries into it).
  */
-const BALANCE_RE = /insufficient\s+(balance|quota|credit|credits|funds)|out\s+of\s+(balance|credit|credits|funds)|credit\s+balance\s+is\s+too\s+low|balance\s+(is\s+)?(too\s+)?low|exceeded\s+your\s+current\s+quota|billing\s+(hard\s+)?limit/i;
+const BALANCE_RE = /insufficient[\s_-]+(balance|quota|credit|credits|funds)|out\s+of\s+(balance|credit|credits|funds)|credit\s+balance\s+is\s+too\s+low|balance\s+(is\s+)?(too\s+)?low|exceeded\s+your\s+current\s+quota|billing\s+(hard\s+)?limit/i;
 function insufficientBalance(err) {
     if (!err) return false;
     if (err.status === 402) return true;

@@ -1,0 +1,58 @@
+{
+  "note": "Recorded error shapes of the providers AI routes to (their own docs and production answers, checked 2026-11-09). Tests replay them; no test reaches the network. `class` is what server/providers/failure.js must say.",
+  "deepseek_balance": {
+    "class": "balance",
+    "status": 402,
+    "body": { "error": { "message": "Insufficient Balance", "type": "unknown_error", "param": null, "code": "invalid_request_error" } }
+  },
+  "openai_quota": {
+    "class": "balance",
+    "status": 429,
+    "body": { "error": { "message": "You exceeded your current quota, please check your plan and billing details.", "type": "insufficient_quota", "code": "insufficient_quota" } }
+  },
+  "anthropic_credit": {
+    "class": "balance",
+    "status": 400,
+    "body": { "type": "error", "error": { "type": "invalid_request_error", "message": "Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits." } }
+  },
+  "openrouter_credits": {
+    "class": "balance",
+    "status": 402,
+    "body": { "error": { "code": 402, "message": "Insufficient credits" } }
+  },
+  "openai_auth": {
+    "class": "auth",
+    "status": 401,
+    "body": { "error": { "message": "Incorrect API key provided: sk-test****", "type": "invalid_request_error", "code": "invalid_api_key" } }
+  },
+  "anthropic_auth": {
+    "class": "auth",
+    "status": 401,
+    "body": { "type": "error", "error": { "type": "authentication_error", "message": "invalid x-api-key" } }
+  },
+  "openrouter_rate": {
+    "class": "rate_limit",
+    "status": 429,
+    "body": { "error": { "code": 429, "message": "Rate limit exceeded" } }
+  },
+  "gemini_quota": {
+    "class": "rate_limit",
+    "status": 429,
+    "body": { "error": { "code": 429, "status": "RESOURCE_EXHAUSTED", "message": "Quota exceeded for quota metric 'Generate Content API requests per minute' and limit 'GenerateContentRequestsPerMinutePerProjectPerRegion' of service 'generativelanguage.googleapis.com'." } }
+  },
+  "deepseek_transient": {
+    "class": "transient",
+    "status": 503,
+    "body": { "error": { "message": "Service temporarily unavailable" } }
+  },
+  "context_too_long": {
+    "class": "request",
+    "status": 400,
+    "body": { "error": { "message": "This model's maximum context length is 8192 tokens", "type": "invalid_request_error", "code": "context_length_exceeded" } }
+  },
+  "bad_image": {
+    "class": "request",
+    "status": 400,
+    "body": { "error": { "message": "Invalid image data", "type": "invalid_request_error", "code": "invalid_image" } }
+  }
+}

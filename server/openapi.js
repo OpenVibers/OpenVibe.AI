@@ -89,6 +89,37 @@ function route(method, p, operation) {
     (PATHS[p] = PATHS[p] || {})[method] = operation;
 }
 
+// ── What AI can make (owner, 11-09, item 45) ────────────────────────────────────────────────
+const creation = {
+    type: 'object', additionalProperties: false,
+    required: ['id', 'product', 'name', 'gives', 'returns', 'workflow', 'task', 'access', 'costs_coins', 'start_url'],
+    properties: {
+        id: str({ pattern: '^[a-z][a-z0-9-]{1,63}$' }),
+        product: str({ enum: ['ai', 'blog', 'codes', 'community', 'design', 'food', 'games', 'live', 'media', 'meme', 'news', 'pics', 'quest', 'rent', 'reviews', 'space', 'tools', 'trade', 'wiki'] }),
+        name: str({ maxLength: 80 }), gives: str({ maxLength: 300 }), returns: str({ maxLength: 300 }),
+        workflow: nullable('string'), task: nullable('string'),
+        access: {
+            type: 'object', additionalProperties: false, required: ['guest', 'signed_in', 'floor_18'],
+            properties: { guest: { type: 'boolean' }, signed_in: { type: 'boolean' }, floor_18: { type: 'boolean' } },
+        },
+        costs_coins: { type: 'boolean' }, start_url: str({ format: 'uri' }),
+    },
+};
+const creationList = {
+    type: 'object', additionalProperties: false, required: ['creations', 'count', 'generated_at'],
+    properties: { creations: arrayOf(creation), count: integer({ minimum: 0 }), generated_at: str({ format: 'date-time' }) },
+};
+route('get', '/creations', {
+    operationId: 'listCreations', summary: 'What AI can make: every creation that is live now', tags: ['creations'], security: [],
+    description: 'Public, cached for five minutes and open to every origin (Access-Control-Allow-Origin: *). One entry per thing AI can make, built from the registered workflows and tasks (ai.creation-list@1): the product, a plain name, what the person gives it and what comes back, the workflow or task behind it, who may use it, whether it can cost coins and where to start. Only a workflow whose status is active is listed. The same list as Markdown is GET /api/v1/creations.md, or this path with ?format=markdown, and it is in /llms.txt.',
+    responses: { 200: json('The live catalogue', creationList), ...errors([429]) },
+});
+route('get', '/creations.md', {
+    operationId: 'listCreationsMarkdown', summary: 'What AI can make, as Markdown', tags: ['creations'], security: [],
+    description: 'The same live catalogue grouped by product, for AI readers and pages that want plain text (ai.creation-list@1).',
+    responses: { 200: { description: 'The catalogue as Markdown', content: { 'text/markdown': { schema: { type: 'string' } } } }, ...errors([429]) },
+});
+
 // ── AI tasks and choices (rich-content plan §1) ──────────────────────────────────────────────
 route('get', '/tasks', {
     operationId: 'listTasks', summary: 'The task catalogue: every named piece of AI work', tags: ['choices'], security: [],
@@ -447,6 +478,10 @@ const exchangeOffer = {
         access: str({ enum: ['OWN_DEPLOYMENT', 'AUTHORIZED_WHOLESALE', 'UNVERIFIED'] }),
         free: { type: 'boolean', description: 'Prepaid capacity with no per-token price (a free server, a subscription, a local machine).' },
         free_tier: { type: 'boolean', description: 'The free allowance and the anonymous Try it may use this offer: its provider is one of AI_FREE_PROVIDERS (default deepseek,local,community; local covers local2 and whisper.cpp) and its output price is at or below AI_FREE_MAX_OUTPUT_PRICE_USD_PER_MTOK (default 1.5). Distinct from free: a priced DeepSeek Flash offer is free_tier true while a dearer priced offer is false.' },
+        status: { type: 'string', enum: ['up', 'degraded', 'down'], description: 'Measured, never guessed: down while this offer\'s circuit is open; degraded when more than 5% of at least 10 requests in the last hour failed; up otherwise.' },
+        status_reason: nullable('string', { description: 'Plain words for a degraded or down offer: "the provider says the account is out of credit", "the key was refused" or "too many errors in the last hour"' }),
+        status_since: nullable('string', { description: 'When the current status began (ISO 8601)' }),
+        status_class: nullable('string', { enum: ['balance', 'auth', 'rate_limit', 'transient', 'request'], description: 'The failure class behind a degraded or down status' }),
         price: nullable('object', { properties: { in: { type: 'number' }, out: { type: 'number' }, cached: { type: 'number' }, per: str(), currency: str() } }),
         price_source: nullable('string', { description: 'The price page the card was read from, when recorded' }),
         price_checked_at: nullable('string', { description: 'The date someone checked the price, when recorded' }),
@@ -526,7 +561,7 @@ route('put', '/agent-role-defaults/{role}', {
 });
 route('get', '/exchange/catalog', {
     operationId: 'exchangeCatalog', summary: 'Every model and every offer that serves it', tags: ['exchange'], security: [],
-    description: 'Public. The live offers: price in, out and cached per million tokens, measured p50/p95, uptime, requests, and the provider data policy. Speed and uptime are read from the last seven days of real runs (time to the first token where a receipt recorded one, else the answering attempt\'s total); cached answers are counted apart and excluded from speed, uptime and requests. Uptime is succeeded / (succeeded + failed); null when no data, never 0. A prepaid offer has no price (free: true); free_tier says whether the free allowance and the anonymous Try it may use an offer at all (a named AI_FREE_PROVIDERS source under the output price ceiling). Models carry a kind (chat, embedding, stt, image); chat lists must use kind "chat" and never mix embeddings or speech-to-text.',
+    description: 'Public. The live offers: measured status (up/degraded/down, with a plain reason and since when), price in, out and cached per million tokens, measured p50/p95, uptime, requests, and the provider data policy. Speed and uptime are read from the last seven days of real runs (time to the first token where a receipt recorded one, else the answering attempt\'s total); cached answers are counted apart and excluded from speed, uptime and requests. Uptime is succeeded / (succeeded + failed); null when no data, never 0. A prepaid offer has no price (free: true); free_tier says whether the free allowance and the anonymous Try it may use an offer at all (a named AI_FREE_PROVIDERS source under the output price ceiling). Models carry a kind (chat, embedding, stt, image); chat lists must use kind "chat" and never mix embeddings or speech-to-text.',
     parameters: [query('kind', str({ enum: ['chat', 'embedding', 'stt', 'image'] }), 'Only models of this kind')],
     responses: { 200: json('The models, grouped by model, with their offers', { type: 'object', required: ['models'], properties: {
         generated_at: str({ format: 'date-time' }), window_days: integer(), count: integer(),

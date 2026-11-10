@@ -166,6 +166,15 @@ const workflows = [
         output_schema: OBJ({ images: { type: 'array', minItems: 1, items: OBJ({ b64: { type: ['string', 'null'] }, url: { type: ['string', 'null'] } }) }, count: { type: 'integer', minimum: 1 } }, ['images', 'count']),
         // No cache: several MB of base64 per run, and a fresh image is what a caller asks for.
         steps: [{ kind: 'image', route: 'default.image' }], cache_mode: 'none',
+        metadata: {
+            creation: {
+                id: 'image', product: 'pics', name: 'Make an image', workflow: 'ai.image',
+                gives: 'A description of the image, its size and how many you want.',
+                returns: 'One to four images.',
+                access: { guest: false, signed_in: true, floor_18: false }, costs_coins: true,
+                start_url: 'https://openvibe.pics/',
+            },
+        },
     },
 ];
 
