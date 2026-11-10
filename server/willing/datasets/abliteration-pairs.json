@@ -1,0 +1,31 @@
+{
+  "version": "abliteration-pairs-2026-11-09.v1",
+  "age": "18+",
+  "note": "A base model and its abliterated build, declared together so the same objective set can be run on both. The source link names where the abliterated build is published. Every pair is served by a provider in OpenVibe.AI's catalogue.",
+  "pairs": [
+    {
+      "id": "llama-3.1-8b-instruct",
+      "family": "llama",
+      "base": { "provider": "featherless", "model": "meta-llama/Meta-Llama-3.1-8B-Instruct" },
+      "abliterated": { "provider": "featherless", "model": "mlabonne/Meta-Llama-3.1-8B-Instruct-abliterated" },
+      "source": "https://huggingface.co/mlabonne/Meta-Llama-3.1-8B-Instruct-abliterated",
+      "note": "Both builds are on the same provider and price page, so the difference is the weights, not the host."
+    },
+    {
+      "id": "deepseek-v4.1-flash",
+      "family": "deepseek",
+      "base": { "provider": "novita", "model": "deepseek/deepseek-v4.1-flash-1017" },
+      "abliterated": { "provider": "refuseless", "model": "deepseek-v4.1-flash-abliterated" },
+      "source": "https://docs.refuseless.com/api/models.md",
+      "note": "Refuseless lists the abliterated build of DeepSeek V4.1 Flash; Novita serves the standard weights."
+    },
+    {
+      "id": "glm-5.3",
+      "family": "glm",
+      "base": { "provider": "glm", "model": "glm-5.3" },
+      "abliterated": { "provider": "refuseless", "model": "glm-5.3-abliterated" },
+      "source": "https://docs.refuseless.com/api/models.md",
+      "note": "Refuseless lists the abliterated build of GLM 5.3; Z.ai serves the standard weights."
+    }
+  ]
+}

@@ -1,13 +1,14 @@
 'use strict';
 const { guardedFetch } = require('../providers/guarded-fetch');
 const { publicTarget } = require('./transport');
-const { AiError } = require('../util');
+const { AiError, providerSecret } = require('../util');
 const { validate } = require('openvibe-contracts');
 const net = require('node:net');
 const { createHash } = require('node:crypto');
 const adapters = ['openverse', 'commons', 'searxng', 'openvibe', 'iconify',
     'deepseek', 'brave', 'exa', 'tavily', 'serper', 'serpapi', 'jina',
-    'openvibe-egress', 'perplexity', 'kagi', 'google', 'unsplash', 'pexels', 'pixabay', 'brave-images']
+    'openvibe-egress', 'perplexity', 'kagi', 'google', 'unsplash', 'pexels', 'pixabay', 'brave-images',
+    'meta', 'serper-images']
     .map(n => require('./adapters/' + n));
 const CHARGE = Symbol('search Exchange charge');
 const invalid = (message) => new AiError(422, 'ai.invalid', message);
@@ -54,57 +55,110 @@ function normalize(rows, engine, kind, b) {
     if (b.style && b.style !== 'any') out = out.filter(r => r.style === b.style);
     return out.slice(0, b.limit);
 }
-function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () => Date.now(), credentials = null, targetGuard = publicTarget } = {}) {
+function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () => Date.now(), credentials = null, registry = null, targetGuard = publicTarget } = {}) {
     const health = new Map();
-    const configured = a => (!a.key_env || Boolean(env[a.key_env])) && (!a.setting || Boolean(env[a.setting])) && (a.requires || []).every(k => env[k]);
-    function engines() {
-        return adapters.map(a => ({ id: a.id, kinds: a.kinds, price_per_1000: a.price_per_1000,
-            byok: a.byok, available: configured(a), freshness: a.freshness, healthy: (health.get(a.id) || 0) <= now(),
-            source: a.source, checked_on: a.checked_on, pricing_note: a.pricing_note || null,
-        }));
+    const providerFor = (a, providers) => providers.find(p => p.metadata?.search_adapters?.includes(a.id));
+    function binding(a, providers) {
+        const provider = providerFor(a, providers);
+        // Existing environment-backed search stays available until the owner manages its registry row.
+        // New adapters require an enabled registry entry when running inside the service.
+        const managed = Boolean(registry && (a.registry_required || provider && (provider.origin === 'admin' || provider.status === 'active' || providerSecret(provider, env))));
+        const key = managed ? providerSecret(provider, env) || (a.key_env && env[a.key_env]) : a.key_env && env[a.key_env];
+        const settings = a.setting === 'EXCHANGE_SEARXNG_URL' && managed && provider?.base_url ? { ...env, EXCHANGE_SEARXNG_URL: provider.base_url } : env;
+        const configured = (!a.key_env || Boolean(key)) && (!a.setting || Boolean(settings[a.setting])) && (a.requires || []).every(k => settings[k]);
+        if (managed && (!provider || provider.status !== 'active')) return { provider, managed, key, env: settings, configured, available: false };
+        return { provider, managed, key, env: settings, configured, available: configured };
+    }
+    async function engines() {
+        const providers = registry ? await registry.listProviders() : [];
+        return adapters.map(a => {
+            const state = binding(a, providers);
+            return { id: a.id, kinds: a.kinds, price_per_1000: a.price_per_1000,
+                byok: a.byok, available: state.available, freshness: a.freshness, healthy: (health.get(a.id) || 0) <= now(),
+                provider: state.provider?.key || null, manual_only: a.manual_only === true,
+                source: a.source, checked_on: a.checked_on, pricing_note: a.pricing_note || null };
+        });
     }
     async function prepare(kind, body, { subject = null } = {}) {
         const b = inputFor(kind, body);
         if (b.type === 'icon') kind = 'icons';
         for (const [k, until] of health) if (until <= now()) health.delete(k);
         const candidates = [];
+        const providers = registry ? await registry.listProviders() : [];
         for (const a of adapters) {
+            if (a.manual_only && (!b.engine || b.engine === 'auto')) continue;
             if (!a.kinds.includes(kind) || b.engine && b.engine !== 'auto' && b.engine !== a.id ||
                 b.freshness && !a.freshness.includes(b.freshness) || (a.requires || []).some(k => !env[k])) continue;
             if (kind !== 'fetch' && a.max_query && [...b.q].length + (b.freshness ? 17 : 0) > a.max_query) continue;
             const own = a.byok && subject && credentials ? await credentials.searchForRun(subject, credentialId(a)) : null;
-            const key = own?.apiKey || (a.key_env && env[a.key_env]);
-            if (a.key_env && !key || a.setting && !env[a.setting]) continue;
-            const healthKey = own ? `${a.id}:${createHash('sha256').update(key).digest('hex')}` : a.id;
+            const state = binding(a, providers);
             const ceiling = a.ceiling ? a.ceiling(b) : a.price_per_1000 / 1000;
-            if (b.max_cost_usd != null && ceiling > b.max_cost_usd) continue;
-            candidates.push({ a, key, own: Boolean(own), healthKey, ceiling });
+            if (!own && !state.available) {
+                // An owner-managed provider that is off stays in the plan so the receipt says why it was skipped.
+                if (state.managed && state.provider && state.configured)
+                    candidates.push({ a, key: state.key, own: false, healthKey: a.id, ceiling, provider: state.provider.key, managed: true, env: state.env, skipReason: 'disabled' });
+                continue;
+            }
+            const key = own?.apiKey || state.key;
+            if (a.key_env && !key || a.setting && !state.env?.[a.setting]) continue;
+            const healthKey = own ? `${a.id}:${createHash('sha256').update(key).digest('hex')}` : a.id;
+            candidates.push({ a, key, own: Boolean(own), healthKey, ceiling, provider: state.provider?.key || null, managed: state.managed, env: state.env || env,
+                skipReason: b.max_cost_usd != null && ceiling > b.max_cost_usd ? 'budget' : null });
         }
         // Once the person has an eligible key, fallback stays within their keys (0% Exchange fee).
         const cohort = candidates.some(c => c.own) ? candidates.filter(c => c.own) : candidates;
-        const selected = cohort.filter(c => b.engine && b.engine !== 'auto' || !health.has(c.healthKey));
+        // A cooldown is a skip in the receipt, not a disappearance; an explicit engine may still retry.
+        const selected = cohort.map(c => {
+            if (!c.skipReason && !(b.engine && b.engine !== 'auto') && health.has(c.healthKey)) c.skipReason = 'circuit_open';
+            return c;
+        });
         const price = c => c.a.estimate ? c.a.estimate(b) : c.a.price_per_1000 == null ? c.ceiling : c.a.price_per_1000 / 1000;
         selected.sort((a, b) => price(a) - price(b));
-        if (!selected.length) throw new AiError(503, 'search.unavailable', 'No configured engine serves this request within its price and freshness limits');
-        return { kind, b, candidates: selected, ceiling: Math.min(b.max_cost_usd ?? Infinity, selected.reduce((n, c) => n + (c.own ? 0 : c.ceiling), 0)) };
+        const runnable = selected.filter(c => !c.skipReason);
+        if (!runnable.length) throw new AiError(503, 'search.unavailable', 'No configured engine serves this request within its price and freshness limits');
+        return { kind, b, candidates: selected, ceiling: Math.min(b.max_cost_usd ?? Infinity, runnable.reduce((n, c) => n + (c.own ? 0 : c.ceiling), 0)) };
     }
-    const receipt = (engine, cost, start) => ({ engine, cost_usd: cost, time_ms: Math.max(0, now() - start) });
+    const receipt = (engine, cost, start, attempts) => ({ engine, cost_usd: cost, time_ms: Math.max(0, now() - start), ...(attempts ? { attempts } : {}) });
     async function execute(plan, budget = Infinity) {
         const start = now();
         let incurred = 0, charge = 0;
+        const attempts = [];
+        const attempt = (c, status, started, cost, reason) => ({ provider: c.provider || credentialId(c.a), engine: c.a.id, status,
+            ...(reason ? { reason } : {}), time_ms: Math.max(0, now() - started), cost_usd: cost });
         for (const c of plan.candidates) {
-            if ((!c.own && c.ceiling + charge > budget + 1e-12) || c.ceiling + incurred > (plan.b.max_cost_usd ?? Infinity) + 1e-12) continue;
+            const attemptStart = now();
+            if (c.skipReason) { attempts.push(attempt(c, 'skipped', attemptStart, 0, c.skipReason)); continue; }
+            if ((!c.own && c.ceiling + charge > budget + 1e-12) || c.ceiling + incurred > (plan.b.max_cost_usd ?? Infinity) + 1e-12) {
+                attempts.push(attempt(c, 'skipped', attemptStart, 0, 'budget')); continue;
+            }
             let attempted = false;
             try {
                 if (plan.kind === 'fetch' && c.a.id !== 'openvibe-egress') await targetGuard(plan.b.url);
-                const options = { fetchImpl, key: c.key, env, now };
+                let boundFetch = fetchImpl;
+                if (!c.own && c.managed) {
+                    const current = await registry.getProvider(c.provider);
+                    if (!current || current.status !== 'active') { attempts.push(attempt(c, 'skipped', attemptStart, 0, 'disabled')); continue; }
+                    const expected = current.base_url && new URL(current.base_url).origin;
+                    // The adapter's own host allowlist covers multi-host readers (Jina); the provider's
+                    // registered origin covers a configured SearXNG address. Nothing else gets the key.
+                    const hosts = new Set((c.a.hosts || []).map(h => 'https://' + h));
+                    boundFetch = (url, init) => {
+                        const origin = new URL(String(url)).origin;
+                        if (!(expected && origin === expected) && !hosts.has(origin)) throw Object.assign(new Error('Search endpoint does not match the provider'), { unbilled: true });
+                        return fetchImpl(url, init);
+                    };
+                    // Key replacement/removal takes effect even for a previously prepared plan.
+                    c.key = providerSecret(current, env) || (c.a.key_env && env[c.a.key_env]);
+                    if (c.a.key_env && !c.key) { attempts.push(attempt(c, 'skipped', attemptStart, 0, 'no_credentials')); continue; }
+                }
+                const options = { fetchImpl: boundFetch, key: c.key, env: c.env, now };
                 attempted = true;
                 const raw = plan.kind === 'fetch' ? await c.a.read(plan.b, options) : await c.a.search(plan.b, options);
                 const cost = raw.cost ?? c.a.price_per_1000 / 1000;
                 if (!Number.isFinite(cost) || cost < 0) throw new Error('Invalid engine cost');
                 const out = plan.kind === 'fetch'
-                    ? { url: plan.b.url, text: String(raw.text || '').slice(0, 200000), receipt: receipt(c.a.id, cost + incurred, start) }
-                    : { results: normalize(Array.isArray(raw) ? raw : raw.rows, c.a.id, plan.kind, plan.b), receipt: receipt(c.a.id, cost + incurred, start) };
+                    ? { url: plan.b.url, text: String(raw.text || '').slice(0, 200000), receipt: receipt(c.a.id, cost + incurred, start, [...attempts, attempt(c, 'ok', attemptStart, cost)]) }
+                    : { results: normalize(Array.isArray(raw) ? raw : raw.rows, c.a.id, plan.kind, plan.b), receipt: receipt(c.a.id, cost + incurred, start, [...attempts, attempt(c, 'ok', attemptStart, cost)]) };
                 if (plan.kind !== 'fetch' && !validate(plan.kind === 'web' ? 'exchange.search-result@1' : 'exchange.image-result@1', out).valid) throw new Error('Invalid search response');
                 health.delete(c.healthKey);
                 Object.defineProperty(out, CHARGE, { value: charge + (c.own ? 0 : cost) });
@@ -112,12 +166,16 @@ function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () =>
             } catch (error) {
                 // A transport timeout or malformed successful response may already be billed.
                 // Keep its ceiling in both the fallback budget and receipt, rather than overspend.
-                if (attempted && !error.unbilled) { incurred += c.ceiling; if (!c.own) charge += c.ceiling; }
+                const failedCost = attempted && !error.unbilled ? c.ceiling : 0;
+                const reason = ['AbortError', 'TimeoutError'].includes(error.name) || error.code === 'provider.timeout' ? 'timeout'
+                    : /usage is missing|Invalid engine cost|Invalid search response/.test(error.message || '') ? 'invalid_response' : 'upstream_error';
+                attempts.push(attempt(c, 'error', attemptStart, failedCost, reason));
+                if (failedCost) { incurred += failedCost; if (!c.own) charge += failedCost; }
                 health.set(c.healthKey, now() + 60000);
                 if (health.size > 1000) health.delete(health.keys().next().value);
             }
         }
-        throw Object.assign(new AiError(503, 'search.unavailable', 'The selected engines did not answer'), { [CHARGE]: charge });
+        throw Object.assign(new AiError(503, 'search.unavailable', 'The selected engines did not answer', { attempts }), { [CHARGE]: charge });
     }
     async function search(kind, b, context = {}) {
         return execute(context.plan || await prepare(kind, b, context), context.budget);

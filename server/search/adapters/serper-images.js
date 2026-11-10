@@ -1,0 +1,14 @@
+'use strict';
+const { requestFor, post } = require('../transport');
+module.exports = {
+    id: 'serper-images', credential_id: 'serper', byok: true, manual_only: true, checked_on: '2026-11-10',
+    kinds: ['images'], key_env: 'SEARCH_SERPER_KEY', hosts: ['google.serper.dev'], freshness: [],
+    price_per_1000: 1, source: 'https://serper.dev/',
+    pricing_note: 'Starter prepaid pack: $50 for 50000 credits. Search results do not establish reuse rights.',
+    async search(b, { fetchImpl, key }) {
+        const out = await requestFor(this.hosts, fetchImpl)('https://google.serper.dev/images', post({ q: b.q, num: Math.min(b.limit, 10) }, { 'x-api-key': key }));
+        return (out.images || []).map(r => ({ title: r.title || '', url: r.imageUrl, snippet: '', published: null,
+            thumbnail: r.thumbnailUrl, width: r.imageWidth, height: r.imageHeight, source_page: r.link,
+            license: null, license_url: null, author: null, attribution: null }));
+    },
+};

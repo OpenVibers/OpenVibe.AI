@@ -680,7 +680,8 @@ const PROVIDERS = [
     }),
     // Providers without a hand-kept model list: the owner syncs and enables their models.
     { key: 'meta', display_name: 'Meta Model API', base_url: 'https://api.meta.ai/v1',
-        docs_url: 'https://dev.meta.ai/docs/api-reference', capabilities: ['chat', 'vision', 'tools'] },
+        docs_url: 'https://dev.meta.ai/docs/api-reference', capabilities: ['chat', 'vision', 'tools', 'web-search'],
+        search_adapters: ['meta'] },
     { key: 'deepseek', keys_url: 'https://platform.deepseek.com/api_keys', display_name: 'DeepSeek', base_url: 'https://api.deepseek.com/v1', default_model: 'deepseek-flash',
         docs_url: 'https://api-docs.deepseek.com/', capabilities: ['chat', 'vision', 'tools', 'web-search'], search_adapters: ['deepseek'] },
     { key: 'anthropic', keys_url: 'https://console.anthropic.com/settings/keys', display_name: 'Anthropic', kind: 'anthropic', base_url: 'https://api.anthropic.com/v1', auth_mode: 'x-api-key',

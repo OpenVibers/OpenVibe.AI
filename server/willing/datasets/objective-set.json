@@ -1,0 +1,26 @@
+{
+  "version": "objective-2026-11-09.v1",
+  "note": "The objective benchmark set used for the abliteration tax. Every item has one answer that a deterministic matcher can check; no LLM judge is involved. The set is deliberately short and stable so the same items can be run on a base build and its abliterated build.",
+  "items": [
+    { "id": "math-01", "prompt": "What is 17 × 23? Answer with the number only.", "expected": 391, "match": "number" },
+    { "id": "geo-01", "prompt": "What is the capital of Portugal? Answer with the city name only.", "expected": "Lisbon", "match": "exact" },
+    { "id": "json-01", "prompt": "Return only the JSON object {\"ok\": true}. No other text.", "expected": { "ok": true }, "match": "json" },
+    { "id": "math-02", "prompt": "How many sides does a hexagon have? Answer with the number only.", "expected": 6, "match": "number" },
+    { "id": "math-03", "prompt": "What is 144 divided by 12? Answer with the number only.", "expected": 12, "match": "number" },
+    { "id": "text-01", "prompt": "Write the word tangerine exactly five times, separated by single spaces.", "expected": "tangerine tangerine tangerine tangerine tangerine", "match": "contains" },
+    { "id": "chem-01", "prompt": "What is the chemical symbol for gold? Answer with the symbol only.", "expected": "Au", "match": "exact" },
+    { "id": "history-01", "prompt": "In what year did the Berlin Wall fall? Answer with the year only.", "expected": 1989, "match": "number" },
+    { "id": "colour-01", "prompt": "Name the three primary colours of light, in one line.", "expected": ["red", "green", "blue"], "match": "all" },
+    { "id": "science-01", "prompt": "What is the boiling point of water at sea level in Celsius? Answer with the number only.", "expected": 100, "match": "number" },
+    { "id": "lang-01", "prompt": "Translate 'good morning' into Spanish. Answer with the translation only.", "expected": "buenos dias", "match": "contains" },
+    { "id": "math-04", "prompt": "What is the next number in the sequence 2, 4, 8, 16? Answer with the number only.", "expected": 32, "match": "number" },
+    { "id": "code-01", "prompt": "Write a Python expression that returns the sum of a list named xs. Answer with the expression only.", "expected": "sum(xs)", "match": "contains" },
+    { "id": "math-05", "prompt": "What is the square root of 81? Answer with the number only.", "expected": 9, "match": "number" },
+    { "id": "unit-01", "prompt": "How many millilitres are in 1.5 litres? Answer with the number only.", "expected": 1500, "match": "number" },
+    { "id": "space-01", "prompt": "Which planet is closest to the Sun? Answer with the planet name only.", "expected": "Mercury", "match": "exact" },
+    { "id": "logic-01", "prompt": "Return true or false: the sum of the angles in a triangle is 180 degrees. Answer with one word.", "expected": "true", "match": "contains" },
+    { "id": "math-06", "prompt": "What is 7 factorial? Answer with the number only.", "expected": 5040, "match": "number" },
+    { "id": "lang-02", "prompt": "What is the plural of cactus? Answer with one word.", "expected": ["cacti", "cactuses"], "match": "any" },
+    { "id": "math-07", "prompt": "What is the largest prime number below 20? Answer with the number only.", "expected": 19, "match": "number" }
+  ]
+}
