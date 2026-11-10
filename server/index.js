@@ -124,6 +124,9 @@ async function start({ searchFetch = null, config, db: givenDb = null, clock = {
     // The Exchange's routing presets and the receipts of the answered requests (server/exchange/).
     const presets = require('./exchange/presets').createPresets({ db, clock, log });
     const receipts = require('./exchange/receipts').createReceipts({ db, clock, log });
+    // The weekly real-traffic share (stage B8): the public read stores the week; the housekeeping pass
+    // publishes it even when nobody reads it, before the receipts it came from are pruned.
+    const share = require('./exchange/share').createShare({ db, clock, log, k: config.trafficShare.k });
     const choices = require('./choices').createChoices({ db, registry, preferences, credentials, machines, adultStatus, ratings: require('./choices/ratings').createRatings({ fetchImpl, clock }), clock, catalog: require('./exchange/catalog').createCatalog({ db, registry, pool, config, env, clock }) });
     await choices.seed();
     const projectSecrets = require('./project-secrets').createProjectSecrets({ config, env, fetchImpl });
@@ -210,7 +213,7 @@ async function start({ searchFetch = null, config, db: givenDb = null, clock = {
         clientSecret: env.OV_OAUTH_CLIENT_SECRET, fetch: fetchImpl,
     }) : null;
     const benchEvents = createBenchEvents({ bench, accountData, accountSend, config, log, fetchImpl, clientSecret: env.OV_OAUTH_CLIENT_SECRET });
-    const app = createApp({ choices, searchFetch, config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, grants, vault, settings, benchEvents, runBudgets, memory, memoryImport, memoryServices, memorySharing, community, endpoints, webhooks, presets, receipts, balance, creditGrants, sessionCookies, gpus, abuse, priceBook, ownEndpoints, refusal, batches, gpuMarket });
+    const app = createApp({ choices, searchFetch, config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, grants, vault, settings, benchEvents, runBudgets, memory, memoryImport, memoryServices, memorySharing, community, endpoints, webhooks, presets, receipts, balance, creditGrants, sessionCookies, gpus, abuse, priceBook, ownEndpoints, refusal, batches, gpuMarket, share });
     let jwks = null;
     let keyLoaded = Promise.resolve(null);
     if (!keys.pinned && config.nodeEnv !== 'test') {
@@ -230,6 +233,7 @@ async function start({ searchFetch = null, config, db: givenDb = null, clock = {
             if (pruned || expired || lapsed) log.log(`[ai] retention: ${pruned} old run(s), ${expired} expired cache entr${expired === 1 ? 'y' : 'ies'}, ${lapsed} unsent usage reading(s)`);
             if (Object.values(abusePruned).some((n) => n)) log.log(`[ai] abuse retention: ${Object.entries(abusePruned).filter(([, n]) => n).map(([k, n]) => `${n} ${k}`).join(', ')}`);
         } catch (err) { log.error(`[ai] retention failed: ${err.message}`); }
+        try { await share.ensure(); } catch (err) { log.warn(`[ai] traffic share failed: ${err.message}`); }
     }, 60 * 60 * 1000);
     housekeeping.unref?.();
 

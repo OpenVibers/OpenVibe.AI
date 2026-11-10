@@ -117,7 +117,7 @@ const laterOf = (a, b) => {
     return x > y ? x : y;
 };
 
-function createCatalog({ db, registry, pool, env = process.env, clock = { now: () => Date.now() }, config = null }) {
+function createCatalog({ db, registry, pool, env = process.env, clock = { now: () => Date.now() }, config = null, fidelity = null }) {
     // The free-tier admission rules are the router's (server/free-tier.js): the catalog marks an offer with what
     // the free allowance and the anonymous Try it may actually use. config.freeUse is fixed at boot, like the
     // provider keys and upstreams the rest of this read shows.
@@ -147,6 +147,7 @@ function createCatalog({ db, registry, pool, env = process.env, clock = { now: (
         const now = clock.now();
         const providers = await registry.listProviders();
         const byKey = new Map(providers.map((p) => [p.key, p]));
+        const fidelityMap = fidelity ? await fidelity.read() : new Map();
         // The router's per-offer circuit (server/providers/index.js, migrations/0060) is the authority; a
         // provider-level provider_health row is still read for a state written before it (or by a test).
         // Measured failures are folded in below: over 5% of at least 10 requests in the last hour is degraded.
@@ -252,6 +253,9 @@ function createCatalog({ db, registry, pool, env = process.env, clock = { now: (
                 refusal_rate: refusal && refusal.refusal_rate != null ? Number(refusal.refusal_rate) : null,
                 refusal_measured_on: refusal ? (String(refusal.measured_on || '').slice(0, 10) || null) : null,
                 refusal_prompt_set: refusal ? (refusal.prompt_set || null) : null,
+                // Bench's measured provider fidelity for this exact endpoint: score, n, interval, the model
+                // it was compared on and when. Null when nobody measured it (missing is not zero).
+                fidelity: fidelityMap.get(`${String(up.key).toLowerCase()}\0${String(row.model_key).toLowerCase()}`) || null,
                 updated_at: row.updated_at || provider.updated_at || null,
             };
             if (!groups.has(slug)) {
