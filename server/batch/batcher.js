@@ -232,7 +232,10 @@ function createBatcher({ db, runs, registry, credits = null, config = {}, clock 
             const charge = capacity.chargeOf(cards.row);
             if (!charge || !capacity.within(cards.batch.nano_usd_per_m, charge)) continue;
             let body;
-            try { body = prepared.bodyFor(offer.model); } catch { continue; }
+            try {
+                body = prepared.bodyFor(offer.model);
+                if (prepared.effort) require('../effort/providers').apply(body, { model: offer.model, effort: prepared.effort }, provider);
+            } catch { continue; }
             if (!body || !Array.isArray(body.messages) || !body.messages.length) continue;
             body.model = offer.model;
             // BA2's probe: a real hold, released at once. A payer who cannot cover the run is refused now,

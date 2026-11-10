@@ -59,13 +59,18 @@ const SERVICE_OR_APP = [{ bearer: [] }, { app: [] }];
 const json = (description, schema) => ({ description, ...(schema ? { content: { 'application/json': { schema } } } : {}) });
 const body = (schema, required = true) => ({ required, content: { 'application/json': { schema } } });
 
+const effortFields = {
+    effort: str({ enum: ['auto', 'low', 'medium', 'high', 'max'] }),
+    agent_role: str({ enum: ['router', 'gate', 'assessor', 'worker', 'subagent', 'reviewer'] }),
+    ladder_id: str({ maxLength: 128 }), rung: integer({ minimum: 0 }), kind: str({ maxLength: 100 }),
+};
 const runBody = (required = []) => ({
     type: 'object', ...(required.length ? { required } : {}),
     properties: {
         workflow: str({ description: 'The workflow key, e.g. ai.generate' }), version: integer({ minimum: 1 }),
         task: str({ description: 'A registered task (GET /api/v1/tasks); its workflow runs with the task’s resolved choice. Required instead of workflow when no workflow is named.' }),
         choice: ref('Choice'),
-        input: { type: 'object' }, idempotency_key: str({ minLength: 8, maxLength: 128 }),
+        ...effortFields, input: { type: 'object' }, idempotency_key: str({ minLength: 8, maxLength: 128 }),
         target: { type: 'object' }, attribution: { type: 'object' }, on_behalf_of: ref('SubjectRef'),
         options: { type: 'object', description: 'cache, debug, and the latency class: latency (interactive | background | batch); a batch-class run also takes deadline_hours (1-72, the default is 24)' }, route: { type: 'object', description: '{ provider, model } — one offer from GET /api/v1/routes?operation=…' },
     },
@@ -73,6 +78,7 @@ const runBody = (required = []) => ({
 const directBody = {
     type: 'object',
     properties: {
+        ...effortFields,
         idempotency_key: str({ minLength: 8, maxLength: 128 }), target: { type: 'object' }, attribution: { type: 'object' },
         on_behalf_of: ref('SubjectRef'), options: { type: 'object' },
     },
@@ -466,6 +472,7 @@ const exchangeModel = {
         capabilities: { type: 'object', properties: { tools: { type: 'boolean' }, json: { type: 'boolean' }, vision: { type: 'boolean' }, stream: { type: 'boolean' } } },
         modalities: arrayOf(str()), description: nullable('string'),
         requests_7d: integer({ minimum: 0 }), requests_today: integer({ minimum: 0 }),
+        cache_hit_share_7d: nullable('number', { minimum: 0, maximum: 1 }),
         cached_7d: integer({ minimum: 0 }), cached_today: integer({ minimum: 0 }), community: { type: 'boolean' },
         cache_hit_share_7d: nullable('number', { minimum: 0, maximum: 1, description: 'The prompt-cache share over this model\'s offers in the window (cached prompt tokens / reported prompt tokens). Null when no offer has enough attempts to measure one.' }),
         offers: arrayOf(exchangeOffer),
@@ -497,6 +504,25 @@ route('get', '/exchange/market', {
             } }),
         },
     }), ...errors([422]) },
+});
+route('get', '/exchange/estimate', {
+    operationId: 'exchangeEffortEstimate', summary: 'A current-price p25–p75 cost estimate from 30 days of receipts', tags: ['exchange'], security: [],
+    parameters: [query('model', str()), query('effort', effortFields.effort), query('kind', str()), query('input_tokens', integer({ minimum: 1 }))],
+    responses: { 200: json('Under twenty observations: null prices with n and basis.status no_data', { type: 'object', required: ['low_usd', 'high_usd', 'n', 'basis'], properties: { low_usd: nullable('number'), high_usd: nullable('number'), n: integer(), basis: { type: 'object' } } }), ...errors([422]) },
+});
+route('get', '/me/ladders/{id}', {
+    operationId: 'myEffortLadder', summary: 'Your own ladder costs by rung', tags: ['exchange'], security: SERVICE,
+    parameters: [path('id', str())], responses: { 200: json('Total cost and rung totals', { type: 'object' }), ...errors([401, 403, 404]) },
+});
+route('get', '/agent-role-defaults', {
+    operationId: 'agentRoleDefaults', summary: 'Owner role model and effort defaults', tags: ['admin'], security: SERVICE,
+    description: 'ai.config.manage. Reviewer uses a different model provider family than worker.', responses: { 200: json('Role defaults', { type: 'object' }), ...errors([401, 403]) },
+});
+route('put', '/agent-role-defaults/{role}', {
+    operationId: 'putAgentRoleDefault', summary: 'Update and audit a role default', tags: ['admin'], security: SERVICE,
+    description: 'ai.config.manage. Exactly one of model or choice_order; concrete effort.', parameters: [path('role', effortFields.agent_role)],
+    requestBody: body({ type: 'object', properties: { model: str(), choice_order: arrayOf(str()), effort: effortFields.effort } }),
+    responses: { 200: json('Saved default', { type: 'object' }), ...errors([401, 403, 422]) },
 });
 route('get', '/exchange/catalog', {
     operationId: 'exchangeCatalog', summary: 'Every model and every offer that serves it', tags: ['exchange'], security: [],
@@ -853,6 +879,7 @@ function openapi() {
                     source_service: nullable('string'), target: nullable('object'), input: nullable('object'), output: nullable('object'),
                     error: nullable('object', { properties: { code: str(), detail: str() } }), synthetic: { type: 'boolean' },
                     provenance: { type: 'object' },
+                    effort_requested: effortFields.effort, effort_applied: nullable('string'), effort_rung: integer({ minimum: 0 }), ladder_id: str(), ladder: arrayOf({ type: 'object' }),
                     latency_class: { type: 'string', enum: ['interactive', 'background', 'batch'] },
                     service_tier: nullable('string', { description: 'the tier the answer really ran on: standard, flex, batch, offpeak or local' }),
                     latency_clamped: nullable('object', { description: '{ asked, used }: the class the caller asked for and the class the run really took' }),

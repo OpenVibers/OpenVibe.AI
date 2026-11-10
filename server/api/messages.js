@@ -28,6 +28,7 @@
  * with the HTTP status the run's problem had.
  */
 const express = require('express');
+const { controls } = require('../effort/defaults');
 const { CAPS } = require('../auth');
 const { appAttribution } = require('../apps');
 const { credentialFor } = require('./credential');
@@ -178,6 +179,7 @@ function messagesRouter({ runs, auth, config, registry, presets = null, receipts
         }
         if (!Array.isArray(b.messages) || !b.messages.length) return anthropicError(res, 400, 'messages: must be a non-empty array');
         if (!Number.isInteger(b.max_tokens) || b.max_tokens < 1) return anthropicError(res, 400, 'max_tokens: must be a positive integer');
+        if (/^claude-(opus|sonnet)-5-5/.test(String(b.model || '').split('/').pop()) && b.thinking && Object.hasOwn(b.thinking, 'budget_tokens')) return anthropicError(res, 400, 'Opus/Sonnet 5.5 require adaptive thinking; budget_tokens is refused');
         const input = { messages: b.messages, max_tokens: Math.min(b.max_tokens, MAX_TOKENS) };
         for (const k of FIELDS) if (b[k] !== undefined && b[k] !== null) input[k] = b[k];
         // AI Exchange F: the caller's liability cap for the Balance hold (an OpenVibe extension).
@@ -224,7 +226,7 @@ function messagesRouter({ runs, auth, config, registry, presets = null, receipts
                 delete input.model;
             }
         } catch (err) { return anthropicError(res, err.status || 400, err.message, null, err.code); }
-        let body = { workflow: 'ai.messages', input, idempotency_key: req.get('idempotency-key') || undefined };
+        let body = { ...controls(b), workflow: 'ai.messages', input, idempotency_key: req.get('idempotency-key') || undefined };
         // The preset's rules ride the run into the router.
         if (preset) body = { ...body, preset: { name: preset.name, scope: preset.scope, policy: preset.policy } };
         if (preset && preset.policy.adult && b.policy == null) body = { ...body, policy: 'uncensored' };
