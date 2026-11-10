@@ -114,7 +114,7 @@ function speechProviderRecords(config, env) {
 
 function providerRecords(config, env) {
     const out = [
-        { key: 'stub', display_name: 'Deterministic stub (synthetic output)', kind: 'stub', status: 'active', auth_mode: 'none', default_model: 'stub-1', capabilities: ['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich', 'embed', 'json', 'vision', 'transcribe', 'speak'], timeout_ms: 10000, priority: 1000, provider_access: 'OWN_DEPLOYMENT', metadata: { synthetic: true, billing_profile: 'free' } },
+        { key: 'stub', display_name: 'Deterministic stub (synthetic output)', kind: 'stub', status: 'active', auth_mode: 'none', default_model: 'stub-1', capabilities: ['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich', 'embed', 'json', 'vision', 'transcribe', 'speak', 'speech'], timeout_ms: 10000, priority: 1000, provider_access: 'OWN_DEPLOYMENT', metadata: { synthetic: true, billing_profile: 'free' } },
         sharedProviderRecord(config, env),
         deepseekProviderRecord(config, env),
         ...speechProviderRecords(config, env),

@@ -523,9 +523,19 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
         const format = input.response_format || 'mp3';
         const speed = input.speed == null ? 1 : Number(input.speed);
         const exact = { id: `voice:${voice}`, offers: [{ provider: entry.provider, model: voice }] };
-        const exec = await pool.execute(route, 'speak', { voice, text, format, speed, model: voice,
-            timeoutMs: route.timeout_ms || 60000 }, { ...ctx, ...selectionCtx(selection), exact: ctx.exact || exact,
-            routeKey: route.key, routeVersion: route.version, promptHash: sha256({ v: voice, t: text, f: format, s: speed }) });
+        const req = { voice, text, format, speed, model: voice, timeoutMs: route.timeout_ms || 60000 };
+        const base = { ...ctx, ...selectionCtx(selection), routeKey: route.key, routeVersion: route.version,
+            promptHash: sha256({ v: voice, t: text, f: format, s: speed }) };
+        let exec;
+        try {
+            exec = await pool.execute(route, 'speak', req, { ...base, exact: ctx.exact || exact });
+        } catch (err) {
+            // The pinned voice has no usable offer (no key, provider off): the pool's own order answers —
+            // the deterministic stub in keyless environments — rather than failing a known voice. Any
+            // other refusal (quota, payer, an unknown voice) still fails, never silently another voice.
+            if (!err || err.code !== 'ai.model_unavailable') throw err;
+            exec = await pool.execute(route, 'speak', req, base);
+        }
         const audio = exec.result.audio;
         if (!audio || !audio.length) throw new AiError(502, 'output.invalid', 'the provider answered, but with no audio');
         return { output: { audio: Buffer.isBuffer(audio) ? audio.toString('base64') : String(audio),
