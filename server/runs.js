@@ -102,13 +102,14 @@ function projectProviderOf(spec) {
  * uses; the offer itself is checked against the routing's own list later, once the run's route is resolved.
  */
 const ROUTE_PIN_KEYS = new Set(['provider', 'model']);
-function routePinRequest(value, principal, wf) {
+function routePinRequest(value, principal, wf, internal = false) {
     if (value == null) return null;
-    // A first-party service pins a route on the generate operation. An app may pin only the advisor's own
-    // ai.chat child run: no app-reachable route passes a caller's route field for that workflow.
-    if (principal.kind === 'app' && (!wf || wf.key !== 'ai.chat')) throw new AiError(403, 'capability.denied', 'a developer app may not pin a route; use the routing pool');
+    // A first-party service pins a route on the generate operation. The advisor's own ai.chat child run is
+    // created with the app's (or service's) principal and passes `internal`; no caller's request reaches the
+    // chat pin, so a caller still cannot pin anything but generate.
+    if (principal.kind === 'app' && !(internal && wf && wf.key === 'ai.chat')) throw new AiError(403, 'capability.denied', 'a developer app may not pin a route; use the routing pool');
     if (principal.kind !== 'app' && (!principal.subject || principal.subject.type !== 'service')) throw new AiError(403, 'capability.denied', 'only a first-party service may pin a route');
-    if (!wf || !['ai.generate', 'ai.chat'].includes(wf.key)) throw new AiError(422, 'input.invalid', 'route pinning is available on the generate operation (ai.generate) and the advisor chat (ai.chat) only');
+    if (!wf || !(wf.key === 'ai.generate' || (internal && wf.key === 'ai.chat'))) throw new AiError(422, 'input.invalid', 'route pinning is available on the generate operation (ai.generate) only');
     if (typeof value !== 'object' || Array.isArray(value)) throw new AiError(422, 'input.invalid', 'route must be { provider, model }');
     for (const k of Object.keys(value)) if (!ROUTE_PIN_KEYS.has(k)) throw new AiError(422, 'input.invalid', `route has no field ${k}; send { provider, model }`);
     const provider = typeof value.provider === 'string' ? value.provider.trim() : '';
@@ -229,7 +230,7 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
      * principal: { sub, subject: {type, id} }
      * Returns { run, created, promise? }.
      */
-    async function create(body, principal, { trace = null, requestId = null, retryOf = null, onDelta = null, onRoute = null, abuse: requestAbuse = null, discount = null, exact = null, costCheck = null, communityOfferId = null, callerWaitMs = 0 } = {}) {
+    async function create(body, principal, { trace = null, requestId = null, retryOf = null, onDelta = null, onRoute = null, abuse: requestAbuse = null, discount = null, exact = null, costCheck = null, communityOfferId = null, callerWaitMs = 0, advisorInternal = false } = {}) {
         if (!body || typeof body !== 'object') throw new AiError(400, 'input.invalid', 'JSON body required');
         const namedTask = choices && body.task ? await choices.task(String(body.task)) : null;
         if (body.task && !namedTask) throw new AiError(404, 'task.not_found', 'unknown task');
@@ -237,7 +238,7 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
         const wf = body.version ? await registry.getWorkflow(wfKey, Number(body.version)) : await registry.activeWorkflow(wfKey);
         if (!wf) throw new AiError(404, 'workflow.not_found', `no active workflow ${wfKey}${body.version ? ` v${body.version}` : ''}`);
         if (body.version && !['active', 'deprecated'].includes(wf.status)) throw new AiError(409, 'workflow.inactive', `${wfKey} v${wf.version} is ${wf.status}`);
-        const pinned = routePinRequest(body.route, principal, wf);
+        const pinned = routePinRequest(body.route, principal, wf, advisorInternal);
         if (pinned && body.credential != null) throw new AiError(422, 'input.invalid', 'a pinned route cannot be combined with a person\'s credential; the pin is the provider');
         // A run token names the person it acts for (Codes C3, `on_behalf_of` in the claims). The run records that
         // person exactly as a body field would, so they pay, the run is theirs and caches never cross persons. The
@@ -1273,7 +1274,7 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
             ...(row.on_behalf_of ? { on_behalf_of: parseJson(row.on_behalf_of, null) } : {}),
             ...(row.attribution ? { attribution: parseJson(row.attribution, null) } : {}),
             options: { cache: false },
-        }, principal, { trace });
+        }, principal, { trace, advisorInternal: true });
         const done = await wait(created, config.runs.maxWaitMs);
         if (!done || ['failed', 'cancelled'].includes(done.status)) throw new AiError(502, 'advisor.failed', (done && done.error && done.error.detail) || 'the advisor run did not answer');
         const cut = advisor.words(done.output && done.output.text, maxWords);
