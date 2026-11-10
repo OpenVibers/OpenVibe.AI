@@ -35,9 +35,11 @@ t.test('30/90-day series, six-model bound, selected measures, same-day ranking a
     assert.deepEqual(comparison.body.models.map((m) => m.cells[0].latency_p50_ms), [1000, 2000]);
     assert(!Object.hasOwn(comparison.body.models[0].cells[0], 'cost_per_run_usd'));
     assert.equal((await get('/leaderboard?kind=chat&measure=latency_p50_ms')).body.rows[0].model, 'openai/gpt-test');
-    const preflight = await fetch(base + '/api/v1/exchange/metrics/compare', { method: 'OPTIONS', headers: { Origin: 'https://example.test' } });
+    const preflight = await fetch(base + '/api/v1/exchange/metrics/compare', { method: 'OPTIONS', headers: { Origin: 'https://example.test', 'Access-Control-Request-Method': 'GET', 'Access-Control-Request-Headers': 'traceparent,x-openvibe-request-id,content-type' } });
     assert.equal(preflight.status, 204);
     assert.equal(preflight.headers.get('access-control-allow-origin'), '*');
+    const allowed = preflight.headers.get('access-control-allow-headers').toLowerCase().split(/,\s*/);
+    for (const header of ['traceparent', 'x-openvibe-request-id', 'content-type']) assert(allowed.includes(header), header);
     for (const path of ['/compare?models=a,b,c,d,e,f,g', '/compare?models=a&measures=made_up', '/models/a?days=365', '/leaderboard?kind=private-site', '/compare?models=a&day=2026-02-31']) {
         const invalid = await get(path);
         assert.equal(invalid.status, 422, path);

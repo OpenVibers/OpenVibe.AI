@@ -9,7 +9,7 @@ function measuredMetricsRouter({ db, clock = { now: () => Date.now() }, log = co
         if (!['GET', 'OPTIONS'].includes(req.method)) return next();
         res.set('Access-Control-Allow-Origin', '*');
         if (req.method === 'OPTIONS') return res.set({ 'Access-Control-Allow-Methods': 'GET, OPTIONS',
-            'Access-Control-Allow-Headers': 'Accept, Content-Type, Authorization', 'Access-Control-Max-Age': '600' }).sendStatus(204);
+            'Access-Control-Allow-Headers': 'Accept, Content-Type, Authorization, traceparent, X-OpenVibe-Request-Id', 'Access-Control-Max-Age': '600' }).sendStatus(204);
         next();
     });
     const read = (fn) => async (req, res) => {
