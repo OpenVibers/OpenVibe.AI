@@ -165,7 +165,7 @@ function assertOpenAiStream(parsed, expected) {
 
 function assertAnthropicJson(body, expected) {
     assert.deepStrictEqual([body.type, body.role], ['message', 'assistant']);
-    assert.strictEqual(body.id, expected.response.id);
+    assert.strictEqual(body.id, 'msg_' + body.x_openvibe.run_id, 'gateway ids support generation lookup');
     assert.strictEqual(body.model, expected.response.model);
     assert.deepStrictEqual(body.content, expected.response.content, 'the upstream content blocks are passed through untranslated');
     assert.strictEqual(body.stop_reason, expected.response.stop_reason);
@@ -186,7 +186,9 @@ function assertAnthropicStream(parsed, expected) {
     const last = parsed.frames[parsed.frames.length - 1];
     assert.ok(parsed.frames.length >= 2, 'message_start through message_stop');
     assert.deepStrictEqual(parsed.frames.map((f) => f.event), expected.stream.map((f) => f.event), 'the named events, in protocol order');
-    assert.deepStrictEqual(parsed.frames.slice(0, -1).map((f) => f.data), expected.stream.slice(0, -1).map((f) => f.data), 'every event before message_stop is passed through');
+    const expectedEvents = expected.stream.slice(0, -1).map(f => f.event === 'message_start'
+        ? { ...f.data, message: { ...f.data.message, id: 'msg_' + last.data.x_openvibe.run_id } } : f.data);
+    assert.deepStrictEqual(parsed.frames.slice(0, -1).map((f) => f.data), expectedEvents, 'events pass through with the gateway generation id');
     assert.ok(parsed.frames.every((f) => f.event === f.data.type), 'the event name matches the data type');
     assert.deepStrictEqual([last.event, last.data.type], ['message_stop', 'message_stop']);
     assert.ok(last.data.x_openvibe, 'message_stop carries x_openvibe');
