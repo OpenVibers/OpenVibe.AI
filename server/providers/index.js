@@ -1654,14 +1654,15 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         explain.paid_by = 'openvibe';
         explain.attempts = attempts;
         explain.reasons = [...(explain.reasons || []), ...(selfAttempts.length ? ['your own keys did not answer; the network is the fallback'] : [])];
-        // A first-party service's generate run may name one offer from GET /api/v1/routes. The run then
-        // tries that offer alone: no fallback to another model, so the caller gets the model it asked for
-        // or an explicit failure. server/runs.js validates the pin against this same offer list first.
-        if (ctx.routePin && operation === 'generate' && !exact) {
+        // A first-party service's generate run may name one offer from GET /api/v1/routes; the advisor's own
+        // ai.chat child run names its stronger model the same way. The run then tries that offer alone: no
+        // fallback to another model, so the caller gets the model it asked for or an explicit failure.
+        // server/runs.js validates the pin against this same offer list first.
+        if (ctx.routePin && ['generate', 'chat'].includes(operation) && !exact) {
             const pin = ctx.routePin;
             const chosen = list.find((c) => c.provider === pin.provider && (pin.model == null || c.model === pin.model));
             if (!chosen) {
-                throw new AiError(422, 'route.not_offered', `route ${pin.model ? `${pin.provider}/${pin.model}` : pin.provider} is not offered for generate; GET /api/v1/routes?operation=generate lists the offers`);
+                throw new AiError(422, 'route.not_offered', `route ${pin.model ? `${pin.provider}/${pin.model}` : pin.provider} is not offered for ${operation}; GET /api/v1/routes?operation=${operation} lists the offers`);
             }
             list = [chosen];
             explain.reasons = [`pinned to ${chosen.model ? `${chosen.provider}/${chosen.model}` : chosen.provider} for this run`, ...(explain.reasons || [])];
