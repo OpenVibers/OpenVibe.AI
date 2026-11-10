@@ -102,6 +102,11 @@ function load(env = process.env) {
             url: trimUrl(env.AI_BENCH_URL || env.OV_BENCH_INTERNAL_URL || env.OV_BENCH_URL || env.BENCH_URL || 'http://127.0.0.1:5230'),
             timeoutMs: int(env.AI_BENCH_TIMEOUT_MS, 15000),
         },
+        // Real-traffic share by model and app category (stage B8). The k rule is a floor: a cell below it
+        // is never published, whatever the environment says.
+        trafficShare: {
+            k: Math.max(20, int(env.AI_TRAFFIC_SHARE_K, 20)),
+        },
 
         // PostgreSQL (ADR-035): DATABASE_URL serves (PgBouncer), DATABASE_DIRECT_URL migrates (owner role).
         db: { url: env.DATABASE_URL || '', directUrl: env.DATABASE_DIRECT_URL || '' },

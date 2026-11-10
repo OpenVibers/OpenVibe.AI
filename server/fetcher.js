@@ -134,7 +134,9 @@ function createFetcher(config, { transport = null } = {}) {
                 }
                 if (res.statusCode !== 200) {
                     res.resume();
-                    return done(() => reject(new AiError(502, 'source.unavailable', `source answered HTTP ${res.statusCode}`)));
+                    const err = new AiError(502, 'source.unavailable', `source answered HTTP ${res.statusCode}`);
+                    err.upstreamStatus = res.statusCode;   // a caller can tell "gone" from "down" (file-inputs does)
+                    return done(() => reject(err));
                 }
                 const declared = Number(res.headers['content-length']);
                 if (Number.isFinite(declared) && declared > maxBytes) { res.resume(); return done(() => reject(new AiError(413, 'source.too_large', `source is larger than ${maxBytes} bytes`))); }

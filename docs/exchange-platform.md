@@ -69,3 +69,18 @@ per minute. Every known metadata field carries its own source URL. Provider-page
 facts take precedence over models.dev. Tests disable live refresh and inject
 recorded responses. The market projects public fields explicitly; credentials,
 account ids, internal provider metadata and price-change actors are never returned.
+
+## Fidelity and real-traffic share
+
+Each offer in the market feed and the catalog carries a `fidelity` field when OpenVibe.Bench has measured that exact
+endpoint on its fixed objective set: `{score, n, interval, compared_to, measured_at, prompt_set}`. AI reads Bench's
+public `GET /api/v1/fidelity` (fail-soft, five-minute cache) and never measures or invents the number itself; when
+Bench has no measurement, or is unreachable, the field is null and the page says "not measured", never zero.
+
+`GET /api/v1/exchange/share` publishes the week's real-traffic share by model and app category, from the Exchange
+receipts of a completed UTC week Monday to Monday. It is aggregate only: a cell needs at least `k` requests
+(`AI_TRAFFIC_SHARE_K`, floor 20) to be published; smaller cells are withheld and counted in `withheld`. Runs whose
+person turned `history` off are excluded, as are failed, cached and synthetic runs; no prompt, answer, person or
+developer app is named (every app folds into the category `apps`). The first read stores the week in
+`exchange_traffic_share` and later reads return the stored copy, so the number survives receipt retention. Tests
+replay receipts into a real test database; no live call is made. Migration 0063 is expand-only.

@@ -51,6 +51,7 @@ t.test('an export carries the person\'s sessions and credential hints, and a del
     const h = await boot({ env: { AI_EVENTS_SECRET: SECRET, AI_EVENTS_SUBSCRIBE: '0', OV_NETWORK_INTERNAL_URL: stub.url, OV_OAUTH_CLIENT_SECRET: 'ai-secret' } });
     try {
         for (const [subject, name] of [[A, 'ada'], [B, 'bo']]) {
+            await h.db.exec('INSERT INTO exchange_compat_presets(owner,name,definition) VALUES ($1,$2,$3)', [subject, 'writer-' + name, JSON.stringify({ name: 'writer-' + name, model: 'openvibe/auto', system: 'Prompt for ' + name })]);
             await h.db.exec('INSERT INTO exchange_key_requests(owner,idempotency_key,request_hash,max_cost_usd) VALUES ($1,$2,$3,1)', [subject, `request-${name}`, `hash-${name}`]);
             await h.db.exec("INSERT INTO console_sessions (id_hash, subject, username, staff, csrf, created_at, expires_at) VALUES ($1, $2, $3, '{}', 'c', '2026-10-01', '2027-10-01')", [`h_${name}`, subject, name]);
             await h.db.exec("INSERT INTO person_sessions (id_hash, subject, username, created_at, expires_at) VALUES ($1, $2, $3, '2026-10-01', '2027-10-01')", [`p_${name}`, subject, name]);
@@ -74,6 +75,9 @@ t.test('an export carries the person\'s sessions and credential hints, and a del
         const part = stub.calls.find((c) => c.url === `/internal/account-exports/${EXP}/parts`);
         assert.ok(part, 'the part was pushed to Network');
         const files = Object.fromEntries(part.body.files.map((f) => [f.name, f.content]));
+        assert.strictEqual(files['exchange-request-presets.json'].length, 1);
+        assert.strictEqual(files['exchange-request-presets.json'][0].name, 'writer-ada');
+        assert.ok(JSON.stringify(files['exchange-request-presets.json']).includes('Prompt for ada'));
         assert.strictEqual(files['console-sessions.json'].length, 1);
         assert.strictEqual(files['person-sessions.json'].length, 1);
         assert.strictEqual(files['provider-credentials.json'].length, 1);
@@ -87,6 +91,8 @@ t.test('an export carries the person\'s sessions and credential hints, and a del
 
         const d = await deliver(ev('evt_01JZ0000000000000000000D01', 'network.account.deleted', { deletion_id: DEL, subject: A, aliases: [] }));
         assert.deepStrictEqual([d.status, d.json.outcome], [200, 'erased']);
+        assert.strictEqual(Number(await h.db.value('SELECT count(*)::int FROM exchange_compat_presets WHERE owner = $1', [A])), 0, 'saved prompts are erased with the owner');
+        assert.strictEqual(Number(await h.db.value('SELECT count(*)::int FROM exchange_compat_presets WHERE owner = $1', [B])), 1, 'another owner retains their preset');
         assert.strictEqual(Number(await h.db.value('SELECT count(*)::int FROM console_sessions WHERE subject = $1', [A])), 0);
         assert.strictEqual(Number(await h.db.value('SELECT count(*)::int FROM exchange_key_requests WHERE owner = $1', [A])), 0, 'request claims are erased with their owner');
         assert.strictEqual(Number(await h.db.value('SELECT count(*)::int FROM exchange_key_requests WHERE owner = $1', [B])), 1, 'another owner\'s claims remain');
