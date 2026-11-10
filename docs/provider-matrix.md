@@ -67,7 +67,7 @@ These presets are seeded disabled in practice until the owner adds a provider ke
 
 ## Cheap hosted inference added 2026-11-10
 
-Endpoints, keyless model lists and key requirements were probed on 2026-11-10 (no account, no key, no paid call). Retention, training and resale terms are unstated for all eleven; NanoGPT's terms alone explicitly allow reselling PAYG access, which still keeps its default `UNVERIFIED` until an executed agreement exists. Prices below are read from the providers' own keyless model lists where the list carries them; Avian publishes per-million figures the existing sync cannot read, so its prices stay on the owner's panel.
+Endpoints, keyless model lists and key requirements were probed on 2026-11-10 (no account, no key, no paid call). Retention, training and resale terms are unstated for all ten; NanoGPT's terms alone explicitly allow reselling PAYG access, which still keeps its default `UNVERIFIED` until an executed agreement exists. Prices are not read by the price book for these ten (it takes per-1M figures; the catalogue sync takes the per-token strings Inference.net, AtlasCloud and Friendli publish). Avian publishes per-million figures the existing sync cannot read, so its prices stay on the owner's panel.
 
 | Provider | Base URL | Privacy facts confirmed | Access default | Own provider listing / terms |
 |---|---|---|---|---|
@@ -76,7 +76,6 @@ Endpoints, keyless model lists and key requirements were probed on 2026-11-10 (n
 | Inference.net | `https://api.inference.net/v1` | Retention/training unstated; keyless model list with per-token prices | `UNVERIFIED` | [Docs](https://docs.inference.net/) |
 | AtlasCloud | `https://api.atlascloud.ai/v1` | Retention/training unstated; keyless model list with per-token prices | `UNVERIFIED` | [Docs](https://www.atlascloud.ai/docs) |
 | Avian | `https://api.avian.io/v1` | Retention/training unstated; keyless model list, per-million prices not readable by sync | `UNVERIFIED` | [Docs](https://avian.io/docs/) |
-| Mancer | `https://neuro.mancer.tech/oai/v1` | Retention/training unstated; keyless model list with per-token prices | `UNVERIFIED` | [Site](https://mancer.tech/) |
 | NanoGPT | `https://api.nano-gpt.com/v1` | Terms allow reselling PAYG access (no markup); keyless model list carries no prices | `UNVERIFIED` | [Pricing](https://nano-gpt.com/pricing) |
 | Infermatic | `https://api.totalgpt.ai/v1` | Retention/training unstated; model list needs a key | `UNVERIFIED` | [Docs](https://ui.infermatic.ai/docs) |
 | ArliAI | `https://api.arliai.com/v1` | Retention/training unstated; keyless custom model list at `/model/all` | `UNVERIFIED` | [Site](https://www.arliai.com/) |

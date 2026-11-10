@@ -371,17 +371,6 @@
       "checked": "2026-11-10"
     },
     {
-      "provider": "Mancer",
-      "api_format": "OpenAI-compatible",
-      "existing_adapter": "openai",
-      "byok": null,
-      "access_mode_default": "UNVERIFIED",
-      "resale_terms_quote": "No resale clause verified; terms silent on retention and training.",
-      "terms_url": "https://mancer.tech/",
-      "terms_effective": null,
-      "checked": "2026-11-10"
-    },
-    {
       "provider": "NanoGPT",
       "api_format": "OpenAI-compatible",
       "existing_adapter": "openai",

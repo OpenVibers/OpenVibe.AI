@@ -122,10 +122,6 @@ const SOURCES = [
         ['sambanova', 'https://api.sambanova.ai/v1/models'],
         ['baseten', 'https://inference.baseten.co/v1/models'],
         ['hyperbolic', 'https://api.hyperbolic.xyz/v1/models'],
-        ['inference-net', 'https://api.inference.net/v1/models'],
-        ['atlas-cloud', 'https://api.atlascloud.ai/v1/models'],
-        ['mancer', 'https://neuro.mancer.tech/oai/v1/models'],
-        ['friendli', 'https://api.friendli.ai/serverless/v1/models'],
     ].map(([key, url]) => ({ key, provider: key, role: 'own', url, kind: 'json', parse: parsers.compatibleModels })),
 ];
 

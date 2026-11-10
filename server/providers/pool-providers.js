@@ -728,8 +728,6 @@ const PROVIDERS = [
         docs_url: 'https://www.atlascloud.ai/docs', capabilities: ['chat'] },
     { key: 'avian', display_name: 'Avian', base_url: 'https://api.avian.io/v1', models_public: true,
         docs_url: 'https://avian.io/docs/', capabilities: ['chat'] },
-    { key: 'mancer', display_name: 'Mancer', base_url: 'https://neuro.mancer.tech/oai/v1', models_public: true,
-        docs_url: 'https://mancer.tech/', capabilities: ['chat'] },
     { key: 'nanogpt', display_name: 'NanoGPT', base_url: 'https://api.nano-gpt.com/v1', models_public: true,
         docs_url: 'https://nano-gpt.com/pricing', capabilities: ['chat'] },
     { key: 'infermatic', display_name: 'Infermatic', base_url: 'https://api.totalgpt.ai/v1',
