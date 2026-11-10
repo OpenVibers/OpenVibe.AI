@@ -28,6 +28,7 @@ function provider(key, extra = {}) {
 /** A pool over a fixed provider map; models is keyed '<provider>/<model>' -> a models row. */
 function poolFor(providers, models = {}) {
     const registry = {
+        getRoute: async () => null,
         getProvider: async (k) => providers[k] || null,
         listProviders: async () => Object.values(providers),
         listModels: async () => [],

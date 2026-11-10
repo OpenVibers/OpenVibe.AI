@@ -128,6 +128,7 @@ t.test('the seed writes the privacy label, the quantization and the refusal rate
     const saved = new Map();
     const models = new Map();
     const registry = {
+        getRoute: async () => null,
         getProvider: async (key) => saved.get(key) || null,
         upsertProvider: async (row) => { saved.set(row.key, { ...row, metadata: row.metadata || {} }); },
         getModel: async (p, m) => models.get(`${p}/${m}`) || null,
@@ -158,6 +159,7 @@ t.test('seed refreshes unused endpoints while preserving configured and owner-ma
         base_url: 'https://legacy.example/v1', secret_ref: 'env:REGISTRY_TEST_KEY', metadata: {},
     }]]);
     const registry = {
+        getRoute: async () => null,
         getProvider: async key => records.get(key) || null,
         upsertProvider: async (row, options) => records.set(row.key, { ...records.get(row.key), ...row, origin: options.origin }),
         getModel: async () => null, upsertModel: async () => {},
@@ -200,6 +202,7 @@ t.test('a catalogue offer with no key is off: the pool skips it no_credentials',
     // credential gate is what this test is about, so the row carries the access mode the owner would grant.
     const row = { ...seed.recordOf(pool.byKey.get('qwen')), status: 'active', provider_access: 'OWN_DEPLOYMENT', origin: 'catalog' };
     const registry = {
+        getRoute: async () => null,
         getProvider: async (k) => (k === 'qwen' ? row : null),
         listProviders: async () => [row],
         listModels: async () => [],
