@@ -59,6 +59,7 @@ function exchangeRouter({ db, registry, pool, quotas = null, env = process.env, 
     const market = require('../exchange/market').createMarket({ db, registry, catalog: all, config, clock, fidelity: fidelitySource });
     const usageByWindow = new Map();
     const r = express.Router();
+    r.use(require('./measured-metrics').measuredMetricsRouter({ db, clock, log }));
 
     const publicCache = (seconds) => (req, res, next) => { res.set('Cache-Control', `public, max-age=${seconds}`); next(); };
 
