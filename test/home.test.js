@@ -108,7 +108,7 @@ const active = (file) => fs.readFileSync(path.join(__dirname, '..', 'deploy', 'n
 
 t.test('the vhost still proxies the API, the run receipt and the console; the app answers and redirects the pages', () => {
     const conf = active('ai.openvibe.services.conf');
-    for (const loc of ['location = /stats', 'location = /updates', 'location = /terms', 'location = /privacy', 'location = /dmca', 'location = /sitemap.xml', 'location = /llms.txt', 'location /runs/ {', 'location /console {', 'location /auth/ {', 'location /shared/']) assert.ok(conf.includes(loc), loc);
+    for (const loc of ['location = /stats', 'location = /updates', 'location = /terms', 'location = /privacy', 'location = /dmca', 'location = /sitemap.xml', 'location = /llms.txt', 'location = /api/v1/creations ', 'location = /api/v1/creations.md ', 'location /runs/ {', 'location /console {', 'location /auth/ {', 'location /shared/']) assert.ok(conf.includes(loc), loc);
     const ops = conf.indexOf('location ~ ^/api/v1/(chat|generate|summarize|classify|extract|embed)$ {');
     const run = conf.indexOf('location ~ ^/api/v1/runs/[A-Za-z0-9_-]+$ {');
     const completions = conf.indexOf('location = /v1/chat/completions {');
