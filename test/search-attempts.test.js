@@ -2,6 +2,8 @@
 const assert = require('node:assert/strict');
 const { validate } = require('openvibe-contracts');
 const { createSearch, CHARGE } = require('../server/search');
+require('../server/search/adapters/meta');
+require('../server/search/adapters/serper-images');
 const sample = id => require('./fixtures/search/' + id + '.json').response;
 const json = body => new Response(JSON.stringify(body), { status: 200 });
 const host = url => new URL(url).hostname;
