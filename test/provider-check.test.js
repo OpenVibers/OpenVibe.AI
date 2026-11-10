@@ -134,6 +134,16 @@ t.test('a service without owner capabilities gets 403 for every key operation', 
     assert.strictEqual(requests, before);
 });
 
+t.test('checking a seeded environment provider preserves its configuration ownership', async () => {
+    await h.registry.upsertProvider({ ...provider, key: 'envcheck', status: 'active', capabilities: ['chat'] }, { origin: 'seed' });
+    const before = requests;
+    const check = await api('POST', '/api/v1/admin/console/providers/envcheck/check');
+    assert.strictEqual(check.status, 200, check.text);
+    assert.strictEqual(check.body.ok, true);
+    assert.strictEqual(requests - before, 1);
+    assert.strictEqual((await h.registry.getProvider('envcheck')).origin, 'seed');
+});
+
 t.test('removal disables immediately, clears the stored key and disconnects environment fallback', async () => {
     const removed = await api('DELETE', `${path}/key`);
     assert.strictEqual(removed.status, 200, removed.text);

@@ -136,7 +136,7 @@ function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth,
             fetchImpl: fetchImpl === globalThis.fetch ? require('../providers/guarded-fetch').guardedFetch : fetchImpl });
         // A check does not enable a provider or overwrite settings changed while its request was in flight.
         const current = await registry.getProvider(provider.key);
-        if (current.updated_at === provider.updated_at) await registry.upsertProvider({ key: provider.key, metadata: { ...current.metadata, last_check: result } }, { actor: actor(req), origin: 'admin' });
+        if (current.updated_at === provider.updated_at) await registry.upsertProvider({ key: provider.key, metadata: { ...current.metadata, last_check: result } }, { actor: actor(req), origin: current.origin });
         return { provider: provider.key, ...result };
     }));
     r.post('/api/v1/admin/console/providers', json, write, wrap(async (req) => {
