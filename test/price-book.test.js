@@ -158,7 +158,7 @@ t.test('the owner approves a waiting change and the price the router charges fol
 t.test('the public catalog says when the price was checked', async () => {
     // The catalog lists an offer only when the provider's key is there, as production has it.
     await h.registry.upsertProvider({
-        key: 'deepinfra', display_name: 'DeepInfra', kind: 'openai', auth_mode: 'bearer', secret_ref: 'env:DEEPINFRA_KEY',
+        key: 'deepinfra', status: 'active', display_name: 'DeepInfra', kind: 'openai', auth_mode: 'bearer', secret_ref: 'env:DEEPINFRA_KEY',
         base_url: 'https://api.deepinfra.test', capabilities: ['chat'], provider_access: 'AUTHORIZED_WHOLESALE',
     });
     const book = createPriceBook({ db: h.db, registry: h.registry, config: { priceBook: { enabled: true }, nodeEnv: 'test' }, clock: CLOCK, log: silent, transport: recorded });

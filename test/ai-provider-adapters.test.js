@@ -50,6 +50,7 @@ t.test('provider presets are OpenAI-compatible, with a base URL, a timeout, an a
     assert.strictEqual(new Set(pool.PROVIDER_KEYS).size, 40);
     assert.strictEqual(pool.byKey.get('meta').base_url, 'https://api.meta.ai/v1');
     assert.strictEqual(pool.byKey.get('perplexity').kind, 'responses');
+    assert.strictEqual(require('../server/console/presets').credentialProvider('groq').model, 'openai/gpt-oss-20b', 'existing personal-key default is preserved');
     assert.deepStrictEqual(pool.byKey.get('brave').search_adapters, ['brave', 'brave-images']);
     assert.strictEqual(pool.byKey.get('openverse').auth_mode, 'none');
     assert.strictEqual(pool.byKey.get('commons').auth_mode, 'none');

@@ -56,7 +56,7 @@ t.test('catalog groups the same model across providers, with prices, speed, upti
     await h.registry.upsertModel({ provider_key: 'deepseek', model_key: 'deepseek-chat', type: 'chat', context_window: 131072,
         cost: { in_per_mtok: 0.28, out_per_mtok: 0.42, cached_per_mtok: 0.028 } });
     await h.registry.upsertProvider({
-        key: 'deepinfra', display_name: 'DeepInfra', kind: 'openai', auth_mode: 'bearer', secret_ref: 'env:DEEPINFRA_KEY',
+        key: 'deepinfra', status: 'active', display_name: 'DeepInfra', kind: 'openai', auth_mode: 'bearer', secret_ref: 'env:DEEPINFRA_KEY',
         base_url: 'https://api.deepinfra.test', capabilities: ['chat'], provider_access: 'AUTHORIZED_WHOLESALE',
     });
     await h.registry.upsertModel({ provider_key: 'deepinfra', model_key: 'deepseek-chat', type: 'chat', context_window: 131072,

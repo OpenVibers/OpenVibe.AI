@@ -8,7 +8,7 @@ const { PROVIDERS } = require('../providers/pool-providers');
 const PRESETS = [
     ...PROVIDERS.filter(p => p.capabilities.includes('chat')).map(p => ({
         id: p.key, name: p.display_name, kind: p.kind, base_url: p.base_url,
-        model: p.default_model || '', keys: p.docs_url,
+        model: p.credential_default_model ?? p.default_model ?? '', keys: p.keys_url || p.docs_url,
     })),
     // Compatibility names for already stored personal credentials; not separate provider rows.
     { id: 'deepseek-anthropic', name: 'DeepSeek (Anthropic format)', kind: 'anthropic', base_url: 'https://api.deepseek.com/anthropic', model: 'deepseek-chat', keys: 'https://platform.deepseek.com/api_keys' },

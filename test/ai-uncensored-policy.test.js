@@ -199,7 +199,7 @@ t.test('a booted service seeds the catalogue off, and the uncensored request is 
         for (const p of pool.PROVIDERS) {
             const row = seeded.find((x) => x.key === p.key);
             assert.ok(row, `${p.key} seeded`);
-            assert.strictEqual(row.secret_ref, `vault:${p.key}`, `${p.key} key slot`);
+            assert.strictEqual(row.secret_ref, p.key === 'deepseek' ? 'env:DEEPSEEK_API_KEY' : p.auth_mode === 'none' ? null : `vault:${p.key}`, `${p.key} key slot`);
             assert.ok(await h.registry.getModel(p.key, p.models[0] && p.models[0].model_key || '').catch(() => null) || p.models.length === 0, `${p.key} model`);
         }
         await h.registry.upsertProvider({ key: 'refuseless', display_name: 'Refuseless', kind: 'openai', status: 'active', base_url: seam.url, auth_mode: 'none', secret_ref: null, default_model: 'deepseek-v4.1-flash-abliterated', capabilities: ['chat', 'generate', 'complete'], timeout_ms: 5000, priority: 1, provider_access: 'AUTHORIZED_WHOLESALE', metadata: { uncensored: true } }, { origin: 'admin' });
