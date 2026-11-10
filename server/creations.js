@@ -186,7 +186,8 @@ function renderMarkdown(creations, { generatedAt = null, heading = true } = {}) 
             '',
         );
     }
-    for (const [product, list] of [...byProduct.entries()].sort((a, b) => PRODUCT_NAMES[a[0]].localeCompare(PRODUCT_NAMES[b[0]]))) {
+    const productName = (id) => PRODUCT_NAMES[id] || id;
+    for (const [product, list] of [...byProduct.entries()].sort((a, b) => productName(a[0]).localeCompare(productName(b[0])))) {
         lines.push(`## ${PRODUCT_NAMES[product] || product}`, '');
         for (const c of list.sort((a, b) => a.name.localeCompare(b.name))) {
             lines.push(`### ${c.name}`, '');
