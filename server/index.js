@@ -330,7 +330,7 @@ async function start({ searchFetch = null, config, db: givenDb = null, clock = {
         if (!givenDb) await db.close();
     }
 
-    return { config, db, registry, pool, quotas, tiers, cache, fetcher, engine, runs, keys, keyLoaded, auth, app, server, bench, benchEvents, memory, memoryJobs, memoryServices, memorySharing, priceBook, refusal, batches, batcher, credits: creditsRef, settings, vault, community, endpoints, webhooks, gpus, gpuMarket, abuse, ownEndpoints, close };
+    return { config, db, registry, pool, quotas, tiers, cache, fetcher, engine, runs, keys, keyLoaded, auth, app, server, choices, bench, benchEvents, memory, memoryJobs, memoryServices, memorySharing, priceBook, refusal, batches, batcher, credits: creditsRef, settings, vault, community, endpoints, webhooks, gpus, gpuMarket, abuse, ownEndpoints, close };
 }
 
 if (require.main === module) {

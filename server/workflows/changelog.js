@@ -59,6 +59,7 @@ const workflow = {
     output_schema: template.output_schema,
     default_route: 'default.json',
     steps: [{ kind: 'llm', template: 'blog.changelog.tag', operation: 'generate', output: 'json', params: { max_tokens: 2200, temperature: 0 } }],
+    metadata: { internal: true },
 };
 
 module.exports = { templates: [template], workflows: [workflow], KINDS, AREAS };

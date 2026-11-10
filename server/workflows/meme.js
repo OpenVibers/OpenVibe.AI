@@ -15,6 +15,15 @@ const workflow = {
     description: 'Generate a handful of original, short caption ideas for a selected meme template.',
     input_schema: template.input_schema, output_schema: template.output_schema, default_route: 'meme.caption',
     steps: [{ kind: 'llm', template: 'meme.caption', operation: 'generate', output: 'json', params: { max_tokens: 700, temperature: 0.85 } }],
+    metadata: {
+        creation: {
+            id: 'meme-caption', product: 'meme', name: 'Write meme caption ideas', workflow: 'meme.caption',
+            gives: 'A meme format and the situation you want to joke about.',
+            returns: 'Three to five original caption ideas for that format.',
+            access: { guest: false, signed_in: true, floor_18: false }, costs_coins: true,
+            start_url: 'https://openvibe.meme/',
+        },
+    },
 };
 
 module.exports = { templates: [template], workflows: [workflow] };

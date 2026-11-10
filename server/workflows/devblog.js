@@ -23,7 +23,16 @@ const workflows = [{ key: 'content.devblog', name: 'Draft a devblog from merged 
     input_schema: { ...obj({ site: str(80), from: str(10), to: str(10), sources: SOURCES(1, 200), stories: arr({ type: 'object' }, 1, 8), screenshots: arr(obj({ media_id: str(80), alt: str(300), caption: str(500), source: { type: 'integer', minimum: 0 } }), 0, 24), voice: str(6000) }) },
     output_schema: obj({ title: str(80), summary: str(2000), names: arr(str(80), 5, 5), blocks: { type: 'object' }, citations: arr({ type: 'integer', minimum: 0 }, 1, 200), checks: arr(str(500), 0, 30), steps: arr(str(100), 1, 10) }),
     steps: [{ kind: 'devblog', cite: true }], default_route: 'background.json', cache_mode: 'none',
-    metadata: { seed: true, draft: true, task: 'blog.devblog.write', tools: ['changelog.stories', 'site.screenshot', 'facts.check'], max_model_calls: 5 } }];
+    metadata: {
+        seed: true, draft: true, task: 'blog.devblog.write', tools: ['changelog.stories', 'site.screenshot', 'facts.check'], max_model_calls: 5,
+        creation: {
+            id: 'devblog', product: 'blog', name: 'Write my project\'s devblog', workflow: 'content.devblog', task: 'blog.devblog.write',
+            gives: 'The merged changes for one site over a period, and the stories to tell.',
+            returns: 'A named devblog with sections, hero art and the full patch notes folded in.',
+            access: { guest: false, signed_in: true, floor_18: false }, costs_coins: true,
+            start_url: 'https://openvibe.blog/write',
+        },
+    } }];
 const SLOP = /\b(unleashed|supercharged|level up|game changer|next level)\b/i;
 function issuesOf(draft, input) {
     const issues = [];
