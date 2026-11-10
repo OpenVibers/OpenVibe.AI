@@ -28,7 +28,7 @@ const credentialFetch = async (url, init = {}) => {
 };
 
 async function provider(body) {
-    const r = await request(h.base, 'POST', '/api/v1/providers', { tok: service, body: { kind: 'http', auth_mode: 'none', timeout_ms: 3000, ...body } });
+    const r = await request(h.base, 'POST', '/api/v1/providers', { tok: service, body: { status: 'active', kind: 'http', auth_mode: 'none', timeout_ms: 3000, ...body } });
     assert.strictEqual(r.status, 201, r.text);
 }
 async function model(providerKey, modelKey, body) {

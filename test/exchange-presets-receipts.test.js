@@ -66,7 +66,7 @@ async function makeProvider(name) {
     const made = await request(h.base, 'POST', '/api/v1/providers', {
         tok: service,
         body: {
-            key: name, kind: offer.kind, base_url: `${upstream.url}/v1`, auth_mode: 'none',
+            key: name, status: 'active', kind: offer.kind, base_url: `${upstream.url}/v1`, auth_mode: 'none',
             capabilities: anthropic ? ['chat', 'messages', 'tools', 'json'] : ['chat', 'complete', 'tools', 'json'],
             default_model: offer.model,
             provider_access: 'OWN_DEPLOYMENT', metadata: { data_policy: offer.data_policy },

@@ -47,9 +47,6 @@
 const CHECKED = '2026-11-06';
 const NEW_CHECKED = '2026-11-09';
 
-/** The keys of the ten providers, in the order the router should prefer them when the price is equal. */
-const PROVIDER_KEYS = ['qwen', 'kimi', 'glm', 'minimax', 'deepinfra', 'novita', 'featherless', 'refuseless', 'abliteration', 'openrouter', 'venice', 'abliteratedmodels', 'uplinkswitch', 'chutes', 'siliconflow', 'nebius', 'together', 'fireworks', 'groq', 'cerebras', 'sambanova', 'baseten', 'hyperbolic'];
-
 /**
  * What a provider says it does with a prompt.
  *
@@ -97,6 +94,7 @@ const privacy = (o) => ({
 const PROVIDERS = [
     {
         key: 'qwen',
+        docs_url: 'https://www.alibabacloud.com/help/en/model-studio/compatibility-of-openai-with-dashscope',
         display_name: 'Qwen (Alibaba Model Studio)',
         base_url: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
         default_model: 'qwen3.8-max',
@@ -148,6 +146,7 @@ const PROVIDERS = [
     },
     {
         key: 'kimi',
+        docs_url: 'https://platform.moonshot.ai/docs/guide/start-using-kimi-api',
         display_name: 'Kimi (Moonshot)',
         base_url: 'https://api.moonshot.ai/v1',
         default_model: 'kimi-k3.1-pro',
@@ -198,6 +197,7 @@ const PROVIDERS = [
     },
     {
         key: 'glm',
+        docs_url: 'https://docs.z.ai/guides/overview/quick-start',
         display_name: 'GLM (Z.ai)',
         base_url: 'https://api.z.ai/api/paas/v4',
         default_model: 'glm-5.3-flash',
@@ -258,6 +258,7 @@ const PROVIDERS = [
     },
     {
         key: 'minimax',
+        docs_url: 'https://platform.minimax.io/docs/api-reference/text-openai-api',
         display_name: 'MiniMax',
         base_url: 'https://api.minimax.io/v1',
         default_model: 'MiniMax-M3.1-Flash',
@@ -296,6 +297,7 @@ const PROVIDERS = [
     },
     {
         key: 'deepinfra',
+        docs_url: 'https://deepinfra.com/docs/openai_api',
         display_name: 'DeepInfra',
         base_url: 'https://api.deepinfra.com/v1/openai',
         default_model: 'deepseek-ai/DeepSeek-V4.1-Flash-1017',
@@ -369,8 +371,9 @@ const PROVIDERS = [
     },
     {
         key: 'novita',
+        docs_url: 'https://novita.ai/docs/api-reference/model-apis-llm-list-models',
         display_name: 'Novita AI',
-        base_url: 'https://api.novita.ai/v3/openai',
+        base_url: 'https://api.novita.ai/openai',
         default_model: 'deepseek/deepseek-v4.1-flash-1017',
         timeout_ms: 90000,
         capabilities: ['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich', 'json', 'tools'],
@@ -378,13 +381,13 @@ const PROVIDERS = [
         priority: 30,
         privacy: privacy({
             label: 'anonymized',
-            terms_url: 'https://api.novita.ai/v3/openai/models',
+            terms_url: 'https://api.novita.ai/openai/models',
             wording: 'Novita has no readable privacy policy page (the address returns a not-found page on 2026-11-06), so nothing says zero retention or no training',
         }),
         data_policy: policy({
             trains: null, retention: null, region: null,
             retention_note: 'not stated (the provider has no readable privacy page)',
-            terms: 'https://api.novita.ai/v3/openai/models',
+            terms: 'https://api.novita.ai/openai/models',
             resale: 'UNVERIFIED (2026-11-03 matrix): the terms page returned 404',
         }),
 
@@ -392,7 +395,7 @@ const PROVIDERS = [
             {
                 model_key: 'deepseek/deepseek-v4.1-flash-1017', display_name: 'DeepSeek V4.1 Flash 1017', family: 'deepseek', context_window: 1048576,
                 cost: { in_per_mtok: 0.30, cached_per_mtok: 0.006, out_per_mtok: 1.20 },
-                source: 'https://api.novita.ai/v3/openai/models', checked: CHECKED,
+                source: 'https://api.novita.ai/openai/models', checked: CHECKED,
                 supports: { json: true, tools: true, streaming: true, vision: false },
                 quantization: null, refusal_rate: null,
                 note: 'the list marks the model as serverless with function calling, structured outputs and reasoning',
@@ -400,28 +403,28 @@ const PROVIDERS = [
             {
                 model_key: 'qwen/qwen3.8-max', display_name: 'Qwen3.8-Max', family: 'qwen', context_window: 1000000,
                 cost: { in_per_mtok: 2.00, cached_per_mtok: 0.25, out_per_mtok: 6.00 },
-                source: 'https://api.novita.ai/v3/openai/models', checked: CHECKED,
+                source: 'https://api.novita.ai/openai/models', checked: CHECKED,
                 supports: { json: true, tools: true, streaming: true, vision: false },
                 quantization: null, refusal_rate: null,
             },
             {
                 model_key: 'zai-org/glm-5.3', display_name: 'GLM-5.3', family: 'glm', context_window: 1048576,
                 cost: { in_per_mtok: 1.40, cached_per_mtok: 0.26, out_per_mtok: 4.40 },
-                source: 'https://api.novita.ai/v3/openai/models', checked: CHECKED,
+                source: 'https://api.novita.ai/openai/models', checked: CHECKED,
                 supports: { json: true, tools: true, streaming: true, vision: false },
                 quantization: null, refusal_rate: null,
             },
             {
                 model_key: 'moonshotai/kimi-k3.1-pro', display_name: 'Kimi K3.1 Pro', family: 'kimi', context_window: 1048576,
                 cost: { in_per_mtok: 2.00, cached_per_mtok: 0.20, out_per_mtok: 10.00 },
-                source: 'https://api.novita.ai/v3/openai/models', checked: CHECKED,
+                source: 'https://api.novita.ai/openai/models', checked: CHECKED,
                 supports: { json: true, tools: true, streaming: true, vision: false },
                 quantization: null, refusal_rate: null,
             },
             {
                 model_key: 'xiaomimimo/mimo-v2.6-flash', display_name: 'MiMo V2.6 Flash', family: 'mimo', context_window: 1048576,
                 cost: { in_per_mtok: 0.14, cached_per_mtok: 0.0028, out_per_mtok: 0.28 },
-                source: 'https://api.novita.ai/v3/openai/models', checked: CHECKED,
+                source: 'https://api.novita.ai/openai/models', checked: CHECKED,
                 supports: { json: true, tools: true, streaming: true, vision: false },
                 quantization: null, refusal_rate: null,
             },
@@ -612,7 +615,8 @@ const PROVIDERS = [
         ],
     },
     {
-        key: 'openrouter',
+        key: 'openrouter', keys_url: 'https://openrouter.ai/settings/keys',
+        docs_url: 'https://openrouter.ai/docs/api-reference/overview',
         display_name: 'OpenRouter (the last fallback)',
         base_url: 'https://openrouter.ai/api/v1',
         default_model: 'openrouter/auto',
@@ -642,18 +646,18 @@ const PROVIDERS = [
         ['uplinkswitch', 'UplinkSwitch', 'https://api.uplinkswitch.ai/v1', 'abliterated', 'https://uplinkswitch.ai/acceptable-use', 'UNKNOWN', 'UNVERIFIED', { in: null, cached: null, out: null }, null, true],
         ['chutes', 'Chutes', 'https://llm.chutes.ai/v1', 'Qwen/Qwen3-32B-TEE', 'https://www.chutes.ai/pricing', 'UNKNOWN', 'UNVERIFIED', { in: 0.104, cached: null, out: 0.416 }, 40960, false],
         ['siliconflow', 'SiliconFlow', 'https://api.siliconflow.com/v1', 'Qwen/Qwen3-32B', 'https://docs.siliconflow.com/', 'UNKNOWN', 'UNVERIFIED', { in: null, cached: null, out: null }, null, false],
-        ['nebius', 'Nebius Token Factory', 'https://api.tokenfactory.nebius.com/v1', 'Qwen/Qwen3-30B-A3B-Instruct-2507', 'https://nebius.com/services/token-factory/models/qwen-models-inference', 'UNKNOWN', 'UNVERIFIED', { in: 0.10, cached: null, out: 0.30 }, 262144, false],
-        ['together', 'Together AI', 'https://api.together.xyz/v1', 'openai/gpt-oss-120b', 'https://www.together.ai/pricing', 'UNKNOWN', 'RESTRICTED', { in: 0.15, cached: null, out: 0.60 }, 131072, false],
-        ['fireworks', 'Fireworks AI', 'https://api.fireworks.ai/inference/v1', 'accounts/fireworks/models/gpt-oss-120b', 'https://fireworks.ai/models', 'UNKNOWN', 'UNVERIFIED', { in: 0.15, cached: null, out: 0.60 }, 131072, false],
-        ['groq', 'Groq', 'https://api.groq.com/openai/v1', 'openai/gpt-oss-120b', 'https://console.groq.com/docs/model/openai/gpt-oss-120b', 'UNKNOWN', 'UNVERIFIED', { in: 0.15, cached: 0.075, out: 0.60 }, 131072, false],
-        ['cerebras', 'Cerebras', 'https://api.cerebras.ai/v1', 'gpt-oss-120b', 'https://api.cerebras.ai/public/v1/models', 'UNKNOWN', 'UNVERIFIED', { in: null, cached: null, out: null }, 131072, false],
-        ['sambanova', 'SambaNova', 'https://api.sambanova.ai/v1', 'gpt-oss-120b', 'https://cloud.sambanova.ai/plans/pricing', 'UNKNOWN', 'UNVERIFIED', { in: 0.22, cached: null, out: 0.59 }, 131072, false],
+        ['nebius', 'Nebius Token Factory', 'https://api.tokenfactory.nebius.com/v1', 'Qwen/Qwen3-30B-A3B-Instruct-2507', 'https://nebius.com/services/token-factory/models/qwen-models-inference', 'UNKNOWN', 'UNVERIFIED', { in: 0.10, cached: null, out: 0.30 }, 262144, false, 'https://docs.tokenfactory.nebius.com/quickstart'],
+        ['together', 'Together AI', 'https://api.together.ai/v1', 'openai/gpt-oss-120b', 'https://www.together.ai/pricing', 'UNKNOWN', 'RESTRICTED', { in: 0.15, cached: null, out: 0.60 }, 131072, false, 'https://docs.together.ai/docs/openai-api-compatibility', 'https://api.together.ai/settings/api-keys', ''],
+        ['fireworks', 'Fireworks AI', 'https://api.fireworks.ai/inference/v1', 'accounts/fireworks/models/gpt-oss-120b', 'https://fireworks.ai/models', 'UNKNOWN', 'UNVERIFIED', { in: 0.15, cached: null, out: 0.60 }, 131072, false, 'https://docs.fireworks.ai/tools-sdks/openai-compatibility', 'https://fireworks.ai/account/api-keys', ''],
+        ['groq', 'Groq', 'https://api.groq.com/openai/v1', 'openai/gpt-oss-120b', 'https://console.groq.com/docs/model/openai/gpt-oss-120b', 'UNKNOWN', 'UNVERIFIED', { in: 0.15, cached: 0.075, out: 0.60 }, 131072, false, 'https://console.groq.com/docs/openai', 'https://console.groq.com/keys', 'openai/gpt-oss-20b'],
+        ['cerebras', 'Cerebras', 'https://api.cerebras.ai/v1', 'gpt-oss-120b', 'https://api.cerebras.ai/public/v1/models', 'UNKNOWN', 'UNVERIFIED', { in: null, cached: null, out: null }, 131072, false, 'https://inference-docs.cerebras.ai/api-reference/models', 'https://cloud.cerebras.ai/', ''],
+        ['sambanova', 'SambaNova', 'https://api.sambanova.ai/v1', 'gpt-oss-120b', 'https://cloud.sambanova.ai/plans/pricing', 'UNKNOWN', 'UNVERIFIED', { in: 0.22, cached: null, out: 0.59 }, 131072, false, 'https://docs-prod.sambanova.ai/docs/api-reference/endpoints/model-list'],
         ['baseten', 'Baseten', 'https://inference.baseten.co/v1', 'openai/gpt-oss-120b', 'https://www.baseten.co/pricing/', 'UNKNOWN', 'UNVERIFIED', { in: null, cached: null, out: null }, 131072, false],
-        ['hyperbolic', 'Hyperbolic', 'https://api.hyperbolic.xyz/v1', 'openai/gpt-oss-120b', 'https://docs.hyperbolic.xyz/docs/hyperbolic-ai-inference-pricing', 'UNKNOWN', 'UNVERIFIED', { in: null, cached: null, out: null }, 131072, false],
-    ].map(([key, display_name, base_url, model_key, source, privacyLabel, provider_access, prices, context_window, uncensored]) => {
+        ['hyperbolic', 'Hyperbolic', 'https://api.hyperbolic.ai/inference/v1', 'openai/gpt-oss-120b', 'https://docs.hyperbolic.xyz/docs/hyperbolic-ai-inference-pricing', 'UNKNOWN', 'UNVERIFIED', { in: null, cached: null, out: null }, 131072, false, 'https://docs.hyperbolic.ai/inference/quickstart'],
+    ].map(([key, display_name, base_url, model_key, source, privacyLabel, provider_access, prices, context_window, uncensored, docs_url, keys_url, credential_default_model]) => {
         const privateTier = privacyLabel === 'PRIVATE';
         return {
-            key, display_name, base_url, default_model: model_key, timeout_ms: 60000,
+            key, display_name, base_url, docs_url, keys_url, credential_default_model, default_model: model_key, timeout_ms: 60000,
             capabilities: ['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich', 'json', 'tools'],
             provider_access, priority: 40, ...(uncensored ? { uncensored: true } : {}),
             privacy: privacy({ label: privateTier ? 'private' : 'anonymized', terms_url: privateTier ? source : null,
@@ -672,7 +676,61 @@ const PROVIDERS = [
             ],
         };
     }),
+    // Providers without a hand-kept model list: the owner syncs and enables their models.
+    { key: 'meta', display_name: 'Meta Model API', base_url: 'https://api.meta.ai/v1',
+        docs_url: 'https://dev.meta.ai/docs/api-reference', capabilities: ['chat', 'vision', 'tools'] },
+    { key: 'deepseek', keys_url: 'https://platform.deepseek.com/api_keys', display_name: 'DeepSeek', base_url: 'https://api.deepseek.com/v1', default_model: 'deepseek-flash',
+        docs_url: 'https://api-docs.deepseek.com/', capabilities: ['chat', 'vision', 'tools', 'web-search'], search_adapters: ['deepseek'] },
+    { key: 'anthropic', keys_url: 'https://console.anthropic.com/settings/keys', display_name: 'Anthropic', kind: 'anthropic', base_url: 'https://api.anthropic.com/v1', auth_mode: 'x-api-key',
+        docs_url: 'https://platform.claude.com/docs/en/api/overview', capabilities: ['chat', 'messages', 'vision', 'tools'] },
+    { key: 'openai', keys_url: 'https://platform.openai.com/api-keys', display_name: 'OpenAI', base_url: 'https://api.openai.com/v1', default_model: 'gpt-5-mini',
+        docs_url: 'https://platform.openai.com/docs/api-reference/models/list', capabilities: ['chat', 'vision', 'tools', 'image', 'video', 'speech', 'transcribe', 'embed'] },
+    { key: 'gemini', keys_url: 'https://aistudio.google.com/apikey', display_name: 'Google Gemini', base_url: 'https://generativelanguage.googleapis.com/v1beta/openai',
+        api_family: 'google', docs_url: 'https://ai.google.dev/gemini-api/docs/openai', capabilities: ['chat', 'vision', 'tools', 'embed'] },
+    { key: 'xai', keys_url: 'https://console.x.ai/', display_name: 'xAI', base_url: 'https://api.x.ai/v1',
+        docs_url: 'https://docs.x.ai/docs/api-reference', capabilities: ['chat', 'vision', 'tools', 'image', 'video'] },
+    { key: 'mistral', keys_url: 'https://console.mistral.ai/api-keys', display_name: 'Mistral', base_url: 'https://api.mistral.ai/v1',
+        docs_url: 'https://docs.mistral.ai/api', capabilities: ['chat', 'vision', 'tools', 'embed', 'transcribe'] },
+    { key: 'cohere', display_name: 'Cohere', base_url: 'https://api.cohere.com/compatibility/v1', models_endpoint: 'https://api.cohere.com/v1/models',
+        docs_url: 'https://docs.cohere.com/docs/compatibility-api', capabilities: ['chat', 'tools', 'embed', 'rerank'] },
+    { key: 'perplexity', display_name: 'Perplexity', kind: 'responses', base_url: 'https://api.perplexity.ai/v1',
+        docs_url: 'https://docs.perplexity.ai/docs/agent-api/openai-compatibility', capabilities: ['chat', 'web-search'], search_adapters: ['perplexity'] },
+    { key: 'brave', display_name: 'Brave Search', kind: 'http', base_url: 'https://api.search.brave.com/res/v1',
+        auth_header: 'x-subscription-token', models_endpoint: null, capabilities: ['web-search', 'image-search'],
+        search_adapters: ['brave', 'brave-images'], docs_url: 'https://api-dashboard.search.brave.com/documentation/services/web-search' },
+    { key: 'tavily', display_name: 'Tavily', kind: 'http', base_url: 'https://api.tavily.com', models_endpoint: null,
+        capabilities: ['web-search'], search_adapters: ['tavily'], docs_url: 'https://docs.tavily.com/documentation/api-reference/endpoint/search' },
+    { key: 'exa', display_name: 'Exa', kind: 'http', base_url: 'https://api.exa.ai', auth_mode: 'x-api-key', models_endpoint: null,
+        capabilities: ['web-search'], search_adapters: ['exa'], docs_url: 'https://docs.exa.ai/reference/search' },
+    { key: 'serper', display_name: 'Serper', kind: 'http', base_url: 'https://google.serper.dev', auth_mode: 'x-api-key', models_endpoint: null,
+        capabilities: ['web-search', 'image-search'], search_adapters: ['serper', 'serper-images'], docs_url: 'https://serper.dev/' },
+    { key: 'jina', display_name: 'Jina', kind: 'http', base_url: 'https://s.jina.ai', models_endpoint: null,
+        capabilities: ['web-search'], search_adapters: ['jina'], docs_url: 'https://jina.ai/reader/' },
+    { key: 'searxng', display_name: 'SearXNG', kind: 'http', base_url: null, auth_mode: 'none', models_endpoint: null,
+        capabilities: ['web-search'], search_adapters: ['searxng'], docs_url: 'https://docs.searxng.org/dev/search_api.html' },
+    { key: 'openverse', display_name: 'Openverse', kind: 'http', base_url: 'https://api.openverse.org/v1', auth_mode: 'none', models_endpoint: null,
+        capabilities: ['image-search'], search_adapters: ['openverse'], docs_url: 'https://api.openverse.org/' },
+    { key: 'commons', display_name: 'Wikimedia Commons', kind: 'http', base_url: 'https://commons.wikimedia.org/w/api.php', auth_mode: 'none', models_endpoint: null,
+        capabilities: ['image-search'], search_adapters: ['commons'], docs_url: 'https://www.mediawiki.org/wiki/API:Search' },
+
 ];
+
+// The seed, console and personal-key forms consume these same records.
+for (const p of PROVIDERS) {
+    if (p.capabilities.includes('chat')) p.capabilities = [...new Set([...p.capabilities, 'generate', 'summarize', 'classify', 'extract', 'enrich', 'json'])];
+    p.kind ||= 'openai';
+    p.auth_mode ||= 'bearer';
+    p.api_family ||= p.kind === 'http' ? 'adapter' : p.kind;
+    if (p.models_endpoint === undefined) p.models_endpoint = p.base_url ? `${p.base_url}/models` : null;
+    p.models ||= [];
+    p.provider_access ||= 'UNVERIFIED';
+    p.priority ??= 100;
+    p.timeout_ms ||= 30000;
+    p.docs_url ||= p.models[0]?.source || null;
+    p.data_policy ||= policy({ checked: '2026-11-10' });
+    p.privacy ||= privacy({ label: 'anonymized', wording: 'Data retention and training terms have not been verified.', checked: '2026-11-10' });
+}
+const PROVIDER_KEYS = PROVIDERS.map(p => p.key);
 
 const byKey = new Map(PROVIDERS.map((p) => [p.key, p]));
 

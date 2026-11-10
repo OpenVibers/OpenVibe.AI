@@ -44,11 +44,20 @@ const iso = (n) => new Date(n).toISOString();
 const CHAT = { messages: [{ role: 'user', content: 'x' }], timeoutMs: 3000 };
 
 t.test('provider presets are OpenAI-compatible, with a base URL, a timeout, an access mode and a privacy label', () => {
-    assert.deepStrictEqual(pool.PROVIDERS.map((p) => p.key),
+    assert.deepStrictEqual(pool.PROVIDERS.slice(0, 23).map((p) => p.key),
         ['qwen', 'kimi', 'glm', 'minimax', 'deepinfra', 'novita', 'featherless', 'refuseless', 'abliteration', 'openrouter', 'venice', 'abliteratedmodels', 'uplinkswitch', 'chutes', 'siliconflow', 'nebius', 'together', 'fireworks', 'groq', 'cerebras', 'sambanova', 'baseten', 'hyperbolic']);
     assert.deepStrictEqual(pool.PROVIDER_KEYS, pool.PROVIDERS.map((p) => p.key));
+    assert.strictEqual(new Set(pool.PROVIDER_KEYS).size, 40);
+    assert.strictEqual(pool.byKey.get('meta').base_url, 'https://api.meta.ai/v1');
+    assert.strictEqual(pool.byKey.get('perplexity').kind, 'responses');
+    assert.strictEqual(require('../server/console/presets').credentialProvider('groq').model, 'openai/gpt-oss-20b', 'existing personal-key default is preserved');
+    assert.deepStrictEqual(pool.byKey.get('brave').search_adapters, ['brave', 'brave-images']);
+    assert.strictEqual(pool.byKey.get('openverse').auth_mode, 'none');
+    assert.strictEqual(pool.byKey.get('commons').auth_mode, 'none');
     for (const p of pool.PROVIDERS) {
-        assert.ok(/^https:\/\//.test(p.base_url), `${p.key} base_url`);
+        assert.ok(p.key === 'searxng' && p.base_url === null || /^https:\/\//.test(p.base_url), `${p.key} base_url`);
+        assert.strictEqual(seed.recordOf(p).status, 'disabled', `${p.key} starts off`);
+        assert.ok(p.api_family && Object.hasOwn(p, 'models_endpoint'), `${p.key} has protocol metadata`);
         assert.ok(p.timeout_ms >= 1000, `${p.key} timeout`);
         assert.ok(['OWN_DEPLOYMENT', 'AUTHORIZED_WHOLESALE', 'CUSTOMER_BYOK', 'RESTRICTED', 'UNVERIFIED'].includes(p.provider_access), p.key);
         assert.ok(p.data_policy, `${p.key} data policy`);
@@ -142,8 +151,32 @@ t.test('the seed writes the privacy label, the quantization and the refusal rate
     assert.strictEqual(saved.get('qwen').base_url, 'https://proxy.example/v1');
 });
 
+t.test('seed refreshes unused endpoints while preserving configured and owner-managed bindings', async () => {
+    const source = pool.byKey.get('hyperbolic');
+    const records = new Map([['hyperbolic', {
+        ...seed.recordOf(source), status: 'active', origin: 'catalog',
+        base_url: 'https://legacy.example/v1', secret_ref: 'env:REGISTRY_TEST_KEY', metadata: {},
+    }]]);
+    const registry = {
+        getProvider: async key => records.get(key) || null,
+        upsertProvider: async (row, options) => records.set(row.key, { ...records.get(row.key), ...row, origin: options.origin }),
+        getModel: async () => null, upsertModel: async () => {},
+    };
+    await seed.seedPoolProviders({ registry, env: { REGISTRY_TEST_KEY: 'fixture-provider-credential' } });
+    assert.strictEqual(records.get('hyperbolic').base_url, 'https://legacy.example/v1');
+    assert.strictEqual(records.get('hyperbolic').status, 'active');
+    await seed.seedPoolProviders({ registry, env: {} });
+    assert.strictEqual(records.get('hyperbolic').base_url, source.base_url);
+    assert.strictEqual(records.get('hyperbolic').metadata.models_endpoint, source.models_endpoint);
+    assert.strictEqual(records.get('hyperbolic').status, 'disabled');
+    records.set('hyperbolic', { ...records.get('hyperbolic'), origin: 'admin', base_url: 'https://owner.example/v1', status: 'active' });
+    await seed.seedPoolProviders({ registry, env: {} });
+    assert.strictEqual(records.get('hyperbolic').base_url, 'https://owner.example/v1');
+    assert.strictEqual(records.get('hyperbolic').status, 'active');
+});
+
 t.test('the recorded shape of every provider is parsed by the OpenAI adapter, tool calls included', async () => {
-    for (const key of pool.PROVIDER_KEYS) {
+    for (const key of pool.PROVIDERS.filter(p => p.kind === 'openai').map(p => p.key)) {
         const recorded = fixtures[key] || fixtures.openrouter;
         assert.ok(recorded && recorded.completion, `${key} fixture`);
         const srv = await seamServer(() => recorded.completion);
@@ -165,7 +198,7 @@ t.test('the recorded shape of every provider is parsed by the OpenAI adapter, to
 t.test('a catalogue offer with no key is off: the pool skips it no_credentials', async () => {
     // The commercial gate (an UNVERIFIED offer) keeps most of the catalogue out of the managed pool; the
     // credential gate is what this test is about, so the row carries the access mode the owner would grant.
-    const row = { ...seed.recordOf(pool.byKey.get('qwen')), provider_access: 'OWN_DEPLOYMENT', origin: 'catalog' };
+    const row = { ...seed.recordOf(pool.byKey.get('qwen')), status: 'active', provider_access: 'OWN_DEPLOYMENT', origin: 'catalog' };
     const registry = {
         getProvider: async (k) => (k === 'qwen' ? row : null),
         listProviders: async () => [row],
@@ -200,14 +233,15 @@ t.test('a provider that says the account has no money left is exhaustion, and it
     assert.strictEqual(insufficientBalance(new ProviderError('the backend fell over', { status: 500, code: 'provider.http', body: {} })), false);
 });
 
-t.test('a booted service seeds the ten offers, each with its own key slot', async () => {
+t.test('a booted service seeds the registry and preserves the existing environment key slot', async () => {
     const h = await boot({ env: { AI_STUB_FALLBACK: 'false' } });
     try {
         const rows = await h.registry.listProviders();
         for (const p of pool.PROVIDERS) {
             const row = rows.find((x) => x.key === p.key);
             assert.ok(row, `${p.key} seeded`);
-            assert.strictEqual(row.secret_ref, `vault:${p.key}`, `${p.key} key slot`);
+            assert.strictEqual(row.secret_ref, p.key === 'deepseek' ? 'env:DEEPSEEK_API_KEY' : p.auth_mode === 'none' ? null : `vault:${p.key}`, `${p.key} key slot`);
+            if (p.key === 'deepseek') continue; // the existing environment-backed seed retains its configuration
             assert.ok(row.metadata && row.metadata.catalog === 'pool-providers', `${p.key} catalogue row`);
             assert.strictEqual(row.metadata.privacy.label, p.privacy.label, `${p.key} privacy label`);
         }
@@ -215,7 +249,7 @@ t.test('a booted service seeds the ten offers, each with its own key slot', asyn
         const route = { key: 'test.seeded', primary: { provider: 'qwen', model: null }, fallbacks: [], timeout_ms: 3000 };
         const { explain } = await h.pool.candidates(route, ['chat'], 'chat', {});
         assert.strictEqual(explain.candidates[0].eligible, false, 'an offer with no key is not eligible');
-        assert.ok(String(explain.candidates[0].excluded_reason).includes('no_credentials'), explain.candidates[0].excluded_reason);
+        assert.ok(/no_credentials|disabled/.test(String(explain.candidates[0].excluded_reason)), explain.candidates[0].excluded_reason);
         await assert.rejects(
             h.pool.execute(route, 'chat', { messages: [{ role: 'user', content: 'x' }], timeoutMs: 3000 }, { routeKey: route.key }),
             (err) => err.code === 'provider.unavailable',
