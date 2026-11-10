@@ -1095,6 +1095,11 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
     async function skipReason(p, a, features, model = undefined) {
         if (!p || !a) return 'unknown_provider';
         if (p.status !== 'active') return 'disabled';
+        // Read the current model state even on pinned/default routes: a sync retirement or owner switch
+        // must take effect before the next attempt, without requiring the route to be rebuilt.
+        const row = model ? await registry.getModel(p.key, model) : null;
+        if (row?.metadata?.missing_since) return 'model_gone';
+        if (row && row.status !== 'active') return 'model_disabled';
         if (p.auth_mode !== 'none' && !credentialNotRequired(p) && !providerSecret(p, env)) return 'no_credentials';
         if (features.some(f => !a.supports(f))) return 'unsupported';
         const h = await health(p.key, model, { stamp: stampFor(p) });

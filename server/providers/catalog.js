@@ -14,7 +14,7 @@
  *                                 one on: routing would otherwise change what OpenVibe spends), a known model keeps its
  *                                 status and its prices, and one the provider no longer lists is marked, never deleted.
  *
- * Prices are never read from here: a person types them from the provider's own price page (registry.upsertModel).
+ * Listed prices and optional public metadata fill previously unknown prices; owner and price-book values win.
  * The families below are what the ids mean; what a provider's list says (Anthropic's capabilities, OpenRouter's
  * modalities and context) wins over them.
  */
@@ -22,6 +22,8 @@ const { ProviderError, deadline, describeAbort } = require('./common');
 
 // Each family: the id it matches, then what it is. First match wins, so the narrower come first.
 const FAMILIES = [
+    [/rerank/i, { type: 'rerank', tier: 'fast' }],
+    [/tts|text-to-speech|speech-/i, { type: 'speech', tier: 'fast' }],
     [/embed/i, { type: 'embedding', tier: 'fast' }],
     [/whisper|transcri|(^|[-_])stt([-_]|$)/i, { type: 'stt', tier: 'fast' }],
     [/^(gpt-image|dall-e|imagen)|image-(preview|generation)|-image$|flash-image/i, { type: 'image', tier: 'balanced' }],
@@ -64,6 +66,7 @@ function describe(id, hints = {}) {
     if (hints.vision != null) out.vision = !!hints.vision;
     if (hints.tools != null) out.tools = !!hints.tools;
     if (hints.reasoning != null) out.reasoning = !!hints.reasoning;
+    if (MODEL_TYPES.includes(hints.type)) out.type = hints.type;
     if (Number(hints.contextWindow) > 0) out.contextWindow = Math.round(Number(hints.contextWindow));
     if (Number(hints.maxOutput) > 0) out.maxOutput = Math.round(Number(hints.maxOutput));
     return out;
@@ -71,7 +74,7 @@ function describe(id, hints = {}) {
 
 async function getJson(url, headers, { timeoutMs = 20000, fetchImpl = globalThis.fetch } = {}) {
     let res;
-    try { res = await fetchImpl(url, { headers, signal: deadline(null, timeoutMs) }); } catch (err) {
+    try { res = await fetchImpl(url, { headers, redirect: 'error', signal: deadline(null, timeoutMs) }); } catch (err) {
         throw describeAbort(err, null, timeoutMs) || new ProviderError(`connection failed: ${err.message}`, { code: 'provider.unreachable' });
     }
     const text = await res.text().catch(() => '');
@@ -88,73 +91,112 @@ async function getJson(url, headers, { timeoutMs = 20000, fetchImpl = globalThis
 async function listRemote(provider, apiKey, { fetchImpl = globalThis.fetch } = {}) {
     const base = String(provider.base_url || '').replace(/\/+$/, '');
     if (!base) throw new ProviderError('the provider has no base URL', { code: 'provider.config' });
+    const endpoint = provider.metadata?.models_endpoint || `${base}/models`;
+    if (new URL(endpoint).origin !== new URL(base).origin) throw new ProviderError('model list must use the provider origin', { code: 'provider.config' });
     if (provider.kind === 'anthropic') {
         // Anthropic's Models API pages by after_id; its Anthropic-format look-alikes (DeepSeek, MiniMax) have no list.
-        if (!/anthropic\.com/i.test(base)) return [];
+        if (!/anthropic\.com/i.test(base) && !provider.metadata?.models_endpoint) return [];
         const out = [];
         let after = null;
         for (let page = 0; page < 10; page++) {
-            const j = await getJson(`${base}/models?limit=100${after ? `&after_id=${encodeURIComponent(after)}` : ''}`, { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' }, { fetchImpl });
+            const url = new URL(endpoint);
+            url.searchParams.set('limit', '100');
+            if (after) url.searchParams.set('after_id', after);
+            const auth = provider.auth_mode === 'none' ? {} : provider.auth_mode === 'bearer' ? { Authorization: `Bearer ${apiKey}` } : { 'x-api-key': apiKey };
+            const j = await getJson(url.href, { ...auth, 'anthropic-version': '2023-06-01' }, { fetchImpl });
+            if (!Array.isArray(j.data)) throw new ProviderError('invalid model list', { code: 'provider.catalog_invalid' });
             for (const m of j.data || []) {
                 const caps = m.capabilities || {};
                 const has = (k) => (caps[k] && typeof caps[k] === 'object' ? caps[k].supported !== false : caps[k] == null ? null : !!caps[k]);
                 out.push({ id: m.id, name: m.display_name || m.id, hints: { contextWindow: m.max_input_tokens, maxOutput: m.max_tokens, vision: has('image_input') ?? has('vision'), reasoning: has('thinking') ?? has('extended_thinking') } });
             }
-            if (!j.has_more || !j.last_id) break;
+            if (!j.has_more) break;
+            if (!j.last_id || page === 9) throw new ProviderError('incomplete model list', { code: 'provider.catalog_invalid' });
             after = j.last_id;
         }
         return out;
     }
-    const j = await getJson(`${base}/models`, apiKey ? { Authorization: `Bearer ${apiKey}` } : {}, { fetchImpl });
-    return (Array.isArray(j.data) ? j.data : Array.isArray(j.models) ? j.models : []).map((m) => {
-        const id = String(m.id || m.name || '').replace(/^models\//, '');
-        const arch = m.architecture || {};
-        const params = Array.isArray(m.supported_parameters) ? m.supported_parameters : null;
-        return {
-            id, name: m.name && m.name !== m.id ? String(m.name).replace(/^models\//, '') : (m.display_name || id),
-            hints: {
-                contextWindow: m.context_length || m.context_window || m.inputTokenLimit || (m.top_provider && m.top_provider.context_length),
-                maxOutput: m.outputTokenLimit || (m.top_provider && m.top_provider.max_completion_tokens),
-                vision: Array.isArray(arch.input_modalities) ? arch.input_modalities.includes('image') : null,
-                tools: params ? params.includes('tools') : null,
-                reasoning: params ? params.includes('reasoning') || params.includes('include_reasoning') : null,
-            },
-        };
-    }).filter((m) => m.id);
+    const headers = provider.auth_mode === 'none' || !apiKey ? {} : provider.auth_mode === 'x-api-key' ? { [provider.metadata?.auth_header || 'x-api-key']: apiKey } : { Authorization: `Bearer ${apiKey}` };
+    const out = [];
+    const tokens = new Set();
+    const url = new URL(endpoint);
+    for (let page = 0; page < 10; page++) {
+        const j = await getJson(url.href, headers, { fetchImpl });
+        const rows = Array.isArray(j) ? j : Array.isArray(j?.data) ? j.data : j?.models;
+        if (!Array.isArray(rows) || rows.some(m => !m || typeof (m.id || m.name) !== 'string' || !(m.id || m.name).trim())) {
+            throw new ProviderError('invalid model list', { code: 'provider.catalog_invalid' });
+        }
+        out.push(...rows.map(remoteModel));
+        const token = j.next_page_token || j.nextPageToken;
+        if (!token && !j.has_more) return out;
+        if (typeof token !== 'string' || tokens.has(token) || page === 9) throw new ProviderError('incomplete model list', { code: 'provider.catalog_invalid' });
+        tokens.add(token);
+        url.searchParams.set(j.next_page_token ? 'page_token' : 'pageToken', token);
+    }
 }
 
-const MODEL_TYPES = ['chat', 'vision', 'embedding', 'stt', 'image'];
+function remoteModel(m) {
+    const id = String(m.id || m.name || '').replace(/^models\//, '');
+    const arch = m.architecture || {};
+    const params = Array.isArray(m.supported_parameters) ? m.supported_parameters : null;
+    const type = m.type === 'language' ? 'chat' : m.type;
+    return {
+        id, name: m.name && m.name !== m.id ? String(m.name).replace(/^models\//, '') : (m.display_name || id),
+        hints: {
+            contextWindow: m.context_length || m.context_window || m.inputTokenLimit || (m.top_provider && m.top_provider.context_length),
+            maxOutput: m.outputTokenLimit || (m.top_provider && m.top_provider.max_completion_tokens),
+            vision: Array.isArray(arch.input_modalities) ? arch.input_modalities.includes('image') : null,
+            tools: params ? params.includes('tools') : null,
+            reasoning: params ? params.includes('reasoning') || params.includes('include_reasoning') : null,
+            ...(MODEL_TYPES.includes(type) ? { type } : {}),
+        },
+        ...(m.pricing ? { cost: listedCost(m.pricing) } : {}),
+    };
+}
+
+const price = (value, scale = 1) => value != null && value !== '' && Number.isFinite(Number(value)) && Number(value) >= 0 ? Number(value) * scale : null;
+function listedCost(pricing) {
+    return { in_per_mtok: price(pricing.prompt, 1e6), out_per_mtok: price(pricing.completion, 1e6), cached_per_mtok: price(pricing.input_cache_read, 1e6) };
+}
+const MODEL_TYPES = ['chat', 'vision', 'embedding', 'stt', 'image', 'video', 'speech', 'rerank'];
 
 /** Read the provider's list and bring its models into the catalogue. */
-async function sync({ registry, provider, apiKey, fetchImpl = globalThis.fetch, actor = 'system', now = () => Date.now() }) {
+async function sync({ registry, provider, apiKey, fetchImpl = globalThis.fetch, actor = 'system', now = () => Date.now(), enrich = null }) {
     const remote = await listRemote(provider, apiKey, { fetchImpl });
     const known = new Map((await registry.listModels({ provider: provider.key })).map((m) => [m.model_key, m]));
     const seen = new Set();
     const result = { added: [], updated: [], missing: [], skipped: [] };
     const at = new Date(now()).toISOString();
     for (const m of remote) {
-        const d = describe(m.id, m.hints);
-        if (!MODEL_TYPES.includes(d.type)) { result.skipped.push(m.id); continue; }   // video: not a model type here yet
+        const extra = enrich ? enrich(m.id) : {};
+        const d = describe(m.id, { ...extra.hints, ...Object.fromEntries(Object.entries(m.hints || {}).filter(([, v]) => v != null)) });
+        if (!MODEL_TYPES.includes(d.type)) { result.skipped.push(m.id); continue; }
         seen.add(m.id);
         const prev = known.get(m.id);
-        const metadata = { ...((prev && prev.metadata) || {}), tier: d.tier, reasoning: d.reasoning, note: d.note, synced_at: at, listed: true };
+        const uncensored = require('./pool-providers').isUncensored(provider, { model_key: m.id, metadata: prev?.metadata || {} });
+        const metadata = { tier: d.tier, reasoning: d.reasoning, note: d.note, ...prev?.metadata, synced_at: at, listed: true,
+            ...(uncensored ? { uncensored: true, min_age: 18 } : {}),
+            ...(extra.source ? { catalogue_enrichment: { source: extra.source, checked_at: extra.checked_at } } : {}) };
         delete metadata.missing_since;
+        const ownCost = m.cost && Object.values(m.cost).some(v => v != null) ? { ...m.cost, source: provider.metadata?.models_endpoint || `${provider.base_url.replace(/\/+$/, '')}/models`, verified_at: at.slice(0, 10) } : null;
+        const hasPrice = prev?.metadata?.price_book || ['in_per_mtok', 'out_per_mtok', 'cached_per_mtok'].some(f => prev?.cost?.[f] != null);
+        const cost = hasPrice ? prev.cost : ownCost || extra.cost || prev?.cost;
         await registry.upsertModel({
-            provider_key: provider.key, model_key: m.id, display_name: m.name || m.id, type: d.type,
+            provider_key: provider.key, model_key: m.id, display_name: prev?.display_name || m.name || m.id, type: d.type,
             // A new model is switched off until a person turns it on; a known one keeps its status (and its prices).
-            status: prev ? prev.status : 'disabled',
+            status: prev ? prev.status : provider.metadata?.auto_list_new_models === true && !uncensored ? 'active' : 'disabled',
             context_window: d.contextWindow ?? (prev && prev.context_window) ?? null, max_output: d.maxOutput ?? (prev && prev.max_output) ?? null,
-            supports: { json: true, tools: d.tools, streaming: true, vision: d.vision }, metadata,
+            supports: { json: true, tools: d.tools, streaming: true, vision: d.vision }, metadata, ...(cost ? { cost } : {}),
         }, { actor });
         (prev ? result.updated : result.added).push(m.id);
     }
     for (const [id, prev] of known) {
         if (seen.has(id) || (prev.metadata && prev.metadata.missing_since)) continue;
         if (!(prev.metadata && prev.metadata.listed)) continue;   // typed in by a person, never listed: leave it be
-        await registry.upsertModel({ provider_key: provider.key, model_key: id, metadata: { ...prev.metadata, listed: false, missing_since: at } }, { actor });
+        await registry.upsertModel({ provider_key: provider.key, model_key: id, status: 'disabled', metadata: { ...prev.metadata, listed: false, missing_since: at } }, { actor });
         result.missing.push(id);
     }
     return result;
 }
 
-module.exports = { describe, listRemote, sync, FAMILIES, TIERS };
+module.exports = { describe, listRemote, remoteModel, sync, FAMILIES, TIERS };

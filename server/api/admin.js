@@ -117,6 +117,20 @@ function adminRouter({ config = {}, db, registry, pool, quotas, cache, runs, aut
         const b = body(req);
         const prev = await registry.getModel(req.params.provider, req.params.model);
         const metadata = { ...(prev.metadata || {}), ...(b.metadata || {}) };
+        if (b.display_name !== undefined) {
+            if (typeof b.display_name !== 'string' || !b.display_name.trim() || b.display_name.length > 200) throw new AiError(422, 'ai.invalid', 'display_name must contain 1-200 characters');
+            metadata.owner_display_name = true;
+        }
+        if (b.status === 'active' && prev.metadata?.missing_since) throw new AiError(409, 'ai.model_gone', 'sync the provider before enabling a model that is no longer listed');
+        if (b.content_tier !== undefined) {
+            if (!['standard', 'uncensored'].includes(b.content_tier)) throw new AiError(422, 'ai.invalid', 'content_tier must be standard or uncensored');
+            const provider = await registry.getProvider(req.params.provider);
+            if (b.content_tier === 'standard' && require('../providers/pool-providers').isUncensored(provider, { model_key: req.params.model })) throw new AiError(422, 'ai.invalid', 'an uncensored provider or model keeps its 18+ tier');
+            metadata.uncensored = b.content_tier === 'uncensored';
+            metadata.owner_content_tier = true;
+            if (metadata.uncensored) metadata.min_age = 18;
+            else delete metadata.min_age;
+        }
         if (b.owner_override !== undefined) {
             const override = b.owner_override;
             if (override === null) {

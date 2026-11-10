@@ -11,7 +11,7 @@ const gpuCatalog = require('../gpu/catalog');
 const { tokenCosts } = require('../gpu/token-cost');
 
 /** Read-only JSON read models for Exchange's owner console. Every query is bounded and the query module redacts runs. */
-function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, gpus = null, gpuMarket = null, abuse = null, priceBook = null, creditGrants = null, sessionCookies = null, vault = null, settings = null, config = {}, log = console }) {
+function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, gpus = null, gpuMarket = null, abuse = null, priceBook = null, modelSync = null, creditGrants = null, sessionCookies = null, vault = null, settings = null, config = {}, log = console }) {
     const r = express.Router();
     const supply = require('../platform/supply').createSupply({ db, registry, clock });
     // The public marketplace readings and the per-token cost they imply, added to both console sections. Data only:
@@ -25,6 +25,9 @@ function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth,
     const read = auth.requireCap(CAPS.usageRead);
     const write = auth.requireCap(CAPS.providerManage);
     const workflowWrite = auth.requireCap(CAPS.workflowManage);
+    const modelView = (m, provider) => ({ ...m, provider: m.provider_key, model: m.model_key, accepted_price: m.cost,
+        content_tier: require('../providers/pool-providers').isUncensored(provider, m) ? 'uncensored' : 'standard',
+        owner_override: m.metadata?.owner_override || null });
     const actor = (req) => {
         const subject = String(req.get('x-ov-subject') || '');
         return /^usr_[0-9A-HJKMNP-TV-Z]{26}$/.test(subject) ? subject : req.principal.sub;
@@ -59,11 +62,15 @@ function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth,
             }))) : [];
             const cookies = sessionCookies ? await sessionCookies.list('operator', 'owner') : [];
             const balances = sessionCookies ? await Promise.all(cookies.map((c) => sessionCookies.balance('operator', 'owner', c.id))) : [];
-            return { providers: rows, models: (await registry.listModels()).map((m) => ({ ...m, accepted_price: m.cost,
-                owner_override: m.metadata && m.metadata.owner_override || null })), presets: poolProviders.map((p) => ({ key: p.key, display_name: p.display_name, base_url: p.base_url, default_model: p.default_model, provider_access: p.provider_access, uncensored: Boolean(p.uncensored), models: p.models })), credit_estimates: estimates, session_credentials: cookies, session_balances: balances };
+            return { providers: rows, models: (await registry.listModels()).map(m => modelView(m, rows.find(p => p.key === m.provider_key))), presets: poolProviders.map((p) => ({ key: p.key, display_name: p.display_name, base_url: p.base_url, default_model: p.default_model, provider_access: p.provider_access, uncensored: Boolean(p.uncensored), models: p.models })), credit_estimates: estimates, session_credentials: cookies, session_balances: balances };
         }
-        if (section === 'models') return { models: (await registry.listModels()).map((m) => ({ ...m, accepted_price: m.cost,
-            owner_override: m.metadata && m.metadata.owner_override || null })) };
+        if (section === 'models') {
+            const provider = typeof req.query.provider === 'string' ? req.query.provider : undefined;
+            const providers = await registry.listProviders();
+            return { models: (await registry.listModels({ provider })).map(m => modelView(m, providers.find(p => p.key === m.provider_key))),
+                provider: provider || null, sync_log: modelSync ? await modelSync.read(provider) : [] };
+        }
+        if (section === 'sync') return { sync_log: modelSync ? await modelSync.read() : [] };
         if (section === 'runs') {
             const { filters, form, bad } = q.parseRunFilters(req.query);
             const list = await q.listRuns(db, filters);
@@ -138,6 +145,19 @@ function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth,
         const current = await registry.getProvider(provider.key);
         if (current.updated_at === provider.updated_at) await registry.upsertProvider({ key: provider.key, metadata: { ...current.metadata, last_check: result } }, { actor: actor(req), origin: current.origin });
         return { provider: provider.key, ...result };
+    }));
+    r.post('/api/v1/admin/console/providers/:key/sync', write, wrap(async (req) => {
+        if (!modelSync) throw new AiError(503, 'ai.unavailable', 'model sync is unavailable');
+        return modelSync.run(req.params.key, { actor: actor(req) });
+    }));
+    r.post('/api/v1/admin/console/providers/:key/model-settings', json, write, wrap(async (req) => {
+        const provider = await registry.getProvider(req.params.key);
+        if (!provider) throw new AiError(404, 'ai.not_found', 'no such provider');
+        const b = req.body || {};
+        if (typeof b.auto_list_new_models !== 'boolean' || ![0, 60, 360, 1440].includes(b.model_sync_interval_minutes)) throw new AiError(422, 'ai.invalid', 'choose a model sync interval and automatic listing preference');
+        await registry.upsertProvider({ key: provider.key, metadata: { ...provider.metadata,
+            auto_list_new_models: b.auto_list_new_models, model_sync_interval_minutes: b.model_sync_interval_minutes } }, { actor: actor(req), origin: 'admin' });
+        return { ok: true, provider: provider.key };
     }));
     r.post('/api/v1/admin/console/providers', json, write, wrap(async (req) => {
         if (!vault || !settings) throw new AiError(503, 'vault.unavailable', 'provider keys cannot be stored on this host');
