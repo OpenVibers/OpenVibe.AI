@@ -1546,6 +1546,10 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         // CHECKPOINT D3: an exact id runs only its own artifact. The candidates are the catalog's deployments of
         // that id, filtered first by commercial access and what the request needs; no other model is ever added.
         const exact = ctx.exact || null;
+        const ownerOrder = await require('./order').createProviderOrder({ registry }).read(features.includes('vision') ? 'vision' : features.includes('tools') ? 'tools' : operation);
+        const ordered = ownerOrder?.enabled === true;
+        // Feed configured models through the existing eligibility and policy checks.
+        if (ordered && !exact) route = { ...route, capability: route.capability || operation, pinned: ownerOrder.choices };
         // A routing preset's objective is the more specific request: it decides what the router optimises
         // (cheapest, fastest, balanced, private). An exact id stays exact: a pin is never re-ranked.
         const presetObjective = ctx.presetPolicy && ctx.presetPolicy.objective ? ctx.presetPolicy.objective : null;
@@ -1762,6 +1766,10 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         if (uncensored) explain.label = tier.LABEL;
         const attempts = [...selfAttempts];
         explain.paid_by = 'openvibe';
+        if (ordered) {
+            list = require('./order').orderedSubset(list, ownerOrder.choices);
+            explain.reasons = [`owner ${ownerOrder.capability} order v${ownerOrder.version}`, ...(explain.reasons || [])];
+        }
         explain.attempts = attempts;
         explain.reasons = [...(explain.reasons || []), ...(selfAttempts.length ? ['your own keys did not answer; the network is the fallback'] : [])];
         // A first-party service's generate run may name one offer from GET /api/v1/routes; the advisor's own
@@ -1778,14 +1786,14 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             explain.reasons = [`pinned to ${chosen.model ? `${chosen.provider}/${chosen.model}` : chosen.provider} for this run`, ...(explain.reasons || [])];
         }
         // L36 Y7: the fallback chain stops after three providers.
-        const maxAttempts = (config.routing && config.routing.maxAttempts) || DEFAULT_MAX_ATTEMPTS;
+        const maxAttempts = ordered ? ownerOrder.choices.length : (config.routing && config.routing.maxAttempts) || DEFAULT_MAX_ATTEMPTS;
         let attemptsMade = 0;
         // BA1: a run that may wait (the 'background' class) looks for capacity that is cheap because it may
         // take minutes: the host's own idle model first, when the route's quality allows it. The provider
         // order stays the router's own (the authority keeps critical work); what changes is the tier each
         // candidate runs on, and that is decided per candidate below.
         const latencyClass = latency.isClass(ctx.latencyClass) ? ctx.latencyClass : latency.DEFAULT;
-        if (latencyClass !== latency.DEFAULT && !exact) {
+        if (latencyClass !== latency.DEFAULT && !exact && !ordered) {
             list = await orderForWaiting(list, { route, operation, req });
             explain.latency_class = latencyClass;
         }
@@ -1888,7 +1896,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             const room = waiting ? Math.max(latency.timeoutMs(latencyClass), Number(route.timeout_ms) || 0) : 0;
             const cap = (outlast || waiting) ? Math.max(own, Number(route.timeout_ms) || 0, room, operation === 'image' ? 600000 : 0) : (own || 600000);
             const timeoutMs = Math.max(1000, Math.min(req.timeoutMs || route.timeout_ms || own || DEFAULT_PROVIDER_TIMEOUT_MS, cap));
-            const retries = config.providerRetries;
+            const retries = ordered ? 0 : config.providerRetries;
             // BA1: the tier this candidate runs on. A background run asks for the cheaper tier the
             // provider sells. A refusal of that tier (a Flex tier with no capacity, or a model that does
             // not serve it) sends the same run once more on the standard tier: the refusal is counted and
