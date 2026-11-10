@@ -64,13 +64,26 @@ const effortFields = {
     agent_role: str({ enum: ['router', 'gate', 'assessor', 'worker', 'subagent', 'reviewer'] }),
     ladder_id: str({ maxLength: 128 }), rung: integer({ minimum: 0 }), kind: str({ maxLength: 100 }),
 };
+// AL3: a run may ask a stronger model for advice (ai.advisor@1). Off when omitted; true takes the defaults.
+const advisorField = {
+    description: 'Ask a stronger model for advice during this run (ai.advisor@1): true, or { model, effort, max_uses (1-3), max_words (10-100) }. Off when omitted; each use is on the run receipt with its cost.',
+    oneOf: [
+        { const: true },
+        { type: 'object', additionalProperties: false, properties: {
+            model: str({ description: 'provider/model from GET /api/v1/routes' }),
+            effort: str({ enum: ['low', 'medium', 'high', 'max'] }),
+            max_uses: integer({ minimum: 1, maximum: 3, default: 3 }),
+            max_words: integer({ minimum: 10, maximum: 100, default: 100 }),
+        } },
+    ],
+};
 const runBody = (required = []) => ({
     type: 'object', ...(required.length ? { required } : {}),
     properties: {
         workflow: str({ description: 'The workflow key, e.g. ai.generate' }), version: integer({ minimum: 1 }),
         task: str({ description: 'A registered task (GET /api/v1/tasks); its workflow runs with the task’s resolved choice. Required instead of workflow when no workflow is named.' }),
         choice: ref('Choice'),
-        ...effortFields, input: { type: 'object' }, idempotency_key: str({ minLength: 8, maxLength: 128 }),
+        ...effortFields, advisor: advisorField, input: { type: 'object' }, idempotency_key: str({ minLength: 8, maxLength: 128 }),
         target: { type: 'object' }, attribution: { type: 'object' }, on_behalf_of: ref('SubjectRef'),
         options: { type: 'object', description: 'cache, debug, and the latency class: latency (interactive | background | batch); a batch-class run also takes deadline_hours (1-72, the default is 24)' }, route: { type: 'object', description: '{ provider, model } — one offer from GET /api/v1/routes?operation=…' },
     },
@@ -79,6 +92,7 @@ const directBody = {
     type: 'object',
     properties: {
         ...effortFields,
+        advisor: advisorField,
         idempotency_key: str({ minLength: 8, maxLength: 128 }), target: { type: 'object' }, attribution: { type: 'object' },
         on_behalf_of: ref('SubjectRef'), options: { type: 'object' },
     },
@@ -358,6 +372,21 @@ route('post', '/runs/{id}/retry', {
     parameters: [path('id', str()), query('wait', integer({ minimum: 0 }))],
     responses: { 201: json('The new run', { type: 'object', required: ['run'], properties: { run: ref('Run') } }),
         202: json('Still running', { type: 'object', required: ['run'], properties: { run: ref('Run') } }), ...errors([401, 403, 404, 409, 429]) },
+});
+route('post', '/runs/{id}/advice', {
+    operationId: 'adviseRun', summary: 'One advisor call for a run that asked for it (owner)', tags: ['runs'], security: SERVICE,
+    description: 'ai.run.create. The run must have been created with advisor (ai.advisor@1). At most 3 uses per run and at most 100 words back; the advice is guidance the executor feeds into its own loop, and each use is on the run receipt (ai.advice@1) with the advice run, model, tokens and cost.',
+    parameters: [path('id', str())],
+    requestBody: body({ type: 'object', required: ['transcript'], properties: {
+        transcript: { type: 'array', minItems: 1, maxItems: 200, items: { type: 'object', required: ['role', 'content'], properties: { role: { type: 'string', enum: ['system', 'user', 'assistant', 'tool'] }, content: str({ maxLength: 200000 }) } } },
+        question: str({ maxLength: 4000 }), model: str({ description: 'provider/model; omitted uses the reviewer role default, then the strongest offer' }),
+        effort: str({ enum: ['low', 'medium', 'high', 'max'] }), max_words: integer({ minimum: 10, maximum: 100 }),
+    } }),
+    responses: { 201: json('The advice', { type: 'object', required: ['run_id', 'use', 'advice', 'max_uses', 'advice_run_id'], properties: {
+        run_id: str(), use: integer({ minimum: 1, maximum: 3 }), max_uses: integer({ minimum: 1, maximum: 3 }), max_words: integer({ minimum: 10, maximum: 100 }),
+        advice: str(), model: str(), effort: str(), usage: { type: 'object', properties: { tokens_in: integer(), tokens_out: integer(), cost_usd: { type: 'number' } } },
+        advice_run_id: str(), receipt_id: str(),
+    } }), ...errors([401, 403, 404, 409, 413, 422, 429, 502, 503]) },
 });
 route('get', '/runs/{id}/citations', {
     operationId: 'listRunCitations', summary: 'A run\'s citations', tags: ['runs'], security: SERVICE,

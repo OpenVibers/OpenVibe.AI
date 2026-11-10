@@ -57,7 +57,7 @@ function createDefaults({ db, registry, clock = { now: () => Date.now() } }) {
 }
 function controls(body) {
     const out = {};
-    for (const k of ['effort', 'agent_role', 'ladder_id', 'rung', 'kind']) if (body[k] !== undefined) out[k] = body[k];
+    for (const k of ['effort', 'agent_role', 'ladder_id', 'rung', 'kind', 'advisor']) if (body[k] !== undefined) out[k] = body[k];
     return out;
 }
 async function resolve(body, workflow, defaults) {

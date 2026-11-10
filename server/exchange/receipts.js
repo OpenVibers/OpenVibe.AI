@@ -81,6 +81,7 @@ function buildReceipt({ run, explain = null, usage = {}, price = null, privacy =
     return {
         ...require('../effort/receipt').receiptEffort(run, explain),
         ...(parseJson(run.options, {}).effort_policy?.kind ? { kind: parseJson(run.options, {}).effort_policy.kind } : {}),
+        ...(x.advisor ? { advisor: x.advisor } : {}),
         id: receiptId(run.id),
         run_id: run.id,
         created_at: createdAt || new Date().toISOString(),
@@ -142,6 +143,7 @@ function compact(receipt) {
         fallbacks: (receipt.fallbacks || []).map((f) => f.offer),
         privacy: receipt.privacy ? receipt.privacy.label : null,
         preset: receipt.preset ? receipt.preset.name : null,
+        advisor: receipt.advisor ? { count: receipt.advisor.count, cost_usd: receipt.advisor.cost_usd } : null,
     };
 }
 

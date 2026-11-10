@@ -76,3 +76,26 @@ samples yields null. This is provider token-cache usage, distinct from whole-run
 Migration 0059 is expand-only, above main's 0057 and the 0058 reserved by Exchange routing PR #403.
 It adds only role policy storage and a receipt time index. Tests use fixture responses
 and temporary databases; no paid provider calls, production writes or deployment.
+
+## The advisor
+
+A run on a cheap executor may ask a stronger model for advice while it works (plan AL3,
+`ai.advisor@1`). The executor sends its transcript and a question to
+`POST /api/v1/runs/:id/advice` (owner, `ai.run.create`); the advisor sees the transcript, runs without tools
+and answers in at most 100 words. The executor stays in charge: the advice is guidance it feeds back into its
+own loop, never an answer to the task. The endpoint is available on `ai.complete`, `ai.chat` and `ai.messages`
+runs.
+
+The advisor is **off unless the run asks**: `advisor: true` on the run request, or an object
+`{model?, effort?, max_uses?, max_words?}`. `advisor: true` takes at most 3 uses, at most 100 words, high
+effort and no named model. A named model is `provider/model` from `GET /api/v1/routes?operation=chat` and must
+be offered to that run; without one the owner's reviewer role default is used, then the dearest chat offer on
+the run's route (never the executor's own model when another exists). Abortion, an empty transcript and a
+fourth use are refused before a provider is called; the 18+ floor travels with an uncensored run's advice.
+
+Each use is its own run of `ai.chat` on the pinned offer, so it carries the ordinary receipt, quota and usage
+record. The use is written to `run_advisor_uses` and appears in the run's `explain.advisor` and on its receipt
+(`ai.advice@1`) as `{max_uses, max_words, count, cost_usd, uses: [{run_id, use, advice_run_id, model, effort,
+tokens_in, tokens_out, cost_usd, words, created_at}]}`. The advice text is answered to the caller and is not
+kept. Migration 0066 is expand-only. Tests use the stub provider and a temporary database; no paid call or
+production write is made.
