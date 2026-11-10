@@ -52,3 +52,18 @@ Required-provider documentation was checked on 2026-11-10. Meta now documents Mo
 Search capabilities use web-search and image-search, matching the shared placement capability syntax. Brave web and images share one provider/key, as do Serper web and images. Openverse and Wikimedia Commons require no key. SearXNG has no invented public address; the owner supplies their self-hosted base.
 
 For Fable: the existing providers console now receives all seeded provider rows and protocol metadata. Its visual grouping and capability presentation remain for the main session.
+
+Owner key controls use the existing encrypted `ai.provider_keys` store. The console JSON exposes only presence,
+the last four characters and the stored date. Saving or replacing a key makes no provider request. Deleting a key
+disables the provider and clears its secret reference before removing the encrypted value; it does not fall back
+to an environment key. The separate Setup panel retains its existing environment-fallback behavior.
+
+`POST /api/v1/admin/console/providers/:key/check` performs at most one request and never enables the provider.
+It uses the model-list endpoint, a minimal search for search-only adapters, or a registered read-only account
+endpoint: [OpenRouter's current key](https://openrouter.ai/docs/api/api-reference/api-keys/get-current-api-key)
+and [Tavily usage](https://docs.tavily.com/documentation/api-reference/endpoint/usage). There are no retries,
+redirects, generated tokens or automatic checks when a key is saved. Only HTTP status, a safe error code,
+latency and check time are stored; no upstream response text is logged or returned. A model-list check confirms
+endpoint access, not that a particular model can run. Missing keys result in zero requests.
+
+For Fable: key marker/date, explicit check button, check status/latency and remove-and-disable controls in each provider.

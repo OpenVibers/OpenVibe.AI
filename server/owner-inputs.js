@@ -115,9 +115,16 @@ async function testProviderKey(provider, key, { fetchImpl }) {
         url = `${base}/models?pageSize=1`;
         headers = { 'x-goog-api-key': key };
     }
+    if (provider.metadata && provider.metadata.models_endpoint) url = provider.metadata.models_endpoint;
+    if (provider.auth_mode === 'none') headers = {};
+    else if (provider.kind !== 'anthropic' && provider.kind !== 'gemini' && provider.auth_mode === 'x-api-key') headers = { 'x-api-key': key };
+    // A configured models endpoint receives a key only on the origin the owner entered it for.
+    try { if (new URL(url).origin !== new URL(base).origin) return { ok: false, message: `${name} has a model-list address on a different origin.` }; }
+    catch { return { ok: false, message: `${name} has an invalid model-list address.` }; }
     const r = await probe(fetchImpl, url, { headers });
     if (r.status >= 200 && r.status < 300) {
         const list = r.json && (Array.isArray(r.json.data) ? r.json.data : Array.isArray(r.json.models) ? r.json.models : null);
+        if (!list) return { ok: false, message: `${name} answered without a model list.` };
         return { ok: true, message: `${name} accepted the key${list ? ` and lists ${list.length} model${list.length === 1 ? '' : 's'}` : ''}.` };
     }
     return { ok: false, message: refused(name, r) };

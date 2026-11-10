@@ -275,7 +275,7 @@ function createApp({ choices = null, searchFetch = null, config, db, registry, p
     // dashboard, an API for Exchange. Nothing here writes an offer; the offer belongs to Network and the Link owner.
     if (community) app.use('/api/v1', require('./api/community').communityRouter({ community, auth, log }));
     app.use(adminRouter({ config, db, registry, pool, quotas, cache, runs, auth, settings, ops, log }));
-    app.use(require('./api/console-data').consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth, clock, fetchImpl, gpus, gpuMarket, abuse, priceBook, creditGrants, sessionCookies, vault, settings, config, log }));
+    app.use(require('./api/console-data').consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth, clock, fetchImpl, env, gpus, gpuMarket, abuse, priceBook, creditGrants, sessionCookies, vault, settings, config, log }));
     // The operator console moved to OpenVibe.Exchange. Keep the legacy AI paths as permanent redirects;
     // run receipts still use the person-session routes below and the AI JSON admin APIs stay here.
     // Person sessions are separate, read-only and open one run receipt each (server/person-session.js).
