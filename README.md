@@ -159,7 +159,8 @@ have no CORS access. Service callers do not need CORS.
 `/api/ready` (openvibe-shared/ready) is 503 when the database, the active workflows or the Network
 key fail; provider configuration (an active provider without its credentials, or with an open
 circuit) degrades it. `/metrics` (openvibe-shared/metrics) carries golden signals by route template,
-`ai_runs{state="queued"|"running"}` and `ai_provider_circuit{provider,state}`.
+`ai_runs{state="queued"|"running"}`, `ai_provider_circuit{provider,state}` and the measured
+`ai_provider_circuit_open{provider,model,class}` and `ai_provider_failures_total{provider,class}`.
 
 Each HTTP request is aggregated by route template, method and status class, never by raw URL; `/shared`
 files, static assets, health, readiness and `/metrics` are not counted. Once a minute one `http.request`
@@ -519,7 +520,7 @@ never a value.
 
 | Group | Table(s) |
 |---|---|
-| Providers | `providers` (+ `provider_health`: circuit breaker) — secrets only as `env:NAME` references |
+| Providers | `providers`, `provider_circuits` (per provider+model breaker), `provider_failure_counts`, `provider_health` (roll-up) — secrets only as `env:NAME` references |
 | Models | `models` (type, limits, cost per Mtok, JSON/tools/streaming/vision support) |
 | Routing profiles | `routes` — versioned; primary + fallbacks, options, output limit, format, timeout, explicit aliases |
 | Prompt templates | `templates` — versioned; input/output schema, system/user prompt, default route, owner, visibility, `draft\|active\|deprecated\|archived` |
@@ -554,9 +555,15 @@ can serve it, ordered by `openvibe-sdk/placement` (objective, price, measured la
 hysteresis through the route's current placement), or pins a `[primary, ...fallbacks]` list. A
 provider that is disabled, missing credentials, circuit-open or unable to do the operation is
 **skipped and logged**; every call has a strict timeout, cancellation and one retry on a transient
-failure. A provider's own "insufficient balance" answer (HTTP 402, or 429/403 `insufficient_quota`) is never
-retried: its circuit opens at once for `AI_BREAKER_EXHAUSTED_COOLDOWN_MS` (10 minutes, shared by every request)
-and the router fails over. When nothing can serve, the run answers `ai.resting`; a fallback that answers is
+failure. A failure is classified as `balance` (402, `insufficient_quota`, "credit balance is too low",
+OpenRouter's 402 credits), `auth` (401/403), `rate_limit` (429), `transient` (timeout, 5xx, broken
+stream) or `request` (400/413/422 and context too long). The circuit is per provider+model
+(`provider_circuits`, migrations/0060, survives a restart): balance and auth open it at once and are
+never retried; a run of transient failures opens it for 30 s doubling to 10 min; rate limits and
+malformed requests never open it. A balance/auth circuit may probe the next real request after
+`AI_BREAKER_EXHAUSTED_COOLDOWN_MS` (15 minutes) and closes on a success or when the provider's key
+changes. The catalogue reports `up`, `degraded` (over 5% of at least 10 requests in the last hour) or
+`down`, with `status_reason`, `status_since` and `status_class`. When nothing can serve, the run answers `ai.resting`; a fallback that answers is
 recorded on the run (`fallback_used`), in the request log
 (`fallback = 1`) and in the audit log. Every run response and `GET /api/v1/runs/:id` carry `explain`
 (objective, reasons, selected, and every candidate with its estimated cost, latency and excluded
@@ -965,6 +972,7 @@ mix vectors from different providers (re-embed when the provider changes).
 | Edits are new versions; runs pin versions; lifecycle; admin versions survive reseeding | `test/versioning.test.js` |
 | A degraded primary falls back and records it; breaker; skips; timeouts; explicit `provider.unavailable` | `test/fallback.test.js` |
 | 402/insufficient-quota opens the long exhausted circuit, never retries, fails over, then `ai.resting` | `test/provider-exhausted.test.js` |
+| Every provider error shape maps to balance/auth/rate_limit/transient/request; per-offer circuits, 30 s doubling backoff, persistence, key reset, catalogue status and the owner alert | `test/provider-circuits.test.js` |
 | Hourly DeepSeek balance gauge, no key in logs, off under a drill | `test/provider-balance.test.js` |
 | Quotas refuse with 429 + Retry-After **before** any provider call; per-service, attribution, cost caps | `test/quota.test.js` |
 | Free allowance: free up to the card's allowance then fully priced, reset per day/month (never for `none`), per subject, never past the cap under concurrent claims, absent at 0 | `test/free-allowance.test.js` |

@@ -129,6 +129,10 @@ function load(env = process.env) {
             ssoAudience: String(env.AI_SSO_AUDIENCE || 'openvibe.network').trim(),
         },
 
+        // The owner's Network subject (usr_…), for the one alert sent when a provider's balance or key
+        // fails. Unset means no push is attempted; the console and the metrics still say what happened.
+        ownerSubject: /^usr_[0-9A-HJKMNP-TV-Z]{26}$/.test(String(env.AI_OWNER_SUBJECT || '')) ? String(env.AI_OWNER_SUBJECT) : null,
+
         // ── The shared provider (Live's "shared key") ──
         // AI_ENABLED is Live's ai_enabled master switch. Unset means "on when a key or a
         // self-hosted base URL is configured".
@@ -359,6 +363,10 @@ function load(env = process.env) {
             // A provider that answered "insufficient balance" is out of money, not flaky: its circuit stays open this
             // long (10 minutes), shared by every request, before one probe is allowed to spend again.
             exhaustedCooldownMs: Math.max(60000, int(env.AI_BREAKER_EXHAUSTED_COOLDOWN_MS, 15 * 60000)),
+            // A run of transient failures opens the offer for this long, doubling on every failed probe to the
+            // ceiling. The first pause is 30 seconds and the offer is never away for more than 10 minutes.
+            transientBackoffMs: Math.max(1000, int(env.AI_BREAKER_BACKOFF_MS, 30000)),
+            transientMaxMs: Math.max(30000, int(env.AI_BREAKER_MAX_BACKOFF_MS, 10 * 60000)),
         },
         // One retry on a transient failure (timeout, 429, 5xx, connection reset) before the
         // router moves on to the fallback — Live's rule.
