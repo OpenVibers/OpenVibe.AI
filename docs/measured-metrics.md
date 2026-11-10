@@ -23,5 +23,30 @@ Backfill covers complete dates still inside receipt retention (normally 29 days)
 Longer history accumulates going forward; it is never fabricated from expired runs.
 Models use the catalogue's canonical identity and longest matching registered revision.
 
-For Fable: part 1 adds storage only. The next read surface will expose the daily
-series, sample counts and null states for charts without needing raw receipts.
+Public reads under `/api/v1/exchange/metrics` are cached sixty seconds and allow
+cross-origin GETs without credentials. Model slugs in path segments are URI-encoded.
+
+| Read | Parameters | Data |
+| --- | --- | --- |
+| `/models/:model` | `days=30|90`, optional `kind` | Daily series per provider and task kind |
+| `/compare` | `models=a,b` (up to six), optional `kind`, `measures`, `day` | Exact daily metrics, grouped by model/provider/kind |
+| `/leaderboard` | `kind`, `measure`, optional `day` | Ordered model/provider rows for that completed UTC day |
+| `/prices/:model` | `days=30|90` | Daily catalogue prices per offer, source and capture time |
+| `/providers/:provider` | none | Seven days of hourly run success rate and successful median latency |
+| `/status` | none | Published date coverage and job completion |
+
+Comparisons and leaderboards default to the latest published day, shared by every
+row. They never average daily medians or mix dates without saying so. These are
+observational workloads, not controlled benchmark runs. The response names the
+measure units, sample minimum, methodology, providers, task kinds and dates. An
+empty series or cell is unavailable evidence, never a zero score.
+
+The second due job records hourly provider health and today's listed prices. It
+backfills health from seven days of receipts, refreshes two prior hours and keeps
+only seven days. Prices are immutable daily observations and accumulate from the
+deployment date; no previous price is invented. A listed price is not a measured
+number and needs no run samples. Adult models are absent from these public reads.
+
+For Fable: chart inputs are `series[].day`, provider/task kind, `runs`, the selected
+measure and `samples`; price charts use `price_in/out/cached` in USD per million
+tokens; health charts use UTC `hour`, `success_rate`, `latency_p50_ms` and samples.

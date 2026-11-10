@@ -588,6 +588,26 @@ route('put', '/agent-role-defaults/{role}', {
     requestBody: body({ type: 'object', properties: { model: str(), choice_order: arrayOf(str()), effort: effortFields.effort } }),
     responses: { 200: json('Saved default', { type: 'object' }), ...errors([401, 403, 422]) },
 });
+const measuredCell = { type: 'object', properties: {
+    day: str({ format: 'date' }), model: str(), provider: str(), task_kind: str(), runs: integer({ minimum: 20 }),
+    ...Object.fromEntries(require('./exchange/metrics-read').MEASURES.map((m) => [m, nullable('number')])),
+    samples: { type: 'object', additionalProperties: nullable('integer', { minimum: 20 }) }, computed_at: str({ format: 'date-time' }),
+} };
+for (const [routePath, id, summary, parameters, properties] of [
+    ['/exchange/metrics/models/{model}', 'exchangeModelMetrics', 'Measured model series over 30 or 90 completed UTC days',
+        [path('model', str()), query('days', integer({ enum: [30, 90] })), query('kind', str())], { series: arrayOf(measuredCell) }],
+    ['/exchange/metrics/compare', 'exchangeCompareMetrics', 'Compare up to six models on chosen measures for one completed UTC day',
+        [query('models', str()), query('measures', str()), query('kind', str()), query('day', str({ format: 'date' }))],
+        { models: arrayOf({ type: 'object', properties: { model: str(), cells: arrayOf(measuredCell) } }) }],
+    ['/exchange/metrics/leaderboard', 'exchangeMetricsLeaderboard', 'A task kind leaderboard for one measure and completed UTC day',
+        [query('kind', str()), query('measure', str({ enum: require('./exchange/metrics-read').MEASURES })), query('day', str({ format: 'date' }))], { rows: arrayOf(measuredCell) }],
+    ['/exchange/metrics/prices/{model}', 'exchangeModelPriceHistory', 'Daily listed catalogue prices per model and provider',
+        [path('model', str()), query('days', integer({ enum: [30, 90] }))], { series: arrayOf({ type: 'object' }) }],
+    ['/exchange/metrics/providers/{provider}', 'exchangeProviderHealth', 'Seven days of hourly provider run success and median latency',
+        [path('provider', str())], { series: arrayOf({ type: 'object', properties: { hour: str({ format: 'date-time' }), provider: str(), runs: integer({ minimum: 20 }), success_rate: { type: 'number' }, latency_p50_ms: nullable('number'), latency_samples: nullable('integer', { minimum: 20 }) } }) }],
+]) route('get', routePath, { operationId: id, summary, tags: ['exchange'], security: [], parameters,
+    description: 'Public, cached sixty seconds, CORS enabled. Measured cells and each timing measure require twenty observations. Missing is not zero; prices are listed prices, not measurements. No person, prompt or site identifiers.',
+    responses: { 200: json(summary, { type: 'object', properties }), ...errors([422]) } });
 route('get', '/exchange/metrics/status', {
     operationId: 'exchangeMetricsStatus', summary: 'Daily measured metrics publication status', tags: ['exchange'], security: [],
     description: 'Public, cached sixty seconds. Complete UTC days from retained run receipts; published cells and each timing measure require twenty samples. No caller or prompt data.',
