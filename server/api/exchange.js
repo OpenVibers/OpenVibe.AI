@@ -150,7 +150,9 @@ function exchangeRouter({ db, registry, pool, quotas = null, env = process.env, 
             const ob = p.onBehalfOf || (p.claims && p.claims.on_behalf_of);
             const obId = ob && typeof ob === 'object' ? ob.id : ob;
             const owner = receipt.owner || {};
+            const requester = receipt.requester || {};
             const allowed = auth.principalHas(req, CAPS.usageRead)
+                || (requester.type === subject.type && requester.id === subject.id)
                 || (receipt.requester_type === subject.type && receipt.requester_id === subject.id)
                 || (owner.type === 'user' && obId && String(owner.id) === String(obId));
             if (!allowed) throw new AiError(404, 'ai.receipt_not_found', `no receipt ${req.params.id}`);
