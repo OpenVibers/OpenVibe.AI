@@ -17,9 +17,11 @@
  * through placement_state.current); or it pins `[primary, ...fallbacks]`. `explain` (objective,
  * reasons, selected, candidates with their excluded reasons) rides every run response.
  *
- * Circuit breaker per provider: `failureThreshold` consecutive failures open it for `cooldownMs`;
- * after that one half-open probe decides whether it closes again. A provider's own "insufficient balance"
- * answer opens it at once for the long exhausted cooldown, is never retried, and the router fails over.
+ * Circuit breaker per provider+model (server/providers/failure.js): a run of transient failures opens
+ * that offer for 30 s doubling to 10 min; a balance or auth answer opens it at once for the long
+ * exhausted cooldown and is never retried; the next real request after the cooldown is the one probe.
+ * Another model on the same provider keeps answering. The state is stored (provider_circuits, 0060),
+ * so a restart keeps it, and a changed provider key resets it.
  * When nothing can serve because offers are exhausted or paused, the route answers 503 ai.resting with a
  * human sentence and Retry-After. The host's local model is a last offer for short text only, one request at
  * a time, labelled local on the receipt.
@@ -28,6 +30,8 @@ const placement = require('openvibe-sdk/placement');
 const contracts = require('openvibe-contracts');
 const { AiError, providerSecret, sha256 } = require('../util');
 const { retryable, sleep, ProviderError, schemaInstruction, insufficientBalance } = require('./common');
+const { classifyFailure, reasonForClass, circuitStatus, offerStatus, iso } = require('./failure');
+const { createOwnerNotifier } = require('./owner-notify');
 const { sourcesOf, ceilingOf, allowsProvider, allowsCommunity } = require('../free-tier');
 const { createStubProvider } = require('./stub');
 const { createOpenAiProvider } = require('./openai');
@@ -216,7 +220,16 @@ function selfModelFor(cred, operation, req, ctx, prefs) {
     return { model, kind, why };
 }
 
-function createProviderPool({ db, registry, config, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, credentialFetch = null, machineModels = null, community = null, bench = null, variantEvidence = null, adultStatus = null, offPeak = null, creditGrants = null }) {
+/** The prompt-cache switch is off for this kind: no cache marker and no warm-cache bias may be sent. */
+function withoutPromptCache(req) {
+    if (!req || typeof req !== 'object') return req;
+    const out = { ...req };
+    if (Array.isArray(out.system)) out.system = out.system.map((b) => (b && b.cache ? { ...b, cache: false } : b));
+    delete out.cacheKey;
+    return out;
+}
+
+function createProviderPool({ db, registry, config, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, credentialFetch = null, machineModels = null, community = null, bench = null, variantEvidence = null, adultStatus = null, offPeak = null, creditGrants = null, ownerNotify = null, ownerConfig = null }) {
     // A person's own machine as their model (credential provider node, server/machines.js).
     const machines = machineModels || require('../machines').createMachineModels({ config, env, fetchImpl });
     const cache = new Map();          // key -> { stamp, adapter }
@@ -228,6 +241,88 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
     const exhaustedCooldownMs = () => Math.max(60000, Number(config.breaker.exhaustedCooldownMs) || 10 * 60000);
     // L36 Y7: the provider that last answered this prompt, for five minutes (server/providers/warm-cache.js).
     const warm = createWarmCache({ now: () => clock.now() });
+    // The owner's inference configuration (server/owner-config.js): spend caps, routing strategy
+    // per capability (cheapest / fastest / fixed order with a ceiling and a denylist) and economy
+    // toggles. Empty by installation: every check below is a no-op until the owner writes a row.
+    const ownerSettings = ownerConfig || (() => { try { return require('../owner-config').createOwnerConfig({ db, registry, clock }); } catch { return null; } })();
+    const ownerCapability = (operation, ctx = {}, req = null) => {
+        if ((ctx.contentPolicy || 'standard') === 'uncensored') return 'uncensored';
+        if (operation === 'embed' || operation === 'embedding') return 'embed';
+        if (operation === 'image') return 'image';
+        if (operation === 'transcribe' || operation === 'speech') return 'transcribe';
+        if (ctx.latencyClass === 'batch' || (req && req.latencyClass === 'batch')) return 'batch';
+        return 'chat';
+    };
+    /** Apply the owner's routing row to an already-ranked order: denylist, ceiling, spend caps,
+     * then cheapest / fastest / fixed ordering. Excluded offers keep their reason in explain. */
+    async function applyOwner(list, explain, { operation, ctx = {}, req = null, economy = undefined }) {
+        if (!ownerSettings || !list || !list.length) return list;
+        const capability = ownerCapability(operation, ctx, req);
+        const routing = await ownerSettings.routingFor(capability).catch(() => null);
+        const economyRows = economy === undefined ? await ownerSettings.getEconomy().catch(() => []) : null;
+        const eco = economy !== undefined ? economy : (economyRows.find((r) => r.capability === capability) || null);
+        const denied = new Set((routing && routing.denylist) || []);
+        const ceiling = routing ? routing.ceiling : null;
+        const out = [];
+        for (const c of list) {
+            if (denied.has(c.provider)) { explain.candidates.push({ provider: c.provider, model: c.model || null, eligible: false, excluded_reason: `owner_denylist (${capability})`, cost: null, latency: null }); continue; }
+            const cap = await ownerSettings.capHit(c.provider).catch(() => null);
+            if (cap && cap.over) { explain.candidates.push({ provider: c.provider, model: c.model || null, eligible: false, excluded_reason: `spend_cap (today $${Number(cap.spent_today).toFixed(4)} of $${cap.daily == null ? '∞' : cap.daily}, month $${Number(cap.spent_month).toFixed(4)} of $${cap.monthly == null ? '∞' : cap.monthly})`, cost: null, latency: null }); continue; }
+            if (ceiling != null) {
+                const price = await priceFor(c.provider, c.model).catch(() => null);
+                let outPrice = price ? Number(price.out) || 0 : 0;
+                if (outPrice === 0 && c.model) { const row = await registry.getModel(c.provider, c.model).catch(() => null); if (row && row.cost) outPrice = Number(row.cost.out_per_mtok ?? outPrice) || 0; }
+                if (price && outPrice > Number(ceiling)) { explain.candidates.push({ provider: c.provider, model: c.model || null, eligible: false, excluded_reason: `over_owner_ceiling (${outPrice.toFixed(4)} > ${Number(ceiling).toFixed(4)} USD/Mtok)`, cost: null, latency: null }); continue; }
+                if (!price && outPrice > Number(ceiling)) { explain.candidates.push({ provider: c.provider, model: c.model || null, eligible: false, excluded_reason: `over_owner_ceiling (${outPrice.toFixed(4)} > ${Number(ceiling).toFixed(4)} USD/Mtok)`, cost: null, latency: null }); continue; }
+            }
+            out.push(c);
+        }
+        let order = out;
+        if (routing && routing.enabled && routing.strategy === 'fixed') {
+            const pos = new Map(routing.choices.map((c, i) => [`${c.provider}/${c.model || ''}`, i]));
+            order = choicesSubset(out, routing.choices);
+            explain.reasons = [`owner ${capability} fixed order v${routing.updated_at}`, ...(explain.reasons || [])];
+        } else if (routing && routing.enabled && routing.strategy === 'cheapest') {
+            order = await sortByPrice(out, 'cheapest');
+            explain.reasons = [`owner ${capability} cheapest first`, ...(explain.reasons || [])];
+        } else if (routing && routing.enabled && routing.strategy === 'fastest') {
+            order = await sortByLatency(out);
+            explain.reasons = [`owner ${capability} fastest first`, ...(explain.reasons || [])];
+        }
+        if (eco && eco.small_first && capability === 'chat') {
+            order = await sortByTier(out, order, routing && routing.enabled && routing.strategy === 'fixed');
+            if (!(routing && routing.enabled && routing.strategy === 'fixed')) explain.reasons = [`owner small-model-first (${capability})`, ...(explain.reasons || [])];
+        }
+        if (eco) explain.owner_economy = { capability, batches: eco.batches, prompt_cache: eco.prompt_cache, small_first: eco.small_first, output_limit: eco.output_limit, answer_cache: eco.answer_cache };
+        if (!(routing && routing.enabled)) return order;
+        return order;
+    }
+    function choicesSubset(list, choices) {
+        return choices.flatMap((ch) => list.filter((c) => c.provider === ch.provider && (c.model || null) === (ch.model || null) || (c.provider === ch.provider && c.model == null && ch.model == null)));
+    }
+    async function sortByPrice(list) {
+        const scored = [];
+        for (const c of list) {
+            if (c.provider === 'stub') { scored.push([Infinity, Infinity, c]); continue; }
+            const p = await priceFor(c.provider, c.model).catch(() => ({ out: Infinity }));
+            let out = Number(p.out) || 0, inn = Number(p.in) || 0;
+            if (out === 0 && inn === 0 && c.model) { const row = await registry.getModel(c.provider, c.model).catch(() => null); if (row && row.cost) { out = Number(row.cost.out_per_mtok ?? out) || 0; inn = Number(row.cost.in_per_mtok ?? inn) || 0; } }
+            scored.push([out, inn, c]);
+        }
+        scored.sort((a, b) => (a[0] - b[0]) || (a[1] - b[1]));
+        return scored.map((x) => x[2]);
+    }
+    async function sortByLatency(list) {
+        const stats = await statsByProvider().catch(() => new Map());
+        return [...list].sort((a, b) => { const pa = stats.get(a.provider) || {}; const pb = stats.get(b.provider) || {}; return (pa.p95 == null ? Infinity : pa.p95) - (pb.p95 == null ? Infinity : pb.p95); });
+    }
+    async function sortByTier(list, order, fixed) {
+        if (fixed) return order;
+        const scored = [];
+        for (const c of list) { const row = c.model ? await registry.getModel(c.provider, c.model).catch(() => null) : null; const tier = row && row.metadata && row.metadata.tier ? String(row.metadata.tier) : 'balanced'; const rank = { fast: 0, balanced: 1, strong: 2, frontier: 3 }[tier]; scored.push([rank === undefined ? 1 : rank, c]); }
+        scored.sort((a, b) => a[0] - b[0]);
+        return scored.map((x) => x[1]);
+    }
     // AI Exchange P7: measured per-deployment evidence for alias routing. The feature flag is read live (D11
     // owner settings), so turning routing_evidence on or off in the config store needs no restart; while it is off
     // no metrics are written and no order changes.
@@ -285,39 +380,271 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         return { record: p, adapter: a };
     }
 
-    // ── Circuit breaker ────────────────────────────────────
+    // ── Circuit breaker (per provider + model) ─────────────
+    // A provider can fail one offer while another offer on the same provider still answers, so the
+    // breaker is keyed by (provider, model). provider_health stays as the provider-level roll-up for
+    // the console, readiness and older callers; the per-offer rows are the authority.
     const getHealth = db.prepare('SELECT * FROM provider_health WHERE provider_key = ?');
     const putHealth = db.prepare(`INSERT INTO provider_health (provider_key, state, consecutive_failures, opened_at, exhausted_at, last_error, last_success_at, last_failure_at)
         VALUES (@provider_key, @state, @consecutive_failures, @opened_at, @exhausted_at, @last_error, @last_success_at, @last_failure_at)
         ON CONFLICT(provider_key) DO UPDATE SET state = excluded.state, consecutive_failures = excluded.consecutive_failures, opened_at = excluded.opened_at,
           exhausted_at = excluded.exhausted_at, last_error = excluded.last_error, last_success_at = excluded.last_success_at, last_failure_at = excluded.last_failure_at`);
-    async function health(key) {
-        const h = await getHealth.get(key) || { provider_key: key, state: 'closed', consecutive_failures: 0, opened_at: null, exhausted_at: null, last_error: null, last_success_at: null, last_failure_at: null };
-        if (h.state === 'open') {
-            // Out of balance: a long cooldown (10 minutes), so every request shares the same pause instead of each
-            // one retrying a provider that cannot answer until someone tops it up.
+    const getCircuit = db.prepare('SELECT * FROM provider_circuits WHERE provider_key = ? AND model_key = ?');
+    const listCircuits = db.prepare('SELECT * FROM provider_circuits WHERE provider_key = ? ORDER BY model_key');
+    const putCircuit = db.prepare(`INSERT INTO provider_circuits
+            (provider_key, model_key, state, failure_class, consecutive_failures, opened_at, retry_at, backoff_ms, key_stamp, last_error, last_success_at, last_failure_at, notified_at)
+        VALUES (@provider_key, @model_key, @state, @failure_class, @consecutive_failures, @opened_at, @retry_at, @backoff_ms, @key_stamp, @last_error, @last_success_at, @last_failure_at, @notified_at)
+        ON CONFLICT(provider_key, model_key) DO UPDATE SET
+            state = excluded.state, failure_class = excluded.failure_class, consecutive_failures = excluded.consecutive_failures,
+            opened_at = excluded.opened_at, retry_at = excluded.retry_at, backoff_ms = excluded.backoff_ms, key_stamp = excluded.key_stamp,
+            last_error = excluded.last_error, last_success_at = excluded.last_success_at, last_failure_at = excluded.last_failure_at, notified_at = excluded.notified_at`);
+    const putFailureCount = db.prepare(`INSERT INTO provider_failure_counts (provider_key, failure_class, count, updated_at)
+        VALUES (@provider_key, @failure_class, 1, @updated_at)
+        ON CONFLICT(provider_key, failure_class) DO UPDATE SET count = provider_failure_counts.count + excluded.count, updated_at = excluded.updated_at`);
+    const notifyOwner = ownerNotify || createOwnerNotifier({ config, env, fetchImpl, log });
+
+    /** The fingerprint of the provider's current key: a SHA-256, never the key itself. */
+    function stampFor(p) {
+        if (!p || p.auth_mode === 'none') return null;
+        const secret = providerSecret(p, env);
+        return secret ? sha256(secret) : null;
+    }
+    async function keyStamp(key) { return stampFor(await registry.getProvider(key)); }
+
+    /**
+     * A key change closes every circuit on its provider: a new key may answer where the old one was
+     * refused. The provider record's secret_ref alone is not enough (an env value can change under the
+     * same reference), so the resolved key's fingerprint is compared. Nothing about the key is stored.
+     */
+    async function resetForNewKey(key, stamp) {
+        const rows = await listCircuits.all(key);
+        if (!rows.length) return false;
+        if (rows.every((r) => (r.key_stamp || null) === (stamp || null))) return false;
+        await db.prepare('DELETE FROM provider_circuits WHERE provider_key = ?').run(key);
+        await db.prepare('DELETE FROM provider_health WHERE provider_key = ?').run(key);
+        await registry.audit('system', 'provider.circuit_reset', 'provider', key, { metadata: { reason: 'the provider key changed' } });
+        return true;
+    }
+
+    const CLOSED = Object.freeze({ state: 'closed', consecutive_failures: 0, opened_at: null, retry_at: null, backoff_ms: 0, failure_class: null, last_error: null, last_success_at: null, last_failure_at: null, notified_at: null });
+
+    /** One circuit row as the router and the admin API show it; an open row past retry_at is a half-open probe. */
+    function circuitView(row) {
+        if (!row) return { ...CLOSED, status: 'up', status_reason: null, status_since: null };
+        const state = row.state === 'open' && Number(row.retry_at || 0) <= clock.now() ? 'half_open' : row.state;
+        const failureClass = row.failure_class || (row.exhausted_at ? 'balance' : null);
+        const down = state !== 'closed';
+        return {
+            provider_key: row.provider_key, model_key: row.model_key || '',
+            state, failure_class: failureClass, consecutive_failures: Number(row.consecutive_failures) || 0,
+            opened_at: row.opened_at == null ? null : Number(row.opened_at),
+            retry_at: row.retry_at == null ? null : Number(row.retry_at),
+            backoff_ms: Number(row.backoff_ms) || 0,
+            exhausted_at: failureClass === 'balance' ? (row.opened_at == null ? null : Number(row.opened_at)) : null,
+            last_error: row.last_error || null,
+            last_success_at: row.last_success_at == null ? null : Number(row.last_success_at),
+            last_failure_at: row.last_failure_at == null ? null : Number(row.last_failure_at),
+            notified_at: row.notified_at == null ? null : Number(row.notified_at),
+            status: down ? 'down' : 'up',
+            status_reason: down ? reasonForClass(failureClass) : null,
+            status_since: down ? iso(row.opened_at) : null,
+        };
+    }
+
+    /** A legacy provider_health row (a direct insert, or a state from before 0060), still honoured. */
+    function legacyView(h, model = undefined) {
+        const failureClass = h.exhausted_at ? 'balance' : null;
+        let state = h.state;
+        if (state === 'open') {
             const cooldown = h.exhausted_at ? exhaustedCooldownMs() : config.breaker.cooldownMs;
-            if (clock.now() - (h.opened_at || 0) >= cooldown) return { ...h, state: 'half_open' };
+            if (clock.now() - (h.opened_at || 0) >= cooldown) state = 'half_open';
         }
-        return h;
+        const down = state !== 'closed';
+        return {
+            ...CLOSED, ...h, provider_key: h.provider_key, ...(model === undefined ? {} : { model_key: String(model || '') }),
+            state, failure_class: failureClass, consecutive_failures: Number(h.consecutive_failures) || 0,
+            opened_at: h.opened_at == null ? null : Number(h.opened_at),
+            exhausted_at: h.exhausted_at == null ? null : Number(h.exhausted_at),
+            status: down ? 'down' : 'up',
+            status_reason: down ? reasonForClass(failureClass) : null,
+            status_since: down ? iso(h.opened_at) : null,
+        };
     }
-    async function recordSuccess(key) {
-        const h = await health(key);
-        if (h.state !== 'closed') await registry.audit('system', 'provider.circuit_closed', 'provider', key, { metadata: { after_failures: h.consecutive_failures } });
-        await putHealth.run({ ...h, provider_key: key, state: 'closed', consecutive_failures: 0, opened_at: null, exhausted_at: null, last_success_at: clock.now() });
+
+    /** The provider-level roll-up of its offers, written where readiness and older callers read it. */
+    async function syncProviderHealth(key) {
+        const rows = await listCircuits.all(key);
+        if (!rows.length) { await db.prepare('DELETE FROM provider_health WHERE provider_key = ?').run(key); return; }
+        const open = rows.filter((r) => r.state === 'open');
+        const half = rows.filter((r) => r.state === 'half_open');
+        const state = open.length ? 'open' : half.length ? 'half_open' : 'closed';
+        const pick = open[0] || half[0] || rows[0];
+        const exhausted = rows.find((r) => r.failure_class === 'balance' && r.state !== 'closed');
+        const latest = rows.reduce((a, b) => (Number(b.last_failure_at || 0) > Number(a.last_failure_at || 0) ? b : a), rows[0]);
+        const success = Math.max(...rows.map((r) => Number(r.last_success_at) || 0)) || null;
+        const failure = Math.max(...rows.map((r) => Number(r.last_failure_at) || 0)) || null;
+        await putHealth.run({
+            provider_key: key, state, consecutive_failures: Math.max(...rows.map((r) => Number(r.consecutive_failures) || 0)),
+            opened_at: pick.opened_at == null ? null : Number(pick.opened_at),
+            exhausted_at: exhausted && exhausted.opened_at != null ? Number(exhausted.opened_at) : null,
+            last_error: latest.last_error || null, last_success_at: success, last_failure_at: failure,
+        });
     }
-    async function recordFailure(key, err) {
-        const h = await health(key);
-        const failures = (h.consecutive_failures || 0) + 1;
-        const exhausted = insufficientBalance(err);
-        // A balance answer opens the circuit at once (it will not recover on its own), not after failureThreshold.
-        const open = exhausted || h.state === 'half_open' || failures >= config.breaker.failureThreshold;
-        if (open && h.state !== 'open') await registry.audit('system', 'provider.circuit_opened', 'provider', key, { metadata: { failures, exhausted, error: String(err && err.message || err).slice(0, 200) } });
-        await putHealth.run({ ...h, provider_key: key, state: open ? 'open' : 'closed', consecutive_failures: failures,
-            opened_at: open ? clock.now() : h.opened_at, exhausted_at: exhausted ? clock.now() : (h.exhausted_at || null),
-            last_error: String(err && err.message || err).slice(0, 500), last_failure_at: clock.now() });
+
+    /**
+     * The health of one offer (model given) or of the provider as a whole (model omitted).
+     * A provider-level answer carries every offer's circuit in `circuits`.
+     */
+    async function health(key, model = undefined, { stamp } = {}) {
+        const current = stamp !== undefined ? stamp : await keyStamp(key);
+        await resetForNewKey(key, current);
+        if (model !== undefined) {
+            const row = await getCircuit.get(key, String(model || ''));
+            if (row) return circuitView(row);
+            // Once a provider has per-offer rows, a model without one has no failure of its own: another
+            // model's open circuit must not take it away. provider_health is only a legacy fallback.
+            if ((await listCircuits.all(key)).length) {
+                return { ...CLOSED, provider_key: key, model_key: String(model || ''), status: 'up', status_reason: null, status_since: null };
+            }
+            const legacy = await getHealth.get(key);
+            return legacy && legacy.state !== 'closed' ? legacyView(legacy, model) : { ...CLOSED, provider_key: key, model_key: String(model || ''), status: 'up', status_reason: null, status_since: null };
+        }
+        const rows = await listCircuits.all(key);
+        if (rows.length) {
+            const views = rows.map(circuitView);
+            const open = views.find((v) => v.state === 'open');
+            const half = views.find((v) => v.state === 'half_open');
+            const pick = open || half || views[0];
+            return {
+                ...pick, provider_key: key, model_key: undefined,
+                state: open ? 'open' : half ? 'half_open' : 'closed',
+                consecutive_failures: Math.max(...views.map((v) => v.consecutive_failures || 0)),
+                last_error: views.reduce((a, b) => (Number(b.last_failure_at || 0) > Number(a.last_failure_at || 0) ? b : a), views[0]).last_error,
+                last_success_at: Math.max(...views.map((v) => Number(v.last_success_at) || 0)) || null,
+                last_failure_at: Math.max(...views.map((v) => Number(v.last_failure_at) || 0)) || null,
+                circuits: views,
+            };
+        }
+        const legacy = await getHealth.get(key);
+        return legacy ? legacyView(legacy) : { ...CLOSED, provider_key: key, status: 'up', status_reason: null, status_since: null, circuits: [] };
     }
-    async function resetHealth(key) { await db.prepare('DELETE FROM provider_health WHERE provider_key = ?').run(key); }
+
+    async function recordSuccess(key, model = '', { stamp } = {}) {
+        const modelKey = String(model || '');
+        const row = await getCircuit.get(key, modelKey);
+        const wasOpen = row && row.state && row.state !== 'closed';
+        if (wasOpen) await registry.audit('system', 'provider.circuit_closed', 'provider', key, { metadata: { after_failures: Number(row.consecutive_failures) || 0, model: modelKey } });
+        const current = stamp !== undefined ? stamp : await keyStamp(key);
+        const prev = row || {};
+        await putCircuit.run({
+            provider_key: key, model_key: modelKey, state: 'closed', failure_class: null, consecutive_failures: 0,
+            opened_at: null, retry_at: null, backoff_ms: 0, key_stamp: current,
+            last_error: prev.last_error || null, last_success_at: clock.now(), last_failure_at: prev.last_failure_at || null, notified_at: null,
+        });
+        await syncProviderHealth(key);
+    }
+
+    /**
+     * Record one failed attempt. Every class is counted (ai_provider_failures_total); only balance, auth
+     * and a run of transient failures touch the circuit. rate_limit and request failures move this
+     * request on without taking the offer away from anyone else.
+     */
+    async function recordFailure(key, model = '', err, { stamp } = {}) {
+        const failure = classifyFailure(err);
+        if (!failure) return null;
+        const now = clock.now();
+        // Our own policy refusing an answer is not the provider failing: it produced one.
+        const counts = err && err.code !== 'policy.floor_refused';
+        if (counts) await putFailureCount.run({ provider_key: key, failure_class: failure.class, updated_at: now });
+        if (!['balance', 'auth', 'transient'].includes(failure.class)) return { ...failure, opened: false };
+
+        const modelKey = String(model || '');
+        const current = stamp !== undefined ? stamp : await keyStamp(key);
+        await resetForNewKey(key, current);
+        const row = await getCircuit.get(key, modelKey) || { state: 'closed' };
+        const failures = (Number(row.consecutive_failures) || 0) + 1;
+        const wasOpen = row.state === 'open' || row.state === 'half_open';
+        // A failure after retry_at is the half-open probe failing: the pause starts again from now.
+        const probing = row.state === 'half_open' || (row.state === 'open' && Number(row.retry_at || 0) <= now);
+        let state = 'closed';
+        let openedAt = null;
+        let retryAt = null;
+        let backoff = 0;
+        let notified = row.notified_at == null ? null : Number(row.notified_at);
+
+        if (failure.class === 'balance' || failure.class === 'auth') {
+            state = 'open';
+            openedAt = wasOpen && !probing && row.opened_at ? Number(row.opened_at) : now;
+            retryAt = openedAt + exhaustedCooldownMs();
+            if (!wasOpen) notified = null;
+        } else if (wasOpen || failures >= config.breaker.failureThreshold) {
+            state = 'open';
+            const initial = config.breaker.transientBackoffMs;
+            const max = config.breaker.transientMaxMs;
+            backoff = wasOpen ? Math.min(max, Math.max(initial, (Number(row.backoff_ms) || initial) * 2)) : initial;
+            openedAt = wasOpen && !probing && row.opened_at ? Number(row.opened_at) : now;
+            retryAt = now + backoff;
+        }
+
+        if (state === 'open' && !wasOpen) {
+            await registry.audit('system', 'provider.circuit_opened', 'provider', key, {
+                metadata: { failures, failure_class: failure.class, model: modelKey, error: String(failure.message || err && err.message || err).slice(0, 200) },
+            });
+        }
+        const saved = {
+            provider_key: key, model_key: modelKey, state,
+            failure_class: failure.class, consecutive_failures: failures,
+            opened_at: openedAt, retry_at: retryAt, backoff_ms: backoff, key_stamp: current,
+            last_error: String(failure.message || err && err.message || err || '').slice(0, 500),
+            last_success_at: row.last_success_at == null ? null : Number(row.last_success_at),
+            last_failure_at: now, notified_at: notified,
+        };
+        await putCircuit.run(saved);
+        await syncProviderHealth(key);
+        if (state === 'open' && (failure.class === 'balance' || failure.class === 'auth') && !notified) {
+            await announceOnce(key, modelKey, failure.class, now);
+        }
+        return { ...failure, opened: state === 'open', state, opened_at: openedAt, retry_at: retryAt, backoff_ms: backoff };
+    }
+
+    /**
+     * Announce an open circuit at most once: the database row is claimed before the push, so two
+     * requests that fail together cannot both send. A failed push releases the claim for a later try.
+     */
+    async function announceOnce(key, model, failureClass, at = clock.now()) {
+        const claimed = await db.prepare('UPDATE provider_circuits SET notified_at = ? WHERE provider_key = ? AND model_key = ? AND notified_at IS NULL')
+            .run(at, key, String(model || ''));
+        if (!claimed || !claimed.changes) return false;
+        if (await alertOwner(key, model, failureClass)) return true;
+        await db.prepare('UPDATE provider_circuits SET notified_at = NULL WHERE provider_key = ? AND model_key = ? AND notified_at = ?')
+            .run(key, String(model || ''), at);
+        return false;
+    }
+
+    /** One owner message per open balance/auth circuit, with the provider's own class, never a request body. */
+    async function alertOwner(key, model, failureClass) {
+        const offer = model ? `${key}/${model}` : key;
+        const title = failureClass === 'balance' ? 'A provider is out of credit' : 'A provider key was refused';
+        const message = failureClass === 'balance'
+            ? `${offer} says its account is out of credit. OpenVibe.AI is using the other offers until it is topped up.`
+            : `${offer} refused its key. OpenVibe.AI is using the other offers until the key is replaced.`;
+        return await notifyOwner({ title, message });
+    }
+
+    /** At boot: an open balance/auth circuit that was never announced (a crash before the push) is announced once. */
+    async function notifyOpenCircuits() {
+        const rows = await db.prepare("SELECT * FROM provider_circuits WHERE state = 'open' AND failure_class IN ('balance', 'auth') AND notified_at IS NULL").all();
+        let sent = 0;
+        for (const row of rows) {
+            if (await announceOnce(row.provider_key, row.model_key, row.failure_class)) sent++;
+        }
+        return sent;
+    }
+
+    async function resetHealth(key) {
+        await db.prepare('DELETE FROM provider_circuits WHERE provider_key = ?').run(key);
+        await db.prepare('DELETE FROM provider_health WHERE provider_key = ?').run(key);
+    }
 
     // ── Pricing: platform.rate-card@1 per metric (server/providers/rate-cards.js; models row -> AI_PRICING_JSON -> flat) ──
     /** The { in, cached, out } rate cards for a provider + model, or null for a provider that is never billed. */
@@ -694,7 +1021,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             const entry = await adapter(c.provider);
             const p = entry && entry.record;
             const modelId = c.model || (p && p.default_model) || null;
-            const why = await skipReason(p, entry && entry.adapter, features);
+            const why = await skipReason(p, entry && entry.adapter, features, modelId);
             const offered = appOffered(ctx, p);
             const access = accessOffered(p);
             const policyOk = p ? await policyAllows(registry, p, modelId, ctx.contentPolicy || 'standard') : false;
@@ -747,6 +1074,9 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             order.push({ provider: 'stub', model: null });
             explain.candidates.push({ provider: 'stub', model: null, eligible: true, excluded_reason: null, cost: 0, latency: null });
         }
+        // The owner's ordering, caps and denylists (server/owner-config.js). Empty by
+        // installation: a call with no owner row leaves the order exactly as ranked.
+        order = await applyOwner(order, explain, { operation, ctx });
         return { order, explain, placement: result, rateCards: rest.rateCards || [], states: rest.states || [] };   // placement: the platform.placement-result@1 explain is built from (pool routes)
     }
 
@@ -856,13 +1186,22 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         return { order, ranked: view, reasons, keepOrder };
     }
 
-    async function skipReason(p, a, features) {
+    async function skipReason(p, a, features, model = undefined) {
         if (!p || !a) return 'unknown_provider';
         if (p.status !== 'active') return 'disabled';
+        // Read the current model state even on pinned/default routes: a sync retirement or owner switch
+        // must take effect before the next attempt, without requiring the route to be rebuilt.
+        const row = model ? await registry.getModel(p.key, model) : null;
+        if (row?.metadata?.missing_since) return 'model_gone';
+        if (row && row.status !== 'active') return 'model_disabled';
         if (p.auth_mode !== 'none' && !credentialNotRequired(p) && !providerSecret(p, env)) return 'no_credentials';
         if (features.some(f => !a.supports(f))) return 'unsupported';
-        const h = await health(p.key);
-        if (h.state === 'open') return h.exhausted_at ? 'exhausted' : 'circuit_open';
+        const h = await health(p.key, model, { stamp: stampFor(p) });
+        if (h.state === 'open') {
+            if (h.failure_class === 'balance' || h.exhausted_at) return 'exhausted';
+            if (h.failure_class === 'auth') return 'key_refused';
+            return 'circuit_open';
+        }
         return null;
     }
 
@@ -918,7 +1257,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                     attempts: [{ key: 'your machine', provider: 'link', model: result.model, why: 'your own machine', status: 'ok', error: null }],
                     openvibe: ownFacts } };
         } catch (err) {
-            if (ctx.logRequest) ctx.logRequest({ ...base, status: 'error', latency_ms: Date.now() - t0, error: String(err && err.message || err).slice(0, 500) });
+            if (ctx.logRequest) ctx.logRequest({ ...base, status: 'error', latency_ms: Date.now() - t0, error: String(err && err.message || err).slice(0, 500), error_class: classifyFailure(err)?.class || null });
             if (ctx.signal && ctx.signal.aborted) throw new AiError(409, 'run.cancelled', 'run was cancelled');
             throw err;
         }
@@ -980,14 +1319,14 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                 const latency = Date.now() - t0;
                 if (ctx.logRequest) {
                     ctx.logRequest({ ...base, model_key: result.model || model, status: 'ok', output_hash: sha256(result.json || result.text || ''), tokens_in: usage.input || 0, tokens_out: usage.output || 0,
-                        tokens_cached: usage.cached || 0, tokens_estimated: usage.estimated ? 1 : 0, cost_usd: cost, latency_ms: latency });
+                        tokens_cached: usage.cached || 0, tokens_cache_write: usage.cache_write || 0, tokens_estimated: usage.estimated ? 1 : 0, cost_usd: cost, latency_ms: latency });
                 }
                 return { result, provider: cred.providerKey, providerKind: cred.provider, model: result.model || model, fallbackUsed: false, usage, cost, latencyMs: latency, synthetic: false, tried: [],
                     startedAt: t0, explain: { ...explain, selected: `${cred.provider}/${result.model || model}`, openvibe: ownFacts } };
             } catch (err) {
                 lastErr = err;
                 if (ctx.signal && ctx.signal.aborted) throw new AiError(409, 'run.cancelled', 'run was cancelled');
-                if (ctx.logRequest) ctx.logRequest({ ...base, status: err && err.code === 'provider.timeout' ? 'timeout' : 'error', latency_ms: Date.now() - t0, error: scrub(err && err.message || err).slice(0, 500) });
+                if (ctx.logRequest) ctx.logRequest({ ...base, status: err && err.code === 'provider.timeout' ? 'timeout' : 'error', latency_ms: Date.now() - t0, error: scrub(err && err.message || err).slice(0, 500), error_class: classifyFailure(err)?.class || null });
                 // L36 Y8: the provider refused the key (401/403). The key becomes failing and the event says so.
                 if (err && (err.status === 401 || err.status === 403) && typeof ctx.onCredentialFailed === 'function') {
                     await ctx.onCredentialFailed({ owner: cred.owner || null, subject: cred.subject || null, provider: cred.provider, providerKey: cred.providerKey, error: scrub(err.message) });
@@ -1054,6 +1393,8 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
     }
 
     async function execute(route, operation, req, ctx = {}) {
+        if (ctx.compatRouting && (ctx.credential || ctx.byok || ctx.selfPreferences?.only_my_keys))
+            throw new AiError(400, 'input.invalid', 'Provider routing cannot be combined with an explicit credential or only_my_keys');
         if (ctx.taskChoice) return require('../choices/execute').executeChoice({ execute, registry, poolRates: rateCardsFor, maxAttempts: config.providerRetries + 1, route, operation, req, ctx });
         const contentPolicy = ctx.contentPolicy || 'standard';
         const refuseFloor = (r) => new AiError(403, 'policy.floor_refused', r.detail, { rule: r.rule, policy: contentPolicy });
@@ -1122,7 +1463,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         const selfAttempts = [];
         // The adult tier is network supply only: a person's own provider key is not an offer marked uncensored, and
         // only such an offer may answer an uncensored request. Their key is still used for every standard request.
-        const selfList = uncensored ? [] : (Array.isArray(ctx.selfCredentials) ? ctx.selfCredentials : []);
+        const selfList = uncensored || ctx.compatRouting ? [] : (Array.isArray(ctx.selfCredentials) ? ctx.selfCredentials : []);
         if (!uncensored && (selfList.length || (ctx.selfSubject && prefs.only_my_keys))) {
             const order = [...selfList].sort((a, b) => {
                 const rank = (x) => (x.status === 'failing' ? 2 : x.status === 'untested' ? 1 : 0);
@@ -1185,7 +1526,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         // Community placement runs before the catalog pool. A preset with price, privacy, region, or quality
         // rules must use the catalog path so those rules are checked before any offer is called.
         const communityPresetSafe = !ctx.presetPolicy || Object.keys(ctx.presetPolicy).every((key) => key === 'community');
-        if (community && ctx.communityOptIn && communityPresetSafe && !ctx.credential && !ctx.byok && !ctx.exact) {
+        if (!ctx.compatRouting && community && ctx.communityOptIn && communityPresetSafe && !ctx.credential && !ctx.byok && !ctx.exact) {
             // Community capacity is a free-tier source only when the allowlist names it: without that, the
             // ordinary network answers and the skip is named in the explain, never silently used.
             if (freeSources && !allowsCommunity(freeSources)) {
@@ -1205,6 +1546,10 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         // CHECKPOINT D3: an exact id runs only its own artifact. The candidates are the catalog's deployments of
         // that id, filtered first by commercial access and what the request needs; no other model is ever added.
         const exact = ctx.exact || null;
+        const ownerOrder = await require('./order').createProviderOrder({ registry }).read(features.includes('vision') ? 'vision' : features.includes('tools') ? 'tools' : operation);
+        const ordered = ownerOrder?.enabled === true;
+        // Feed configured models through the existing eligibility and policy checks.
+        if (ordered && !exact) route = { ...route, capability: route.capability || operation, pinned: ownerOrder.choices };
         // A routing preset's objective is the more specific request: it decides what the router optimises
         // (cheapest, fastest, balanced, private). An exact id stays exact: a pin is never re-ranked.
         const presetObjective = ctx.presetPolicy && ctx.presetPolicy.objective ? ctx.presetPolicy.objective : null;
@@ -1224,6 +1569,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                 const card = row ? modelCatalog.retailRate(row) : null;
                 const policyOk = p ? await policyAllows(registry, p, offer.model, ctx.contentPolicy || 'standard') : false;
                 if (!p) why.push('unknown_provider');
+                else if (!appOffered(ctx, p)) why.push('app_provider_not_allowed');
                 else if (!policyOk) why.push('content_policy');
                 else if (ctx.creditsRequired && !isFreeProvider(p) && card && card.version) { why.push('payer_required'); payerSkipped = true; }
                 else if (freeSources && !allowsProvider(p.key, p, freeSources)) {
@@ -1236,7 +1582,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                     if (price && Number(price.out) > freeCeiling) { why.push('over_price_ceiling'); freeCeilingSkipped = true; }
                     else {
                         if (!accessOffered(p)) why.push(`provider_access ${modelCatalog.accessOf(p)}`);
-                        const skip = await skipReason(p, entry && entry.adapter, features);
+                        const skip = await skipReason(p, entry && entry.adapter, features, offer.model);
                         if (skip) why.push(skip);
                     }
                 }
@@ -1275,9 +1621,15 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             }
             list = [...list].sort((a, b) => Number(free.get(b.provider)) - Number(free.get(a.provider)));
         }
+        // The owner's economy row for this kind, read once: the prompt-cache switch decides whether a
+        // warm-cache bias or a cache-control marker may be sent at all, before any candidate is tried.
+        const capability = ownerCapability(operation, ctx, req);
+        const ownerEconomy = ownerSettings ? await ownerSettings.economyFor(capability).catch(() => null) : null;
+        const promptCacheOn = !ownerEconomy || ownerEconomy.prompt_cache !== false;
+        if (!promptCacheOn) req = withoutPromptCache(req);
         // L36 Y7: pick for the task. The hard needs first (a model that cannot do the job is never tried), then
         // fit and cost: a light job takes the cheapest capable model, a heavy one the catalogue's strength tier.
-        const warmDeployment = warm.getDeployment(warmSubject(ctx, route), leadingText(req));
+        const warmDeployment = promptCacheOn ? warm.getDeployment(warmSubject(ctx, route), leadingText(req)) : null;
         const warmProvider = warmDeployment ? warmDeployment.provider : null;
         // L36 Y3: with free_first on, the free tiers lead (the price decides); with it off, the strength tier
         // leads and the free tiers are the failover, not the first choice.
@@ -1352,6 +1704,11 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             }
             explain.preset = { name: ctx.presetName || null, policy: ctx.presetPolicy };
         }
+        // The owner's fixed/cheapest/fastest order survives the router's re-ranking: re-apply
+        // here, on the authoritative list, so an owner's uncensored first/second always holds.
+        // The floor (server/policy/floor.js) and the 18+ gate run before/after every attempt
+        // regardless of this order; there is no switch that skips either.
+        if (!exact) list = await applyOwner(list, explain, { operation, ctx, req, economy: ownerEconomy });
         // AI Exchange P7: an alias route (economy/fast/balanced/auto) is ranked by measured evidence when
         // AI_ROUTING_EVIDENCE is on. planAi (openvibe-sdk/placement) is the planner: this only prepares its
         // inputs, keeps the incumbent for N decisions and explains the answer. Private never leaves local
@@ -1365,34 +1722,78 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                 explain.reasons = [picked.view.reason, ...(explain.reasons || [])];
             }
         }
+        if (ctx.compatRouting) {
+            const { select, policyFor } = require('../exchange/compat-routing');
+            const ordered = [];
+            const ratingEvidence = require('../bench/evidence');
+            let ratings = [];
+            if (bench && ['quality', 'value'].includes(ctx.compatRouting.policy.sort)) {
+                // Messages shares completion ratings; this is a provider method, not a public capability.
+                const ratingOperation = operation === 'messages' ? 'complete' : operation;
+                const ratingRoute = operation === 'messages' ? { ...route, capability: ratingOperation } : route;
+                for (const kind of bench.kindCandidates(ratingRoute, ratingOperation)) {
+                    ratings = await bench.list(kind, bench.categoryFor(route));
+                    if (ratings.length) break;
+                }
+            }
+            for (const group of [...new Set(ctx.compatRouting.offers.map(o => o.group))]) {
+                const offers = ctx.compatRouting.offers.filter(o => o.group === group);
+                const variant = offers[0]?.variant;
+                const { policy: requestedPolicy } = policyFor({ model: 'openvibe/auto' + (variant ? ':' + variant : ''), provider: ctx.compatRouting.policy });
+                const groupList = list.filter(c => offers.some(o => o.provider === c.provider && o.model === c.model));
+                const result = await select(groupList, requestedPolicy, async c => {
+                    const d = await describeCandidate(c);
+                    const privacy = exchangePrivacy.dataPolicyOf(d.record) || {};
+                    const metrics = await createProviderMetrics({ db, clock }).get(c.provider, c.model);
+                    // Report's board pages read Bench. Use the same event-fed ratings, never a declared tier.
+                    const rating = ratings.find(row => ratingEvidence.usable(row) && (
+                        ratingEvidence.matchesOffer(row, c) || ratingEvidence.matchesOffer(row, {
+                            ...c, model: require('../exchange/catalog').canonicalOf(d.row, d.record),
+                        })
+                    ));
+                    return { priceIn: d.row?.cost?.in_per_mtok ?? null, priceOut: d.row?.cost?.out_per_mtok ?? null, training: privacy.training,
+                        retention: privacy.retention, latency: metrics?.ttft_ms, throughput: metrics?.decode_tps,
+                        quality: rating ? Number(rating.rating) : null };
+                });
+                ordered.push(...result.allowed);
+                for (const x of result.excluded) explain.candidates.push({ ...x, eligible: false, excluded_reason: x.reason });
+            }
+            list = ordered;
+            if (!list.length) throw new AiError(503, 'ai.routing_unavailable', 'No provider satisfies the requested routing policy', { explain });
+        }
         const evidenceReason = explain.evidence ? explain.evidence.reason : null;
         explain.content_policy = contentPolicy;
         if (uncensored) explain.label = tier.LABEL;
         const attempts = [...selfAttempts];
         explain.paid_by = 'openvibe';
+        if (ordered) {
+            list = require('./order').orderedSubset(list, ownerOrder.choices);
+            explain.reasons = [`owner ${ownerOrder.capability} order v${ownerOrder.version}`, ...(explain.reasons || [])];
+        }
         explain.attempts = attempts;
         explain.reasons = [...(explain.reasons || []), ...(selfAttempts.length ? ['your own keys did not answer; the network is the fallback'] : [])];
-        // A first-party service's generate run may name one offer from GET /api/v1/routes. The run then
-        // tries that offer alone: no fallback to another model, so the caller gets the model it asked for
-        // or an explicit failure. server/runs.js validates the pin against this same offer list first.
-        if (ctx.routePin && operation === 'generate' && !exact) {
+        // A first-party service's generate run may name one offer from GET /api/v1/routes; the advisor's own
+        // ai.chat child run names its stronger model the same way. The run then tries that offer alone: no
+        // fallback to another model, so the caller gets the model it asked for or an explicit failure.
+        // server/runs.js validates the pin against this same offer list first.
+        if (ctx.routePin && ['generate', 'chat'].includes(operation) && !exact) {
             const pin = ctx.routePin;
             const chosen = list.find((c) => c.provider === pin.provider && (pin.model == null || c.model === pin.model));
             if (!chosen) {
-                throw new AiError(422, 'route.not_offered', `route ${pin.model ? `${pin.provider}/${pin.model}` : pin.provider} is not offered for generate; GET /api/v1/routes?operation=generate lists the offers`);
+                throw new AiError(422, 'route.not_offered', `route ${pin.model ? `${pin.provider}/${pin.model}` : pin.provider} is not offered for ${operation}; GET /api/v1/routes?operation=${operation} lists the offers`);
             }
             list = [chosen];
             explain.reasons = [`pinned to ${chosen.model ? `${chosen.provider}/${chosen.model}` : chosen.provider} for this run`, ...(explain.reasons || [])];
         }
         // L36 Y7: the fallback chain stops after three providers.
-        const maxAttempts = (config.routing && config.routing.maxAttempts) || DEFAULT_MAX_ATTEMPTS;
+        const maxAttempts = ordered ? ownerOrder.choices.length : (config.routing && config.routing.maxAttempts) || DEFAULT_MAX_ATTEMPTS;
         let attemptsMade = 0;
         // BA1: a run that may wait (the 'background' class) looks for capacity that is cheap because it may
         // take minutes: the host's own idle model first, when the route's quality allows it. The provider
         // order stays the router's own (the authority keeps critical work); what changes is the tier each
         // candidate runs on, and that is decided per candidate below.
         const latencyClass = latency.isClass(ctx.latencyClass) ? ctx.latencyClass : latency.DEFAULT;
-        if (latencyClass !== latency.DEFAULT && !exact) {
+        if (latencyClass !== latency.DEFAULT && !exact && !ordered) {
             list = await orderForWaiting(list, { route, operation, req });
             explain.latency_class = latencyClass;
         }
@@ -1449,9 +1850,9 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                     continue;
                 }
             }
-            const why = await skipReason(p, a, features);
+            const why = await skipReason(p, a, features, model);
             if (why) {
-                if (why === 'exhausted' || why === 'circuit_open') resting = true;
+                if (why === 'exhausted' || why === 'circuit_open' || why === 'key_refused') resting = true;
                 statFor(c.provider).skipped++;
                 tried.push({ provider: c.provider, skipped: why });
                 attempts.push({ key: 'openvibe', provider: c.provider, model, why: chosen || 'the router chose it', status: 'skipped', error: why });
@@ -1495,7 +1896,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             const room = waiting ? Math.max(latency.timeoutMs(latencyClass), Number(route.timeout_ms) || 0) : 0;
             const cap = (outlast || waiting) ? Math.max(own, Number(route.timeout_ms) || 0, room, operation === 'image' ? 600000 : 0) : (own || 600000);
             const timeoutMs = Math.max(1000, Math.min(req.timeoutMs || route.timeout_ms || own || DEFAULT_PROVIDER_TIMEOUT_MS, cap));
-            const retries = config.providerRetries;
+            const retries = ordered ? 0 : config.providerRetries;
             // BA1: the tier this candidate runs on. A background run asks for the cheaper tier the
             // provider sells. A refusal of that tier (a Flex tier with no capacity, or a model that does
             // not serve it) sends the same run once more on the standard tier: the refusal is counted and
@@ -1526,10 +1927,16 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                 // The registry says how much room this model needs on top of the answer the caller asked for.
                 const reserve = Number(attemptRow && attemptRow.metadata && attemptRow.metadata.reasoning_reserve_tokens) || 0;
                 const requestedMax = Number(req.maxTokens);
-                const modelMax = reserve > 0 && Number.isSafeInteger(requestedMax) && requestedMax >= 1
+                const modelMaxBase = reserve > 0 && Number.isSafeInteger(requestedMax) && requestedMax >= 1
                     && ['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich', 'complete', 'messages'].includes(operation)
                     ? requestedMax + reserve
                     : req.maxTokens;
+                // The owner's output limit per capability (server/owner-config.js): a cap, not
+                // a floor. It only ever lowers what the request asked for.
+                const ownerCap = explain.owner_economy && explain.owner_economy.output_limit ? Number(explain.owner_economy.output_limit) : null;
+                const modelMax = ownerCap != null && Number.isSafeInteger(ownerCap) && ownerCap >= 1
+                    ? Math.min(Number(modelMaxBase) || ownerCap, ownerCap)
+                    : modelMaxBase;
                 const attemptMeta = { provider: p ? p.key : null, model, maxTokens: modelMax, paid: !isFreeProvider(p), retail: modelCatalog.retailRate(attemptRow) };
                 const routed = typeof ctx.onRoute === 'function' ? await ctx.onRoute(attemptFacts, attemptMeta) : null;
                 if (routed && routed.skip) {
@@ -1572,22 +1979,24 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                     const usage = result.usage || { input: 0, output: 0, cached: 0 };
                     await recordEvidence({ provider: c.provider, model, ok: true, timeout: false, ttftMs, latencyMs: latency,
                         outputTokens: usage.output || 0, inputTokens: usage.input || 0, cachedTokens: usage.cached || 0 });
-                    // An image is metered per image (usage.output = images), and no rate card prices one yet (an owner/T5
-                    // item): its cost is 0 rather than the image count read as output tokens on the token cards.
-                    // BA1: the cost is the tier the answer really ran on, and the wait's saving is the
-                    // standard price minus that one. A provider that does not say which tier it served is
-                    // priced at the list price: a saving nobody confirmed is not a saving.
+                    // An image is metered per image (usage.output = images). The image task (workflow image.picture)
+                    // sets ctx.imagePriceUsd from the offer's metadata.price_per_image_usd before the call, so the
+                    // measured count settles at that price; every other image run has no card and costs 0 rather
+                    // than the image count being read as output tokens.
                     const ranOn = tiers.tierOfAnswer(result, askedTier);
+                    const imagePrice = ctx.imagePriceUsd == null ? null : Number(ctx.imagePriceUsd);
                     const priced = operation === 'image'
-                        ? { cost: 0, standard: 0, saved: 0 }
+                        ? (Number.isFinite(imagePrice) && imagePrice >= 0
+                            ? { cost: imagePrice * (Number(usage.output) || 0), standard: imagePrice * (Number(usage.output) || 0), saved: 0 }
+                            : { cost: 0, standard: 0, saved: 0 })
                         : await costOnTier({ providerKey: c.provider, model: result.model || model, usage, tier: ranOn, p });
                     const cost = priced.cost;
                     statFor(c.provider).ok++;
-                    await recordSuccess(c.provider);
+                    await recordSuccess(c.provider, model);
                     if (ctx.logRequest) {
                         ctx.logRequest({
                             ...base, model_key: result.model || model, status: 'ok', output_hash: sha256(result.json || result.text || result.vectors || result.segments || result.images || ''),
-                            tokens_in: usage.input || 0, tokens_out: usage.output || 0, tokens_cached: usage.cached || 0, tokens_estimated: usage.estimated ? 1 : 0,
+                            tokens_in: usage.input || 0, tokens_out: usage.output || 0, tokens_cached: usage.cached || 0, tokens_cache_write: usage.cache_write || 0, tokens_estimated: usage.estimated ? 1 : 0,
                             cost_usd: cost, latency_ms: latency,
                             debug_prompt: ctx.debugRaw ? JSON.stringify({ system: req.system, messages: req.messages }).slice(0, 200000) : null,
                             debug_response: ctx.debugRaw ? String(result.text || '').slice(0, 200000) : null,
@@ -1618,7 +2027,8 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                     }
                     await recordEvidence({ provider: c.provider, model, ok: false, timeout: Boolean(err && err.code === 'provider.timeout'), latencyMs: Date.now() - t0 });
                     statFor(c.provider).failures++;
-                    if (ctx.logRequest) ctx.logRequest({ ...base, status: err && err.code === 'provider.timeout' ? 'timeout' : 'error', latency_ms: Date.now() - t0, error: String(err && err.message || err).slice(0, 500) });
+                    const failure = classifyFailure(err);
+                    if (ctx.logRequest) ctx.logRequest({ ...base, status: err && err.code === 'provider.timeout' ? 'timeout' : 'error', latency_ms: Date.now() - t0, error: String(err && err.message || err).slice(0, 500), error_class: failure ? failure.class : null });
                     // A stream that broke off still delivers what the upstream had already said (the guard's held tail
                     // included), unless that tail itself breaks the floor.
                     if (streamed && floorGuard) {
@@ -1631,8 +2041,9 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                     if (streamed && err && err.code === 'policy.floor_refused') throw new AiError(403, 'policy.floor_refused', err.detail || err.message, { rule: err.rule, policy: contentPolicy });
                     if (streamed) throw new AiError(502, 'provider.stream_broken', `the answer broke off after it began streaming: ${String(err && err.message || err).slice(0, 200)}`, { tried: [...tried, { provider: c.provider, error: String(err && err.message || err).slice(0, 200) }], explain });
                     // A timed-out image may still be generated and billed upstream: never pay for it twice.
-                    // An insufficient-balance answer is never retried: the same provider cannot answer until it is topped up.
-                    if (insufficientBalance(err)) resting = true;
+                    // An insufficient-balance or refused-key answer is never retried: the offer cannot answer
+                    // until it is topped up or the key is replaced.
+                    if (failure && (failure.class === 'balance' || failure.class === 'auth')) resting = true;
                     // BA1: the provider refused the tier we asked for (a Flex tier with no capacity, or a
                     // model that does not serve it). The same run goes once more on the standard tier: the
                     // refusal is counted and logged above, and it produced no tokens, so nothing is billed
@@ -1652,14 +2063,12 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             } finally {
                 if (local) localActive--;
             }
-            // A request the provider rejected as malformed is the caller's fault, not a sign the
-            // provider is unhealthy; a 429 is capacity, not health either, and moves on without
-            // opening the circuit. Neither must take a shared provider away from other callers.
             if (lastErr && lastErr.code === 'media.unreadable') unreadable = lastErr;
-            // An insufficient-balance 429 is not ordinary capacity: it must open the long exhausted circuit.
-            if (insufficientBalance(lastErr) || (!callerFault(lastErr) && !rateLimited(lastErr))) await recordFailure(c.provider, lastErr);
-            tried.push({ provider: c.provider, error: String(lastErr && lastErr.message || lastErr).slice(0, 200) });
-            attempts.push({ key: 'openvibe', provider: c.provider, model: lastErr && lastErr.model || model, why: chosen || (fallback ? 'the next network provider after an earlier attempt failed' : 'the first network offer for this route'), status: lastErr && lastErr.code === 'provider.timeout' ? 'timeout' : 'failed', error: String(lastErr && lastErr.message || lastErr).slice(0, 300) });
+            // classifyFailure decides what a failure means: balance/auth open at once, a run of transient
+            // failures opens for a doubling backoff, a 429 or a malformed request never opens a circuit.
+            const failedAs = await recordFailure(c.provider, model, lastErr);
+            tried.push({ provider: c.provider, error: String(lastErr && lastErr.message || lastErr).slice(0, 200), error_class: failedAs && failedAs.class });
+            attempts.push({ key: 'openvibe', provider: c.provider, model: lastErr && lastErr.model || model, why: chosen || (fallback ? 'the next network provider after an earlier attempt failed' : 'the first network offer for this route'), status: lastErr && lastErr.code === 'provider.timeout' ? 'timeout' : 'failed', error: String(lastErr && lastErr.message || lastErr).slice(0, 300), error_class: failedAs && failedAs.class });
             log.warn(`[ai] ${operation} via ${c.provider}/${model || '-'} failed: ${lastErr && lastErr.message}`);
         }
         explain.selected = null;
@@ -1695,7 +2104,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         throw new AiError(503, 'provider.unavailable', 'no provider on this route could answer', { tried, explain });
     }
 
-    return { adapter, health, resetHealth, execute, executeWithCredential, offers, benchView, priceFor, costOf, rateCardsFor, providerStates, stats, statFor, candidates, machines, routingEvidence };
+    return { adapter, health, resetHealth, notifyOpenCircuits, execute, executeWithCredential, offers, benchView, priceFor, costOf, rateCardsFor, providerStates, stats, statFor, candidates, machines, routingEvidence };
 }
 
 module.exports = { createProviderPool, createFloorGuard, policyAllows, machineMessages, machineTools };

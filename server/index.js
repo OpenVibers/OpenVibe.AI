@@ -32,7 +32,7 @@ const { AiError } = require('./util');
 const { gracefulStop, telemetry } = require('openvibe-sdk/service');
 const { createPgTelemetrySink, startTelemetryRetention } = require('openvibe-sdk/telemetry');
 
-async function start({ searchFetch = null, config, db: givenDb = null, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, listen = true, credentialFetch = null, valkey = null, research = null, machineModels = null, variantEvidence = null, community: givenCommunity = null, communityEndpoints: givenEndpoints = null, webhooks: givenWebhooks = null, abuse: givenAbuse = null, memoryTransport = null, memoryLookup = null } = {}) {
+async function start({ searchFetch = null, config, db: givenDb = null, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, listen = true, credentialFetch = null, valkey = null, research = null, machineModels = null, variantEvidence = null, community: givenCommunity = null, communityEndpoints: givenEndpoints = null, webhooks: givenWebhooks = null, abuse: givenAbuse = null, memoryTransport = null, memoryLookup = null, ownerNotify = null, mediaStore: givenMediaStore = null } = {}) {
     config = config || load(env);
     schemas.configure(config.schemaCache);
     // PostgreSQL (ADR-035): opened and migrated here unless the caller (a test) hands in a migrated handle.
@@ -88,7 +88,12 @@ async function start({ searchFetch = null, config, db: givenDb = null, clock = {
     const offPeak = require('./pricebook/offpeak').createOffPeak({ db, clock });
     const creditGrants = require('./providers/credit-grants').createCreditGrants({ db, env, fetchImpl, clock });
     const sessionCookies = require('./session-cookies').createSessionCookies({ db, config, clock });
-    const pool = createProviderPool({ db, registry, config, clock, fetchImpl, env, log, credentialFetch, machineModels: machines, community, bench, variantEvidence, adultStatus, offPeak, creditGrants });
+    // The owner's inference configuration: one read for the router's economy switches and the runs'
+    // answer cache and batch decisions (server/owner-config.js).
+    const ownerConfig = require('./owner-config').createOwnerConfig({ db, registry, clock });
+    const pool = createProviderPool({ db, registry, config, clock, fetchImpl, env, log, credentialFetch, machineModels: machines, community, bench, variantEvidence, adultStatus, offPeak, creditGrants, ownerNotify, ownerConfig });
+    // An open balance/auth circuit that was persisted by an earlier process is announced once (notified_at dedupes).
+    if (listen && config.nodeEnv !== 'test') pool.notifyOpenCircuits().catch((err) => log.warn(`[ai] owner alerts: ${err && err.message}`));
     // The hourly provider balance probe (server/providers/balance.js): a gauge for the operator alert, started
     // only when the service listens (never in tests) and off under a restore drill.
     const balance = require('./providers/balance').createBalanceProbe({ registry, config, env, fetchImpl, clock, log });
@@ -102,8 +107,10 @@ async function start({ searchFetch = null, config, db: givenDb = null, clock = {
     const runBudgets = createRunBudgets(db, { clock });
     const cache = createCache(db, { clock });
     const fetcher = createFetcher(config);
+    // Pictures into Media for the image task (server/media-store.js): one tenant, the owner's namespace.
+    const mediaStore = givenMediaStore || require('./media-store').createMediaStore({ config, env, fetchImpl, log });
     // MegaSource (server/research/): the DeepSeek key resolves by name from this environment; tests hand in their own.
-    const engine = createEngine({ registry, pool, fetcher, quotas, config, log, research: research || require('./research').createResearch({ config: config.research, env, log }) });
+    const engine = createEngine({ registry, pool, fetcher, quotas, config, log, db, clock, mediaStore, research: research || require('./research').createResearch({ config: config.research, env, log }) });
     // ai.run.* to OpenVibe.Events through the outbox (server/events.js); before recovery, so its failures are announced.
     require('./events').init(db, { log });
     // platform.usage-sample@1 readings to OpenVibe.Billing through their own outbox (server/usage-samples.js).
@@ -122,6 +129,14 @@ async function start({ searchFetch = null, config, db: givenDb = null, clock = {
     // The Exchange's routing presets and the receipts of the answered requests (server/exchange/).
     const presets = require('./exchange/presets').createPresets({ db, clock, log });
     const receipts = require('./exchange/receipts').createReceipts({ db, clock, log });
+    const measuredMetrics = require('./exchange/metrics-rollup').createMetricsRollup({ db, registry, clock, log,
+        retentionDays: config.runs.retentionDays, enabled: config.nodeEnv !== 'test' && !/^(1|true)$/i.test(env.AI_DRILL || '') });
+    const observations = require('./exchange/metrics-observations').createObservations({ db, registry, clock, log,
+        catalog: require('./exchange/catalog').createCatalog({ db, registry, pool, config, env, clock }),
+        enabled: config.nodeEnv !== 'test' && !/^(1|true)$/i.test(env.AI_DRILL || '') });
+    // The weekly real-traffic share (stage B8): the public read stores the week; the housekeeping pass
+    // publishes it even when nobody reads it, before the receipts it came from are pruned.
+    const share = require('./exchange/share').createShare({ db, clock, log, k: config.trafficShare.k });
     const choices = require('./choices').createChoices({ db, registry, preferences, credentials, machines, adultStatus, ratings: require('./choices/ratings').createRatings({ fetchImpl, clock }), clock, catalog: require('./exchange/catalog').createCatalog({ db, registry, pool, config, env, clock }) });
     await choices.seed();
     const projectSecrets = require('./project-secrets').createProjectSecrets({ config, env, fetchImpl });
@@ -154,7 +169,7 @@ async function start({ searchFetch = null, config, db: givenDb = null, clock = {
     // BA3: the runs and the batcher need each other (a batch-class run is created first, then queued), so
     // the runs hold this facade and the batcher fills it in below, before any request can arrive.
     const batchRef = {};
-    const runs = createRuns({ choices, db, registry, engine, cache, quotas, config, clock, log, userModules, credentials, preferences, tiers, projectSecrets, pool, runBudgets, credits: creditsRef, community, presets, receipts, abuse, webhooks, batch: batchRef,
+    const runs = createRuns({ choices, db, registry, engine, cache, quotas, config, clock, log, userModules, credentials, preferences, tiers, projectSecrets, pool, runBudgets, credits: creditsRef, community, presets, receipts, abuse, webhooks, batch: batchRef, ownerConfig,
         // BA2: a run that waits for a provider's batch answer is not interrupted by a restart: it stays
         // queued until the batcher finishes it (the provider is still working on it).
         batchWaiting: async (runId) => {
@@ -190,6 +205,7 @@ async function start({ searchFetch = null, config, db: givenDb = null, clock = {
     // keeps the price the router charges in step with it. A change of more than 20% waits for the owner on the
     // operator console. Off in test mode (the tests replay the recorded listings) and off under a drill.
     const priceBook = require('./pricebook').createPriceBook({ db, registry, config, clock, log, offPeak });
+    const modelSync = require('./providers/model-sync').createModelSync({ db, registry, env, fetchImpl, clock, log });
     // The measured refusal rates (server/refusal/): the weekly job that asks every offer the same published,
     // harmless questions and publishes how often it refused them. Due-based, like the price book.
     const refusal = require('./refusal/job').createRefusalJob({ db, registry, pool, config, env, clock, log });
@@ -212,7 +228,7 @@ async function start({ searchFetch = null, config, db: givenDb = null, clock = {
         clientSecret: env.OV_OAUTH_CLIENT_SECRET, fetch: fetchImpl,
     }) : null;
     const benchEvents = createBenchEvents({ bench, accountData, accountSend, config, log, fetchImpl, clientSecret: env.OV_OAUTH_CLIENT_SECRET });
-    const app = createApp({ choices, searchFetch, config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, grants, vault, settings, benchEvents, runBudgets, memory, memoryImport, memoryServices, memorySharing, community, endpoints, webhooks, presets, receipts, balance, creditGrants, sessionCookies, gpus, gpuMarket, abuse, priceBook, ownEndpoints, refusal, willingness, abliterationTax, batches });
+    const app = createApp({ choices, searchFetch, config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, grants, vault, settings, benchEvents, runBudgets, memory, memoryImport, memoryServices, memorySharing, community, endpoints, webhooks, presets, receipts, balance, creditGrants, sessionCookies, gpus, gpuMarket, abuse, priceBook, modelSync, ownEndpoints, refusal, willingness, abliterationTax, batches, share });
     let jwks = null;
     let keyLoaded = Promise.resolve(null);
     if (!keys.pinned && config.nodeEnv !== 'test') {
@@ -232,6 +248,7 @@ async function start({ searchFetch = null, config, db: givenDb = null, clock = {
             if (pruned || expired || lapsed) log.log(`[ai] retention: ${pruned} old run(s), ${expired} expired cache entr${expired === 1 ? 'y' : 'ies'}, ${lapsed} unsent usage reading(s)`);
             if (Object.values(abusePruned).some((n) => n)) log.log(`[ai] abuse retention: ${Object.entries(abusePruned).filter(([, n]) => n).map(([k, n]) => `${n} ${k}`).join(', ')}`);
         } catch (err) { log.error(`[ai] retention failed: ${err.message}`); }
+        try { await share.ensure(); } catch (err) { log.warn(`[ai] traffic share failed: ${err.message}`); }
     }, 60 * 60 * 1000);
     housekeeping.unref?.();
 
@@ -266,6 +283,9 @@ async function start({ searchFetch = null, config, db: givenDb = null, clock = {
     if (listen && config.nodeEnv !== 'test' && memorySharing) memorySharing.start();
     // The price book reads the providers' listings once a week; it never starts in test mode or under a drill.
     if (listen && config.priceBook && config.priceBook.enabled) priceBook.start();
+    if (listen && config.nodeEnv !== 'test' && !/^(1|true|yes|on)$/i.test(String(env.AI_DRILL || ''))) modelSync.start();
+    if (listen) measuredMetrics.start();
+    if (listen) observations.start();
     // The public GPU price reader: public pages only, due-based, off in tests and under a drill.
     if (listen && config.gpuMarket && config.gpuMarket.enabled) gpuMarket.start();
     // The refusal job asks the offers the same questions once a week; it never starts in test mode (the
@@ -316,6 +336,9 @@ async function start({ searchFetch = null, config, db: givenDb = null, clock = {
         memoryJobs.stop();
         if (memorySharing) memorySharing.stop();
         priceBook.stop();
+        await modelSync.stop();
+        await measuredMetrics.stop();
+        await observations.stop();
         gpuMarket.stop();
         refusal.stop();
         willingness.stop();
@@ -338,7 +361,7 @@ async function start({ searchFetch = null, config, db: givenDb = null, clock = {
         if (!givenDb) await db.close();
     }
 
-    return { config, db, registry, pool, quotas, tiers, cache, fetcher, engine, runs, keys, keyLoaded, auth, app, server, bench, benchEvents, memory, memoryJobs, memoryServices, memorySharing, priceBook, refusal, willingness, abliterationTax, batches, batcher, credits: creditsRef, settings, vault, community, endpoints, webhooks, gpus, gpuMarket, abuse, ownEndpoints, close };
+    return { config, db, registry, pool, quotas, tiers, cache, fetcher, engine, runs, keys, keyLoaded, auth, app, server, choices, bench, benchEvents, memory, memoryJobs, memoryServices, memorySharing, priceBook, modelSync, refusal, willingness, abliterationTax, batches, batcher, credits: creditsRef, settings, vault, community, endpoints, webhooks, gpus, gpuMarket, abuse, ownEndpoints, close };
 }
 
 if (require.main === module) {

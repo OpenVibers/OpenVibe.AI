@@ -102,6 +102,11 @@ function load(env = process.env) {
             url: trimUrl(env.AI_BENCH_URL || env.OV_BENCH_INTERNAL_URL || env.OV_BENCH_URL || env.BENCH_URL || 'http://127.0.0.1:5230'),
             timeoutMs: int(env.AI_BENCH_TIMEOUT_MS, 15000),
         },
+        // Real-traffic share by model and app category (stage B8). The k rule is a floor: a cell below it
+        // is never published, whatever the environment says.
+        trafficShare: {
+            k: Math.max(20, int(env.AI_TRAFFIC_SHARE_K, 20)),
+        },
 
         // PostgreSQL (ADR-035): DATABASE_URL serves (PgBouncer), DATABASE_DIRECT_URL migrates (owner role).
         db: { url: env.DATABASE_URL || '', directUrl: env.DATABASE_DIRECT_URL || '' },
@@ -123,6 +128,10 @@ function load(env = process.env) {
             // Audience a Network user token must carry (the Network's own is always present).
             ssoAudience: String(env.AI_SSO_AUDIENCE || 'openvibe.network').trim(),
         },
+
+        // The owner's Network subject (usr_…), for the one alert sent when a provider's balance or key
+        // fails. Unset means no push is attempted; the console and the metrics still say what happened.
+        ownerSubject: /^usr_[0-9A-HJKMNP-TV-Z]{26}$/.test(String(env.AI_OWNER_SUBJECT || '')) ? String(env.AI_OWNER_SUBJECT) : null,
 
         // ── The shared provider (Live's "shared key") ──
         // AI_ENABLED is Live's ai_enabled master switch. Unset means "on when a key or a
@@ -253,6 +262,15 @@ function load(env = process.env) {
         // Image generation (POST /api/v1/image, workflow ai.image): off until AI_IMAGE_MODEL names the shared
         // provider's image model (dall-e-3, gpt-image-1); then boot seeds that model and route default.image.
         image: { model: String(env.AI_IMAGE_MODEL || '').trim(), size: String(env.AI_IMAGE_SIZE || '').trim() || '1024x1024' },
+        // The image task (workflow image.picture, rich-content plan §4/§5): pictures found on Wikimedia Commons and
+        // Openverse are fetched only from these hosts (the same SSRF rules as every other fetch) and stored in
+        // Media under AI_MEDIA_APP. An image model's per-image price lives on the model row's
+        // metadata.price_per_image_usd; the task refuses a paid, unpriced offer rather than guess.
+        pictures: {
+            sourceHosts: list(env.AI_PICTURE_SOURCE_HOSTS, ['upload.wikimedia.org', '*.wikimedia.org', 'api.openverse.org', '*.openverse.org']),
+            providerHosts: list(env.AI_PICTURE_PROVIDER_HOSTS, ['*.openai.com', '*.googleusercontent.com', '*.fal.media', '*.replicate.delivery']),
+            defaultDailyCap: int(env.AI_PICTURE_DAILY_CAP, 24),
+        },
         // MegaSource (server/research/, workflow research.gather): web search asks the Search Fabric's web scope
         // first (OpenVibe.Search POST /api/v1/query, capability search.fabric.query) as AI's service principal;
         // DeepSeek's paid search stays as the fallback when the fabric is off, refuses or answers nothing. The
@@ -354,6 +372,10 @@ function load(env = process.env) {
             // A provider that answered "insufficient balance" is out of money, not flaky: its circuit stays open this
             // long (10 minutes), shared by every request, before one probe is allowed to spend again.
             exhaustedCooldownMs: Math.max(60000, int(env.AI_BREAKER_EXHAUSTED_COOLDOWN_MS, 15 * 60000)),
+            // A run of transient failures opens the offer for this long, doubling on every failed probe to the
+            // ceiling. The first pause is 30 seconds and the offer is never away for more than 10 minutes.
+            transientBackoffMs: Math.max(1000, int(env.AI_BREAKER_BACKOFF_MS, 30000)),
+            transientMaxMs: Math.max(30000, int(env.AI_BREAKER_MAX_BACKOFF_MS, 10 * 60000)),
         },
         // One retry on a transient failure (timeout, 429, 5xx, connection reset) before the
         // router moves on to the fallback — Live's rule.
@@ -474,6 +496,9 @@ function load(env = process.env) {
         media: {
             publicUrl: trimUrl(env.OV_MEDIA_URL || 'https://openvibe.media'),
             internalUrl: trimUrl(env.OV_MEDIA_INTERNAL_URL || ''),
+            // The Media tenant (and namespace) AI's pictures are stored in. Network grants the AI service
+            // media.object.upload there; Media seeds the tenant at boot.
+            app: String(env.AI_MEDIA_APP || 'ai').trim() || 'ai',
             // https hostnames (exact, or *.suffix) that media/image URLs may point at.
             allowHosts: list(env.AI_FETCH_ALLOW_HOSTS, ['openvibe.media', 'openvibe.live', 'openvibe.network', '*.openvibe.network', 'openvibe.community', 'openvibe.tools', 'openvibe.games']),
             // Object storage Media hands recordings off to (a 302 to a presigned URL), and Media's origin shield

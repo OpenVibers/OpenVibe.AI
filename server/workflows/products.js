@@ -83,6 +83,15 @@ const workflows = [
         }),
         default_route: 'wiki.write',
         steps: [{ kind: 'llm', template: 'wiki.generate_space', operation: 'generate', output: 'json', prepare: 'wiki.space', cite: true, params: { max_tokens: 4000, temperature: 0.3, timeout_ms: 150000 } }],
+        metadata: {
+            creation: {
+                id: 'wiki', product: 'wiki', name: 'Make a wiki', workflow: 'wiki.generate_space',
+                gives: 'A topic, the sources to build it from, and who it is for.',
+                returns: 'A wiki plan: its title, a summary and the pages to make, each with an outline and its citations.',
+                access: { guest: false, signed_in: true, floor_18: false }, costs_coins: true,
+                start_url: 'https://openvibe.wiki/spaces',
+            },
+        },
     },
     {
         key: 'wiki.generate_page', name: 'Write a wiki page', namespace: 'wiki',
@@ -99,6 +108,15 @@ const workflows = [
         }),
         default_route: 'wiki.write',
         steps: [{ kind: 'llm', template: 'wiki.generate_page', operation: 'generate', output: 'json', prepare: 'wiki.page', cite: true, params: { max_tokens: 7000, temperature: 0.4, timeout_ms: 170000 } }],
+        metadata: {
+            creation: {
+                id: 'wiki-article', product: 'wiki', name: 'Write a wiki article', workflow: 'wiki.generate_page',
+                gives: 'A page title, the wiki it belongs to, and the sources to cite.',
+                returns: 'A cited article: a lead, sections, an infobox and the pictures that fit.',
+                access: { guest: false, signed_in: true, floor_18: false }, costs_coins: true,
+                start_url: 'https://openvibe.wiki/spaces',
+            },
+        },
     },
     {
         // The wiki writer (rich-content plan §5): research, then every sentence cited and the infobox from facts.
@@ -122,12 +140,30 @@ const workflows = [
             { kind: 'research' },
             { kind: 'llm', template: 'content.wiki', operation: 'generate', output: 'json', prepare: 'content.wiki', cite: true, params: { max_tokens: 8000, temperature: 0.4, timeout_ms: 180000 } },
         ],
+        metadata: {
+            creation: {
+                id: 'wiki-research', product: 'wiki', name: 'Research and write a wiki article', workflow: 'content.wiki',
+                gives: 'A title and what the article should cover; it finds its own sources.',
+                returns: 'A cited article as sentences you can check, filed as a proposal for a person to review.',
+                access: { guest: false, signed_in: true, floor_18: false }, costs_coins: true,
+                start_url: 'https://openvibe.wiki/spaces',
+            },
+        },
     },
     {
         key: 'blog.draft_post', name: 'Draft a blog post', namespace: 'blog',
         input_schema: OBJ({ topic: STR(300), brief: STR(4000), tone: STR(200), audience: STR(300), sources: SOURCES(0) }, ['topic']),
         output_schema: OBJ({ title: STR(200), dek: STR(400), body_markdown: STR(40000), tags: ARR(STR(40), 10), citations: CITES, gaps: GAPS }),
         default_route: 'background.json',
+        metadata: {
+            creation: {
+                id: 'blog-post', product: 'blog', name: 'Write a blog post', workflow: 'blog.draft_post',
+                gives: 'A topic, and optionally a brief, a tone and who it is for.',
+                returns: 'A Markdown draft with a title, a standfirst and cited sources, saved as a draft you can edit.',
+                access: { guest: false, signed_in: true, floor_18: false }, costs_coins: true,
+                start_url: 'https://openvibe.blog/write',
+            },
+        },
     },
     {
         // OpenVibe.Blog's AI desks (server/desks.js): a digest of what a desk's sources published, each section cited.
@@ -135,6 +171,7 @@ const workflows = [
         input_schema: OBJ({ desk: STR(120), about: STR(400), period: STR(120), sources: SOURCES(2) }, ['desk', 'period', 'sources']),
         output_schema: OBJ({ title: STR(200), dek: STR(400), sections: ARR(OBJ({ heading: STR(160), paragraphs: ARR(CLAIM, 8) }), 6), citations: CITES, gaps: GAPS }),
         default_route: 'background.json',
+        metadata: { internal: true },
     },
     {
         key: 'news.summarize_story', name: 'Summarize a news story', namespace: 'news',
@@ -143,18 +180,45 @@ const workflows = [
         input_schema: OBJ({ topic: STR(300), tone: { enum: ['brief', 'neutral', 'explained'] }, sources: SOURCES(1) }, ['sources']),
         output_schema: OBJ({ headline: STR(200), summary: STR(3000), key_points: ARR(CLAIM, 20), timeline: ARR(OBJ({ when: STR(60), what: STR(500), citations: CITES }), 30), citations: CITES, gaps: GAPS }),
         default_route: 'background.json',
+        metadata: {
+            creation: {
+                id: 'news-story', product: 'news', name: 'Summarize a news story', workflow: 'news.summarize_story',
+                gives: 'The source reports for one story, and whether you want it brief or explained.',
+                returns: 'A headline, a summary, the key points and a timeline, every claim cited.',
+                access: { guest: false, signed_in: true, floor_18: false }, costs_coins: true,
+                start_url: 'https://openvibe.news/stories',
+            },
+        },
     },
     {
         key: 'news.compare_perspectives', name: 'Compare perspectives on a story', namespace: 'news',
         input_schema: OBJ({ topic: STR(300), sources: SOURCES(2) }, ['topic', 'sources']),
         output_schema: OBJ({ question: STR(300), perspectives: ARR(OBJ({ label: STR(120), summary: STR(2000), citations: CITES }), 10), agreements: ARR(CLAIM, 10), disagreements: ARR(CLAIM, 10), citations: CITES, gaps: GAPS }),
         default_route: 'news.summarize',
+        metadata: {
+            creation: {
+                id: 'news-perspectives', product: 'news', name: 'Compare how sources tell a story', workflow: 'news.compare_perspectives',
+                gives: 'A question and the sources from each side of it.',
+                returns: 'Each perspective in its own terms, where they agree and where they differ.',
+                access: { guest: false, signed_in: true, floor_18: false }, costs_coins: true,
+                start_url: 'https://openvibe.news/stories',
+            },
+        },
     },
     {
         key: 'reviews.summarize_entity', name: 'Summarize review signals for an entity', namespace: 'reviews',
         input_schema: OBJ({ entity: OBJ({ name: STR(200), type: STR(80) }, ['name']), sources: SOURCES(1) }, ['entity', 'sources']),
         output_schema: OBJ({ summary: STR(2000), themes: ARR(STR(80), 12), pros: ARR(CLAIM, 12), cons: ARR(CLAIM, 12), coverage: { enum: ['weak', 'moderate', 'strong'] }, citations: CITES, gaps: GAPS }),
         default_route: 'reviews.summarize',
+        metadata: {
+            creation: {
+                id: 'review-summary', product: 'reviews', name: 'Summarize what reviewers say', workflow: 'reviews.summarize_entity',
+                gives: 'An entity and the review signals written about it.',
+                returns: 'The themes, pros and cons, each cited, and how strong the coverage is.',
+                access: { guest: false, signed_in: true, floor_18: false }, costs_coins: true,
+                start_url: 'https://openvibe.reviews/',
+            },
+        },
     },
     {
         key: 'deals.enrich_deal', name: 'Enrich a deal', namespace: 'deals',
@@ -170,6 +234,7 @@ const workflows = [
             summary: STR(1000), citations: CITES, gaps: GAPS,
         }),
         default_route: 'deals.enrich',
+        metadata: { internal: true },
     },
     {
         key: 'coupons.extract_coupon', name: 'Extract coupons', namespace: 'coupons',
@@ -179,6 +244,7 @@ const workflows = [
             citations: CITES, gaps: GAPS,
         }),
         default_route: 'coupons.extract',
+        metadata: { internal: true },
     },
     {
         key: 'trade.summarize_market_context', name: 'Summarize market context (informational)', namespace: 'trade',
@@ -191,18 +257,45 @@ const workflows = [
             citations: CITES, gaps: GAPS,
         }),
         default_route: 'background.json',
+        metadata: {
+            creation: {
+                id: 'market-context', product: 'trade', name: 'Summarize a market\'s latest filings', workflow: 'trade.summarize_market_context',
+                gives: 'An instrument and the sourced market and filing context.',
+                returns: 'Sourced observations with their dates and a plain informational disclaimer; never advice.',
+                access: { guest: false, signed_in: true, floor_18: false }, costs_coins: true,
+                start_url: 'https://openvibe.trade/',
+            },
+        },
     },
     {
         key: 'codes.generate_docs', name: 'Generate documentation from code', namespace: 'codes',
         input_schema: OBJ({ project: STR(200), audience: STR(200), sources: SOURCES(1) }, ['project', 'sources']),
         output_schema: OBJ({ title: STR(200), overview: STR(4000), sections: ARR(OBJ({ heading: STR(200), body_markdown: STR(20000), citations: CITES }), 40), citations: CITES, gaps: GAPS }),
         default_route: 'codes.generate_docs',
+        metadata: {
+            creation: {
+                id: 'project-docs', product: 'codes', name: 'Write docs for my project', workflow: 'codes.generate_docs',
+                gives: 'The project and its source files.',
+                returns: 'An overview and sections in Markdown, each citing the files it describes.',
+                access: { guest: false, signed_in: true, floor_18: false }, costs_coins: true,
+                start_url: 'https://openvibe.codes/',
+            },
+        },
     },
     {
         key: 'games.generate_lore', name: 'Generate game lore', namespace: 'games',
         input_schema: OBJ({ world: STR(200), prompt: STR(4000), sources: SOURCES(0) }, ['world', 'prompt']),
         output_schema: OBJ({ title: STR(200), lore_markdown: STR(20000), entities: ARR(OBJ({ name: STR(120), kind: STR(60), description: STR(1000) }), 30), contradictions: ARR(STR(500), 10), citations: CITES, gaps: GAPS }),
         default_route: 'games.generate_lore',
+        metadata: {
+            creation: {
+                id: 'game-lore', product: 'games', name: 'Write lore for my game world', workflow: 'games.generate_lore',
+                gives: 'Your world, its canon sources and what you want written.',
+                returns: 'Lore in Markdown with its entities, and every clash with canon named.',
+                access: { guest: false, signed_in: true, floor_18: false }, costs_coins: true,
+                start_url: 'https://openvibe.games/',
+            },
+        },
     },
     {
         key: 'tools.describe', name: 'Describe a tool', namespace: 'tools',
@@ -215,6 +308,15 @@ const workflows = [
             citations: CITES, gaps: GAPS,
         }),
         default_route: 'tools.describe',
+        metadata: {
+            creation: {
+                id: 'tool-page', product: 'tools', name: 'Describe a tool for its users', workflow: 'tools.describe',
+                gives: 'A tool\'s descriptor: what it is and what it takes.',
+                returns: 'A summary, how to use it, every input and output, its limits and an FAQ.',
+                access: { guest: false, signed_in: true, floor_18: false }, costs_coins: true,
+                start_url: 'https://openvibe.tools/',
+            },
+        },
     },
     {
         key: 'food.suggest_recipes', name: 'Suggest recipes from a pantry', namespace: 'food',
@@ -228,6 +330,15 @@ const workflows = [
             citations: CITES, gaps: GAPS,
         }),
         default_route: 'background.json',
+        metadata: {
+            creation: {
+                id: 'recipes', product: 'food', name: 'Suggest recipes from my pantry', workflow: 'food.suggest_recipes',
+                gives: 'What is in your pantry, how many people you are cooking for, and what you feel like.',
+                returns: 'Up to three recipes with everyday amounts and short steps; any missing ingredient is named.',
+                access: { guest: false, signed_in: true, floor_18: false }, costs_coins: true,
+                start_url: 'https://openvibe.food/',
+            },
+        },
     },
     {
         key: 'rent.screen_listing', name: 'Screen a rental listing for scam signs', namespace: 'rent',
@@ -243,6 +354,15 @@ const workflows = [
             citations: CITES,
         }),
         default_route: 'rent.screen', cache_mode: 'private',
+        metadata: {
+            creation: {
+                id: 'rental-check', product: 'rent', name: 'Check a rental listing for scam signs', workflow: 'rent.screen_listing',
+                gives: 'A rental listing as you found it.',
+                returns: 'Allow or review, the exact words behind each scam sign, and a plain reason.',
+                access: { guest: false, signed_in: true, floor_18: false }, costs_coins: true,
+                start_url: 'https://openvibe.rent/',
+            },
+        },
     },
     {
         key: 'moderation.classify', name: 'Classify content for moderation', namespace: 'moderation',
@@ -256,12 +376,13 @@ const workflows = [
             citations: CITES,
         }),
         default_route: 'moderation.classify', cache_mode: 'private',
+        metadata: { internal: true },
     },
 ].map(w => ({
     cache_mode: 'private',
     ...w,
     steps: w.steps || [{ kind: 'llm', template: w.key, operation: w.key === 'moderation.classify' || w.key === 'rent.screen_listing' ? 'classify' : 'generate', output: 'json', prepare: 'sources', cite: true, params: { max_tokens: 2400, temperature: 0.3 } }],
-    metadata: { draft: true, seed: true },
+    metadata: { draft: true, seed: true, ...(w.metadata || {}) },
 }));
 
 // Food's cupboard by photo or receipt (OpenVibe.Food /pantry/photo): a picture, not sources, so it has its own step.
@@ -285,7 +406,7 @@ workflows.push({
     default_route: 'food.vision',
     // A person's photo: never shared between callers (the stored run keeps only the image's hash, server/runs.js).
     cache_mode: 'none',
-    metadata: { seed: true },
+    metadata: { seed: true, internal: true },
 });
 
 // OpenVibe.Pics: alt text, a caption and tags for one picture (accessibility, embeds and finding your own pictures).
@@ -305,7 +426,16 @@ workflows.push({
     default_route: 'background.json',
     // A person's picture: never shared between callers (the stored run keeps only the image's hash).
     cache_mode: 'none',
-    metadata: { seed: true },
+    metadata: {
+        seed: true,
+        creation: {
+            id: 'picture-alt', product: 'pics', name: 'Describe a picture', workflow: 'pics.describe_image',
+            gives: 'A picture, and optionally the title you gave it.',
+            returns: 'Alt text, a caption and up to six tags, ready to paste.',
+            access: { guest: false, signed_in: true, floor_18: false }, costs_coins: true,
+            start_url: 'https://openvibe.pics/',
+        },
+    },
 });
 
 // OpenVibe.Blog's satire desk ("Is This Real?"): invented on purpose, so it is not a sourced evidence package and has its
@@ -325,7 +455,7 @@ workflows.push({
     steps: [{ kind: 'llm', template: 'blog.write_satire', operation: 'generate', output: 'json', params: { max_tokens: 2400, temperature: 0.9 } }],
     default_route: 'background.json',
     cache_mode: 'private',
-    metadata: { seed: true },
+    metadata: { seed: true, internal: true },
 });
 
 module.exports = { templates, workflows };

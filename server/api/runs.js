@@ -12,6 +12,8 @@
  *   run.explain.usage_readings (on every run response): each reading's idempotency key, delivery state (queued/sent/failed), last error, free_allowance_used
  *   POST /api/v1/runs/:id/cancel            (ai.run.create, owner)
  *   POST /api/v1/runs/:id/retry             (ai.run.create, owner) -> a new run with retry_of
+ *   POST /api/v1/runs/:id/advice            (ai.run.create, owner) -> one advisor call for a run that
+ *                                           asked for advisor: true; at most its max_uses, at most 100 words
  *   GET  /api/v1/runs/:id/citations         (ai.run.read)
  *   POST /api/v1/runs/:id/citations         attach sources/citations to a finished run (ai.run.create, owner)
  *   POST /api/v1/{chat,generate,summarize,classify,extract,enrich,embed}
@@ -156,6 +158,15 @@ function runsRouter({ choices = null, runs, registry, auth, config, log = consol
         } catch (err) { sendError(res, err, req.ov, log); }
     });
 
+    // AL3: one advisor call for a run that asked for it. The executor sends its transcript; a stronger model
+    // answers with at most 100 words, every use is on the run's receipt with its cost, and the run's own cap
+    // (at most 3) is enforced here. The advice is guidance the executor feeds back into its own loop.
+    r.post('/api/v1/runs/:id/advice', createApp, async (req, res) => {
+        try {
+            res.status(201).json(await runs.advise(req.params.id, req.body || {}, req.principal, { trace: req.ov.traceId, principalHas: has(req) }));
+        } catch (err) { sendError(res, err, req.ov, log); }
+    });
+
     r.get('/api/v1/runs/:id/citations', read, async (req, res) => {
         try { const run = await owned(req); res.json({ citations: await runs.citations(run.id) }); } catch (err) { sendError(res, err, req.ov, log); }
     });
@@ -184,9 +195,9 @@ function runsRouter({ choices = null, runs, registry, auth, config, log = consol
         r.post(`/api/v1/${op}`, DIRECT_OPS.includes(`ai.${op}`) ? createApp : create, async (req, res) => {
             try {
                 const body = req.body || {};
-                const { idempotency_key: idem, target, attribution, on_behalf_of: obo, options, route, ...input } = body;
+                const { idempotency_key: idem, target, attribution, on_behalf_of: obo, options, route, effort, agent_role, ladder_id, rung, kind, ...input } = body;
                 const wait = req.query.wait != null ? Math.max(0, Math.min(Number(req.query.wait) || 0, config.runs.maxWaitMs)) : config.runs.maxWaitMs;
-                await createAndRespond(req, res, { workflow: `ai.${op}`, input, idempotency_key: idem, target, attribution, on_behalf_of: obo, options, route }, wait);
+                await createAndRespond(req, res, { workflow: `ai.${op}`, input, idempotency_key: idem, target, attribution, on_behalf_of: obo, options, route, effort, agent_role, ladder_id, rung, kind }, wait);
             } catch (err) { sendError(res, err, req.ov, log); }
         });
     }

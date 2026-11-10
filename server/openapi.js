@@ -21,7 +21,7 @@
  * server/runs.js decode(). Nothing is inferred.
  */
 const pkg = require('../package.json');
-const { paths: searchPaths } = require('./search/openapi');
+const searchPaths = { ...require('./search/openapi').paths, ...require('./exchange/compat-openapi').paths };
 
 const MOUNT = '/api/v1';
 // The public base of this API (BASE_URL in production).
@@ -59,13 +59,31 @@ const SERVICE_OR_APP = [{ bearer: [] }, { app: [] }];
 const json = (description, schema) => ({ description, ...(schema ? { content: { 'application/json': { schema } } } : {}) });
 const body = (schema, required = true) => ({ required, content: { 'application/json': { schema } } });
 
+const effortFields = {
+    effort: str({ enum: ['auto', 'low', 'medium', 'high', 'max'] }),
+    agent_role: str({ enum: ['router', 'gate', 'assessor', 'worker', 'subagent', 'reviewer'] }),
+    ladder_id: str({ maxLength: 128 }), rung: integer({ minimum: 0 }), kind: str({ maxLength: 100 }),
+};
+// AL3: a run may ask a stronger model for advice (ai.advisor@1). Off when omitted; true takes the defaults.
+const advisorField = {
+    description: 'Ask a stronger model for advice during this run (ai.advisor@1): true, or { model, effort, max_uses (1-3), max_words (10-100) }. Off when omitted; each use is on the run receipt with its cost.',
+    oneOf: [
+        { const: true },
+        { type: 'object', additionalProperties: false, properties: {
+            model: str({ description: 'provider/model from GET /api/v1/routes' }),
+            effort: str({ enum: ['low', 'medium', 'high', 'max'] }),
+            max_uses: integer({ minimum: 1, maximum: 3, default: 3 }),
+            max_words: integer({ minimum: 10, maximum: 100, default: 100 }),
+        } },
+    ],
+};
 const runBody = (required = []) => ({
     type: 'object', ...(required.length ? { required } : {}),
     properties: {
         workflow: str({ description: 'The workflow key, e.g. ai.generate' }), version: integer({ minimum: 1 }),
         task: str({ description: 'A registered task (GET /api/v1/tasks); its workflow runs with the task’s resolved choice. Required instead of workflow when no workflow is named.' }),
         choice: ref('Choice'),
-        input: { type: 'object' }, idempotency_key: str({ minLength: 8, maxLength: 128 }),
+        ...effortFields, advisor: advisorField, input: { type: 'object' }, idempotency_key: str({ minLength: 8, maxLength: 128 }),
         target: { type: 'object' }, attribution: { type: 'object' }, on_behalf_of: ref('SubjectRef'),
         options: { type: 'object', description: 'cache, debug, and the latency class: latency (interactive | background | batch); a batch-class run also takes deadline_hours (1-72, the default is 24)' }, route: { type: 'object', description: '{ provider, model } — one offer from GET /api/v1/routes?operation=…' },
     },
@@ -73,6 +91,8 @@ const runBody = (required = []) => ({
 const directBody = {
     type: 'object',
     properties: {
+        ...effortFields,
+        advisor: advisorField,
         idempotency_key: str({ minLength: 8, maxLength: 128 }), target: { type: 'object' }, attribution: { type: 'object' },
         on_behalf_of: ref('SubjectRef'), options: { type: 'object' },
     },
@@ -83,15 +103,46 @@ function route(method, p, operation) {
     (PATHS[p] = PATHS[p] || {})[method] = operation;
 }
 
+// ── What AI can make (owner, 11-09, item 45) ────────────────────────────────────────────────
+const creation = {
+    type: 'object', additionalProperties: false,
+    required: ['id', 'product', 'name', 'gives', 'returns', 'workflow', 'task', 'access', 'costs_coins', 'start_url'],
+    properties: {
+        id: str({ pattern: '^[a-z][a-z0-9-]{1,63}$' }),
+        product: str({ enum: ['ai', 'blog', 'codes', 'community', 'design', 'food', 'games', 'live', 'media', 'meme', 'news', 'pics', 'quest', 'rent', 'reviews', 'space', 'tools', 'trade', 'wiki'] }),
+        name: str({ maxLength: 80 }), gives: str({ maxLength: 300 }), returns: str({ maxLength: 300 }),
+        workflow: nullable('string'), task: nullable('string'),
+        access: {
+            type: 'object', additionalProperties: false, required: ['guest', 'signed_in', 'floor_18'],
+            properties: { guest: { type: 'boolean' }, signed_in: { type: 'boolean' }, floor_18: { type: 'boolean' } },
+        },
+        costs_coins: { type: 'boolean' }, start_url: str({ format: 'uri' }),
+    },
+};
+const creationList = {
+    type: 'object', additionalProperties: false, required: ['creations', 'count', 'generated_at'],
+    properties: { creations: arrayOf(creation), count: integer({ minimum: 0 }), generated_at: str({ format: 'date-time' }) },
+};
+route('get', '/creations', {
+    operationId: 'listCreations', summary: 'What AI can make: every creation that is live now', tags: ['creations'], security: [],
+    description: 'Public, cached for five minutes and open to every origin (Access-Control-Allow-Origin: *). One entry per thing AI can make, built from the registered workflows and tasks (ai.creation-list@1): the product, a plain name, what the person gives it and what comes back, the workflow or task behind it, who may use it, whether it can cost coins and where to start. Only a workflow whose status is active is listed. The same list as Markdown is GET /api/v1/creations.md, or this path with ?format=markdown, and it is in /llms.txt.',
+    responses: { 200: json('The live catalogue', creationList), ...errors([429]) },
+});
+route('get', '/creations.md', {
+    operationId: 'listCreationsMarkdown', summary: 'What AI can make, as Markdown', tags: ['creations'], security: [],
+    description: 'The same live catalogue grouped by product, for AI readers and pages that want plain text (ai.creation-list@1).',
+    responses: { 200: { description: 'The catalogue as Markdown', content: { 'text/markdown': { schema: { type: 'string' } } } }, ...errors([429]) },
+});
+
 // ── AI tasks and choices (rich-content plan §1) ──────────────────────────────────────────────
 route('get', '/tasks', {
     operationId: 'listTasks', summary: 'The task catalogue: every named piece of AI work', tags: ['choices'], security: [],
-    description: 'Public. A task names its service, its kind (text, code, vision, image, search), one sentence and its built-in default choice. A service registers its own with POST /api/v1/tasks.',
+    description: 'Public. A task names its service, its kind (text, code, vision, image, search), one sentence and its built-in default choice. A service registers its own with POST /api/v1/tasks. image.picture is the shared image task: find licensed Commons/Openverse pictures or make one with the owner\'s configured image model, every picture stored in Media and returned by Media id.',
     responses: { 200: json('The catalogue', { type: 'object', required: ['tasks'], properties: { tasks: arrayOf(ref('Task')) } }), ...errors([429]) },
 });
 route('post', '/tasks', {
     operationId: 'registerTask', summary: 'Register a task in the caller’s own namespace', tags: ['choices'], security: SERVICE,
-    description: 'ai.workflow.manage. Only a service token registers tasks, and only under its own namespace: the workflow is the service’s own or a general AI workflow (ai.generate, ai.complete, ai.image, research.gather). A registration is audited.',
+    description: 'ai.workflow.manage. Only a service token registers tasks, and only under its own namespace: the workflow is the service’s own or a general AI workflow (ai.generate, ai.complete, ai.image, image.picture, research.gather). A registration is audited.',
     requestBody: body({ type: 'object', required: ['name', 'kind', 'sentence', 'default'], properties: {
         name: str({ pattern: '^[a-z][a-z0-9_-]*\\.[a-z0-9_.-]{1,100}$' }), kind: str({ enum: ['text', 'code', 'vision', 'image', 'search'] }),
         sentence: str({ maxLength: 300 }), default: ref('Choice'), workflow: str(),
@@ -322,6 +373,21 @@ route('post', '/runs/{id}/retry', {
     responses: { 201: json('The new run', { type: 'object', required: ['run'], properties: { run: ref('Run') } }),
         202: json('Still running', { type: 'object', required: ['run'], properties: { run: ref('Run') } }), ...errors([401, 403, 404, 409, 429]) },
 });
+route('post', '/runs/{id}/advice', {
+    operationId: 'adviseRun', summary: 'One advisor call for a run that asked for it (owner)', tags: ['runs'], security: SERVICE,
+    description: 'ai.run.create. The run must have been created with advisor (ai.advisor@1). At most 3 uses per run and at most 100 words back; the advice is guidance the executor feeds into its own loop, and each use is on the run receipt (ai.advice@1) with the advice run, model, tokens and cost.',
+    parameters: [path('id', str())],
+    requestBody: body({ type: 'object', required: ['transcript'], properties: {
+        transcript: { type: 'array', minItems: 1, maxItems: 200, items: { type: 'object', required: ['role', 'content'], properties: { role: { type: 'string', enum: ['system', 'user', 'assistant', 'tool'] }, content: str({ maxLength: 200000 }) } } },
+        question: str({ maxLength: 4000 }), model: str({ description: 'provider/model; omitted uses the reviewer role default, then the strongest offer' }),
+        effort: str({ enum: ['low', 'medium', 'high', 'max'] }), max_words: integer({ minimum: 10, maximum: 100 }),
+    } }),
+    responses: { 201: json('The advice', { type: 'object', required: ['run_id', 'use', 'advice', 'max_uses', 'advice_run_id'], properties: {
+        run_id: str(), use: integer({ minimum: 1, maximum: 3 }), max_uses: integer({ minimum: 1, maximum: 3 }), max_words: integer({ minimum: 10, maximum: 100 }),
+        advice: str(), model: str(), effort: str(), usage: { type: 'object', properties: { tokens_in: integer(), tokens_out: integer(), cost_usd: { type: 'number' } } },
+        advice_run_id: str(), receipt_id: str(),
+    } }), ...errors([401, 403, 404, 409, 413, 422, 429, 502, 503]) },
+});
 route('get', '/runs/{id}/citations', {
     operationId: 'listRunCitations', summary: 'A run\'s citations', tags: ['runs'], security: SERVICE,
     description: 'ai.run.read.',
@@ -441,6 +507,10 @@ const exchangeOffer = {
         access: str({ enum: ['OWN_DEPLOYMENT', 'AUTHORIZED_WHOLESALE', 'UNVERIFIED'] }),
         free: { type: 'boolean', description: 'Prepaid capacity with no per-token price (a free server, a subscription, a local machine).' },
         free_tier: { type: 'boolean', description: 'The free allowance and the anonymous Try it may use this offer: its provider is one of AI_FREE_PROVIDERS (default deepseek,local,community; local covers local2 and whisper.cpp) and its output price is at or below AI_FREE_MAX_OUTPUT_PRICE_USD_PER_MTOK (default 1.5). Distinct from free: a priced DeepSeek Flash offer is free_tier true while a dearer priced offer is false.' },
+        status: { type: 'string', enum: ['up', 'degraded', 'down'], description: 'Measured, never guessed: down while this offer\'s circuit is open; degraded when more than 5% of at least 10 requests in the last hour failed; up otherwise.' },
+        status_reason: nullable('string', { description: 'Plain words for a degraded or down offer: "the provider says the account is out of credit", "the key was refused" or "too many errors in the last hour"' }),
+        status_since: nullable('string', { description: 'When the current status began (ISO 8601)' }),
+        status_class: nullable('string', { enum: ['balance', 'auth', 'rate_limit', 'transient', 'request'], description: 'The failure class behind a degraded or down status' }),
         price: nullable('object', { properties: { in: { type: 'number' }, out: { type: 'number' }, cached: { type: 'number' }, per: str(), currency: str() } }),
         price_source: nullable('string', { description: 'The price page the card was read from, when recorded' }),
         price_checked_at: nullable('string', { description: 'The date someone checked the price, when recorded' }),
@@ -454,6 +524,7 @@ const exchangeOffer = {
         refusal_rate: nullable('number', { minimum: 0, maximum: 1, description: 'The share of the published probe set this offer refused (0.75 is three probes out of four). null when nobody measured this offer, never 0.' }),
         refusal_measured_on: nullable('string', { description: 'The day the refusal rate was measured' }),
         refusal_prompt_set: nullable('string', { description: 'The version of the published probe set the rate was measured with' }),
+        fidelity: nullable('object', { description: 'Provider fidelity measured by OpenVibe.Bench: the same fixed objective set run through every provider that serves this open-weight model. score is the pass rate, n the answered items, interval its 95% Wilson band. Null when Bench has not measured this exact endpoint.', properties: { score: { type: 'number', minimum: 0, maximum: 1 }, n: integer({ minimum: 0 }), interval: { type: ['object', 'null'], properties: { lower: nullable('number'), upper: nullable('number') } }, compared_to: nullable('string'), measured_at: nullable('string'), prompt_set: nullable('string') } }),
         updated_at: nullable('string'),
     },
 };
@@ -465,6 +536,7 @@ const exchangeModel = {
         capabilities: { type: 'object', properties: { tools: { type: 'boolean' }, json: { type: 'boolean' }, vision: { type: 'boolean' }, stream: { type: 'boolean' } } },
         modalities: arrayOf(str()), description: nullable('string'),
         requests_7d: integer({ minimum: 0 }), requests_today: integer({ minimum: 0 }),
+        cache_hit_share_7d: nullable('number', { minimum: 0, maximum: 1 }),
         cached_7d: integer({ minimum: 0 }), cached_today: integer({ minimum: 0 }), community: { type: 'boolean' },
         cache_hit_share_7d: nullable('number', { minimum: 0, maximum: 1, description: 'The prompt-cache share over this model\'s offers in the window (cached prompt tokens / reported prompt tokens). Null when no offer has enough attempts to measure one.' }),
         offers: arrayOf(exchangeOffer),
@@ -491,14 +563,63 @@ route('get', '/exchange/market', {
                 maker: nullable('string'), context: nullable('number'), max_output: nullable('number'),
                 open_weights: nullable('boolean'), licence: nullable('string'), release_date: nullable('string'), knowledge_cutoff: nullable('string'),
                 modalities: { type: ['object', 'null'], properties: { input: arrayOf(str()), output: arrayOf(str()) } },
+                fidelity: nullable('object', { properties: { score: nullable('number'), n: integer(), interval: { type: ['object', 'null'], properties: { lower: nullable('number'), upper: nullable('number') } }, compared_to: nullable('string'), measured_at: nullable('string'), prompt_set: nullable('string') } }),
                 field_sources: { type: 'object', additionalProperties: str({ format: 'uri' }) },
             } }),
         },
     }), ...errors([422]) },
 });
+route('get', '/exchange/estimate', {
+    operationId: 'exchangeEffortEstimate', summary: 'A current-price p25–p75 cost estimate from 30 days of receipts', tags: ['exchange'], security: [],
+    parameters: [query('model', str()), query('effort', effortFields.effort), query('kind', str()), query('input_tokens', integer({ minimum: 1 }))],
+    responses: { 200: json('Under twenty observations: null prices with n and basis.status no_data', { type: 'object', required: ['low_usd', 'high_usd', 'n', 'basis'], properties: { low_usd: nullable('number'), high_usd: nullable('number'), n: integer(), basis: { type: 'object' } } }), ...errors([422]) },
+});
+route('get', '/me/ladders/{id}', {
+    operationId: 'myEffortLadder', summary: 'Your own ladder costs by rung', tags: ['exchange'], security: SERVICE,
+    parameters: [path('id', str())], responses: { 200: json('Total cost and rung totals', { type: 'object' }), ...errors([401, 403, 404]) },
+});
+route('get', '/agent-role-defaults', {
+    operationId: 'agentRoleDefaults', summary: 'Owner role model and effort defaults', tags: ['admin'], security: SERVICE,
+    description: 'ai.config.manage. Reviewer uses a different model provider family than worker.', responses: { 200: json('Role defaults', { type: 'object' }), ...errors([401, 403]) },
+});
+route('put', '/agent-role-defaults/{role}', {
+    operationId: 'putAgentRoleDefault', summary: 'Update and audit a role default', tags: ['admin'], security: SERVICE,
+    description: 'ai.config.manage. Exactly one of model or choice_order; concrete effort.', parameters: [path('role', effortFields.agent_role)],
+    requestBody: body({ type: 'object', properties: { model: str(), choice_order: arrayOf(str()), effort: effortFields.effort } }),
+    responses: { 200: json('Saved default', { type: 'object' }), ...errors([401, 403, 422]) },
+});
+const measuredCell = { type: 'object', properties: {
+    day: str({ format: 'date' }), model: str(), provider: str(), task_kind: str(), runs: integer({ minimum: 20 }),
+    ...Object.fromEntries(require('./exchange/metrics-read').MEASURES.map((m) => [m, nullable('number')])),
+    samples: { type: 'object', additionalProperties: nullable('integer', { minimum: 20 }) }, computed_at: str({ format: 'date-time' }),
+} };
+for (const [routePath, id, summary, parameters, properties] of [
+    ['/exchange/metrics/models/{model}', 'exchangeModelMetrics', 'Measured model series over 30 or 90 completed UTC days',
+        [path('model', str()), query('days', integer({ enum: [30, 90] })), query('kind', str())], { series: arrayOf(measuredCell) }],
+    ['/exchange/metrics/compare', 'exchangeCompareMetrics', 'Compare up to six models on chosen measures for one completed UTC day',
+        [query('models', str()), query('measures', str()), query('kind', str()), query('day', str({ format: 'date' }))],
+        { models: arrayOf({ type: 'object', properties: { model: str(), cells: arrayOf(measuredCell) } }) }],
+    ['/exchange/metrics/leaderboard', 'exchangeMetricsLeaderboard', 'A task kind leaderboard for one measure and completed UTC day',
+        [query('kind', str()), query('measure', str({ enum: require('./exchange/metrics-read').MEASURES })), query('day', str({ format: 'date' }))], { rows: arrayOf(measuredCell) }],
+    ['/exchange/metrics/prices/{model}', 'exchangeModelPriceHistory', 'Daily listed catalogue prices per model and provider',
+        [path('model', str()), query('days', integer({ enum: [30, 90] }))], { series: arrayOf({ type: 'object' }) }],
+    ['/exchange/metrics/providers/{provider}', 'exchangeProviderHealth', 'Seven days of hourly provider run success and median latency',
+        [path('provider', str())], { series: arrayOf({ type: 'object', properties: { hour: str({ format: 'date-time' }), provider: str(), runs: integer({ minimum: 20 }), success_rate: { type: 'number' }, latency_p50_ms: nullable('number'), latency_samples: nullable('integer', { minimum: 20 }) } }) }],
+]) route('get', routePath, { operationId: id, summary, tags: ['exchange'], security: [], parameters,
+    description: 'Public, cached sixty seconds, CORS enabled. Measured cells and each timing measure require twenty observations. Missing is not zero; prices are listed prices, not measurements. No person, prompt or site identifiers.',
+    responses: { 200: json(summary, { type: 'object', properties }), ...errors([422]) } });
+route('get', '/exchange/metrics/status', {
+    operationId: 'exchangeMetricsStatus', summary: 'Daily measured metrics publication status', tags: ['exchange'], security: [],
+    description: 'Public, cached sixty seconds. Complete UTC days from retained run receipts; published cells and each timing measure require twenty samples. No caller or prompt data.',
+    responses: { 200: json('Rollup status', { type: 'object', properties: {
+        schema: { const: 'exchange.metrics@1' }, minimum_samples: { const: 20 }, published_cells: integer(),
+        completed_through: nullable('string', { format: 'date' }), completed_at: nullable('string', { format: 'date-time' }),
+        first_day: nullable('string', { format: 'date' }), last_day: nullable('string', { format: 'date' }),
+    } }) },
+});
 route('get', '/exchange/catalog', {
     operationId: 'exchangeCatalog', summary: 'Every model and every offer that serves it', tags: ['exchange'], security: [],
-    description: 'Public. The live offers: price in, out and cached per million tokens, measured p50/p95, uptime, requests, and the provider data policy. Speed and uptime are read from the last seven days of real runs (time to the first token where a receipt recorded one, else the answering attempt\'s total); cached answers are counted apart and excluded from speed, uptime and requests. Uptime is succeeded / (succeeded + failed); null when no data, never 0. A prepaid offer has no price (free: true); free_tier says whether the free allowance and the anonymous Try it may use an offer at all (a named AI_FREE_PROVIDERS source under the output price ceiling). Models carry a kind (chat, embedding, stt, image); chat lists must use kind "chat" and never mix embeddings or speech-to-text.',
+    description: 'Public. The live offers: measured status (up/degraded/down, with a plain reason and since when), price in, out and cached per million tokens, measured p50/p95, uptime, requests, and the provider data policy. Speed and uptime are read from the last seven days of real runs (time to the first token where a receipt recorded one, else the answering attempt\'s total); cached answers are counted apart and excluded from speed, uptime and requests. Uptime is succeeded / (succeeded + failed); null when no data, never 0. A prepaid offer has no price (free: true); free_tier says whether the free allowance and the anonymous Try it may use an offer at all (a named AI_FREE_PROVIDERS source under the output price ceiling). Models carry a kind (chat, embedding, stt, image); chat lists must use kind "chat" and never mix embeddings or speech-to-text.',
     parameters: [query('kind', str({ enum: ['chat', 'embedding', 'stt', 'image'] }), 'Only models of this kind')],
     responses: { 200: json('The models, grouped by model, with their offers', { type: 'object', required: ['models'], properties: {
         generated_at: str({ format: 'date-time' }), window_days: integer(), count: integer(),
@@ -576,6 +697,9 @@ route('get', '/exchange/key-usage', {
     description: 'Only a person. One row per day, key, model and status (settled, reserved, unresolved): requests, tokens and dollars. Private to the owner.',
     responses: { 200: json('The usage rows', { type: 'object', required: ['rows'], properties: { rows: arrayOf({ type: 'object' }) } }), ...errors([401, 403]) },
 });
+route('get', '/exchange/presets', { operationId: 'exchangeRequestPresets', summary: 'List your saved request presets', tags: ['exchange'], security: [{ bearer: [] }], responses: { 200: json('Owner presets', { type: 'object', properties: { data: arrayOf({ type: 'object' }) } }), ...errors([401, 403]) } });
+route('post', '/exchange/presets', { operationId: 'exchangeRequestPresetSave', summary: 'Save your request preset', tags: ['exchange'], security: [{ bearer: [] }], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object' } } } }, responses: { 200: json('Saved preset', { type: 'object' }), ...errors([400, 401, 403]) } });
+route('delete', '/exchange/presets/{name}', { operationId: 'exchangeRequestPresetDelete', summary: 'Delete your request preset', tags: ['exchange'], security: [{ bearer: [] }], parameters: [{ in: 'path', name: 'name', required: true, schema: str() }], responses: { 200: json('Deletion result', { type: 'object' }), ...errors([400, 401, 403]) } });
 route('get', '/exchange/search/engines', {
     operationId: 'exchangeSearchEngines', summary: 'The search engines behind web, image and icon search', tags: ['exchange'], security: [],
     description: 'Public. Engine IDs, kinds (web, images, icons, fetch), availability of shared keys, BYOK support, health, supported freshness filters, price_per_1000 in USD (null when variable), pricing_note, source URL and checked_on date. Personal key availability is private. Tariffs exclude free allowances and volume discounts.',
@@ -641,6 +765,21 @@ route('get', '/exchange/usage', {
         today: { type: 'object' }, totals: { type: 'object' },
         by_day: arrayOf({ type: 'object' }), by_model: arrayOf({ type: 'object' }), by_product: arrayOf({ type: 'object' }),
     } }) },
+});
+
+route('get', '/exchange/share', {
+    operationId: 'exchangeTrafficShare', summary: 'Real-traffic share by model and app category, published weekly', tags: ['exchange'], security: [], servers: [{ url: 'https://api.openvibe.exchange' }],
+    description: 'Public and aggregate only: never a prompt, an answer, a person or an app\'s name. Read from the Exchange receipts of a completed UTC week (succeeded, non-synthetic requests that a provider answered; runs whose person turned history off are excluded). Every cell needs at least k requests before it is published; smaller cells are withheld and counted only in withheld. Developer apps fold into one category, apps, so no app is named. The weekly answer is stored once and kept after the receipts it came from are pruned.',
+    parameters: [query('week', str(), 'A Monday, YYYY-MM-DD. Default: the last completed week')],
+    responses: { 200: json('The share', { type: 'object', required: ['$schema', 'week_start', 'week_end', 'k', 'totals', 'offers', 'models', 'categories', 'withheld'], properties: {
+        $schema: { const: 'exchange.traffic-share@1' }, week_start: str({ format: 'date' }), week_end: str({ format: 'date' }), generated_at: str({ format: 'date-time' }),
+        k: integer({ minimum: 20 }), source: str(), note: str(),
+        totals: { type: 'object', properties: { requests: integer(), tokens_in: integer(), tokens_out: integer(), tokens: integer() } },
+        offers: arrayOf({ type: 'object', properties: { provider: str(), model: str(), requests: integer(), tokens_in: integer(), tokens_out: integer(), tokens: integer(), request_share: nullable('number'), token_share: nullable('number') } }),
+        models: arrayOf({ type: 'object', properties: { model: str(), providers: integer(), requests: integer(), tokens: integer(), request_share: nullable('number'), token_share: nullable('number') } }),
+        categories: arrayOf({ type: 'object', properties: { category: str(), requests: integer(), tokens: integer(), request_share: nullable('number'), token_share: nullable('number') } }),
+        withheld: { type: 'object', properties: { cells: integer(), requests: integer(), tokens: integer(), share_of_requests: nullable('number') } },
+    } }), ...errors([404, 422]) },
 });
 
 route('get', '/exchange/price-changes', {
@@ -853,6 +992,7 @@ function openapi() {
                     source_service: nullable('string'), target: nullable('object'), input: nullable('object'), output: nullable('object'),
                     error: nullable('object', { properties: { code: str(), detail: str() } }), synthetic: { type: 'boolean' },
                     provenance: { type: 'object' },
+                    effort_requested: effortFields.effort, effort_applied: nullable('string'), effort_rung: integer({ minimum: 0 }), ladder_id: str(), ladder: arrayOf({ type: 'object' }),
                     latency_class: { type: 'string', enum: ['interactive', 'background', 'batch'] },
                     service_tier: nullable('string', { description: 'the tier the answer really ran on: standard, flex, batch, offpeak or local' }),
                     latency_clamped: nullable('object', { description: '{ asked, used }: the class the caller asked for and the class the run really took' }),

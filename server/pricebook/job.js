@@ -27,6 +27,7 @@ const { SOURCES } = require('./sources');
 const { readListing } = require('./read');
 const { createPriceStore, FIELDS, FIELD_NAMES } = require('./store');
 const { createPriceState } = require('./state');
+const { proposePriceChanges } = require('./propose');
 
 /** A price that differs by less than this is the same price: the providers publish floats (0.205999992). */
 const EPSILON = 1e-6;
@@ -399,6 +400,13 @@ function createPriceBook({ db, registry, config = {}, clock = { now: () => Date.
     const changes = (opts) => store.list(opts);
 
     /**
+     * Put a reviewed reading into the log as a pending change. The owner's approval is still what moves the
+     * live price; nothing here writes a price into a model row.
+     */
+    const propose = (proposals, { actor = 'owner', dryRun = false } = {}) =>
+        proposePriceChanges({ registry, store, proposals, clock, actor, dryRun });
+
+    /**
      * The owner's decision on a waiting change. Approving it writes the price into the model row; rejecting it
      * leaves the live price alone and the log keeps the story.
      */
@@ -458,7 +466,7 @@ function createPriceBook({ db, registry, config = {}, clock = { now: () => Date.
         if (first) { clearTimeout(first); first = null; }
     }
 
-    return { runOnce, tick, due, start, stop, decide, pending, live, changes, store, state, settings, threshold: limit, get last() { return last; } };
+    return { runOnce, tick, due, start, stop, decide, pending, live, changes, propose, store, state, settings, threshold: limit, get last() { return last; } };
 }
 
 module.exports = { createPriceBook, eligible, findPrice, catalogueSources, EPSILON, DEFAULT_THRESHOLD, WEEK_MS };

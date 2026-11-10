@@ -13,7 +13,7 @@ const { PROVIDERS: ENGINES } = require('../research');
 
 const KINDS = ['text', 'code', 'vision', 'image', 'search'];
 const SOURCES = ['openvibe', 'keys', 'machines'];
-const GENERAL = ['ai.generate', 'ai.complete', 'ai.image', 'research.gather'];
+const GENERAL = ['ai.generate', 'ai.complete', 'ai.image', 'image.picture', 'research.gather'];
 const MAX_COST_USD = 1000;
 const CACHE_MS = 60000;
 
@@ -25,6 +25,7 @@ const SEEDS = [
     ['blog.devblog.art', 'image', 'Draw title art for a devblog.', 'ai.image'],
     ['wiki.article.write', 'text', 'Write a sourced wiki article.', 'ai.generate'],
     ['wiki.article.images', 'search', 'Find licensed pictures for a wiki article.', 'research.gather'],
+    ['image.picture', 'image', 'Find a licensed picture or make one, stored in Media.', 'image.picture'],
     ['design.icon', 'code', 'Draw an original SVG icon.', 'ai.chat'],
     ['chat.reply', 'text', 'Answer a chat message.', 'ai.complete'],
     ['image.generate', 'image', 'Make an image from a description.', 'ai.image'],
@@ -64,17 +65,23 @@ function choice(value) {
 function defaultValue(value) {
     const keys = value && typeof value === 'object' && !Array.isArray(value) ? Object.keys(value) : [];
     if (!value || typeof value !== 'object' || Array.isArray(value)
-        || keys.some((k) => !['signed_out', 'signed_in', 'fallbacks', 'image_model', 'search_engines', 'max_cost_usd'].includes(k))
+        || keys.some((k) => !['signed_out', 'signed_in', 'fallbacks', 'image_model', 'search_engines', 'max_cost_usd', 'daily_cap', 'guest_find', 'effort'].includes(k))
         || (value.fallbacks != null && !Array.isArray(value.fallbacks))) {
         throw new AiError(422, 'defaults.invalid', 'invalid task defaults');
     }
+    if (value.effort !== undefined && !['low', 'medium', 'high', 'max'].includes(value.effort)) throw new AiError(422, 'defaults.invalid', 'task default effort must be low|medium|high|max');
     const out = {
+        ...(value.effort !== undefined ? { effort: value.effort } : {}),
         signed_out: choice(value.signed_out),
         signed_in: choice(value.signed_in),
         fallbacks: (value.fallbacks || []).map(choice),
         image_model: value.image_model == null ? null : choice(value.image_model),
         search_engines: value.search_engines == null ? [] : value.search_engines,
         max_cost_usd: value.max_cost_usd == null ? null : value.max_cost_usd,
+        // The image task's two extra owner controls: a whole-picture daily cap per person (made pictures,
+        // null for no cap) and whether a guest with no person may use find.
+        daily_cap: value.daily_cap == null ? null : value.daily_cap,
+        guest_find: value.guest_find === true,
     };
     const all = [out.signed_out, out.signed_in, ...out.fallbacks, ...(out.image_model ? [out.image_model] : [])];
     if (all.some((c) => c.source !== 'openvibe')) throw new AiError(422, 'defaults.invalid', 'the owner’s defaults use OpenVibe supply');
@@ -87,6 +94,9 @@ function defaultValue(value) {
     if (out.max_cost_usd !== null && (typeof out.max_cost_usd !== 'number' || !Number.isFinite(out.max_cost_usd)
         || out.max_cost_usd < 0 || out.max_cost_usd > MAX_COST_USD)) {
         throw new AiError(422, 'defaults.invalid', `max_cost_usd must be 0–${MAX_COST_USD} or null`);
+    }
+    if (out.daily_cap !== null && (!Number.isInteger(out.daily_cap) || out.daily_cap < 0 || out.daily_cap > 1000)) {
+        throw new AiError(422, 'defaults.invalid', 'daily_cap must be a whole number of pictures from 0 to 1000, or null');
     }
     return out;
 }
@@ -114,6 +124,11 @@ function createChoices({ db, registry, preferences, credentials, machines, catal
         // and in, with a small per-batch ceiling. The owner can change it on Exchange like any task default.
         await db.prepare('INSERT INTO ai_task_defaults (task, value, updated_by, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT (task) DO NOTHING')
             .run('blog.changelog.tag', JSON.stringify({ signed_out: built('openvibe/cheapest'), signed_in: built('openvibe/cheapest'), fallbacks: [built('openvibe/cheapest')], image_model: null, search_engines: [], max_cost_usd: 0.1 }), 'seed', iso(clock.now()));
+        // The shared image task (rich-content plan §4/§5): find is on for signed-in editors and off for guests
+        // until the owner says otherwise; make is off until the owner picks an image model (image_model: null).
+        const pictureEngines = [{ engine: 'commons', enabled: true }, { engine: 'openverse', enabled: true }];
+        await db.prepare('INSERT INTO ai_task_defaults (task, value, updated_by, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT (task) DO NOTHING')
+            .run('image.picture', JSON.stringify({ signed_out: built('openvibe/auto'), signed_in: built('openvibe/auto'), fallbacks: [], image_model: null, search_engines: pictureEngines, max_cost_usd: null, daily_cap: 24, guest_find: false }), 'seed', iso(clock.now()));
     }
 
     async function register(body, service) {
@@ -205,6 +220,11 @@ function createChoices({ db, registry, preferences, credentials, machines, catal
             fallbacks: picked.why === 'owner' ? owner.fallbacks : [],
             max_cost_usd: owner ? owner.max_cost_usd : null,
             search_engines: owner ? owner.search_engines : [],
+            // image.picture's two modes: the owner's model is the make switch (null = off), and the cap and
+            // guest rule are read by the step itself.
+            image_model: owner && owner.image_model ? owner.image_model : null,
+            daily_cap: owner && owner.daily_cap != null ? owner.daily_cap : null,
+            guest_find: Boolean(owner && owner.guest_find),
         };
     }
 

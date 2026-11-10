@@ -56,6 +56,7 @@ const LEFT_OUT = [
 ];
 const excluded = (key) => {
     const p = key.split(' ')[1];
+    if (key === 'GET /api/v1/me/ladders/{id}') return false; // read-only accounting, no credential fields
     return LEFT_OUT.some((prefix) => p === prefix || p.startsWith(`${prefix}/`));
 };
 
@@ -76,7 +77,7 @@ const excluded = (key) => {
         const documented = Object.entries(doc.paths).flatMap(([p, item]) => Object.keys(item).map((m) => `${m.toUpperCase()} ${p}`)).sort();
         assert.ok(documented.length > 0, 'paths is not empty');
         for (const [p, item] of Object.entries(doc.paths)) {
-            assert.ok(p.startsWith('/api/') || ['/v1/search', '/v1/search/images', '/v1/search/icons', '/v1/fetch'].includes(p), `${p} is outside /api`);
+            assert.ok(p.startsWith('/api/') || ['/v1/search', '/v1/search/images', '/v1/search/icons', '/v1/fetch', ...Object.keys(require('../server/exchange/compat-openapi').paths)].includes(p), `${p} is outside /api`);
             for (const [method, op] of Object.entries(item)) {
                 assert.ok(op.operationId, `${method.toUpperCase()} ${p} has an operationId`);
                 assert.ok(op.responses && Object.keys(op.responses).length, `${method.toUpperCase()} ${p} describes its responses`);
@@ -88,7 +89,7 @@ const excluded = (key) => {
             assert.ok(!text.includes(`"${field}"`), `the document must not name ${field}`);
         }
 
-        const live = [...mounted(h.app)].filter((key) => (key.split(' ')[1].startsWith(`${MOUNT}/`) || /^POST \/v1\/(search(?:\/images|\/icons)?|fetch)$/.test(key)) && !excluded(key)).sort();
+        const live = [...mounted(h.app)].filter((key) => (key.split(' ')[1].startsWith(`${MOUNT}/`) || Object.keys(require('../server/exchange/compat-openapi').paths).includes(key.split(' ')[1]) || /^POST \/v1\/(search(?:\/images|\/icons)?|fetch)$/.test(key)) && !excluded(key)).sort();
         assert.deepStrictEqual(documented, live, 'every mounted public /api/v1 route is documented and vice versa');
         assert.deepStrictEqual(routes(), documented, 'server/openapi.js routes() and the document agree');
 

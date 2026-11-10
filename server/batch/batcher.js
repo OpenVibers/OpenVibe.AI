@@ -28,7 +28,7 @@ const crypto = require('crypto');
 const { AiError, providerSecret } = require('../util');
 const { retailRate, accessOf } = require('../providers/model-catalog');
 const { retailChargeNano } = require('../credits');
-const { providerConfig } = require('./providers');
+const { providerConfig, batchProviderFor } = require('./providers');
 const { createOpenAiCompatibleAdapter } = require('./providers/openai-compatible');
 const { createAnthropicAdapter } = require('./providers/anthropic');
 const { createGeminiAdapter } = require('./providers/gemini');
@@ -111,10 +111,10 @@ function createBatcher({ db, runs, registry, credits = null, config = {}, clock 
     /** The provider's adapter, built once and kept. */
     async function adapterFor(providerKey) {
         if (adapters.has(providerKey)) return adapters.get(providerKey);
-        const cfg = providerConfig(providerKey);
-        if (!cfg || !cfg.enabled) throw new AiError(422, 'batch.no_native_api', 'this provider has no verified batch API');
         const row = await registry.getProvider(providerKey);
         if (!row || row.status !== 'active') throw new AiError(422, 'batch.provider_inactive', 'this provider is not active');
+        const cfg = batchProviderFor(providerKey, row, env);
+        if (!cfg) throw new AiError(422, 'batch.no_native_api', 'this provider has no configured batch API');
         const factory = ADAPTERS[cfg.adapter];
         if (!factory) throw new AiError(422, 'batch.no_native_api', 'this provider has no adapter for its batch API');
         const adapter = factory({
@@ -220,10 +220,10 @@ function createBatcher({ db, runs, registry, credits = null, config = {}, clock 
         const capacity = require('./capacity');                     // lazy: capacity requires this module for its cards
         for (const offer of offers || []) {
             if (!offer || !offer.provider || !offer.model) continue;
-            const cfg = providerConfig(offer.provider);
-            // Only a provider whose batch API is enabled and whose adapter speaks the OpenAI batch shape.
-            if (!cfg || !cfg.enabled || cfg.adapter !== 'openai-compatible') continue;
             const provider = await registry.getProvider(offer.provider);
+            const cfg = batchProviderFor(offer.provider, provider, env);
+            // Only a provider whose batch API is configured for this record.
+            if (!cfg) continue;
             if (!provider || provider.status !== 'active') continue;
             const cards = await cardsFor(offer.provider, offer.model);
             if (!cards || !cards.batch) continue;
@@ -232,7 +232,10 @@ function createBatcher({ db, runs, registry, credits = null, config = {}, clock 
             const charge = capacity.chargeOf(cards.row);
             if (!charge || !capacity.within(cards.batch.nano_usd_per_m, charge)) continue;
             let body;
-            try { body = prepared.bodyFor(offer.model); } catch { continue; }
+            try {
+                body = prepared.bodyFor(offer.model);
+                if (prepared.effort) require('../effort/providers').apply(body, { model: offer.model, effort: prepared.effort }, provider);
+            } catch { continue; }
             if (!body || !Array.isArray(body.messages) || !body.messages.length) continue;
             body.model = offer.model;
             // BA2's probe: a real hold, released at once. A payer who cannot cover the run is refused now,
@@ -286,8 +289,9 @@ function createBatcher({ db, runs, registry, credits = null, config = {}, clock 
      */
     async function enqueue({ principal, provider, model, prompt, kind = 'service', customer = null, deadlineHours = null, discount = null, prefer = null, costCheck = null, requestId = null, maxTokens = 4096, holdCard = null, route = null, charge = null, servicePaid = false, maxCostNano = null }) {
         if (settings.enabled === false) throw new AiError(503, 'batch.disabled', 'native batches are not open on this service');
-        const cfg = providerConfig(provider);
-        if (!cfg || !cfg.enabled) throw new AiError(422, 'batch.no_native_api', 'this provider has no verified batch API');
+        const providerRow = await registry.getProvider(provider);
+        const cfg = batchProviderFor(provider, providerRow, env);
+        if (!cfg) throw new AiError(422, 'batch.no_native_api', 'this provider has no configured batch API');
         const cards = await cardsFor(provider, model);
         if (!cards) throw new AiError(422, 'batch.no_price_card', 'this provider has no price card for that model');
         const body = { workflow: 'ai.complete', options: { latency: 'batch' }, input: { messages: [{ role: 'user', content: prompt }] } };
@@ -355,7 +359,7 @@ function createBatcher({ db, runs, registry, credits = null, config = {}, clock 
             AND deadline_at > ?::timestamptz ORDER BY created_at LIMIT ?`).all(providerKey, modelKey, iso(), Number(settings.maxItemsPerGroup));
         if (!items || !items.length) return null;
         const adapter = await adapterFor(providerKey);
-        const cfg = providerConfig(providerKey);
+        const cfg = batchProviderFor(providerKey, await registry.getProvider(providerKey), env);
         const jobId = `pb_${crypto.randomBytes(10).toString('hex')}`;
         const payload = items.map((i) => ({ customId: i.id, body: JSON.parse(i.request_body || '{}') }));
         await db.prepare(`INSERT INTO provider_batches (id, provider, model, adapter, status, item_count, discount, created_at, updated_at)

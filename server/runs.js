@@ -24,10 +24,14 @@ const { preferenceLines } = require('./user-modules');
 const { preferredTarget } = require('./providers/task');
 const latency = require('./latency');
 const tier = require('./policy/tier');
+const { capabilityOfRun } = require('./owner-config');
 const schemas = require('./schemas');
 const events = require('./events');
 const usageRecord = require('./usage-record');
 const usageSamples = require('./usage-samples');
+const effortDefaults = require('./effort/defaults');
+const { receiptEffort } = require('./effort/receipt');
+const advisor = require('./advisor');
 const { buildReceipt } = require('./exchange/receipts');
 const privacy = require('./exchange/privacy');
 
@@ -95,15 +99,18 @@ function projectProviderOf(spec) {
 
 /**
  * A generate run's `route: { provider, model }`: one offer from GET /api/v1/routes. Only a first-party
- * service may ask for one, and only on the generate operation; the offer itself is checked against the
- * routing's own list later, once the run's route is resolved.
+ * service may ask for one, on the generate operation and on the chat passthrough the advisor's own call
+ * uses; the offer itself is checked against the routing's own list later, once the run's route is resolved.
  */
 const ROUTE_PIN_KEYS = new Set(['provider', 'model']);
-function routePinRequest(value, principal, wf) {
+function routePinRequest(value, principal, wf, internal = false) {
     if (value == null) return null;
-    if (principal.kind === 'app') throw new AiError(403, 'capability.denied', 'a developer app may not pin a route; use the routing pool');
-    if (!principal.subject || principal.subject.type !== 'service') throw new AiError(403, 'capability.denied', 'only a first-party service may pin a route');
-    if (!wf || wf.key !== 'ai.generate') throw new AiError(422, 'input.invalid', 'route pinning is available on the generate operation (ai.generate) only');
+    // A first-party service pins a route on the generate operation. The advisor's own ai.chat child run is
+    // created with the app's (or service's) principal and passes `internal`; no caller's request reaches the
+    // chat pin, so a caller still cannot pin anything but generate.
+    if (principal.kind === 'app' && !(internal && wf && wf.key === 'ai.chat')) throw new AiError(403, 'capability.denied', 'a developer app may not pin a route; use the routing pool');
+    if (principal.kind !== 'app' && (!principal.subject || principal.subject.type !== 'service')) throw new AiError(403, 'capability.denied', 'only a first-party service may pin a route');
+    if (!wf || !(wf.key === 'ai.generate' || (internal && wf.key === 'ai.chat'))) throw new AiError(422, 'input.invalid', 'route pinning is available on the generate operation (ai.generate) only');
     if (typeof value !== 'object' || Array.isArray(value)) throw new AiError(422, 'input.invalid', 'route must be { provider, model }');
     for (const k of Object.keys(value)) if (!ROUTE_PIN_KEYS.has(k)) throw new AiError(422, 'input.invalid', `route has no field ${k}; send { provider, model }`);
     const provider = typeof value.provider === 'string' ? value.provider.trim() : '';
@@ -119,7 +126,10 @@ function routePinRequest(value, principal, wf) {
     return { provider, model };
 }
 
-function createRuns({ choices = null, db, registry, engine, cache, quotas, config, clock = { now: () => Date.now() }, log = console, userModules = null, credentials = null, preferences: personPreferences = null, tiers = null, projectSecrets = null, pool = null, runBudgets = null, credits = null, community = null, presets = null, receipts = null, abuse = null, webhooks = null, batchWaiting = null, batch = null }) {
+function createRuns({ choices = null, db, registry, engine, cache, quotas, config, clock = { now: () => Date.now() }, log = console, userModules = null, credentials = null, preferences: personPreferences = null, tiers = null, projectSecrets = null, pool = null, runBudgets = null, credits = null, community = null, presets = null, receipts = null, abuse = null, webhooks = null, batchWaiting = null, batch = null, ownerConfig = null }) {
+    // The owner's economy switches (server/owner-config.js). An unconfigured kind keeps its old
+    // behaviour (ECONOMY_DEFAULTS), so this only ever turns a way of paying less off.
+    const economyConfig = ownerConfig || (() => { try { return require('./owner-config').createOwnerConfig({ db, registry, clock }); } catch { return null; } })();
     const inflight = new Map();     // run id -> { controller, promise, release, caller }
     // BA2: the runs that wait for a provider's own batch API: they are created at once and finish later.
     const deferred = new Map();     // run id -> { controller, scope, ctx, input, hold, resolveDone }
@@ -127,10 +137,12 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
     let active = 0;
     let shuttingDown = false;
 
+    const agentDefaults = effortDefaults.createDefaults({ db, registry, clock });
     function decode(r) {
         if (!r) return null;
         return {
             id: r.id, status: r.status,
+            ...receiptEffort(r, parseJson(r.explain, null)),
             workflow: { key: r.workflow_key, version: r.workflow_version },
             template: r.template_key ? { key: r.template_key, version: r.template_version } : null,
             route: r.route_key ? { key: r.route_key, version: r.route_version } : null,
@@ -168,6 +180,18 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
     const getRow = async (id) => await db.prepare('SELECT * FROM runs WHERE id = ?').get(id);
     const get = async (id) => decode(await getRow(id));
 
+    /** Every advisor use on a run, oldest first, in ai.advice@1 shape (the receipt and explain carry them). */
+    async function advisorUsesOf(runId) {
+        const rows = await db.prepare(`SELECT run_id, seq AS use, advice_run_id, model, effort, tokens_in, tokens_out, cost_usd, words, created_at
+            FROM run_advisor_uses WHERE run_id = ? ORDER BY seq`).all(String(runId || ''));
+        return rows.map((r) => ({ ...r, tokens_in: Number(r.tokens_in) || 0, tokens_out: Number(r.tokens_out) || 0, cost_usd: Number(r.cost_usd) || 0, use: Number(r.use) || 1, words: r.words == null ? undefined : Number(r.words) }));
+    }
+    const advisorPolicyOf = (options) => parseJson(options, {}).advisor_policy || { max_uses: 3, max_words: 100 };
+    const advisorSummaryOf = async (row) => {
+        const uses = await advisorUsesOf(row.id);
+        return uses.length ? advisor.summary(uses, advisorPolicyOf(row.options)) : null;
+    };
+
     async function citations(runId) {
         return (await db.prepare('SELECT * FROM citations WHERE run_id = ? ORDER BY ordinal, id').all(runId))
             .map(c => ({ ...c, trust: parseJson(c.trust, {}), provenance: parseJson(c.provenance, {}) }));
@@ -184,9 +208,9 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
     }
 
     const insReq = db.prepare(`INSERT INTO requests (run_id, seq, operation, provider_key, model_key, route_key, route_version, status, skip_reason, fallback, prompt_hash, input_hash, output_hash,
-        tokens_in, tokens_out, tokens_cached, tokens_estimated, cost_usd, latency_ms, error, debug_prompt, debug_response, created_at)
+        tokens_in, tokens_out, tokens_cached, tokens_cache_write, tokens_estimated, cost_usd, latency_ms, error, error_class, debug_prompt, debug_response, created_at)
         VALUES (@run_id, @seq, @operation, @provider_key, @model_key, @route_key, @route_version, @status, @skip_reason, @fallback, @prompt_hash, @input_hash, @output_hash,
-        @tokens_in, @tokens_out, @tokens_cached, @tokens_estimated, @cost_usd, @latency_ms, @error, @debug_prompt, @debug_response, @created_at)`);
+        @tokens_in, @tokens_out, @tokens_cached, @tokens_cache_write, @tokens_estimated, @cost_usd, @latency_ms, @error, @error_class, @debug_prompt, @debug_response, @created_at)`);
 
     // ── Create ─────────────────────────────────────────────
     function validateRefs(body) {
@@ -210,7 +234,7 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
      * principal: { sub, subject: {type, id} }
      * Returns { run, created, promise? }.
      */
-    async function create(body, principal, { trace = null, requestId = null, retryOf = null, onDelta = null, onRoute = null, abuse: requestAbuse = null, discount = null, exact = null, costCheck = null, communityOfferId = null, callerWaitMs = 0 } = {}) {
+    async function create(body, principal, { trace = null, requestId = null, retryOf = null, onDelta = null, onRoute = null, abuse: requestAbuse = null, discount = null, exact = null, costCheck = null, communityOfferId = null, callerWaitMs = 0, advisorInternal = false } = {}) {
         if (!body || typeof body !== 'object') throw new AiError(400, 'input.invalid', 'JSON body required');
         const namedTask = choices && body.task ? await choices.task(String(body.task)) : null;
         if (body.task && !namedTask) throw new AiError(404, 'task.not_found', 'unknown task');
@@ -218,7 +242,7 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
         const wf = body.version ? await registry.getWorkflow(wfKey, Number(body.version)) : await registry.activeWorkflow(wfKey);
         if (!wf) throw new AiError(404, 'workflow.not_found', `no active workflow ${wfKey}${body.version ? ` v${body.version}` : ''}`);
         if (body.version && !['active', 'deprecated'].includes(wf.status)) throw new AiError(409, 'workflow.inactive', `${wfKey} v${wf.version} is ${wf.status}`);
-        const pinned = routePinRequest(body.route, principal, wf);
+        const pinned = routePinRequest(body.route, principal, wf, advisorInternal);
         if (pinned && body.credential != null) throw new AiError(422, 'input.invalid', 'a pinned route cannot be combined with a person\'s credential; the pin is the provider');
         // A run token names the person it acts for (Codes C3, `on_behalf_of` in the claims). The run records that
         // person exactly as a body field would, so they pay, the run is theirs and caches never cross persons. The
@@ -237,11 +261,16 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
         if (askedPolicy.error) throw new AiError(422, askedPolicy.error, askedPolicy.detail);
         const contentPolicy = askedPolicy.policy;
         const input = body.input === undefined ? {} : body.input;
+        const taskDefaults = choices ? (await choices.defaults())[body.task || wf.key] : null;
+        const effortPolicy = await effortDefaults.resolve(body, { ...wf, metadata: { ...wf.metadata, ...(taskDefaults?.effort ? { effort: taskDefaults.effort } : {}) } }, agentDefaults);
+        // AL3: the advisor is off unless this run asked for it. Parsed before the input hash, so a different
+        // advisor policy is a different run and never replays another policy's answer.
+        const advisorPolicy = advisor.policy(body, wf);
         const inputJson = stableStringify(input);
         if (Buffer.byteLength(inputJson) > config.runs.maxInputBytes) throw new AiError(413, 'input.too_large', `input is larger than ${config.runs.maxInputBytes} bytes`);
         const v = schemas.validate(wf.input_schema, input);
         if (!v.valid) throw new AiError(422, 'input.invalid', `input does not match ${wf.key} v${wf.version}`, { errors: v.errors });
-        const inputHash = sha256(body.choice || body.task ? { input: inputJson, choice: body.choice || null, task: body.task || null } : inputJson);
+        const inputHash = sha256({ input, effortPolicy, advisorPolicy, choice: body.choice || null, task: body.task || null });
         const requester = principal.subject;
         // A developer app (ADR-014): the requester IS its project, the run is metered with the project's
         // id on every Billing reading, and a sandbox run may use free/local capacity only (server/providers).
@@ -267,8 +296,8 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
         if (pinned) {
             if (!route || route.disabled) throw new AiError(503, 'route.unavailable', `route ${routeKey || '(none)'} is not available, so its offers cannot be listed`);
             if (!pool) throw new AiError(503, 'route.unavailable', 'routing is not available on this service');
-            const step = wf.steps.find((x) => x.kind === 'llm');
-            const operation = (step && step.operation) || 'generate';
+            const step = wf.steps.find((x) => x.kind === 'llm') || wf.steps[0];
+            const operation = (step && (step.operation || (step.kind === 'passthrough' ? 'chat' : step.kind === 'complete' ? 'complete' : step.kind === 'messages' ? 'messages' : null))) || 'generate';
             const offers = await pool.offers(route, operation, { requesterType: requester.type, requesterId: requester.id });
             const offered = offers.some((o) => o.provider === pinned.provider && (pinned.model == null || o.model === pinned.model));
             if (!offered) {
@@ -287,6 +316,14 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
         let latencyClass = resolvedLatency.class;         // BA3 may move a batch-class run to the background class
         // A faster class than the workflow allows was asked for: it runs in its own class, and the run's options say so.
         if (resolvedLatency.clamped) options.latency_clamped = resolvedLatency.clamped;
+        // The owner's economy row for this run's kind (chat, uncensored, embed, image, transcribe or
+        // batch). One read, used by the answer cache and by the batch decision below.
+        const runCapability = capabilityOfRun(wf, { contentPolicy, latencyClass });
+        const runEconomy = economyConfig ? await economyConfig.economyFor(runCapability).catch(() => null) : null;
+        const answerCacheOn = runCapability !== 'uncensored' && (!runEconomy || runEconomy.answer_cache !== false);
+        // The adult tier is never put on a provider batch in this release: its floor and 18+ answer
+        // checks run on the live path, and a batch answer would bypass them.
+        const batchesOn = runCapability !== 'uncensored' && (!runEconomy || runEconomy.batches !== false);
         // Community capacity is opt-in per request: a person's machine sees the prompt, so only a caller that says so
         // may be placed there. The OpenAI and Messages routes set body.community from x-openvibe-community.
         let communityOptIn = body.community === true || options.community === true;
@@ -440,7 +477,7 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
             target: body.target ? JSON.stringify(body.target) : null, target_key: ctx.targetKey,
             input: null, input_hash: inputHash, idempotency_key: idem, trace_id: trace, request_id: requestId, retry_of: retryOf,
             latency_class: latencyClass,
-            options: JSON.stringify({ ...(taskChoice ? { task_choice: taskChoice } : {}), cache: options.cache !== false && credentialSubject === null && !projectProvider && !pinned && !selfKeys && !communityOptIn, debug: Boolean(options.debug), input_retained: kept.full,
+            options: JSON.stringify({ effort_policy: effortPolicy, ...(advisorPolicy.enabled ? { advisor_policy: advisorPolicy } : {}), ...(taskChoice ? { task_choice: taskChoice } : {}), cache: options.cache !== false && credentialSubject === null && !projectProvider && !pinned && !selfKeys && !communityOptIn && !advisorPolicy.enabled, debug: Boolean(options.debug), input_retained: kept.full,
                 ...(options.latency_clamped ? { latency_clamped: options.latency_clamped } : {}),
                 ...(credentialSubject !== null ? { credential_subject: credentialSubject } : {}), ...(credentialProvider !== null ? { credential_provider: credentialProvider } : {}),
                 ...((selfKeys || taskChoice && runPerson) ? { self_subject: runPerson } : {}),
@@ -457,11 +494,11 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
         // and another model's answer under the same prompt would silently break the pin. A run that may use the
         // person's own key is never cached either: their key must be used, and the answer is theirs, not the scope's.
         // A community or adult-tier answer cannot be reused by a request without the same policy.
-        const scope = taskChoice || options.cache === false || credentialSubject !== null || projectProvider || pinned || selfKeys || communityOptIn || contentPolicy !== 'standard' ? null : cache.scopeFor(wf.cache_mode, ctx);
+        const scope = taskChoice || options.cache === false || credentialSubject !== null || projectProvider || pinned || selfKeys || communityOptIn || contentPolicy !== 'standard' || advisorPolicy.enabled || !answerCacheOn ? null : cache.scopeFor(wf.cache_mode, ctx);
         let cacheKey = null;
         if (scope) {
             // Some workflows key the cache on less than their whole input (hooks.js CACHE_INPUT: a signed URL's signature).
-            const keyInput = CACHE_INPUT[wf.key] ? sha256(stableStringify(CACHE_INPUT[wf.key](input))) : inputHash;
+            const keyInput = CACHE_INPUT[wf.key] ? sha256({ input: CACHE_INPUT[wf.key](input), effortPolicy }) : inputHash;
             cacheKey = cache.keyFor({ scope, workflowKey: wf.key, workflowVersion: wf.version, templateVersion: base.template_version, routeKey: base.route_key, routeVersion: base.route_version, inputHash: keyInput });
             const hit = await cache.get(cacheKey, scope);
             if (hit) {
@@ -502,22 +539,25 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
         // route has one whose real batch price fits the half-price card (the same money rule as capacity
         // route (d)). The run is created at once; the provider's answer finishes it on the ordinary path.
         // When no provider on the route can batch, the run runs in the background class at once and says so.
+        // The owner's batches switch for this run's kind is the gate (server/owner-config.js): off means
+        // the deferrable run still answers, at once, in the background class — it is never delayed.
         let autoBatch = null;
         let batchDeadline = null;
-        if (latencyClass === 'batch' && !(principal && principal.deferBatch)) {
+        if (latencyClass === 'batch' && !(principal && principal.deferBatch) && batchesOn) {
             batchDeadline = batchDeadlineHours(options.deadline_hours);
             // A run paid by somebody else's key or by a free allowance is not put on the network's batch
             // provider; a free-only app run cannot be placed on paid capacity either.
             const appFreeOnly = Boolean(ctx.appRun && (ctx.sandbox || !(tiers && tiers.enabled)));
             let prepared = null;
             if (batch && typeof batch.planRun === 'function' && engine.prepareBatch
-                && credentialSubject === null && !projectProvider && !selfKeys && !freeUse && !communityOptIn && !appFreeOnly) {
+                && credentialSubject === null && !projectProvider && !selfKeys && !freeUse && !communityOptIn && !appFreeOnly && !effortPolicy.role_default) {
                 try {
                     prepared = await engine.prepareBatch(wf, { template_key: tpl ? tpl.key : null, template_version: tpl ? tpl.version : null }, input, { ...ctx, runId: id });
                 } catch (err) {
                     log.warn(`[runs] ${id}: the batch request could not be prepared: ${(err && err.message) || err}`);
                 }
             }
+            if (prepared) prepared.effort = effortPolicy.effort_resolved;
             if (prepared && pool && typeof pool.offers === 'function') {
                 let offers = await pool.offers(prepared.route, prepared.operation, ctx).catch(() => []);
                 // A pinned run waits on the provider it pinned, never on another eligible one.
@@ -541,6 +581,15 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
                 ...(options.latency_clamped ? { latency_clamped: options.latency_clamped } : {}),
                 ...(autoBatch ? { deadline_hours: batchDeadline, batch: { provider: autoBatch.provider, model: autoBatch.model } } : {}),
             });
+        } else if (latencyClass === 'batch' && !(principal && principal.deferBatch) && !batchesOn) {
+            // The owner turned batches off for this kind: the run is not delayed and not queued. It
+            // answers in the background class now, and its options say which switch clamped it.
+            latencyClass = 'background';
+            ctx.latencyClass = 'background';
+            delete ctx.discount;
+            options.latency_clamped = { asked: 'batch', used: 'background', economy: `batches off for ${runCapability}` };
+            base.latency_class = latencyClass;
+            base.options = JSON.stringify({ ...parseJson(base.options, {}), latency_clamped: options.latency_clamped });
         }
 
         // Queue caps, then quota: both before any provider call (a refused run is not counted).
@@ -558,6 +607,16 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
             // BA2/BA3: a batch run reserves its quota when the answer is here, not while it waits.
             reserved = credentialSubject !== null || selfKeys || (principal && principal.deferBatch) || autoBatch ? null : await quotas.reserve(ctx);
         } catch (err) { if (hold) await tiers.release(hold); throw err; }
+        // Files on the turn (ai.file@1): the per-turn caps first, then the per-person quota's file limits
+        // (server/quota.js chargeFiles). Both are checked before the run is stored or a provider is called;
+        // the references only are counted here, never the bytes.
+        const filesOnTurn = Array.isArray(input && input.files) ? input.files : [];
+        if (filesOnTurn.length) {
+            try {
+                require('./file-inputs').checkLimits(filesOnTurn);
+                await quotas.chargeFiles(ctx, filesOnTurn);
+            } catch (err) { if (hold) await tiers.release(hold); throw err; }
+        }
 
         try {
             await db.tx(async () => {
@@ -706,7 +765,7 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
             const money = usageRecord.moneyOf({ prices, tokens, paidBy: payer.paid_by, feeRate: (config.usage && config.usage.feeRate) || 0 });
             const rec = usageRecord.recordOf({
                 system: 'ai', run_id: row.id, subject: subjectOf(row), attribution: attributionOf(row), surface: row.workflow_key || '',
-                provider: payer.provider || provider || null, model: model || null, effort: opts.effort || null,
+                provider: payer.provider || provider || null, model: model || null, effort: parseJson(row.explain, {})?.effort_applied || opts.effort || null,
                 paid_by: payer.paid_by, paid_by_detail: payer.detail,
                 input: tokens.input, output: tokens.output, reasoning: tokens.reasoning, cache_read: tokens.cache_read,
                 cache_write: tokens.cache_write, cache_write_ttl: usage.cache_write_ttl || null,
@@ -774,15 +833,23 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
             const paidBy = (payer && payer.paid_by) || 'openvibe_key';
             const feeRate = paidBy === 'openvibe_key' ? Number((config.usage && config.usage.feeRate) || 0) : 0;
             const opts = parseJson(row.options, {});
+            if ((row.service_tier === 'batch' || row.status === 'failed') && opts.effort_policy && answerProvider && !Object.hasOwn(explain || {}, 'effort_applied')) {
+                const record = await registry.getProvider(answerProvider);
+                if (record) explain = { ...(explain || {}), effort_applied: require('./effort/providers').control({ ...record, model: answerModel }, opts.effort_policy.effort_resolved).applied };
+            }
+            // AL3: every advisor use this run made is on the receipt with its cost, whether it happened
+            // while the run was open or after it finished.
+            const advisorBlock = await advisorSummaryOf(row);
+            if (advisorBlock) explain = { ...(explain || {}), advisor: advisorBlock };
             const receipt = buildReceipt({
                 run: {
                     id: row.id, workflow_key: row.workflow_key, route_key: row.route_key, route_version: row.route_version,
-                    provider_key: answerProvider, model_key: answerModel, cost_usd: row.cost_usd,
+                    provider_key: answerProvider, model_key: answerModel, cost_usd: row.cost_usd, options: row.options, status: row.status,
                 },
                 explain, usage, price: prices, privacy: privacy.view(label),
                 payer: { paid_by: paidBy, detail: (payer && payer.detail) || null, fee_rate: feeRate, fee_usd: money ? money.fee_usd : 0 },
                 preset: opts.preset || null,
-                latencyMs, ttftMs,
+                latencyMs: latencyMs ?? require('./exchange/timing').durationMs(row.started_at, row.finished_at), ttftMs,
                 provider: answerProvider, model: answerModel,
                 createdAt: row.finished_at || new Date(clock.now()).toISOString(),
             });
@@ -872,7 +939,8 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
     async function execute(id, { controller, reserved, scope, ctx, input, hold = null }) {
         const row = await getRow(id);
         if (!row || row.status !== 'queued') { inflight.delete(id); return; }
-        await db.prepare("UPDATE runs SET status = 'running', started_at = ? WHERE id = ? AND status = 'queued'").run(iso(clock.now()), id);
+        const startedAt = clock.now();
+        await db.prepare("UPDATE runs SET status = 'running', started_at = ? WHERE id = ? AND status = 'queued'").run(iso(startedAt), id);
         const wf = await registry.getWorkflow(row.workflow_key, row.workflow_version);
         const opts = parseJson(row.options, {});
         let seq = 0;
@@ -884,14 +952,15 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
             await insReq.run({
                 run_id: id, seq: seq++, operation: e.operation, provider_key: e.provider_key, model_key: e.model_key || null, route_key: e.route_key || null, route_version: e.route_version || null,
                 status: e.status, skip_reason: e.skip_reason || null, fallback: e.fallback || 0, prompt_hash: e.prompt_hash || null, input_hash: row.input_hash, output_hash: e.output_hash || null,
-                tokens_in: e.tokens_in || 0, tokens_out: e.tokens_out || 0, tokens_cached: e.tokens_cached || 0, tokens_estimated: e.tokens_estimated || 0, cost_usd: e.cost_usd || 0,
-                latency_ms: e.latency_ms == null ? null : e.latency_ms, error: e.error || null,
+                tokens_in: e.tokens_in || 0, tokens_out: e.tokens_out || 0, tokens_cached: e.tokens_cached || 0, tokens_cache_write: e.tokens_cache_write || 0, tokens_estimated: e.tokens_estimated || 0, cost_usd: e.cost_usd || 0,
+                latency_ms: e.latency_ms == null ? null : e.latency_ms, error: e.error || null, error_class: e.error_class || null,
                 debug_prompt: config.debugRawLog && opts.debug ? e.debug_prompt || null : null, debug_response: config.debugRawLog && opts.debug ? e.debug_response || null : null,
                 created_at: iso(clock.now()),
             });
         };
         let credit = null;
         let billingDelta = null;
+        let firstDeltaAt = null;
         let onRoute = null;
         try {
             // AI Exchange F: hold prepaid Balance before the first managed provider call (AI_CREDITS, off by
@@ -906,7 +975,13 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
                 ctx.creditsRequired = !credit && !ctx.byok && !ctx.serviceBudgeted;
             }
             billingDelta = typeof ctx.onDelta === 'function'
-                ? (credit ? (d) => { credit.observe(d); ctx.onDelta(d); } : ctx.onDelta)
+                ? (d) => {
+                    const delta = d && d.delta;
+                    if (firstDeltaAt === null && (delta?.content || delta?.reasoning_content || delta?.thinking
+                        || delta?.tool_calls?.some((c) => c.function?.arguments))) firstDeltaAt = clock.now();
+                    if (credit) credit.observe(d);
+                    ctx.onDelta(d);
+                }
                 : null;
             // Balance holds first (a 402 must land before the provider), then the router's own disclosure hook.
             onRoute = (credit || typeof ctx.onRoute === 'function')
@@ -952,7 +1027,7 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
             if (batchAnswer && batchAnswer.ok && !batchAnswer.resume) {
                 r = { output: batchAnswer.output || { text: '' }, usage: batchAnswer.usage || { input: 0, output: 0, cached: 0, cache_write: 0 }, cost: Number(batchAnswer.cost) || 0, provider: batchAnswer.provider || null, model: batchAnswer.model || null, citations: [], explain: batchAnswer.explain || null, grounding: null, synthetic: false, fallbackUsed: false };
             }
-            if (!r) r = await engine.execute(wf, row, input, { signal: controller.signal, logRequest, debugRaw: Boolean(config.debugRawLog && opts.debug), inputHash: row.input_hash, preferences,
+            if (!r) r = await engine.execute(wf, row, input, { effortPolicy: opts.effort_policy, signal: controller.signal, logRequest, debugRaw: Boolean(config.debugRawLog && opts.debug), inputHash: row.input_hash, preferences,
                 // A developer app's run (ADR-014): the provider pool excludes a person's byok key, and the run is
                 // limited to free and local capacity when it is a sandbox run or when no tier budget governs its
                 // project (AI_GOVERN_TIERS off): metered capacity is only ever spent under a project budget.
@@ -1024,12 +1099,15 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
                 catch (err) { log.warn(`[runs] ${id}: the abuse counters were not written: ${err && err.message}`); }
             }
             // The record of the run (L40): the tokens with the cache apart, the money and who paid.
-            const published = await publishUsage({ row: await getRow(id), outcome: 'succeeded', usage: r.usage, provider: r.provider, model: r.model, attempts, latencyMs: r.latencyMs, ttftMs: r.ttftMs });
+            const finishedRun = await getRow(id);
+            const timing = { latencyMs: require('./exchange/timing').durationMs(finishedRun.started_at, finishedRun.finished_at),
+                ttftMs: firstDeltaAt === null ? null : Math.max(0, firstDeltaAt - startedAt) };
+            const published = await publishUsage({ row: finishedRun, outcome: 'succeeded', usage: r.usage, provider: r.provider, model: r.model, attempts, ...timing });
             // The receipt of the answer (server/exchange/receipts.js): the offer, the price, the tokens, the cache,
             // the latency, why the router chose it, the fallbacks it would have used, the payer and the privacy label.
             await writeReceipt({
-                row: await getRow(id), explain: r.explain, usage: r.usage, provider: r.provider, model: r.model,
-                latencyMs: r.latencyMs, ttftMs: r.ttftMs, money: published && published.money, payer: published && published.payer,
+                row: finishedRun, explain: r.explain, usage: r.usage, provider: r.provider, model: r.model,
+                ...timing, money: published && published.money, payer: published && published.payer,
             });
             // What the run spent goes on the budget of its run token (Codes C3): the same tokens and cost the
             // quota accounting counts, so the next request of a run over its budget is refused.
@@ -1064,7 +1142,9 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
                     .run(cancelled ? 'cancelled' : 'failed', code, extra ? `${detail} ${extra}` : detail, attempts, explain, iso(clock.now()), id);
                 if (f.changes) await events.runChanged(await getRow(id));
             });
-            const spent = await db.prepare("SELECT COALESCE(SUM(tokens_in),0)::bigint ti, COALESCE(SUM(tokens_out),0)::bigint tout, COALESCE(SUM(tokens_cached),0)::bigint tc, COALESCE(SUM(cost_usd),0) c FROM requests WHERE run_id = ? AND status = 'ok'").get(id);
+            const spent = await db.prepare("SELECT COALESCE(SUM(tokens_in),0)::bigint ti, COALESCE(SUM(tokens_out),0)::bigint tout, COALESCE(SUM(tokens_cached),0)::bigint tc, COALESCE(SUM(tokens_cache_write),0)::bigint tw, COALESCE(SUM(cost_usd),0) c FROM requests WHERE run_id = ? AND status = 'ok'").get(id);
+            const lastAttempt = logged.filter(e => e.status !== 'skipped').at(-1);
+            await writeReceipt({ row: { ...await getRow(id), cost_usd: Number(spent.c) || 0, provider_key: lastAttempt?.provider_key || null, model_key: lastAttempt?.model_key || null }, explain: parseJson(explain, null), usage: { input: Number(spent.ti), output: Number(spent.tout), cached: Number(spent.tc) } });
             // Balance: nothing reached a provider (or it failed before the first token) releases the hold; an abort
             // or a failure after tokens streamed settles the partial usage it did produce.
             if (credit && credit.holdId) {
@@ -1152,6 +1232,135 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
         }, principal, { trace, requestId, retryOf: id });
     }
 
+    /**
+     * AL3: one advisor call for a run that asked for it. The executor sends its transcript and a question;
+     * the advice is a run of workflow ai.chat on a stronger pinned offer, so it carries the ordinary receipt,
+     * quota and usage. At most policy.max_uses calls per run; each use lands in run_advisor_uses, the run's
+     * explain and the run's receipt with the advice run, the model, the tokens and the cost. The advice text
+     * is answered to the caller and never kept: the transcript is the executor's own context, not ours to store.
+     */
+    async function advise(id, body = {}, principal, { trace = null, principalHas } = {}) {
+        const row = await getRow(id);
+        if (!row) throw new AiError(404, 'run.not_found', 'no such run');
+        assertOwner(row, principal, 'ai.workflow.manage', principalHas);
+        const opts = parseJson(row.options, {});
+        const policy = opts.advisor_policy;
+        if (!policy || !policy.enabled) throw new AiError(403, 'advisor.not_enabled', 'this run did not ask for an advisor; send advisor: true when it is created');
+        const transcript = advisor.transcript(body.transcript);
+        const question = body.question == null ? '' : String(body.question).trim();
+        if (question.length > 4000) throw new AiError(422, 'input.invalid', 'question is at most 4000 characters');
+        const maxWords = body.max_words == null ? policy.max_words : body.max_words;
+        if (!Number.isInteger(maxWords) || maxWords < advisor.MIN_WORDS || maxWords > policy.max_words) throw new AiError(422, 'input.invalid', `max_words must be an integer from ${advisor.MIN_WORDS} to ${policy.max_words} for this run`);
+        const effort = body.effort == null ? policy.effort : body.effort;
+        if (!advisor.EFFORTS.includes(effort)) throw new AiError(422, 'input.invalid', 'effort must be low|medium|high|max');
+        const used = await advisorUsesOf(id);
+        if (used.length >= policy.max_uses) throw new AiError(409, 'advisor.exhausted', `this run has used its ${policy.max_uses} advisor calls`);
+        if (!pool) throw new AiError(503, 'route.unavailable', 'routing is not available on this service');
+        const routeKey = row.route_key || 'default.chat';
+        const route = await registry.resolveRoute(routeKey);
+        if (!route || route.disabled) throw new AiError(503, 'route.unavailable', `route ${routeKey} is not available, so the advisor cannot be selected`);
+        const person = subjectOf(row);
+        // A developer app's run may only use what its own run could use: a sandbox app (or any app run no tier
+        // budget governs) is limited to free and local capacity, so the advisor is chosen from those offers too.
+        const appRun = principal.kind === 'app';
+        const freeOnly = appRun && (principal.env === 'sandbox' || !(tiers && tiers.enabled));
+        const ctx = { requesterType: row.requester_type, requesterId: row.requester_id, ...(person ? { onBehalfOf: person } : {}), ...(opts.policy ? { contentPolicy: opts.policy } : {}), ...(appRun ? { appRun: true, freeOnly } : {}) };
+        const offers = await pool.offers(route, 'chat', ctx);
+        // The model may be named on the advice call or once on the run's advisor policy; the call wins.
+        const asked = body.model == null ? (policy.model || null) : String(body.model).trim();
+        if (asked != null && !/^[A-Za-z0-9][A-Za-z0-9._:-]*\/[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}$/.test(asked)) throw new AiError(422, 'input.invalid', 'model must be provider/model from GET /api/v1/routes');
+        let chosen = null;
+        let why = null;
+        if (asked) {
+            chosen = offers.find((o) => `${o.provider}/${o.model}` === asked) || null;
+            if (!chosen) throw new AiError(422, 'advisor.model_unavailable', `${asked} is not offered for chat on route ${routeKey}; GET /api/v1/routes?operation=chat lists the offers`);
+            why = 'the model the caller named';
+        } else {
+            // The owner's reviewer role default is the stronger model by policy. When the route cannot serve it,
+            // the dearest offer the route can serve is the fallback, never the executor's own model if another exists.
+            const defaults = await agentDefaults.get();
+            const candidates = defaults.reviewer ? (defaults.reviewer.model ? [defaults.reviewer.model] : (defaults.reviewer.choice_order || [])) : [];
+            chosen = candidates.map((m) => offers.find((o) => `${o.provider}/${o.model}` === m)).find(Boolean) || null;
+            if (chosen) why = 'the reviewer role default';
+            else {
+                const scored = [];
+                for (const o of offers) {
+                    const cards = await pool.rateCardsFor(o.provider, o.model);
+                    scored.push({ offer: o, price: cards && cards.out ? Number(cards.out.unit_price_usd) || 0 : 0 });
+                }
+                const executorKey = row.provider_key && row.model_key ? `${row.provider_key}/${row.model_key}` : null;
+                const notSame = scored.filter((s) => `${s.offer.provider}/${s.offer.model}` !== executorKey);
+                const list = notSame.length ? notSame : scored;
+                list.sort((a, b) => b.price - a.price);
+                chosen = list[0] && list[0].offer;
+                why = 'the strongest offer on the run\'s route';
+            }
+        }
+        if (!chosen) throw new AiError(503, 'advisor.model_unavailable', `no chat offer on route ${routeKey} can advise this run`);
+        const built = advisor.messagesFor(transcript, question, maxWords);
+        const created = await create({
+            workflow: 'ai.chat',
+            input: { system: built.system, messages: built.messages },
+            route: { provider: chosen.provider, model: chosen.model },
+            effort,
+            // The adult tier's floor travels with the advice: an uncensored run's transcript is only sent
+            // to an uncensored offer, and the child run passes the same 18+ admission.
+            ...(opts.policy ? { policy: opts.policy } : {}),
+            ...(row.on_behalf_of ? { on_behalf_of: parseJson(row.on_behalf_of, null) } : {}),
+            ...(row.attribution ? { attribution: parseJson(row.attribution, null) } : {}),
+            options: { cache: false },
+        }, principal, { trace, advisorInternal: true });
+        const done = await wait(created, config.runs.maxWaitMs);
+        if (!done || ['failed', 'cancelled'].includes(done.status)) throw new AiError(502, 'advisor.failed', (done && done.error && done.error.detail) || 'the advisor run did not answer');
+        const cut = advisor.words(done.output && done.output.text, maxWords);
+        if (!cut.text) throw new AiError(502, 'advisor.empty', 'the advisor answered with no advice');
+        const cost = Number(done.usage && done.usage.cost_usd) || 0;
+        const tokensIn = Number(done.usage && done.usage.tokens_in) || 0;
+        const tokensOut = Number(done.usage && done.usage.tokens_out) || 0;
+        // The offer may name only its provider (a stub or the host's own model leaves model null): the run's
+        // provenance names the artifact that actually answered.
+        const answeredModel = chosen.model || (done.provenance && done.provenance.model) || 'default';
+        const entry = {
+            run_id: id, use: used.length + 1, advice_run_id: done.id, model: `${chosen.provider}/${answeredModel}`, effort,
+            tokens_in: tokensIn, tokens_out: tokensOut, cost_usd: cost, words: cut.count, created_at: iso(clock.now()),
+        };
+        await db.tx(async () => {
+            // One advisor counter per run, so two concurrent calls cannot make a fourth use.
+            await db.prepare('SELECT pg_advisory_xact_lock(hashtext(?))').get(`advisor:${id}`);
+            const count = Number((await db.prepare('SELECT COUNT(*)::int n FROM run_advisor_uses WHERE run_id = ?').get(id)).n) || 0;
+            if (count >= policy.max_uses) throw new AiError(409, 'advisor.exhausted', `this run has used its ${policy.max_uses} advisor calls`);
+            entry.use = count + 1;
+            await db.prepare(`INSERT INTO run_advisor_uses (id, run_id, seq, advice_run_id, model, effort, tokens_in, tokens_out, cost_usd, words, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+                .run(`adv_${ids.ulid()}`, id, entry.use, entry.advice_run_id, entry.model, entry.effort, entry.tokens_in, entry.tokens_out, entry.cost_usd, entry.words, entry.created_at);
+            const latest = await getRow(id);
+            const uses = await advisorUsesOf(id);
+            const explain = { ...(parseJson(latest.explain, {}) || {}), advisor: advisor.summary(uses, advisorPolicyOf(latest.options)) };
+            await db.prepare('UPDATE runs SET explain = ? WHERE id = ?').run(JSON.stringify(explain), id);
+        });
+        // The run may have finished before this call: its receipt is already written, so add the same block to it.
+        // A run that finishes after this call picks the uses up in writeReceipt.
+        try {
+            if (receipts) {
+                const existing = await receipts.forRun(id);
+                if (existing) {
+                    const uses = await advisorUsesOf(id);
+                    await receipts.record({ ...existing, advisor: advisor.summary(uses, policy) }, {
+                        requester: { type: row.requester_type, id: row.requester_id },
+                        owner: person ? { type: 'user', id: person } : null,
+                    });
+                }
+            }
+        } catch (err) {
+            log.warn(`[runs] ${id}: the receipt did not take the advisor use: ${err && err.message}`);
+        }
+        return {
+            run_id: id, use: entry.use, max_uses: policy.max_uses, max_words: maxWords, advice: cut.text, why,
+            model: entry.model, effort, usage: { tokens_in: entry.tokens_in, tokens_out: entry.tokens_out, cost_usd: entry.cost_usd },
+            advice_run_id: entry.advice_run_id, receipt_id: `rcpt_${String(id).replace(/^run_/, '')}`,
+        };
+    }
+
     async function list(principal, { status, workflow, target, limit = 50, before, all = false } = {}) {
         const where = [];
         const args = [];
@@ -1194,11 +1403,19 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
     async function explained(run) {
         const ids = run && run.usage ? run.usage.usage_sample_ids : null;
         const readings = ids && ids.length ? await usageSamples.readingsFor(db, ids) : [];
-        return readings.length ? { ...run, explain: { ...(run.explain || {}), usage_readings: readings } } : run;
+        // AL3: a run's advisor uses are part of its explain, so GET /runs/:id answers them beside the receipt.
+        const row = run && run.id ? await getRow(run.id) : null;
+        const advisorBlock = row ? await advisorSummaryOf(row) : null;
+        const explain = {
+            ...(run.explain || {}),
+            ...(readings.length ? { usage_readings: readings } : {}),
+            ...(advisorBlock ? { advisor: advisorBlock } : {}),
+        };
+        return readings.length || advisorBlock ? { ...run, explain } : run;
     }
 
     async function requestsFor(runId) {
-        return await db.prepare('SELECT id, seq, operation, provider_key, model_key, route_key, route_version, status, skip_reason, fallback, prompt_hash, input_hash, output_hash, tokens_in, tokens_out, tokens_cached, tokens_estimated, cost_usd, latency_ms, error, created_at FROM requests WHERE run_id = ? ORDER BY seq').all(runId);
+        return await db.prepare('SELECT id, seq, operation, provider_key, model_key, route_key, route_version, status, skip_reason, fallback, prompt_hash, input_hash, output_hash, tokens_in, tokens_out, tokens_cached, tokens_cache_write, tokens_estimated, cost_usd, latency_ms, error, error_class, created_at FROM requests WHERE run_id = ? ORDER BY seq').all(runId);
     }
 
     /** Boot: runs interrupted by a restart are failed explicitly (retry is one call away). */
@@ -1231,6 +1448,7 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
         await db.tx(async () => {
             for (const id of old) {
                 await db.prepare('DELETE FROM requests WHERE run_id = ?').run(id);
+                await db.prepare('DELETE FROM run_advisor_uses WHERE run_id = ? OR advice_run_id = ?').run(id, id);
                 await db.prepare('DELETE FROM citations WHERE run_id = ?').run(id);
                 await db.prepare('DELETE FROM runs WHERE id = ?').run(id);
             }
@@ -1354,7 +1572,7 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
     /** Queue depth for /metrics and /api/ready: runs waiting for a slot, and runs holding one. */
     function stats() { return { queued: queue.length, running: active, inflight: inflight.size, max_concurrent: config.runs.maxConcurrent, max_queued: config.runs.maxQueued }; }
 
-    return { create, wait, get, getReceipt, list, listOnBehalfOf, cancel, retry, citations, addCitations, requestsFor, explained, recoverInterrupted, prune, drain, stats, inflight, TERMINAL, decode, completeBatch, deferred };
+    return { create, wait, get, getReceipt, list, listOnBehalfOf, cancel, retry, advise, citations, addCitations, requestsFor, explained, recoverInterrupted, prune, drain, stats, inflight, TERMINAL, decode, completeBatch, deferred };
 }
 
 module.exports = { createRuns, entityKey, subjectKey };

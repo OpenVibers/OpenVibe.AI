@@ -42,6 +42,7 @@ const EXAMPLES = {
     'ai.enrich': { record: { name: 'Widget' }, instructions: 'normalise the name' },
     'ai.embed': { input: ['one', 'two'] },
     'ai.image': { prompt: 'A goose eating croutons, watercolour.', size: '1024x1024', n: 1 },
+    'image.picture': { mode: 'find', query: 'SQLite', media_app: 'ai' },
     'wiki.generate_space': { topic: 'SQLite', max_pages: 6, sources: SRC(2) },
     'content.wiki': { title: 'SQLite', topic: 'SQLite', space: 'SQLite', query: 'SQLite', instruction: 'Write the article from its sources.', outline: ['History'], pages: ['SQLite'], sources: SRC(2) },
     'wiki.generate_page': { title: 'WAL mode', topic: 'SQLite', pages: ['SQLite', 'WAL mode', 'Journal'], images: [{ title: 'WAL diagram', description: 'How WAL writes' }], sources: SRC(3) },
@@ -144,6 +145,8 @@ t.test('every workflow has compiling, versioned input and output schemas and an 
 t.test('every workflow runs end to end on the stub and returns schema-valid output', async () => {
     for (const w of await h.registry.listWorkflows()) {
         if (w.key === 'media.analyze' && !HAS_FFMPEG) { console.log('workflow media.analyze end to end: skipped (no ffprobe)'); continue; }
+        // image.picture reads Commons/Openverse and writes Media: its own test brings a fake researcher and store.
+        if (w.key === 'image.picture') { console.log('workflow image.picture end to end: covered by test/image-picture.test.js (no live fetch)'); continue; }
         const r = await request(h.base, 'POST', '/api/v1/runs?wait=10000', { tok, body: { workflow: w.key, input: EXAMPLES[w.key] } });
         assert.strictEqual(r.status, 201, `${w.key}: ${r.status} ${r.text.slice(0, 300)}`);
         const run = r.body.run;

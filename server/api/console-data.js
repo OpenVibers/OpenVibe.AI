@@ -3,7 +3,7 @@
 const express = require('express');
 const q = require('../console/queries');
 const { CAPS } = require('../auth');
-const { AiError } = require('../util');
+const { AiError, providerSecret } = require('../util');
 const providerPresets = require('../console/presets');
 const providerCatalog = require('../providers/catalog');
 const poolSeed = require('../providers/pool-seed');
@@ -11,9 +11,11 @@ const gpuCatalog = require('../gpu/catalog');
 const { tokenCosts } = require('../gpu/token-cost');
 
 /** Read-only JSON read models for Exchange's owner console. Every query is bounded and the query module redacts runs. */
-function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, gpus = null, gpuMarket = null, abuse = null, priceBook = null, creditGrants = null, sessionCookies = null, vault = null, settings = null, config = {}, log = console }) {
+function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, gpus = null, gpuMarket = null, abuse = null, priceBook = null, modelSync = null, creditGrants = null, sessionCookies = null, vault = null, settings = null, config = {}, log = console }) {
     const r = express.Router();
+    const providerOrder = require('../providers/order').createProviderOrder({ registry });
     const supply = require('../platform/supply').createSupply({ db, registry, clock });
+    const ownerConfig = require('../owner-config').createOwnerConfig({ db, registry, clock });
     // The public marketplace readings and the per-token cost they imply, added to both console sections. Data only:
     // Exchange renders it with its existing console classes.
     const marketPayload = async () => {
@@ -25,6 +27,9 @@ function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth,
     const read = auth.requireCap(CAPS.usageRead);
     const write = auth.requireCap(CAPS.providerManage);
     const workflowWrite = auth.requireCap(CAPS.workflowManage);
+    const modelView = (m, provider) => ({ ...m, provider: m.provider_key, model: m.model_key, accepted_price: m.cost,
+        content_tier: require('../providers/pool-providers').isUncensored(provider, m) ? 'uncensored' : 'standard',
+        owner_override: m.metadata?.owner_override || null });
     const actor = (req) => {
         const subject = String(req.get('x-ov-subject') || '');
         return /^usr_[0-9A-HJKMNP-TV-Z]{26}$/.test(subject) ? subject : req.principal.sub;
@@ -41,8 +46,14 @@ function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth,
             return { status: await ops.status(), counts24: await q.statusCounts(db, since), failures24: await q.failures(db, since), queue: runs.stats(), cache: await cache.stats() };
         }
         if (section === 'providers') {
+            const hints = vault && vault.hints ? await vault.hints() : new Map();
             const rows = (await Promise.all((await registry.listProviders()).map(ops.providerView))).map((p) => ({
                 ...p, key_present: p.credentials === 'configured', preference_order: p.priority,
+                key_state: p.auth_mode === 'none' ? { source: 'not_required', hint: null, set_at: null }
+                    : { source: hints.has(p.key) ? 'stored' : p.credentials === 'configured' ? 'environment' : 'missing',
+                        hint: hints.get(p.key)?.hint || (providerSecret(p, env) ? `…${providerSecret(p, env).slice(-4)}` : null),
+                        set_at: hints.get(p.key)?.updated_at || null },
+                last_check: p.metadata?.last_check || null,
                 markup_percent: Number(p.metadata && p.metadata.markup_percent) || 0,
                 uncensored: Boolean(p.metadata && p.metadata.uncensored),
             }));
@@ -53,11 +64,16 @@ function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth,
             }))) : [];
             const cookies = sessionCookies ? await sessionCookies.list('operator', 'owner') : [];
             const balances = sessionCookies ? await Promise.all(cookies.map((c) => sessionCookies.balance('operator', 'owner', c.id))) : [];
-            return { providers: rows, models: (await registry.listModels()).map((m) => ({ ...m, accepted_price: m.cost,
-                owner_override: m.metadata && m.metadata.owner_override || null })), presets: poolProviders.map((p) => ({ key: p.key, display_name: p.display_name, base_url: p.base_url, default_model: p.default_model, provider_access: p.provider_access, uncensored: Boolean(p.uncensored), models: p.models })), credit_estimates: estimates, session_credentials: cookies, session_balances: balances };
+            return { providers: rows, models: (await registry.listModels()).map(m => modelView(m, rows.find(p => p.key === m.provider_key))), presets: poolProviders.map((p) => ({ key: p.key, display_name: p.display_name, base_url: p.base_url, default_model: p.default_model, provider_access: p.provider_access, uncensored: Boolean(p.uncensored), models: p.models })), credit_estimates: estimates, session_credentials: cookies, session_balances: balances };
         }
-        if (section === 'models') return { models: (await registry.listModels()).map((m) => ({ ...m, accepted_price: m.cost,
-            owner_override: m.metadata && m.metadata.owner_override || null })) };
+        if (section === 'models') {
+            const provider = typeof req.query.provider === 'string' ? req.query.provider : undefined;
+            const providers = await registry.listProviders();
+            return { models: (await registry.listModels({ provider })).map(m => modelView(m, providers.find(p => p.key === m.provider_key))),
+                provider: provider || null, sync_log: modelSync ? await modelSync.read(provider) : [] };
+        }
+        if (section === 'orders') return { orders: await providerOrder.list() };
+        if (section === 'sync') return { sync_log: modelSync ? await modelSync.read() : [] };
         if (section === 'runs') {
             const { filters, form, bad } = q.parseRunFilters(req.query);
             const list = await q.listRuns(db, filters);
@@ -85,6 +101,26 @@ function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth,
         if (section === 'exchange') return { credits: await q.settleQueue(db, clock.now()), routing: await q.routingEvidence(db) };
         if (section === 'abuse') return { report: abuse ? await abuse.overview() : null };
         if (section === 'glossary') return { providers: await registry.listProviders(), models: await registry.listModels() };
+        if (section === 'owner-inference') {
+            const providers = await registry.listProviders();
+            const caps = await ownerConfig.getCaps();
+            const spend = await Promise.all(caps.map(async (c) => ({ provider_key: c.provider_key, ...(await ownerConfig.spendFor(c.provider_key)) })));
+            const prices = {};
+            for (const m of await registry.listModels()) prices[`${m.provider_key}/${m.model_key}`] = m.cost;
+            const kinds = {};
+            for (const cap of ['chat', 'uncensored', 'embed', 'image', 'transcribe', 'batch']) kinds[cap] = { savings: await ownerConfig.savings(cap) };
+            return {
+                providers: providers.map((p) => ({ key: p.key, display_name: p.display_name, kind: p.kind, status: p.status, base_url: p.base_url,
+                    priority: p.priority, capabilities: p.capabilities, uncensored: Boolean(p.metadata && p.metadata.uncensored),
+                    key_state: p.auth_mode === 'none' ? 'not_required' : (providerSecret(p, env) ? 'configured' : 'missing'),
+                    last_check: p.metadata?.last_check || null,
+                    spend_cap: caps.find((c) => c.provider_key === p.key) || null,
+                    spend: spend.find((s) => s.provider_key === p.key) || null })),
+                models: (await registry.listModels()).map((m) => { const p = providers.find((x) => x.key === m.provider_key); return modelView(m, p); }),
+                prices, caps, routing: await ownerConfig.getRouting(), economy: await ownerConfig.getEconomy(),
+                costs_24h: await ownerConfig.costs('24h'), costs_7d: await ownerConfig.costs('7d'), kinds,
+            };
+        }
         throw Object.assign(new Error('no such console section'), { status: 404 });
     }));
     r.get('/api/v1/admin/console/gpus/:model/quote', read, wrap(async (req) => {
@@ -98,6 +134,10 @@ function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth,
     }));
     r.post('/api/v1/admin/console/supply/quotes', json, write, wrap(async req => ({ recorded: await require('../pricebook/gpus').recordGpuQuotes(db, JSON.stringify(req.body.quotes)), dry_run: true })));
     r.post('/api/v1/admin/console/supply', json, write, wrap(req => supply.save(req.body || {}, actor(req))));
+    r.post('/api/v1/admin/console/orders/:capability', json, write, wrap(req => providerOrder.save(req.params.capability, req.body, { actor: actor(req), trace: req.traceId })));
+    r.post('/api/v1/admin/console/owner-inference/spend-caps', json, write, wrap(async (req) => ({ cap: await ownerConfig.setCap(req.body || {}, { actor: actor(req), trace: req.ov && req.ov.traceId }) })));
+    r.post('/api/v1/admin/console/owner-inference/routing', json, write, wrap(async (req) => ({ routing: await ownerConfig.setRouting(req.body || {}, { actor: actor(req), trace: req.ov && req.ov.traceId }) })));
+    r.post('/api/v1/admin/console/owner-inference/economy', json, write, wrap(async (req) => ({ economy: await ownerConfig.setEconomy(req.body || {}, { actor: actor(req), trace: req.ov && req.ov.traceId }) })));
     r.post('/api/v1/admin/console/providers/:key/key', json, write, wrap(async (req) => {
         if (!vault || !settings) throw new AiError(503, 'vault.unavailable', 'provider keys cannot be stored on this host');
         const provider = await registry.getProvider(req.params.key);
@@ -106,8 +146,44 @@ function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth,
         if (value.length < 8 || value.length > 400) throw new AiError(422, 'ai.invalid', 'the provider key must be 8-400 characters');
         const who = { actor: actor(req), trace: req.ov && req.ov.traceId };
         await vault.put(provider.key, value, who);
-        await registry.upsertProvider({ key: provider.key, secret_ref: `vault:${provider.key}` }, { ...who, origin: 'admin' });
+        await registry.upsertProvider({ key: provider.key, secret_ref: `vault:${provider.key}`, metadata: { ...provider.metadata, last_check: null } }, { ...who, origin: 'admin' });
         await registry.audit(who.actor, 'provider.key_replaced', 'provider', provider.key, { trace: who.trace });
+        return { ok: true, provider: provider.key };
+    }));
+    r.delete('/api/v1/admin/console/providers/:key/key', write, wrap(async (req) => {
+        if (!vault || !settings) throw new AiError(503, 'vault.unavailable', 'provider keys cannot be stored on this host');
+        const provider = await registry.getProvider(req.params.key);
+        if (!provider) throw new AiError(404, 'ai.not_found', 'no such provider');
+        const who = { actor: actor(req), trace: req.ov && req.ov.traceId };
+        // Disable first: a request racing the store deletion must not fall back to an environment key.
+        await registry.upsertProvider({ key: provider.key, status: 'disabled', secret_ref: null,
+            metadata: { ...provider.metadata, last_check: null } }, { ...who, origin: 'admin' });
+        await vault.remove(provider.key);
+        await registry.audit(who.actor, 'provider.key_removed', 'provider', provider.key, { trace: who.trace });
+        return { ok: true, provider: provider.key };
+    }));
+    r.post('/api/v1/admin/console/providers/:key/check', write, wrap(async (req) => {
+        const provider = await registry.getProvider(req.params.key);
+        if (!provider) throw new AiError(404, 'ai.not_found', 'no such provider');
+        const { checkProvider } = require('../providers/check');
+        const result = await checkProvider(provider, { env, now: clock.now,
+            fetchImpl: fetchImpl === globalThis.fetch ? require('../providers/guarded-fetch').guardedFetch : fetchImpl });
+        // A check does not enable a provider or overwrite settings changed while its request was in flight.
+        const current = await registry.getProvider(provider.key);
+        if (current.updated_at === provider.updated_at) await registry.upsertProvider({ key: provider.key, metadata: { ...current.metadata, last_check: result } }, { actor: actor(req), origin: current.origin });
+        return { provider: provider.key, ...result };
+    }));
+    r.post('/api/v1/admin/console/providers/:key/sync', write, wrap(async (req) => {
+        if (!modelSync) throw new AiError(503, 'ai.unavailable', 'model sync is unavailable');
+        return modelSync.run(req.params.key, { actor: actor(req) });
+    }));
+    r.post('/api/v1/admin/console/providers/:key/model-settings', json, write, wrap(async (req) => {
+        const provider = await registry.getProvider(req.params.key);
+        if (!provider) throw new AiError(404, 'ai.not_found', 'no such provider');
+        const b = req.body || {};
+        if (typeof b.auto_list_new_models !== 'boolean' || ![0, 60, 360, 1440].includes(b.model_sync_interval_minutes)) throw new AiError(422, 'ai.invalid', 'choose a model sync interval and automatic listing preference');
+        await registry.upsertProvider({ key: provider.key, metadata: { ...provider.metadata,
+            auto_list_new_models: b.auto_list_new_models, model_sync_interval_minutes: b.model_sync_interval_minutes } }, { actor: actor(req), origin: 'admin' });
         return { ok: true, provider: provider.key };
     }));
     r.post('/api/v1/admin/console/providers', json, write, wrap(async (req) => {
@@ -183,6 +259,17 @@ function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth,
         const report = await priceBook.runOnce({ force: true });
         await registry.audit(actor(req), 'pricebook.run', 'pricebook', 'run', { trace: req.ov && req.ov.traceId, metadata: { sources: (report.sources || []).length, applied: (report.applied || []).length, pending: (report.pending || []).length } });
         return report;
+    }));
+    // A reviewed reading goes into the log as pending; only the owner's approve writes the live price. This is how
+    // a provider or a model the weekly job has not read yet gets in front of the owner.
+    r.post('/api/v1/admin/console/pricebook/proposals', write, json, wrap(async (req) => {
+        if (!priceBook) throw new AiError(409, 'ai.conflict', 'the price book is off on this host');
+        const body = req.body || {};
+        const proposals = Array.isArray(body) ? body : body.proposals;
+        const out = await priceBook.propose(proposals, { actor: actor(req) });
+        await registry.audit(actor(req), 'price_changes.proposed', 'price_book', 'propose', { trace: req.ov && req.ov.traceId,
+            metadata: { proposed: out.proposed.length, unchanged: out.unchanged.length, models_created: out.models_created.length } });
+        return out;
     }));
     r.post('/api/v1/admin/console/runs/:id/cancel', workflowWrite, wrap(async (req) => {
         const subject = actor(req);

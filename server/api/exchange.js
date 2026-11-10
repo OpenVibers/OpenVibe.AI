@@ -35,8 +35,16 @@ function memo(fn, ttlMs, clock) {
     };
 }
 
-function exchangeRouter({ db, registry, pool, quotas = null, env = process.env, clock = { now: () => Date.now() }, config = null, presets, receipts, auth, log = console, ownEndpoints = null }) {
-    const catalog = createCatalog({ db, registry, pool, env, clock, config });
+function exchangeRouter({ db, registry, pool, quotas = null, env = process.env, clock = { now: () => Date.now() }, config = null, presets, receipts, auth, log = console, ownEndpoints = null, fetchImpl = globalThis.fetch, fidelity = null, share = null }) {
+    // Bench's provider-fidelity read (stage B5): optional and fail-soft. Off in tests, where no Bench runs.
+    const fidelitySource = fidelity || require('../exchange/fidelity').createFidelitySource({
+        url: config && config.bench ? config.bench.url : null, fetchImpl, clock, log,
+        timeoutMs: 2500, enabled: !config || config.nodeEnv !== 'test',
+    });
+    const catalog = createCatalog({ db, registry, pool, env, clock, config, fidelity: fidelitySource });
+    const trafficShare = share || require('../exchange/share').createShare({
+        db, clock, log, k: config && config.trafficShare ? config.trafficShare.k : 20,
+    });
     const usage = createUsage({ db, clock });
     // The price book's log: what a price was, what it became and when it was read.
     const priceStore = require('../pricebook/store').createPriceStore({ db, clock });
@@ -48,9 +56,10 @@ function exchangeRouter({ db, registry, pool, quotas = null, env = process.env, 
         return hits.get(key)();
     };
     const all = () => allFor(null);
-    const market = require('../exchange/market').createMarket({ db, registry, catalog: all, config, clock });
+    const market = require('../exchange/market').createMarket({ db, registry, catalog: all, config, clock, fidelity: fidelitySource });
     const usageByWindow = new Map();
     const r = express.Router();
+    r.use(require('./measured-metrics').measuredMetricsRouter({ db, clock, log }));
 
     const publicCache = (seconds) => (req, res, next) => { res.set('Cache-Control', `public, max-age=${seconds}`); next(); };
 
@@ -60,6 +69,9 @@ function exchangeRouter({ db, registry, pool, quotas = null, env = process.env, 
     const usageRead = auth.requireCap(CAPS.usageRead);
     const wrap = (fn) => async (req, res) => { try { const out = await fn(req, res); if (out !== undefined) res.json(out); } catch (err) { sendError(res, err, req.ov, log); } };
     const body = (req) => (req.body && typeof req.body === 'object' ? req.body : {});
+    const effortAnalytics = require('../effort/analytics').createAnalytics({ db, catalog, registry, pool, clock });
+    r.get('/api/v1/exchange/estimate', publicCache(30), wrap(req => effortAnalytics.estimate(req.query)));
+    r.get('/api/v1/me/ladders/:id', read, wrap(req => effortAnalytics.ladder(req.params.id, req.principal)));
 
     /** The owner a preset belongs to: the app's project, else the person the token acts for, else the service. */
     const ownerOf = (req) => {
@@ -139,7 +151,9 @@ function exchangeRouter({ db, registry, pool, quotas = null, env = process.env, 
             const ob = p.onBehalfOf || (p.claims && p.claims.on_behalf_of);
             const obId = ob && typeof ob === 'object' ? ob.id : ob;
             const owner = receipt.owner || {};
+            const requester = receipt.requester || {};
             const allowed = auth.principalHas(req, CAPS.usageRead)
+                || (requester.type === subject.type && requester.id === subject.id)
                 || (receipt.requester_type === subject.type && receipt.requester_id === subject.id)
                 || (owner.type === 'user' && obId && String(owner.id) === String(obId));
             if (!allowed) throw new AiError(404, 'ai.receipt_not_found', `no receipt ${req.params.id}`);
@@ -242,6 +256,20 @@ function exchangeRouter({ db, registry, pool, quotas = null, env = process.env, 
                 })),
             });
         } catch (err) { return next(err); }
+    });
+
+    // Stage B8: the share of requests and tokens each model and each app category carried in a completed
+    // week. Aggregated only: cells below k requests are withheld, opt-outs are excluded, and no person, app
+    // or prompt is ever named.
+    r.get('/api/v1/exchange/share', publicCache(300), async (req, res, next) => {
+        try {
+            const week = req.query.week == null || req.query.week === '' ? null : String(req.query.week);
+            const out = await trafficShare.read({ week });
+            return res.json(out);
+        } catch (err) {
+            if (err && err.name === 'ShareError') return http.sendProblem(res, err.status, err.code, { detail: err.detail, ctx: req.ov });
+            return next(err);
+        }
     });
 
     r.get('/api/v1/exchange/usage', publicCache(60), async (req, res, next) => {

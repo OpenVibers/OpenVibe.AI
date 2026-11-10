@@ -106,7 +106,17 @@ const workflows = [
         input_schema: OBJ({ prompt: STR(4000), name: STR(40), current: ARR(FILE, MAX_FILES), components: STR(20000) }, ['prompt']),
         output_schema: OBJ({ name: STR(40), description: STR(400), instructions: STR(4000), capabilities: ARR({ type: 'string', enum: CAPABILITIES }, 4), files: ARR(FILE, MAX_FILES) }),
         steps: [{ kind: 'llm', template: 'space.app.build', operation: 'generate', output: 'json', prepare: 'space.app.build', postprocess: 'space.app.build', params: { max_tokens: 16000, timeout_ms: 180000 } }],
-        default_route: 'space.build', cache_mode: 'none', metadata: { seed: true },
+        default_route: 'space.build', cache_mode: 'none',
+        metadata: {
+            seed: true,
+            creation: {
+                id: 'space-app', product: 'space', name: 'Make a website, game or app', workflow: 'space.app.build',
+                gives: 'What you want it to do, and the files when you are changing one.',
+                returns: 'A working space: its name, what it does, the AI it may use and every file.',
+                access: { guest: false, signed_in: true, floor_18: false }, costs_coins: true,
+                start_url: 'https://openvibe.space/projects',
+            },
+        },
     },
     {
         key: 'space.app.ask', name: 'Space: a space\'s AI answers a visitor', namespace: 'space',
@@ -114,7 +124,7 @@ const workflows = [
         input_schema: OBJ({ space: STR(40), instructions: STR(4000), transcript: STR(16000), message: STR(4000) }, ['space', 'message']),
         output_schema: OBJ({ text: { type: 'string' } }),
         steps: [{ kind: 'llm', template: 'space.app.ask', operation: 'chat', output: 'text', params: { max_tokens: 800, temperature: 0.7, timeout_ms: 25000 } }],
-        default_route: 'space.ask', cache_mode: 'none', metadata: { seed: true },
+        default_route: 'space.ask', cache_mode: 'none', metadata: { seed: true, internal: true },
     },
 ];
 

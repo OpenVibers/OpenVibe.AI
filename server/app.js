@@ -9,6 +9,8 @@ const { createAiReadiness, registerAiGauges } = require('./observability');
 const { runsRouter } = require('./api/runs');
 const { actionsRouter } = require('./api/actions');
 const { sendError, providerSecret } = require('./util');
+const creations = require('./creations');
+const home = require('./home');
 const openapi = require('./openapi');
 const { adminRouter } = require('./api/admin');
 const { CAPS } = require('./auth');
@@ -22,7 +24,7 @@ const pkg = require('../package.json');
 const { adminRoutes } = require('openvibe-shared/config');
 const ownerInputs = require('./owner-inputs');
 
-function createApp({ choices = null, searchFetch = null, config, db, registry, pool, quotas, cache, runs, auth, keys, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, credentials = null, preferences = null, grants = null, vault = null, settings = null, benchEvents = null, runBudgets = null, memory = null, memoryImport = null, memoryServices = null, memorySharing = null, community = null, endpoints = null, webhooks = null, presets = null, receipts = null, balance = null, creditGrants = null, sessionCookies = null, gpus = null, gpuMarket = null, abuse = null, priceBook = null, ownEndpoints = null, refusal = null, willingness = null, abliterationTax = null, batches = null }) {
+function createApp({ choices = null, searchFetch = null, config, db, registry, pool, quotas, cache, runs, auth, keys, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, credentials = null, preferences = null, grants = null, vault = null, settings = null, benchEvents = null, runBudgets = null, memory = null, memoryImport = null, memoryServices = null, memorySharing = null, community = null, endpoints = null, webhooks = null, presets = null, receipts = null, balance = null, creditGrants = null, sessionCookies = null, gpus = null, gpuMarket = null, abuse = null, priceBook = null, modelSync = null, ownEndpoints = null, refusal = null, willingness = null, abliterationTax = null, batches = null, share = null }) {
     const app = express();
     // /.well-known/agent.json (openvibe-shared/agent-layer, SEO-2): what this site serves, for agents.
     require('openvibe-shared/agent-layer').mount(app, { descriptor: require('./agent-descriptor') });
@@ -46,8 +48,23 @@ function createApp({ choices = null, searchFetch = null, config, db, registry, p
     // AI_CORS_ORIGINS is echoed back, never credentials, and OPTIONS answers their preflight.
     // Token (/api/v1/*) and console (/console, /auth/*) routes never reach this branch.
     const publicCorsPaths = new Set(['/stats', '/release.json']);
+    // The creation catalogue is public data for every origin: an app or a page may read it without a
+    // token, so it answers `*` rather than the exact-origin list above.
+    const openCorsPaths = new Set(['/api/v1/creations', '/api/v1/creations.md']);
     const corsOrigins = new Set((config.cors && config.cors.origins) || []);
     app.use((req, res, next) => {
+        if (openCorsPaths.has(req.path)) {
+            if (req.method !== 'GET' && req.method !== 'OPTIONS') return next();
+            res.setHeader('Access-Control-Allow-Origin', '*');
+            res.vary('Origin');
+            if (req.method === 'OPTIONS') {
+                res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+                res.setHeader('Access-Control-Allow-Headers', 'Accept');
+                res.setHeader('Access-Control-Max-Age', '600');
+                return res.sendStatus(204);
+            }
+            return next();
+        }
         if (!publicCorsPaths.has(req.path) || (req.method !== 'GET' && req.method !== 'OPTIONS')) return next();
         const origin = req.get('Origin');
         const allowed = Boolean(origin) && corsOrigins.has(origin);
@@ -92,6 +109,31 @@ function createApp({ choices = null, searchFetch = null, config, db, registry, p
         res.json({ status: 'ok', service: 'openvibe-ai', version: pkg.version });
     });
 
+    // What AI can make (ai.creation-list@1): every creation that is live now, built from the registered
+    // workflows and tasks. Public and cached for five minutes; the Markdown twin is the same list for AI
+    // readers and a page that wants plain text. A workflow that is not active leaves the list.
+    async function creationList() {
+        const [workflows, tasks] = await Promise.all([registry.listWorkflows(), choices ? choices.tasks() : []]);
+        return creations.catalogue({ workflows, tasks });
+    }
+    const sendCreations = (markdown) => async (req, res, next) => {
+        try {
+            const list = await creationList();
+            const generatedAt = new Date(clock.now()).toISOString();
+            res.setHeader('Cache-Control', 'public, max-age=300');
+            if (markdown || req.query.format === 'markdown') return res.set('Content-Type', 'text/markdown; charset=utf-8').send(creations.renderMarkdown(list, { generatedAt }));
+            return res.json({ creations: list, count: list.length, generated_at: generatedAt });
+        } catch (err) { next(err); }
+    };
+    app.get('/api/v1/creations', sendCreations(false));
+    app.get('/api/v1/creations.md', sendCreations(true));
+    app.get('/llms.txt', async (req, res, next) => {
+        try {
+            res.setHeader('Cache-Control', 'public, max-age=300');
+            res.type('text/plain; charset=utf-8').send(home.llmsTxt({ siteUrl: config.baseUrl, creations: await creationList() }));
+        } catch (err) { next(err); }
+    });
+
     // Readiness (openvibe-shared/ready): 503 when the database, the workflows or the Network key
     // fail; provider configuration is optional and degrades it (see observability.js).
     const readiness = createAiReadiness({ db, registry, pool, keys, runs, release: release.release });
@@ -109,7 +151,7 @@ function createApp({ choices = null, searchFetch = null, config, db, registry, p
     app.use(exchangePlatform.router);
     // OpenVibe.Exchange's read API (server/api/exchange.js): the public catalog and aggregate usage. Public on
     // purpose — the site and anyone comparing prices reads the same numbers the router ranks on.
-    app.use(require('./api/exchange').exchangeRouter({ config, db, registry, pool, quotas, env, clock, presets, receipts, auth, log, ownEndpoints }));
+    app.use(require('./api/exchange').exchangeRouter({ config, db, registry, pool, quotas, env, clock, presets, receipts, auth, log, ownEndpoints, fetchImpl, share }));
     // The 18+ board's public read API (server/willing/): the measured willingness rates, the published
     // prompt set, and the abliteration tax. Read-only; plan=1 is the dry run and never calls a provider.
     app.use(require('./api/willing').createWillingRouter({ db, willingness, abliterationTax, log }));
@@ -219,11 +261,12 @@ function createApp({ choices = null, searchFetch = null, config, db, registry, p
     const ops = createOps({ db, registry, pool, quotas, cache, runs });
     app.use(runsRouter({ choices, runs, registry, auth, config, log }));
     app.use(actionsRouter({ runs, registry, auth, log }));
+    app.use(require('./api/compat-extra').compatExtra({ runs, auth, config, log }));
     // The OpenAI-compatible endpoint (POST /v1/chat/completions, GET /v1/models): runs of ai.complete.
     app.use(require('./api/routing-preview').routingPreview({ auth, registry, log }));
-    app.use(require('./api/openai').openaiRouter({ runs, auth, config, registry, presets, receipts, log }));
+    app.use(require('./api/openai').openaiRouter({ runs, auth, config, registry, presets, receipts, db, log }));
     // The Anthropic-compatible endpoint (POST /v1/messages, GET /v1/models): runs of ai.messages (Codes C3).
-    app.use(require('./api/messages').messagesRouter({ runs, auth, config, registry, presets, receipts, log }));
+    app.use(require('./api/messages').messagesRouter({ runs, auth, config, registry, presets, receipts, db, log }));
     app.use(require('./api/attribution-quotas').attributionQuotasRouter({ db, quotas, auth, clock, sendError: (res, err, ctx) => sendError(res, err, ctx, log) }));
     if (memory) app.use(require('./memory').memoryRouter({ memory, memoryImport, services: memoryServices, sharing: memorySharing, auth, config, clock, log, sendError: (res, err, ctx) => sendError(res, err, ctx, log) }));
     // Memory M5: the uniform share routes for kind memory-store (and /api/v1/share/people, /api/v1/shared-with-me).
@@ -235,7 +278,7 @@ function createApp({ choices = null, searchFetch = null, config, db, registry, p
     // dashboard, an API for Exchange. Nothing here writes an offer; the offer belongs to Network and the Link owner.
     if (community) app.use('/api/v1', require('./api/community').communityRouter({ community, auth, log }));
     app.use(adminRouter({ config, db, registry, pool, quotas, cache, runs, auth, settings, ops, log }));
-    app.use(require('./api/console-data').consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth, clock, fetchImpl, gpus, gpuMarket, abuse, priceBook, creditGrants, sessionCookies, vault, settings, config, log }));
+    app.use(require('./api/console-data').consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth, clock, fetchImpl, env, gpus, gpuMarket, abuse, priceBook, modelSync, creditGrants, sessionCookies, vault, settings, config, log }));
     // The operator console moved to OpenVibe.Exchange. Keep the legacy AI paths as permanent redirects;
     // run receipts still use the person-session routes below and the AI JSON admin APIs stay here.
     // Person sessions are separate, read-only and open one run receipt each (server/person-session.js).
@@ -278,6 +321,8 @@ function createApp({ choices = null, searchFetch = null, config, db, registry, p
             'GET  /api/v1/runs/:id    POST /api/v1/runs/:id/cancel|retry',
             'POST /api/v1/{chat,generate,summarize,classify,extract,enrich,embed}',
             'GET  /api/v1/workflows | templates | routes | providers | models | quotas | usage | audit',
+            'GET  /api/v1/creations      what AI can make (public, cached, CORS open); .md for Markdown',
+            'GET  /llms.txt              the same catalogue for AI readers',
             'GET  /api/health, /api/ready, /release.json',
             'GET  /runs/:id  your run receipt (OpenVibe.Network sign-in; your own runs only)',
             `GET  ${EXCHANGE}/privacy/keys   your own provider keys and session cookies`,
@@ -298,12 +343,12 @@ function createApp({ choices = null, searchFetch = null, config, db, registry, p
     app.get('/index.md', moved('/index.md'));
     app.get('/stats.md', moved('/models.md'));
     app.get('/updates.md', moved('/status.md'));
-    for (const p of ['/terms', '/privacy', '/dmca', '/sitemap.xml', '/llms.txt', '/llms-full.txt']) app.get(p, moved(p));
+    for (const p of ['/terms', '/privacy', '/dmca', '/sitemap.xml', '/llms-full.txt']) app.get(p, moved(p));
 
     // Discovery: the human site is Exchange, so this origin asks crawlers to leave it alone and names the map
     // that matters. Machine routes (the API, release.json, a run's receipt) are not crawled anyway.
     app.get('/robots.txt', (_req, res) => {
-        res.type('text/plain').send(`User-agent: *\nDisallow: /\nDisallow: /runs\nDisallow: /console\nDisallow: /auth/\nDisallow: /api/\n\n# The human site is OpenVibe.Exchange; the API stays here.\nSitemap: ${EXCHANGE}/sitemap.xml\n`);
+        res.type('text/plain').send(`User-agent: *\nAllow: /llms.txt\nAllow: /api/v1/creations\nAllow: /api/v1/creations.md\nDisallow: /\nDisallow: /runs\nDisallow: /console\nDisallow: /auth/\nDisallow: /api/\n\n# The human site is OpenVibe.Exchange; the API stays here.\nSitemap: ${EXCHANGE}/sitemap.xml\n`);
     });
 
     // A browser asking for a page that is not here goes to the Exchange home: the human site moved, and a

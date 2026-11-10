@@ -28,7 +28,7 @@ const DEFAULT_TIER = 'balanced';
 /** The kind of work a run does: the person's ai.me-preferences.defaults has one default per kind. */
 function workKind(operation, req = {}, ctx = {}) {
     if (operation === 'image') return 'image';
-    if (req && req.image) return 'vision';
+    if (req && (req.image || req.vision)) return 'vision';
     const hint = String(ctx.workflowKey || '') + ' ' + String(ctx.routeKey || '');
     return /\b(code|coding|codes|build|design|program|developer)\b/i.test(hint) ? 'code' : 'text';
 }
@@ -99,7 +99,7 @@ function weightOf({ operation, kind, reasoning, tools, min_context, maxTokens })
  */
 function detectTask({ operation = 'chat', req = {}, ctx = {}, route = null } = {}) {
     const kind = workKind(operation, req, ctx);
-    const vision = Boolean(req.image) || operation === 'vision';
+    const vision = Boolean(req.image) || Boolean(req.vision) || operation === 'vision';
     const tools = toolCount(req) > 0;
     const json = wantsJson(req, route);
     const min_context = Math.max(1024, tokensOf(leadingText(req)) + (vision ? 1024 : 0) + 512);

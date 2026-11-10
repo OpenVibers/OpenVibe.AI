@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+message: "If you use OpenVibe.AI in research or a product, cite it as below."
+title: openvibe-ai
+type: software
+authors:
+  - name: OpenVibe
+    alias: OpenVibers
+    website: https://openvibe.network
+repository-code: https://github.com/OpenVibers/OpenVibe.AI
+url: https://ai.openvibe.services
+license: AGPL-3.0-only
+abstract: "One API for AI providers, models, routing, prompts, workflows, runs, citations and quotas, at ai.openvibe.services."
+keywords:
+  - openvibe
+  - nodejs
+  - ai
+  - llm
+  - api

@@ -2,6 +2,9 @@
 
 > Providers, models, routing, prompt templates, workflows, runs, citations, cache and quotas for every product.
 
+**Live site:** https://ai.openvibe.services · **API docs:** https://openvibe.services · **For AI:** https://ai.openvibe.services/llms.txt
+**Run it:** `npm ci && npm run dev` (Node 20 or newer) · **Tests:** `npm test`
+
 **Status:** alpha (roadmap Wave 13). Deployed on the host since 2026-09-23 on `127.0.0.1:4700` and in
 production use: OpenVibe.Live runs with `AI_SERVICE=remote` and Network's footer copy runs
 `network.site_copy` here. Public since 2026-10-07 at [ai.openvibe.services](https://ai.openvibe.services):
@@ -125,7 +128,7 @@ idempotent replay):
 
 | Route | Capability |
 |---|---|
-| `POST /api/v1/runs` (`?wait=ms`, `Idempotency-Key`), `POST /runs/:id/cancel`, `POST /runs/:id/retry`, `POST /runs/:id/citations` | `ai.run.create` |
+| `POST /api/v1/runs` (`?wait=ms`, `Idempotency-Key`), `POST /runs/:id/cancel`, `POST /runs/:id/retry`, `POST /runs/:id/advice` (an advisor call on a run that asked for one), `POST /runs/:id/citations` | `ai.run.create` |
 | `POST /api/v1/{chat,generate,summarize,classify,extract,enrich,embed,image}` — each a run of workflow `ai.<op>` | `ai.run.create` |
 | `POST /api/v1/research` — a run of `research.gather` ([MegaSource](#megasource-research)) | `ai.run.create` (namespace `research.*`) or `ai.app.run` (free sources only) |
 | `POST /api/v1/{chat,generate,summarize,classify,extract,embed,image}` (no `enrich`), `GET /runs/:id` (the app's own runs) | `ai.app.run` for a developer-app token ([Developer apps](#developer-apps)) |
@@ -156,7 +159,8 @@ have no CORS access. Service callers do not need CORS.
 `/api/ready` (openvibe-shared/ready) is 503 when the database, the active workflows or the Network
 key fail; provider configuration (an active provider without its credentials, or with an open
 circuit) degrades it. `/metrics` (openvibe-shared/metrics) carries golden signals by route template,
-`ai_runs{state="queued"|"running"}` and `ai_provider_circuit{provider,state}`.
+`ai_runs{state="queued"|"running"}`, `ai_provider_circuit{provider,state}` and the measured
+`ai_provider_circuit_open{provider,model,class}` and `ai_provider_failures_total{provider,class}`.
 
 Each HTTP request is aggregated by route template, method and status class, never by raw URL; `/shared`
 files, static assets, health, readiness and `/metrics` are not counted. Once a minute one `http.request`
@@ -516,7 +520,7 @@ never a value.
 
 | Group | Table(s) |
 |---|---|
-| Providers | `providers` (+ `provider_health`: circuit breaker) — secrets only as `env:NAME` references |
+| Providers | `providers`, `provider_circuits` (per provider+model breaker), `provider_failure_counts`, `provider_health` (roll-up) — secrets only as `env:NAME` references |
 | Models | `models` (type, limits, cost per Mtok, JSON/tools/streaming/vision support) |
 | Routing profiles | `routes` — versioned; primary + fallbacks, options, output limit, format, timeout, explicit aliases |
 | Prompt templates | `templates` — versioned; input/output schema, system/user prompt, default route, owner, visibility, `draft\|active\|deprecated\|archived` |
@@ -551,9 +555,15 @@ can serve it, ordered by `openvibe-sdk/placement` (objective, price, measured la
 hysteresis through the route's current placement), or pins a `[primary, ...fallbacks]` list. A
 provider that is disabled, missing credentials, circuit-open or unable to do the operation is
 **skipped and logged**; every call has a strict timeout, cancellation and one retry on a transient
-failure. A provider's own "insufficient balance" answer (HTTP 402, or 429/403 `insufficient_quota`) is never
-retried: its circuit opens at once for `AI_BREAKER_EXHAUSTED_COOLDOWN_MS` (10 minutes, shared by every request)
-and the router fails over. When nothing can serve, the run answers `ai.resting`; a fallback that answers is
+failure. A failure is classified as `balance` (402, `insufficient_quota`, "credit balance is too low",
+OpenRouter's 402 credits), `auth` (401/403), `rate_limit` (429), `transient` (timeout, 5xx, broken
+stream) or `request` (400/413/422 and context too long). The circuit is per provider+model
+(`provider_circuits`, migrations/0060, survives a restart): balance and auth open it at once and are
+never retried; a run of transient failures opens it for 30 s doubling to 10 min; rate limits and
+malformed requests never open it. A balance/auth circuit may probe the next real request after
+`AI_BREAKER_EXHAUSTED_COOLDOWN_MS` (15 minutes) and closes on a success or when the provider's key
+changes. The catalogue reports `up`, `degraded` (over 5% of at least 10 requests in the last hour) or
+`down`, with `status_reason`, `status_since` and `status_class`. When nothing can serve, the run answers `ai.resting`; a fallback that answers is
 recorded on the run (`fallback_used`), in the request log
 (`fallback = 1`) and in the audit log. Every run response and `GET /api/v1/runs/:id` carry `explain`
 (objective, reasons, selected, and every candidate with its estimated cost, latency and excluded
@@ -704,6 +714,12 @@ owner, who approves or rejects it on the operator console ([price book](https://
 smaller one the job applies at once, and the model row carries the new price with the day it was checked. A
 listing that cannot be read leaves every price alone: an unreadable page is not evidence of a change. A price a
 person typed by hand is never touched.
+
+A reviewed reading can also be put in front of the owner without waiting for the weekly job:
+`POST /api/v1/admin/console/pricebook/proposals` (owner-only, `ai.provider.manage`) takes the same readings
+`scripts/propose-pricebook.js` reads from a JSON file. Both write **pending** changes only — the source listing and
+the day it was read travel with each row — and a model the registry does not know is created switched off with no
+price, so there is a row to approve against. Nothing is applied until the owner approves it.
 
 The book is **due-based**, not timer-based: AI is deployed several times a day, so a timer in the process
 would be reset every time and the week would never come round. The last finished run is a row in the database
@@ -962,6 +978,7 @@ mix vectors from different providers (re-embed when the provider changes).
 | Edits are new versions; runs pin versions; lifecycle; admin versions survive reseeding | `test/versioning.test.js` |
 | A degraded primary falls back and records it; breaker; skips; timeouts; explicit `provider.unavailable` | `test/fallback.test.js` |
 | 402/insufficient-quota opens the long exhausted circuit, never retries, fails over, then `ai.resting` | `test/provider-exhausted.test.js` |
+| Every provider error shape maps to balance/auth/rate_limit/transient/request; per-offer circuits, 30 s doubling backoff, persistence, key reset, catalogue status and the owner alert | `test/provider-circuits.test.js` |
 | Hourly DeepSeek balance gauge, no key in logs, off under a drill | `test/provider-balance.test.js` |
 | Quotas refuse with 429 + Retry-After **before** any provider call; per-service, attribution, cost caps | `test/quota.test.js` |
 | Free allowance: free up to the card's allowance then fully priced, reset per day/month (never for `none`), per subject, never past the cap under concurrent claims, absent at 0 | `test/free-allowance.test.js` |
@@ -1082,9 +1099,9 @@ ai.openvibe.network notice from OpenVibe.Sites.
 Part of the [OpenVibe network](https://openvibe.network). Built in the open by [OpenVibers](https://github.com/OpenVibers).
 
 <!-- versions:start -->
-- openvibe-contracts: v0.375.0
+- openvibe-contracts: v0.389.0
 - openvibe-sdk: v0.125.0
-- openvibe-shared: v4.179.0
+- openvibe-shared: v4.199.0
 <!-- versions:end -->
 
 ### Exchange search engines

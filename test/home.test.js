@@ -54,9 +54,19 @@ t.test('the exact page map, including the Markdown twins and the legal pages', a
         ['/privacy', '/privacy'],
         ['/dmca', '/dmca'],
         ['/sitemap.xml', '/sitemap.xml'],
-        ['/llms.txt', '/llms.txt'],
         ['/llms-full.txt', '/llms-full.txt'],
     ]) await moved(p, to);
+});
+
+t.test('/llms.txt stays on AI and carries the creation catalogue', async () => {
+    const r = await request(h.base, 'GET', '/llms.txt', { headers: { Accept: BROWSER }, redirect: 'manual' });
+    assert.strictEqual(r.status, 200);
+    assert.match(r.headers.get('content-type') || '', /^text\/plain/);
+    assert.strictEqual(r.headers.get('cache-control'), 'public, max-age=300');
+    assert.match(r.text, /^# OpenVibe\.AI/m);
+    assert.ok(r.text.includes('## What AI can make'), 'names the catalogue section');
+    assert.ok(r.text.includes('/api/v1/creations'), 'names the endpoint');
+    assert.ok(r.text.includes('Write a blog post'), 'lists a live creation');
 });
 
 t.test('an unknown human page goes to the Exchange home; an unknown API path stays a problem document', async () => {
@@ -78,7 +88,6 @@ t.test('console paths redirect to Exchange while machine and receipt routes stay
     assert.strictEqual(release.status, 200);
     await moved('/console', '/console');
     await moved('/console/providers?tab=all', '/console/providers?tab=all');
-    await moved('/llms.txt', '/llms.txt');
     await moved('/auth/login', '/auth/login');
     await moved('/you', '/privacy/keys');
     await moved('/you?allow=actor&provider=openai', '/privacy/keys?allow=actor&provider=openai');
@@ -99,7 +108,7 @@ const active = (file) => fs.readFileSync(path.join(__dirname, '..', 'deploy', 'n
 
 t.test('the vhost still proxies the API, the run receipt and the console; the app answers and redirects the pages', () => {
     const conf = active('ai.openvibe.services.conf');
-    for (const loc of ['location = /stats', 'location = /updates', 'location = /terms', 'location = /privacy', 'location = /dmca', 'location = /sitemap.xml', 'location = /llms.txt', 'location /runs/ {', 'location /console {', 'location /auth/ {', 'location /shared/']) assert.ok(conf.includes(loc), loc);
+    for (const loc of ['location = /stats', 'location = /updates', 'location = /terms', 'location = /privacy', 'location = /dmca', 'location = /sitemap.xml', 'location = /llms.txt', 'location = /api/v1/creations ', 'location = /api/v1/creations.md ', 'location /runs/ {', 'location /console {', 'location /auth/ {', 'location /shared/']) assert.ok(conf.includes(loc), loc);
     const ops = conf.indexOf('location ~ ^/api/v1/(chat|generate|summarize|classify|extract|embed)$ {');
     const run = conf.indexOf('location ~ ^/api/v1/runs/[A-Za-z0-9_-]+$ {');
     const completions = conf.indexOf('location = /v1/chat/completions {');

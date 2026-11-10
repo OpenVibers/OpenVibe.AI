@@ -8,6 +8,15 @@ const { PASSTHROUGH_OUTPUT } = require('./live');
 
 const STR = (n) => ({ type: 'string', maxLength: n });
 const OBJ = (props, required = []) => ({ type: 'object', additionalProperties: false, required, properties: props });
+// A file on a turn (ai.file@1): a Media reference, never inline bytes. The full contract shape is
+// accepted (the SDK returns it); a caller that has only the object id may send just { id } / { media_id }.
+const FILE_REF = { type: 'object', additionalProperties: false, properties: {
+    id: STR(200), media_id: STR(80), name: STR(255), media_type: STR(255), size: { type: 'integer', minimum: 0 },
+    storage: { type: 'object', additionalProperties: false, required: ['provider', 'key'], properties: { provider: { const: 'media' }, key: STR(500) } },
+    access: { type: 'object', additionalProperties: false, properties: { readers: { type: 'array', minItems: 1, uniqueItems: true, items: STR(200) } } },
+    read: { type: 'object' }, role: { enum: ['input', 'artifact'] },
+} };
+const TURN_FILES = { type: 'array', maxItems: 10, items: FILE_REF };
 const COMMON = { max_tokens: { type: 'integer', minimum: 1, maximum: 16000 }, temperature: { type: ['number', 'null'], minimum: 0, maximum: 2 },
     // AI Exchange F: a liability cap on the Balance hold for this request (optional; nothing when unset).
     max_cost_usd: { type: ['number', 'string', 'null'] } };
@@ -46,7 +55,7 @@ const templates = [
 const workflows = [
     {
         key: 'ai.chat', name: 'Chat completion', namespace: 'ai',
-        input_schema: OBJ({ system: STR(200000), messages: { type: 'array', minItems: 1, maxItems: 200, items: { type: 'object', required: ['role', 'content'], properties: { role: { enum: ['user', 'assistant'] }, content: STR(200000) } } }, ...COMMON }, ['messages']),
+        input_schema: OBJ({ system: STR(200000), messages: { type: 'array', minItems: 1, maxItems: 200, items: { type: 'object', required: ['role', 'content'], properties: { role: { enum: ['user', 'assistant'] }, content: STR(200000) } } }, files: TURN_FILES, ...COMMON }, ['messages']),
         output_schema: PASSTHROUGH_OUTPUT,
         steps: [{ kind: 'passthrough', route: 'default.chat' }], cache_mode: 'none',
     },
@@ -82,7 +91,7 @@ const workflows = [
     },
     {
         key: 'ai.embed', name: 'Embed text', namespace: 'ai',
-        input_schema: OBJ({ input: { anyOf: [STR(32000), { type: 'array', minItems: 1, maxItems: 64, items: STR(32000) }] } }, ['input']),
+        input_schema: OBJ({ compat_routing: { type: 'object' }, max_cost_usd: COMMON.max_cost_usd, input: { anyOf: [STR(32000), { type: 'array', minItems: 1, maxItems: 64, items: STR(32000) }] } }, ['input']),
         output_schema: OBJ({ vectors: { type: 'array', items: { type: 'array', items: { type: 'number' } } }, dimensions: { type: 'integer' } }, ['vectors', 'dimensions']),
         steps: [{ kind: 'embed', route: 'default.embedding' }], cache_mode: 'private',
     },
@@ -94,6 +103,7 @@ const workflows = [
         input_schema: OBJ({
             // CHECKPOINT D3: an exact id or a dynamic alias, when AI_MODEL_CATALOG is on (server/api/openai.js).
             model: STR(256),
+            compat_routing: { type: 'object' },
             messages: { type: 'array', minItems: 1, maxItems: 500, items: { type: 'object', required: ['role'], properties: {
                 role: { enum: ['system', 'developer', 'user', 'assistant', 'tool'] },
                 content: { anyOf: [{ type: 'string', maxLength: 400000 }, { type: 'array', maxItems: 100 }, { type: 'null' }] },
@@ -108,9 +118,10 @@ const workflows = [
             top_p: { type: ['number', 'null'], minimum: 0, maximum: 1 },
             presence_penalty: { type: ['number', 'null'], minimum: -2, maximum: 2 },
             frequency_penalty: { type: ['number', 'null'], minimum: -2, maximum: 2 },
+            files: TURN_FILES,
             ...COMMON,
         }, ['messages']),
-        output_schema: OBJ({ choices: { type: 'array', minItems: 1, maxItems: 8, items: { type: 'object' } }, system_fingerprint: { type: ['string', 'null'] }, model: { type: ['string', 'null'] } }, ['choices']),
+        output_schema: OBJ({ choices: { type: 'array', minItems: 1, maxItems: 8, items: { type: 'object' } }, system_fingerprint: { type: ['string', 'null'] }, model: { type: ['string', 'null'] }, artifacts: { type: 'array', maxItems: 10, items: { type: 'object' } } }, ['choices']),
         metadata: { passthrough: true },
         steps: [{ kind: 'complete', route: 'default.chat' }], cache_mode: 'none',
     },
@@ -122,6 +133,7 @@ const workflows = [
         input_schema: OBJ({
             // CHECKPOINT D3: an exact id or a dynamic alias, when AI_MODEL_CATALOG is on (server/api/messages.js).
             model: STR(256),
+            compat_routing: { type: 'object' },
             messages: { type: 'array', minItems: 1, maxItems: 500, items: { type: 'object', required: ['role'], properties: {
                 role: { enum: ['user', 'assistant'] },
                 content: { anyOf: [STR(400000), { type: 'array', maxItems: 500 }, { type: 'null' }] },
@@ -136,11 +148,13 @@ const workflows = [
             top_p: { type: ['number', 'null'], minimum: 0, maximum: 1 },
             top_k: { type: ['integer', 'null'], minimum: 0 },
             metadata: { type: 'object' },
+            files: TURN_FILES,
         }, ['messages', 'max_tokens']),
         output_schema: OBJ({
             id: STR(200), type: STR(20), role: STR(20), model: { type: ['string', 'null'] },
             content: { type: 'array', minItems: 1, maxItems: 500, items: { type: 'object' } },
             stop_reason: { type: ['string', 'null'] }, stop_sequence: { type: ['string', 'null'] }, usage: { type: 'object' },
+            artifacts: { type: 'array', maxItems: 10, items: { type: 'object' } },
         }, ['content']),
         metadata: { passthrough: true },
         steps: [{ kind: 'messages', route: 'default.messages' }], cache_mode: 'none',
@@ -148,10 +162,19 @@ const workflows = [
     {
         // Off until AI_IMAGE_MODEL seeds route default.image: without it a run answers 503 route.unavailable.
         key: 'ai.image', name: 'Generate an image', namespace: 'ai',
-        input_schema: OBJ({ prompt: STR(4000), size: { type: 'string', pattern: '^[0-9]{3,4}x[0-9]{3,4}$' }, n: { type: 'integer', minimum: 1, maximum: 4 } }, ['prompt']),
+        input_schema: OBJ({ compat_routing: { type: 'object' }, max_cost_usd: COMMON.max_cost_usd, prompt: STR(4000), size: { type: 'string', pattern: '^[0-9]{3,4}x[0-9]{3,4}$' }, n: { type: 'integer', minimum: 1, maximum: 4 } }, ['prompt']),
         output_schema: OBJ({ images: { type: 'array', minItems: 1, items: OBJ({ b64: { type: ['string', 'null'] }, url: { type: ['string', 'null'] } }) }, count: { type: 'integer', minimum: 1 } }, ['images', 'count']),
         // No cache: several MB of base64 per run, and a fresh image is what a caller asks for.
         steps: [{ kind: 'image', route: 'default.image' }], cache_mode: 'none',
+        metadata: {
+            creation: {
+                id: 'image', product: 'pics', name: 'Make an image', workflow: 'ai.image',
+                gives: 'A description of the image, its size and how many you want.',
+                returns: 'One to four images.',
+                access: { guest: false, signed_in: true, floor_18: false }, costs_coins: true,
+                start_url: 'https://openvibe.pics/',
+            },
+        },
     },
 ];
 

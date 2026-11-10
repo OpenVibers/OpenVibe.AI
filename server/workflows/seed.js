@@ -24,6 +24,7 @@ const chat = require('./chat');
 const research = require('./research');
 const meme = require('./meme');
 const changelog = require('./changelog');
+const pictures = require('./pictures');
 const poolSeed = require('../providers/pool-seed');
 const { resolveSecret } = require('../util');
 
@@ -146,7 +147,7 @@ async function seed({ registry, quotas, config, env = process.env, db }) {
     // DeepInfra, Novita, Featherless, Refuseless, Abliteration.ai and OpenRouter. Each is registered off until its key
     // is in the owner settings; the pool skips one whose key does not resolve. Prices come from each provider's own
     // page, with that page and the day they were read (server/providers/pool-providers.js).
-    await poolSeed.seedPoolProviders({ registry, actor: 'seed' });
+    await poolSeed.seedPoolProviders({ registry, actor: 'seed', env });
     const shared = await registry.getProvider('shared');
 
     // Models
@@ -161,7 +162,10 @@ async function seed({ registry, quotas, config, env = process.env, db }) {
             // Once the price book has checked a price it owns it: the seed does not write over it.
             const owned = prev && prev.metadata && prev.metadata.price_book;
             if (!prev || (!owned && prev.metadata && prev.metadata.configured_by === 'DEEPSEEK_API_KEY')) {
-                await registry.upsertModel({ provider_key: 'deepseek', ...m, status: prev ? prev.status : 'active' }, { actor: 'seed' });
+                await registry.upsertModel({ provider_key: 'deepseek', ...m, status: prev ? prev.status : 'active',
+                    display_name: prev?.metadata?.owner_display_name ? prev.display_name : m.display_name,
+                    metadata: { ...m.metadata, ...prev?.metadata },
+                }, { actor: 'seed' });
             }
         }
     }
@@ -260,11 +264,11 @@ async function seed({ registry, quotas, config, env = process.env, db }) {
     await registry.seedVersioned('route', 'chat.member', { primary: { provider: 'shared', model: null }, fallbacks: [], options: {}, max_output_tokens: 600, response_format: 'text', timeout_ms: null, alias_of: 'default.chat' });
 
     // Templates, then workflows (workflows reference templates)
-    for (const t of [...live.templates, ...core.templates, ...products.templates, ...devblog.templates, ...media.templates, ...chat.templates, ...space.templates, ...research.templates, ...meme.templates, ...changelog.templates]) {
+    for (const t of [...live.templates, ...core.templates, ...products.templates, ...devblog.templates, ...media.templates, ...chat.templates, ...space.templates, ...research.templates, ...meme.templates, ...changelog.templates, ...pictures.templates]) {
         const { key, ...def } = t;
         await registry.seedVersioned('template', key, { description: null, default_route: null, owner: 'ai', visibility: 'internal', metadata: {}, ...def });
     }
-    for (const w of [...live.workflows, ...core.workflows, ...products.workflows, ...devblog.workflows, ...media.workflows, ...chat.workflows, ...space.workflows, ...research.workflows, ...meme.workflows, ...changelog.workflows]) {
+    for (const w of [...live.workflows, ...core.workflows, ...products.workflows, ...devblog.workflows, ...media.workflows, ...chat.workflows, ...space.workflows, ...research.workflows, ...meme.workflows, ...changelog.workflows, ...pictures.workflows]) {
         const { key, ...def } = w;
         await registry.seedVersioned('workflow', key, { description: null, default_route: null, cache_ttl_sec: null, metadata: {}, ...def });
     }

@@ -66,7 +66,7 @@ async function makeProvider(name) {
     const made = await request(h.base, 'POST', '/api/v1/providers', {
         tok: service,
         body: {
-            key: name, kind: offer.kind, base_url: `${upstream.url}/v1`, auth_mode: 'none',
+            key: name, status: 'active', kind: offer.kind, base_url: `${upstream.url}/v1`, auth_mode: 'none',
             capabilities: anthropic ? ['chat', 'messages', 'tools', 'json'] : ['chat', 'complete', 'tools', 'json'],
             default_model: offer.model,
             provider_access: 'OWN_DEPLOYMENT', metadata: { data_policy: offer.data_policy },
@@ -213,6 +213,7 @@ t.test('every answer carries a receipt: the headers, the id, and GET /v1/receipt
     assert.strictEqual(compact.offer, 'crowd/crowd-m');
     assert.deepStrictEqual([compact.price.in, compact.price.out], [0.2, 0.6]);
     assert.deepStrictEqual([compact.tokens.in, compact.tokens.out, compact.tokens.cached], [120, 30, 40]);
+    assert.strictEqual(typeof compact.latency_ms, 'number', 'ordinary runs record latency rather than null');
     assert.ok(compact.latency_ms >= 0);
     assert.strictEqual(compact.privacy, 'community', 'a community machine is labelled as one');
     assert.ok(Array.isArray(compact.fallbacks) && compact.fallbacks.length, 'the fallbacks it would have used are named');
@@ -282,6 +283,10 @@ t.test('a streamed answer names its receipt in the headers and carries it in the
     const last = chunks[chunks.length - 1];
     assert.ok(last.receipt, 'the last chunk carries the receipt');
     assert.strictEqual(last.receipt.id, id);
+    const full = await request(h.base, 'GET', `/v1/receipts/${id}`, { tok: service });
+    assert.strictEqual(typeof full.body.receipt.latency_ms, 'number');
+    assert.strictEqual(typeof full.body.receipt.ttft_ms, 'number', 'the first content delta is timed at the run boundary');
+    assert.ok(full.body.receipt.ttft_ms <= full.body.receipt.latency_ms);
 });
 
 t.test('a preset is refused when nobody has it, and the receipt route needs a token', async () => {
