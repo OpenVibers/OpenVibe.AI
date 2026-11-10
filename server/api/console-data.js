@@ -15,6 +15,7 @@ function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth,
     const r = express.Router();
     const providerOrder = require('../providers/order').createProviderOrder({ registry });
     const supply = require('../platform/supply').createSupply({ db, registry, clock });
+    const ownerConfig = require('../owner-config').createOwnerConfig({ db, registry, clock });
     // The public marketplace readings and the per-token cost they imply, added to both console sections. Data only:
     // Exchange renders it with its existing console classes.
     const marketPayload = async () => {
@@ -100,6 +101,26 @@ function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth,
         if (section === 'exchange') return { credits: await q.settleQueue(db, clock.now()), routing: await q.routingEvidence(db) };
         if (section === 'abuse') return { report: abuse ? await abuse.overview() : null };
         if (section === 'glossary') return { providers: await registry.listProviders(), models: await registry.listModels() };
+        if (section === 'owner-inference') {
+            const providers = await registry.listProviders();
+            const caps = await ownerConfig.getCaps();
+            const spend = await Promise.all(caps.map(async (c) => ({ provider_key: c.provider_key, ...(await ownerConfig.spendFor(c.provider_key)) })));
+            const prices = {};
+            for (const m of await registry.listModels()) prices[`${m.provider_key}/${m.model_key}`] = m.cost;
+            const kinds = {};
+            for (const cap of ['chat', 'uncensored', 'embed', 'image', 'transcribe', 'batch']) kinds[cap] = { savings: await ownerConfig.savings(cap) };
+            return {
+                providers: providers.map((p) => ({ key: p.key, display_name: p.display_name, kind: p.kind, status: p.status, base_url: p.base_url,
+                    priority: p.priority, capabilities: p.capabilities, uncensored: Boolean(p.metadata && p.metadata.uncensored),
+                    key_state: p.auth_mode === 'none' ? 'not_required' : (providerSecret(p, env) ? 'configured' : 'missing'),
+                    last_check: p.metadata?.last_check || null,
+                    spend_cap: caps.find((c) => c.provider_key === p.key) || null,
+                    spend: spend.find((s) => s.provider_key === p.key) || null })),
+                models: (await registry.listModels()).map((m) => { const p = providers.find((x) => x.key === m.provider_key); return modelView(m, p); }),
+                prices, caps, routing: await ownerConfig.getRouting(), economy: await ownerConfig.getEconomy(),
+                costs_24h: await ownerConfig.costs('24h'), costs_7d: await ownerConfig.costs('7d'), kinds,
+            };
+        }
         throw Object.assign(new Error('no such console section'), { status: 404 });
     }));
     r.get('/api/v1/admin/console/gpus/:model/quote', read, wrap(async (req) => {
@@ -114,6 +135,9 @@ function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth,
     r.post('/api/v1/admin/console/supply/quotes', json, write, wrap(async req => ({ recorded: await require('../pricebook/gpus').recordGpuQuotes(db, JSON.stringify(req.body.quotes)), dry_run: true })));
     r.post('/api/v1/admin/console/supply', json, write, wrap(req => supply.save(req.body || {}, actor(req))));
     r.post('/api/v1/admin/console/orders/:capability', json, write, wrap(req => providerOrder.save(req.params.capability, req.body, { actor: actor(req), trace: req.traceId })));
+    r.post('/api/v1/admin/console/owner-inference/spend-caps', json, write, wrap(async (req) => ({ cap: await ownerConfig.setCap(req.body || {}, { actor: actor(req), trace: req.ov && req.ov.traceId }) })));
+    r.post('/api/v1/admin/console/owner-inference/routing', json, write, wrap(async (req) => ({ routing: await ownerConfig.setRouting(req.body || {}, { actor: actor(req), trace: req.ov && req.ov.traceId }) })));
+    r.post('/api/v1/admin/console/owner-inference/economy', json, write, wrap(async (req) => ({ economy: await ownerConfig.setEconomy(req.body || {}, { actor: actor(req), trace: req.ov && req.ov.traceId }) })));
     r.post('/api/v1/admin/console/providers/:key/key', json, write, wrap(async (req) => {
         if (!vault || !settings) throw new AiError(503, 'vault.unavailable', 'provider keys cannot be stored on this host');
         const provider = await registry.getProvider(req.params.key);

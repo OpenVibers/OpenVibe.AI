@@ -1,6 +1,7 @@
 'use strict';
 const { publicOffers, quantile, DAY, MIN_SAMPLES } = require('./metrics-rollup');
 const { modelMatches } = require('./observed');
+const { latencyOf } = require('./timing');
 const HOUR = 3600000;
 const iso = (ms) => new Date(ms).toISOString();
 const numeric = (value) => value == null || !Number.isFinite(Number(value)) || Number(value) < 0 ? null : Number(value);
@@ -17,7 +18,7 @@ function healthCells(rows, offers) {
         cell.runs++;
         if (row.status === 'succeeded') {
             cell.successes++;
-            const latency = numeric(row.latency_ms);
+            const latency = latencyOf(row);
             if (latency != null) cell.latency.push(latency);
         }
         cells.set(key, cell);
@@ -32,16 +33,16 @@ function createObservations({ db, registry, catalog, clock = { now: () => Date.n
         if (!enabled) return { skipped: 'disabled' };
         const now = clock.now(), end = Math.floor(now / HOUR) * HOUR;
         return db.tx(async () => {
-            const state = await db.prepare('SELECT * FROM exchange_observations_job WHERE id = 1 AND next_due <= ?::timestamptz FOR UPDATE SKIP LOCKED').get(iso(now));
+            const state = await db.prepare('SELECT * FROM exchange_observations_job WHERE id = 1 AND (next_due <= ?::timestamptz OR algorithm_version < 2) FOR UPDATE SKIP LOCKED').get(iso(now));
             if (!state) return { skipped: 'not_due' };
             const providers = await registry.listProviders();
             if (providers.some((p) => p.metadata?.drill || p.metadata?.fail)) return { skipped: 'drill' };
             const offers = publicOffers(providers, await registry.listModels());
             const oldest = end - 7 * DAY;
-            const from = state.completed_hour ? Math.max(oldest, Date.parse(state.completed_hour) - HOUR) : oldest;
+            const from = state.completed_hour && state.algorithm_version >= 2 ? Math.max(oldest, Date.parse(state.completed_hour) - HOUR) : oldest;
             const rows = await db.prepare(`SELECT to_char(c.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:00:00"Z"') AS hour,
                 c.body->'offer'->>'provider' AS provider, c.body->'offer'->>'model' AS model,
-                r.status, c.body->>'latency_ms' AS latency_ms FROM ai_receipts c JOIN runs r ON r.id = c.run_id
+                r.status, r.started_at, r.finished_at, c.body->>'latency_ms' AS latency_ms FROM ai_receipts c JOIN runs r ON r.id = c.run_id
                 WHERE c.created_at >= ?::timestamptz AND c.created_at < ?::timestamptz
                 AND r.synthetic = 0 AND r.cached_from IS NULL AND r.status IN ('succeeded', 'failed')`).all(iso(from), iso(end));
             const cells = healthCells(rows, offers);
@@ -62,7 +63,7 @@ function createObservations({ db, registry, catalog, clock = { now: () => Date.n
                     prices += out.changes;
                 }
             }
-            await db.prepare('UPDATE exchange_observations_job SET next_due = ?::timestamptz, completed_hour = ?::timestamptz WHERE id = 1')
+            await db.prepare('UPDATE exchange_observations_job SET algorithm_version = 2, next_due = ?::timestamptz, completed_hour = ?::timestamptz WHERE id = 1')
                 .run(iso(end + HOUR + 5 * 60000), iso(end - HOUR));
             return { hours: cells.length, prices };
         });

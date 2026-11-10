@@ -232,6 +232,88 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
     const exhaustedCooldownMs = () => Math.max(60000, Number(config.breaker.exhaustedCooldownMs) || 10 * 60000);
     // L36 Y7: the provider that last answered this prompt, for five minutes (server/providers/warm-cache.js).
     const warm = createWarmCache({ now: () => clock.now() });
+    // The owner's inference configuration (server/owner-config.js): spend caps, routing strategy
+    // per capability (cheapest / fastest / fixed order with a ceiling and a denylist) and economy
+    // toggles. Empty by installation: every check below is a no-op until the owner writes a row.
+    const ownerConfig = (() => { try { return require('../owner-config').createOwnerConfig({ db, registry, clock }); } catch { return null; } })();
+    const ownerCapability = (operation, ctx = {}, req = null) => {
+        if ((ctx.contentPolicy || 'standard') === 'uncensored') return 'uncensored';
+        if (operation === 'embed' || operation === 'embedding') return 'embed';
+        if (operation === 'image') return 'image';
+        if (operation === 'transcribe' || operation === 'speech') return 'transcribe';
+        if (ctx.latencyClass === 'batch' || (req && req.latencyClass === 'batch')) return 'batch';
+        return 'chat';
+    };
+    /** Apply the owner's routing row to an already-ranked order: denylist, ceiling, spend caps,
+     * then cheapest / fastest / fixed ordering. Excluded offers keep their reason in explain. */
+    async function applyOwner(list, explain, { operation, ctx = {}, req = null }) {
+        if (!ownerConfig || !list || !list.length) return list;
+        const capability = ownerCapability(operation, ctx, req);
+        const routing = await ownerConfig.routingFor(capability).catch(() => null);
+        const economy = await ownerConfig.getEconomy().catch(() => []);
+        const eco = economy.find((r) => r.capability === capability) || null;
+        const denied = new Set((routing && routing.denylist) || []);
+        const ceiling = routing ? routing.ceiling : null;
+        const out = [];
+        for (const c of list) {
+            if (denied.has(c.provider)) { explain.candidates.push({ provider: c.provider, model: c.model || null, eligible: false, excluded_reason: `owner_denylist (${capability})`, cost: null, latency: null }); continue; }
+            const cap = await ownerConfig.capHit(c.provider).catch(() => null);
+            if (cap && cap.over) { explain.candidates.push({ provider: c.provider, model: c.model || null, eligible: false, excluded_reason: `spend_cap (today $${Number(cap.spent_today).toFixed(4)} of $${cap.daily == null ? '∞' : cap.daily}, month $${Number(cap.spent_month).toFixed(4)} of $${cap.monthly == null ? '∞' : cap.monthly})`, cost: null, latency: null }); continue; }
+            if (ceiling != null) {
+                const price = await priceFor(c.provider, c.model).catch(() => null);
+                let outPrice = price ? Number(price.out) || 0 : 0;
+                if (outPrice === 0 && c.model) { const row = await registry.getModel(c.provider, c.model).catch(() => null); if (row && row.cost) outPrice = Number(row.cost.out_per_mtok ?? outPrice) || 0; }
+                if (price && outPrice > Number(ceiling)) { explain.candidates.push({ provider: c.provider, model: c.model || null, eligible: false, excluded_reason: `over_owner_ceiling (${outPrice.toFixed(4)} > ${Number(ceiling).toFixed(4)} USD/Mtok)`, cost: null, latency: null }); continue; }
+                if (!price && outPrice > Number(ceiling)) { explain.candidates.push({ provider: c.provider, model: c.model || null, eligible: false, excluded_reason: `over_owner_ceiling (${outPrice.toFixed(4)} > ${Number(ceiling).toFixed(4)} USD/Mtok)`, cost: null, latency: null }); continue; }
+            }
+            out.push(c);
+        }
+        let order = out;
+        if (routing && routing.enabled && routing.strategy === 'fixed') {
+            const pos = new Map(routing.choices.map((c, i) => [`${c.provider}/${c.model || ''}`, i]));
+            order = choicesSubset(out, routing.choices);
+            explain.reasons = [`owner ${capability} fixed order v${routing.updated_at}`, ...(explain.reasons || [])];
+        } else if (routing && routing.enabled && routing.strategy === 'cheapest') {
+            order = await sortByPrice(out, 'cheapest');
+            explain.reasons = [`owner ${capability} cheapest first`, ...(explain.reasons || [])];
+        } else if (routing && routing.enabled && routing.strategy === 'fastest') {
+            order = await sortByLatency(out);
+            explain.reasons = [`owner ${capability} fastest first`, ...(explain.reasons || [])];
+        }
+        if (eco && eco.small_first && capability === 'chat') {
+            order = await sortByTier(out, order, routing && routing.enabled && routing.strategy === 'fixed');
+            if (!(routing && routing.enabled && routing.strategy === 'fixed')) explain.reasons = [`owner small-model-first (${capability})`, ...(explain.reasons || [])];
+        }
+        if (eco) explain.owner_economy = { capability, batches: eco.batches, prompt_cache: eco.prompt_cache, small_first: eco.small_first, output_limit: eco.output_limit, answer_cache: eco.answer_cache };
+        if (!(routing && routing.enabled)) return order;
+        return order;
+    }
+    function choicesSubset(list, choices) {
+        return choices.flatMap((ch) => list.filter((c) => c.provider === ch.provider && (c.model || null) === (ch.model || null) || (c.provider === ch.provider && c.model == null && ch.model == null)));
+    }
+    async function sortByPrice(list) {
+        const scored = [];
+        for (const c of list) {
+            if (c.provider === 'stub') { scored.push([Infinity, Infinity, c]); continue; }
+            const p = await priceFor(c.provider, c.model).catch(() => ({ out: Infinity }));
+            let out = Number(p.out) || 0, inn = Number(p.in) || 0;
+            if (out === 0 && inn === 0 && c.model) { const row = await registry.getModel(c.provider, c.model).catch(() => null); if (row && row.cost) { out = Number(row.cost.out_per_mtok ?? out) || 0; inn = Number(row.cost.in_per_mtok ?? inn) || 0; } }
+            scored.push([out, inn, c]);
+        }
+        scored.sort((a, b) => (a[0] - b[0]) || (a[1] - b[1]));
+        return scored.map((x) => x[2]);
+    }
+    async function sortByLatency(list) {
+        const stats = await statsByProvider().catch(() => new Map());
+        return [...list].sort((a, b) => { const pa = stats.get(a.provider) || {}; const pb = stats.get(b.provider) || {}; return (pa.p95 == null ? Infinity : pa.p95) - (pb.p95 == null ? Infinity : pb.p95); });
+    }
+    async function sortByTier(list, order, fixed) {
+        if (fixed) return order;
+        const scored = [];
+        for (const c of list) { const row = c.model ? await registry.getModel(c.provider, c.model).catch(() => null) : null; const tier = row && row.metadata && row.metadata.tier ? String(row.metadata.tier) : 'balanced'; const rank = { fast: 0, balanced: 1, strong: 2, frontier: 3 }[tier]; scored.push([rank === undefined ? 1 : rank, c]); }
+        scored.sort((a, b) => a[0] - b[0]);
+        return scored.map((x) => x[1]);
+    }
     // AI Exchange P7: measured per-deployment evidence for alias routing. The feature flag is read live (D11
     // owner settings), so turning routing_evidence on or off in the config store needs no restart; while it is off
     // no metrics are written and no order changes.
@@ -983,6 +1065,9 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             order.push({ provider: 'stub', model: null });
             explain.candidates.push({ provider: 'stub', model: null, eligible: true, excluded_reason: null, cost: 0, latency: null });
         }
+        // The owner's ordering, caps and denylists (server/owner-config.js). Empty by
+        // installation: a call with no owner row leaves the order exactly as ranked.
+        order = await applyOwner(order, explain, { operation, ctx });
         return { order, explain, placement: result, rateCards: rest.rateCards || [], states: rest.states || [] };   // placement: the platform.placement-result@1 explain is built from (pool routes)
     }
 
@@ -1604,6 +1689,11 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             }
             explain.preset = { name: ctx.presetName || null, policy: ctx.presetPolicy };
         }
+        // The owner's fixed/cheapest/fastest order survives the router's re-ranking: re-apply
+        // here, on the authoritative list, so an owner's uncensored first/second always holds.
+        // The floor (server/policy/floor.js) and the 18+ gate run before/after every attempt
+        // regardless of this order; there is no switch that skips either.
+        if (!exact) list = await applyOwner(list, explain, { operation, ctx, req });
         // AI Exchange P7: an alias route (economy/fast/balanced/auto) is ranked by measured evidence when
         // AI_ROUTING_EVIDENCE is on. planAi (openvibe-sdk/placement) is the planner: this only prepares its
         // inputs, keeps the incumbent for N decisions and explains the answer. Private never leaves local
@@ -1822,10 +1912,16 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                 // The registry says how much room this model needs on top of the answer the caller asked for.
                 const reserve = Number(attemptRow && attemptRow.metadata && attemptRow.metadata.reasoning_reserve_tokens) || 0;
                 const requestedMax = Number(req.maxTokens);
-                const modelMax = reserve > 0 && Number.isSafeInteger(requestedMax) && requestedMax >= 1
+                const modelMaxBase = reserve > 0 && Number.isSafeInteger(requestedMax) && requestedMax >= 1
                     && ['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich', 'complete', 'messages'].includes(operation)
                     ? requestedMax + reserve
                     : req.maxTokens;
+                // The owner's output limit per capability (server/owner-config.js): a cap, not
+                // a floor. It only ever lowers what the request asked for.
+                const ownerCap = explain.owner_economy && explain.owner_economy.output_limit ? Number(explain.owner_economy.output_limit) : null;
+                const modelMax = ownerCap != null && Number.isSafeInteger(ownerCap) && ownerCap >= 1
+                    ? Math.min(Number(modelMaxBase) || ownerCap, ownerCap)
+                    : modelMaxBase;
                 const attemptMeta = { provider: p ? p.key : null, model, maxTokens: modelMax, paid: !isFreeProvider(p), retail: modelCatalog.retailRate(attemptRow) };
                 const routed = typeof ctx.onRoute === 'function' ? await ctx.onRoute(attemptFacts, attemptMeta) : null;
                 if (routed && routed.skip) {
