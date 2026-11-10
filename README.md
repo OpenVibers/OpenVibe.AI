@@ -1093,9 +1093,9 @@ ai.openvibe.network notice from OpenVibe.Sites.
 Part of the [OpenVibe network](https://openvibe.network). Built in the open by [OpenVibers](https://github.com/OpenVibers).
 
 <!-- versions:start -->
-- openvibe-contracts: v0.384.0
+- openvibe-contracts: v0.389.0
 - openvibe-sdk: v0.125.0
-- openvibe-shared: v4.183.0
+- openvibe-shared: v4.186.0
 <!-- versions:end -->
 
 ### Exchange search engines
