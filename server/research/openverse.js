@@ -13,6 +13,9 @@ function createOpenverse({ http }) {
         return (j.results || []).filter((r) => r.url && /^https:/.test(r.url) && (r.width || 0) >= 320 && NAMES[r.license]).map((r) => ({
             url: r.url,
             original: r.url,
+            // Openverse's own thumbnail proxy is the small, stable URL the image task fetches; the original
+            // may live on a host we do not fetch (Flickr, a museum).
+            thumbnail: r.thumbnail || null,
             width: r.width || null,
             height: r.height || null,
             mime: null,
