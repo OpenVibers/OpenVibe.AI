@@ -8,6 +8,15 @@ const { PASSTHROUGH_OUTPUT } = require('./live');
 
 const STR = (n) => ({ type: 'string', maxLength: n });
 const OBJ = (props, required = []) => ({ type: 'object', additionalProperties: false, required, properties: props });
+// A file on a turn (ai.file@1): a Media reference, never inline bytes. The full contract shape is
+// accepted (the SDK returns it); a caller that has only the object id may send just { id } / { media_id }.
+const FILE_REF = { type: 'object', additionalProperties: false, properties: {
+    id: STR(200), media_id: STR(80), name: STR(255), media_type: STR(255), size: { type: 'integer', minimum: 0 },
+    storage: { type: 'object', additionalProperties: false, required: ['provider', 'key'], properties: { provider: { const: 'media' }, key: STR(500) } },
+    access: { type: 'object', additionalProperties: false, properties: { readers: { type: 'array', minItems: 1, uniqueItems: true, items: STR(200) } } },
+    read: { type: 'object' }, role: { enum: ['input', 'artifact'] },
+} };
+const TURN_FILES = { type: 'array', maxItems: 10, items: FILE_REF };
 const COMMON = { max_tokens: { type: 'integer', minimum: 1, maximum: 16000 }, temperature: { type: ['number', 'null'], minimum: 0, maximum: 2 },
     // AI Exchange F: a liability cap on the Balance hold for this request (optional; nothing when unset).
     max_cost_usd: { type: ['number', 'string', 'null'] } };
@@ -46,7 +55,7 @@ const templates = [
 const workflows = [
     {
         key: 'ai.chat', name: 'Chat completion', namespace: 'ai',
-        input_schema: OBJ({ system: STR(200000), messages: { type: 'array', minItems: 1, maxItems: 200, items: { type: 'object', required: ['role', 'content'], properties: { role: { enum: ['user', 'assistant'] }, content: STR(200000) } } }, ...COMMON }, ['messages']),
+        input_schema: OBJ({ system: STR(200000), messages: { type: 'array', minItems: 1, maxItems: 200, items: { type: 'object', required: ['role', 'content'], properties: { role: { enum: ['user', 'assistant'] }, content: STR(200000) } } }, files: TURN_FILES, ...COMMON }, ['messages']),
         output_schema: PASSTHROUGH_OUTPUT,
         steps: [{ kind: 'passthrough', route: 'default.chat' }], cache_mode: 'none',
     },
@@ -109,9 +118,10 @@ const workflows = [
             top_p: { type: ['number', 'null'], minimum: 0, maximum: 1 },
             presence_penalty: { type: ['number', 'null'], minimum: -2, maximum: 2 },
             frequency_penalty: { type: ['number', 'null'], minimum: -2, maximum: 2 },
+            files: TURN_FILES,
             ...COMMON,
         }, ['messages']),
-        output_schema: OBJ({ choices: { type: 'array', minItems: 1, maxItems: 8, items: { type: 'object' } }, system_fingerprint: { type: ['string', 'null'] }, model: { type: ['string', 'null'] } }, ['choices']),
+        output_schema: OBJ({ choices: { type: 'array', minItems: 1, maxItems: 8, items: { type: 'object' } }, system_fingerprint: { type: ['string', 'null'] }, model: { type: ['string', 'null'] }, artifacts: { type: 'array', maxItems: 10, items: { type: 'object' } } }, ['choices']),
         metadata: { passthrough: true },
         steps: [{ kind: 'complete', route: 'default.chat' }], cache_mode: 'none',
     },
@@ -138,11 +148,13 @@ const workflows = [
             top_p: { type: ['number', 'null'], minimum: 0, maximum: 1 },
             top_k: { type: ['integer', 'null'], minimum: 0 },
             metadata: { type: 'object' },
+            files: TURN_FILES,
         }, ['messages', 'max_tokens']),
         output_schema: OBJ({
             id: STR(200), type: STR(20), role: STR(20), model: { type: ['string', 'null'] },
             content: { type: 'array', minItems: 1, maxItems: 500, items: { type: 'object' } },
             stop_reason: { type: ['string', 'null'] }, stop_sequence: { type: ['string', 'null'] }, usage: { type: 'object' },
+            artifacts: { type: 'array', maxItems: 10, items: { type: 'object' } },
         }, ['content']),
         metadata: { passthrough: true },
         steps: [{ kind: 'messages', route: 'default.messages' }], cache_mode: 'none',

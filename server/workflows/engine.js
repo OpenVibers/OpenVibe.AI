@@ -36,6 +36,8 @@ const { PREPARE, POSTPROCESS } = require('./hooks');
 const modelCatalog = require('../providers/model-catalog');
 const { buildBody, buildCompleteBody } = require('../providers/openai');
 const { PROVIDERS: ENGINES } = require('../research');
+const fileInputs = require('../file-inputs');
+const filesOut = require('../artifacts');
 
 /** The last user message's text, for the queue's own record of what one item asks (never sent as-is). */
 function lastUserText(messages) {
@@ -260,10 +262,16 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
         const route = await routeFor(routeKey);
         const sys = typeof input.system === 'string' ? (input.system.trim() ? [{ text: input.system, cache: false }] : [])
             : Array.isArray(input.system) ? input.system.filter(x => x && String(x.text || '').trim()).map(x => ({ text: String(x.text), cache: Boolean(x.cache) })) : [];
-        const messages = normMessages(input.messages, input.user);
+        const base = { ...input, messages: normMessages(input.messages, input.user) };
+        // Files on the turn (ai.file@1) become text or image content for this call only.
+        const turn = Array.isArray(input.files) && input.files.length
+            ? await fileInputs.attachFiles(base, fetcher, { signal: ctx.signal, format: 'openai', vision: true })
+            : base;
+        const messages = turn.messages;
         const image = input.image ? await fetcher.loadImage({ ...input.image, max_width: input.image.max_width || 1024 }, { signal: ctx.signal }) : null;
         const req = {
             system: sys, messages, image,
+            ...(turn.hasImage ? { vision: true } : {}),
             json: input.json ? { name: input.json.name || 'result', schema: input.json.schema, strict: input.json.strict !== false, description: input.json.description } : null,
             maxTokens: Math.max(1, Math.round(input.max_tokens || 400)),
             temperature: input.temperature == null ? null : input.temperature,
@@ -336,6 +344,8 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
      */
     async function prepareBatch(wf, run, input, ctx = {}) {
         if (!wf || !Array.isArray(wf.steps) || wf.steps.length !== 1) return null;
+        // Attachments are read from Media at execution time; a provider batch request cannot carry them.
+        if (Array.isArray(input && input.files) && input.files.length) return null;
         const step = wf.steps[0];
         if (step.kind === 'llm') {
             // An image cannot travel in a provider batch request here: the answer would need the media file.
@@ -383,9 +393,13 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
     /** complete: the OpenAI Chat Completions request as the caller wrote it (ai.complete), to an upstream that speaks it. */
     async function completeStep(step, input, wf, run, ctx) {
         const { route, selection } = await selectedRoute(await routeFor(step.route || 'default.chat'), input);
+        // Media-backed files on the turn (ai.file@1) become text or image content for this call only.
+        const turn = Array.isArray(input.files) && input.files.length
+            ? await fileInputs.attachFiles(input, fetcher, { signal: ctx.signal, format: 'openai', vision: true })
+            : input;
         const openai = {};
         for (const k of ['messages', 'tools', 'tool_choice', 'parallel_tool_calls', 'response_format', 'stop', 'seed', 'top_p', 'presence_penalty', 'frequency_penalty']) {
-            if (input[k] !== undefined) openai[k] = input[k];
+            if (turn[k] !== undefined) openai[k] = turn[k];
         }
         const req = {
             openai,
@@ -393,6 +407,7 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
             temperature: input.temperature == null ? null : input.temperature,
             timeoutMs: Math.max(route.timeout_ms || 0, 120000),
             prefer: ctx.prefer || null,
+            ...(turn.hasImage ? { vision: true } : {}),
             ...(typeof ctx.onDelta === 'function' ? { onDelta: ctx.onDelta } : {}),
         };
         const batch = batchAnswerFor(ctx, 'complete');
@@ -401,7 +416,11 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
             : await pool.execute(route, 'complete', req, { ...ctx, ...selectionCtx(selection), routeKey: route.key, routeVersion: route.version, promptHash: sha256({ m: openai.messages, t: openai.tools || null }) });
         const c = exec.result.completion;
         if (!c || !Array.isArray(c.choices) || !c.choices.length) throw new AiError(502, 'output.empty', 'the provider answered, but with no choices');
-        return { output: { choices: c.choices, system_fingerprint: c.system_fingerprint || null, model: exec.model }, exec, route };
+        // Files the model produced beside its text: Media references pass through; inline bytes need the
+        // configured Media store (server/artifacts.js), never the run's output.
+        const subject = ctx.onBehalfOf && ctx.onBehalfOf.id ? ctx.onBehalfOf.id : null;
+        const artifacts = await filesOut.collectArtifacts(c.choices[0] && c.choices[0].message, { store: filesOut.storeOf(config), subject });
+        return { output: { choices: c.choices, system_fingerprint: c.system_fingerprint || null, model: exec.model, ...(artifacts.length ? { artifacts } : {}) }, exec, route };
     }
 
     /**
@@ -410,20 +429,27 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
      */
     async function messagesStep(step, input, wf, run, ctx) {
         const { route, selection } = await selectedRoute(await routeFor(step.route || 'default.messages'), input);
+        // Media-backed files on the turn (ai.file@1): text parts, or base64 image sources for a vision model.
+        const turn = Array.isArray(input.files) && input.files.length
+            ? await fileInputs.attachFiles(input, fetcher, { signal: ctx.signal, format: 'anthropic', vision: true })
+            : input;
         const req = {
-            messages: input.messages,
+            messages: turn.messages,
             maxTokens: Math.max(1, Math.round(input.max_tokens || route.max_output_tokens || 1024)),
             timeoutMs: Math.max(route.timeout_ms || 0, 120000),
             prefer: ctx.prefer || null,
+            ...(turn.hasImage ? { vision: true } : {}),
             ...(typeof ctx.onDelta === 'function' ? { onDelta: ctx.onDelta } : {}),
         };
         for (const k of ['system', 'tools', 'tool_choice', 'stop_sequences', 'temperature', 'top_p', 'top_k', 'metadata']) {
             if (input[k] !== undefined) req[k] = input[k];
         }
-        const exec = await pool.execute(route, 'messages', req, { ...ctx, ...selectionCtx(selection), routeKey: route.key, routeVersion: route.version, promptHash: sha256({ m: input.messages, t: input.tools || null }) });
+        const exec = await pool.execute(route, 'messages', req, { ...ctx, ...selectionCtx(selection), routeKey: route.key, routeVersion: route.version, promptHash: sha256({ m: turn.messages, t: input.tools || null }) });
         const m = exec.result.message;
         if (!m || !Array.isArray(m.content)) throw new AiError(502, 'output.empty', 'the provider answered, but not with a message');
-        return { output: { ...m, model: m.model || exec.model }, exec, route };
+        const subject = ctx.onBehalfOf && ctx.onBehalfOf.id ? ctx.onBehalfOf.id : null;
+        const artifacts = await filesOut.collectArtifacts(m, { store: filesOut.storeOf(config), subject });
+        return { output: { ...m, model: m.model || exec.model, ...(artifacts.length ? { artifacts } : {}) }, exec, route };
     }
 
     async function transcribeStep(step, input, wf, run, ctx) {
