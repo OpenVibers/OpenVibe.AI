@@ -68,6 +68,9 @@ function exchangeRouter({ db, registry, pool, quotas = null, env = process.env, 
     const usageRead = auth.requireCap(CAPS.usageRead);
     const wrap = (fn) => async (req, res) => { try { const out = await fn(req, res); if (out !== undefined) res.json(out); } catch (err) { sendError(res, err, req.ov, log); } };
     const body = (req) => (req.body && typeof req.body === 'object' ? req.body : {});
+    const effortAnalytics = require('../effort/analytics').createAnalytics({ db, catalog, registry, pool, clock });
+    r.get('/api/v1/exchange/estimate', publicCache(30), wrap(req => effortAnalytics.estimate(req.query)));
+    r.get('/api/v1/me/ladders/:id', read, wrap(req => effortAnalytics.ladder(req.params.id, req.principal)));
 
     /** The owner a preset belongs to: the app's project, else the person the token acts for, else the service. */
     const ownerOf = (req) => {

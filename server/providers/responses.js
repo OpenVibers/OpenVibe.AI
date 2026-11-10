@@ -14,11 +14,12 @@
  */
 const { ProviderError, postJson, schemaInstruction } = require('./common');
 const usageParser = require('./usage');
+const effortPolicy = require('../effort/providers');
 
 const DEFAULT_BASE_URL = 'https://api.openai.com/v1';
 const TEXT_OPS = ['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich'];
 
-function isReasoningModel(m) { return /^(gpt-5|o\d)/i.test(m || ''); }
+function isReasoningModel(m) { return /^(gpt-[56]|o\d)/i.test(m || ''); }
 
 /** Chat-style content (a string or [{type:'text',text}] parts) as Responses input content. */
 function inputContent(content) {
@@ -26,7 +27,8 @@ function inputContent(content) {
     return content.map(p => (p && p.type === 'text' ? { type: 'input_text', text: String(p.text || '') } : p));
 }
 
-function buildBody({ model, system, messages, image, json, maxTokens, temperature, cacheKey, baseUrl }, jsonMode) {
+function buildBody(req, jsonMode) {
+    const { model, system, messages, image, json, maxTokens, temperature, cacheKey, baseUrl } = req;
     const input = (messages || []).map((m, i) => {
         const last = i === messages.length - 1;
         if (last && image && m.role === 'user') {
@@ -50,7 +52,7 @@ function buildBody({ model, system, messages, image, json, maxTokens, temperatur
     if (json && jsonMode === 'schema') body.text = { format: { type: 'json_schema', name: json.name || 'result', schema: json.schema, strict: json.strict !== false } };
     else if (json && jsonMode === 'object') body.text = { format: { type: 'json_object' } };
     if (cacheKey && /api\.openai\.com/i.test(baseUrl)) body.prompt_cache_key = String(cacheKey).slice(0, 64);
-    return body;
+    return effortPolicy.apply(body, req, { kind: 'responses', key: 'openai' });
 }
 
 /** The output_text parts of every output item, in order. */
@@ -105,7 +107,7 @@ function createResponsesProvider(record, { apiKey = '', fetchImpl = globalThis.f
         chat,
     };
     for (const op of TEXT_OPS) if (op !== 'chat') adapter[op] = chat;   // the engine shapes the prompt per operation
-    return adapter;
+    return effortPolicy.wrapAdapter(adapter, { ...record, base_url: baseUrl });
 }
 
 module.exports = { createResponsesProvider, buildBody, outputText, DEFAULT_BASE_URL };
