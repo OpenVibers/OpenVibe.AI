@@ -133,7 +133,9 @@ t.test('slogans, the daily secret and the star render as Live rendered them', ()
 t.test('chat analysis, person overviews, session titles and VOD ranking render as Live rendered them', () => {
     const tp = (k) => live.templates.find((x) => x.key === k).user_prompt;
     const g = render(tp('live.chat.global'), PREPARE['live.chat.global']({ window_label: 'past 3 hours', prior_memory: 'notes', recent_labels: ['a', 'b'], messages: [{ mins_ago: 12, where: 'global', author: 'goosely', text: ' hi ' }, { mins_ago: 3, where: '#ann', author: 'bob', kind: 'emote', text: 'waves' }] }).vars);
-    assert.match(g, /covers roughly the past 3 hours, across/);
+    assert.match(g, /roughly the past 3 hours\)\. Work only/);
+    assert.match(g, /TWO sentences/);
+    assert.match(g, /never invent a topic, a person or an event/);
     assert.match(g, /"""notes"""/);
     assert.match(g, /avoid duplicating these\):\n- a\n- b\n/);
     assert.match(g, /RECENT CHAT \(2 messages, oldest first\):\n\[12m ago\] \[global\] goosely: hi\n\[3m ago\] \[#ann\] bob: \(emote\) waves$/);
