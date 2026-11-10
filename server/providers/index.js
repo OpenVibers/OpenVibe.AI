@@ -893,9 +893,12 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
     const getAllowanceUsage = db.prepare(`SELECT COALESCE(SUM(tokens_in + tokens_out), 0)::bigint AS t FROM usage_daily WHERE provider_key = ? AND day >= ?`);
     /** Tokens this provider's free allowance has used this period (0 for a provider with no allowance). */
     async function allowanceUsed(providerKey, record) {
-        const since = traits.allowancePeriodStart(record, clock.now());
-        if (!since) return Number((await db.prepare('SELECT COALESCE(SUM(tokens_in + tokens_out), 0)::bigint AS t FROM usage_daily WHERE provider_key = ?').get(providerKey)).t || 0);
-        return Number((await getAllowanceUsage.get(providerKey, since)).t || 0);
+        try {
+            const since = traits.allowancePeriodStart(record, clock.now());
+            const row = since ? await getAllowanceUsage.get(providerKey, since)
+                : await db.prepare('SELECT COALESCE(SUM(tokens_in + tokens_out), 0)::bigint AS t FROM usage_daily WHERE provider_key = ?').get(providerKey);
+            return Number((row && row.t) || 0);
+        } catch { return 0; }
     }
     /** The request's latency class, as the router will use it. */
     const latencyClassOf = (route, ctx) => (ctx.latencyClass && ['interactive', 'background', 'batch'].includes(ctx.latencyClass))
@@ -929,29 +932,25 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             // interactive request; a provider that trains on or retains a prompt never receives a person's
             // private data; a free-only allowance that ended or is spent is not called again.
             const row = model ? await registry.getModel(p.key, model) : null;
+            // A trait keeps the offer out of the call, not out of placement: it stays in the pool with its
+            // reason (status down, like a credential-less offer), so explain has one entry per placement offer.
+            let traitReason = null;
             if (!traits.latencyAllows(p, row, latencyClass)) {
-                traitExcluded.push({ provider: p.key, model, eligible: false, excluded_reason: `latency_class ${latencyClass} not offered (${(traits.latencyClassesOf(p, row) || []).join('/') || 'interactive only'})`, cost: null, latency: null });
-                return;
+                traitReason = `latency_class ${latencyClass} not offered (${(traits.latencyClassesOf(p, row) || []).join('/') || 'interactive only'})`;
+            } else if (traits.isPrivateRequest(ctx) && traits.trainsOrRetains(p)) {
+                traitReason = 'private data: the provider trains on or retains prompts';
+            } else {
+                const allowance = traits.freeAllowanceOf(p) ? traits.allowanceLeft(p, { used: await allowanceUsed(p.key, p), now: clock.now() }) : null;
+                if (allowance && allowance.ended) traitReason = `free allowance ended ${allowance.ends_at}`;
+                else if (allowance && traits.traitsOf(p) && traits.traitsOf(p).free_only === true && allowance.left <= 0) traitReason = 'free allowance spent';
             }
-            if (traits.isPrivateRequest(ctx) && traits.trainsOrRetains(p)) {
-                traitExcluded.push({ provider: p.key, model, eligible: false, excluded_reason: 'private data: the provider trains on or retains prompts', cost: null, latency: null });
-                return;
-            }
-            const allowance = traits.allowanceLeft(p, { used: await allowanceUsed(p.key, p), now: clock.now() });
-            if (allowance && allowance.ended) {
-                traitExcluded.push({ provider: p.key, model, eligible: false, excluded_reason: `free allowance ended ${allowance.ends_at}`, cost: null, latency: null });
-                return;
-            }
-            if (allowance && traits.traitsOf(p) && traits.traitsOf(p).free_only === true && allowance.left <= 0) {
-                traitExcluded.push({ provider: p.key, model, eligible: false, excluded_reason: 'free allowance spent', cost: null, latency: null });
-                return;
-            }
+            if (traitReason) traitExcluded.push({ provider: p.key, model, eligible: false, excluded_reason: traitReason, cost: null, latency: null });
             seen.add(id);
             const creds = p.auth_mode === 'none' || credentialNotRequired(p) || Boolean(providerSecret(p, env));
             const h = await health(p.key);
             const st = stats.get(p.key) || { p95: null, requests: 0, errors: 0 };
             const errorRate = st.requests ? st.errors / st.requests : 0;
-            const status = p.status !== 'active' || !creds ? 'down' : h.state === 'open' ? 'down' : (h.state === 'half_open' || errorRate > 0.5) ? 'degraded' : 'up';
+            const status = traitReason || p.status !== 'active' || !creds ? 'down' : h.state === 'open' ? 'down' : (h.state === 'half_open' || errorRate > 0.5) ? 'degraded' : 'up';
             const free = isFreeProvider(p);
             // Placement prices an offer on one card: input tokens, the part of a call known before it runs.
             // The cached-input and output cards ride along (costOf bills all three; the state counts each metric).
@@ -977,7 +976,9 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             if (scope === 'local' && !isLocalProvider(p)) continue;
             if (scope === 'paid' && isFreeProvider(p)) continue;
             if (!accessOffered(p)) {
-                accessExcluded.push({ provider: p.key, model: (route.constraints && route.constraints.model) || p.default_model || null, eligible: false,
+                // A commercial-gate exclusion is provider-wide: it names no model, so explain's entry has the
+                // same id shape as the placement candidate it stands for.
+                accessExcluded.push({ provider: p.key, model: null, eligible: false,
                     excluded_reason: `provider_access ${modelCatalog.accessOf(p)}`, cost: null, latency: null });
                 continue;
             }
@@ -1005,7 +1006,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             if (scope === 'local' && !isLocalProvider(p)) continue;
             if (scope === 'paid' && isFreeProvider(p)) continue;
             if (!accessOffered(p)) {
-                accessExcluded.push({ provider: p.key, model: pin.model || p.default_model || null, eligible: false,
+                accessExcluded.push({ provider: p.key, model: null, eligible: false,
                     excluded_reason: `provider_access ${modelCatalog.accessOf(p)}`, cost: null, latency: null });
                 continue;
             }
@@ -1059,8 +1060,12 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         };
         // An offer the commercial gate kept out is named with its reason, never silently missing from the explain.
         for (const x of accessExcluded) if (!explain.candidates.some((c) => c.provider === x.provider && c.model === x.model)) explain.candidates.push(x);
-        // An offer the provider's own traits kept out is named the same way.
-        for (const x of traitExcluded) if (!explain.candidates.some((c) => c.provider === x.provider && c.model === x.model)) explain.candidates.push(x);
+        // An offer the provider's own traits kept out is named with the trait's reason, on the placement
+        // entry it already has; an offer placement never saw is added.
+        for (const x of traitExcluded) {
+            const hit = explain.candidates.find((c) => c.provider === x.provider && (c.model || null) === (x.model || null));
+            if (hit) hit.excluded_reason = x.excluded_reason; else explain.candidates.push(x);
+        }
         const order = [];
         if (result.selected) order.push(result.selected);
         const rest = result.candidates.filter(x => x.id !== result.selected).sort((a, b) => {
@@ -1874,6 +1879,9 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             const p = entry && entry.record;
             const a = entry && entry.adapter;
             const model = c.model || (p && p.default_model) || null;
+            const chosen = ranked.reasons.get(c.provider + ':' + (model || '')) || null;
+            const fallback = i > 0;
+            const base = { operation, provider_key: c.provider, model_key: model, route_key: ctx.routeKey || null, route_version: ctx.routeVersion || null, fallback: fallback ? 1 : 0, prompt_hash: ctx.promptHash || null, input_hash: ctx.inputHash || null };
             // The provider's own traits, checked before the call: a class it does not offer, a person's
             // private data it would train on or retain, or a concurrency cap already reached. Each is a
             // skip with its reason, never an error: the next offer answers.
@@ -1900,9 +1908,6 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                 if (ctx.logRequest) ctx.logRequest({ ...base, status: 'skipped', skip_reason: 'concurrency_cap' });
                 continue;
             }
-            const chosen = ranked.reasons.get(c.provider + ':' + (model || '')) || null;
-            const fallback = i > 0;
-            const base = { operation, provider_key: c.provider, model_key: model, route_key: ctx.routeKey || null, route_version: ctx.routeVersion || null, fallback: fallback ? 1 : 0, prompt_hash: ctx.promptHash || null, input_hash: ctx.inputHash || null };
             // Spend safety: the free allowance / anonymous Try it runs only from its named sources
             // (server/free-tier.js). A provider outside them is skipped even when it is cheaper: who pays
             // matters, not only the price. The person's own keys (above) are always tried first and are never

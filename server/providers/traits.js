@@ -104,7 +104,8 @@ function allowancePeriodStart(record, now = Date.now()) {
 function trainsOrRetains(record) {
     const p = policyOf(record);
     if (!p) return true;
-    if (p.trains === true || p.training === true) return true;
+    // Training must be an explicit "no": a provider that says nothing is not trusted with private data.
+    if (p.trains !== false && p.training !== false) return true;
     if (p.retention == null) return true;
     return RETENTION_KEEPS.has(String(p.retention));
 }

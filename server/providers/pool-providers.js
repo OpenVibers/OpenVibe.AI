@@ -767,12 +767,12 @@ const PROVIDERS = [
             payment: 'prepaid', source: 'https://docs.particle.ai/service-tiers', checked: '2026-11-10',
         }),
         privacy: privacy({
-            label: 'private', terms_url: 'https://docs.particle.ai/data-retention',
-            wording: '"Particle operates zero-data-retention for inference traffic: prompts and completions are processed in memory and never persisted." (data retention, 2026-11-10)',
+            label: 'anonymized', terms_url: 'https://docs.particle.ai/data-retention',
+            wording: '"Particle operates zero-data-retention for inference traffic: prompts and completions are processed in memory and never persisted." The page says nothing about training the prompt (data retention, 2026-11-10), so the offer is not trusted with private data.',
             checked: '2026-11-10',
         }),
         data_policy: policy({
-            trains: false, retention: 'none', trust: 'first-party', region: null,
+            trains: null, retention: 'none', trust: 'first-party', region: null,
             retention_note: 'prompts and completions are processed in memory and never persisted; prefix caches are transient',
             terms: 'https://docs.particle.ai/data-retention', checked: '2026-11-10',
         }),
