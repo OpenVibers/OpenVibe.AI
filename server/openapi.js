@@ -89,6 +89,37 @@ function route(method, p, operation) {
     (PATHS[p] = PATHS[p] || {})[method] = operation;
 }
 
+// ── What AI can make (owner, 11-09, item 45) ────────────────────────────────────────────────
+const creation = {
+    type: 'object', additionalProperties: false,
+    required: ['id', 'product', 'name', 'gives', 'returns', 'workflow', 'task', 'access', 'costs_coins', 'start_url'],
+    properties: {
+        id: str({ pattern: '^[a-z][a-z0-9-]{1,63}$' }),
+        product: str({ enum: ['ai', 'blog', 'codes', 'community', 'design', 'food', 'games', 'live', 'media', 'meme', 'news', 'pics', 'quest', 'rent', 'reviews', 'space', 'tools', 'trade', 'wiki'] }),
+        name: str({ maxLength: 80 }), gives: str({ maxLength: 300 }), returns: str({ maxLength: 300 }),
+        workflow: nullable('string'), task: nullable('string'),
+        access: {
+            type: 'object', additionalProperties: false, required: ['guest', 'signed_in', 'floor_18'],
+            properties: { guest: { type: 'boolean' }, signed_in: { type: 'boolean' }, floor_18: { type: 'boolean' } },
+        },
+        costs_coins: { type: 'boolean' }, start_url: str({ format: 'uri' }),
+    },
+};
+const creationList = {
+    type: 'object', additionalProperties: false, required: ['creations', 'count', 'generated_at'],
+    properties: { creations: arrayOf(creation), count: integer({ minimum: 0 }), generated_at: str({ format: 'date-time' }) },
+};
+route('get', '/creations', {
+    operationId: 'listCreations', summary: 'What AI can make: every creation that is live now', tags: ['creations'], security: [],
+    description: 'Public, cached for five minutes and open to every origin (Access-Control-Allow-Origin: *). One entry per thing AI can make, built from the registered workflows and tasks (ai.creation-list@1): the product, a plain name, what the person gives it and what comes back, the workflow or task behind it, who may use it, whether it can cost coins and where to start. Only a workflow whose status is active is listed. The same list as Markdown is GET /api/v1/creations.md, or this path with ?format=markdown, and it is in /llms.txt.',
+    responses: { 200: json('The live catalogue', creationList), ...errors([429]) },
+});
+route('get', '/creations.md', {
+    operationId: 'listCreationsMarkdown', summary: 'What AI can make, as Markdown', tags: ['creations'], security: [],
+    description: 'The same live catalogue grouped by product, for AI readers and pages that want plain text (ai.creation-list@1).',
+    responses: { 200: { description: 'The catalogue as Markdown', content: { 'text/markdown': { schema: { type: 'string' } } } }, ...errors([429]) },
+});
+
 // ── AI tasks and choices (rich-content plan §1) ──────────────────────────────────────────────
 route('get', '/tasks', {
     operationId: 'listTasks', summary: 'The task catalogue: every named piece of AI work', tags: ['choices'], security: [],

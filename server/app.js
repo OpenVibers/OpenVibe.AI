@@ -9,6 +9,8 @@ const { createAiReadiness, registerAiGauges } = require('./observability');
 const { runsRouter } = require('./api/runs');
 const { actionsRouter } = require('./api/actions');
 const { sendError, providerSecret } = require('./util');
+const creations = require('./creations');
+const home = require('./home');
 const openapi = require('./openapi');
 const { adminRouter } = require('./api/admin');
 const { CAPS } = require('./auth');
@@ -46,8 +48,23 @@ function createApp({ choices = null, searchFetch = null, config, db, registry, p
     // AI_CORS_ORIGINS is echoed back, never credentials, and OPTIONS answers their preflight.
     // Token (/api/v1/*) and console (/console, /auth/*) routes never reach this branch.
     const publicCorsPaths = new Set(['/stats', '/release.json']);
+    // The creation catalogue is public data for every origin: an app or a page may read it without a
+    // token, so it answers `*` rather than the exact-origin list above.
+    const openCorsPaths = new Set(['/api/v1/creations', '/api/v1/creations.md']);
     const corsOrigins = new Set((config.cors && config.cors.origins) || []);
     app.use((req, res, next) => {
+        if (openCorsPaths.has(req.path)) {
+            if (req.method !== 'GET' && req.method !== 'OPTIONS') return next();
+            res.setHeader('Access-Control-Allow-Origin', '*');
+            res.vary('Origin');
+            if (req.method === 'OPTIONS') {
+                res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+                res.setHeader('Access-Control-Allow-Headers', 'Accept');
+                res.setHeader('Access-Control-Max-Age', '600');
+                return res.sendStatus(204);
+            }
+            return next();
+        }
         if (!publicCorsPaths.has(req.path) || (req.method !== 'GET' && req.method !== 'OPTIONS')) return next();
         const origin = req.get('Origin');
         const allowed = Boolean(origin) && corsOrigins.has(origin);
@@ -90,6 +107,31 @@ function createApp({ choices = null, searchFetch = null, config, db, registry, p
 
     app.get('/api/health', (_req, res) => {
         res.json({ status: 'ok', service: 'openvibe-ai', version: pkg.version });
+    });
+
+    // What AI can make (ai.creation-list@1): every creation that is live now, built from the registered
+    // workflows and tasks. Public and cached for five minutes; the Markdown twin is the same list for AI
+    // readers and a page that wants plain text. A workflow that is not active leaves the list.
+    async function creationList() {
+        const [workflows, tasks] = await Promise.all([registry.listWorkflows(), choices ? choices.tasks() : []]);
+        return creations.catalogue({ workflows, tasks });
+    }
+    const sendCreations = (markdown) => async (req, res, next) => {
+        try {
+            const list = await creationList();
+            const generatedAt = new Date(clock.now()).toISOString();
+            res.setHeader('Cache-Control', 'public, max-age=300');
+            if (markdown || req.query.format === 'markdown') return res.set('Content-Type', 'text/markdown; charset=utf-8').send(creations.renderMarkdown(list, { generatedAt }));
+            return res.json({ creations: list, count: list.length, generated_at: generatedAt });
+        } catch (err) { next(err); }
+    };
+    app.get('/api/v1/creations', sendCreations(false));
+    app.get('/api/v1/creations.md', sendCreations(true));
+    app.get('/llms.txt', async (req, res, next) => {
+        try {
+            res.setHeader('Cache-Control', 'public, max-age=300');
+            res.type('text/plain; charset=utf-8').send(home.llmsTxt({ siteUrl: config.baseUrl, creations: await creationList() }));
+        } catch (err) { next(err); }
     });
 
     // Readiness (openvibe-shared/ready): 503 when the database, the workflows or the Network key
@@ -276,6 +318,8 @@ function createApp({ choices = null, searchFetch = null, config, db, registry, p
             'GET  /api/v1/runs/:id    POST /api/v1/runs/:id/cancel|retry',
             'POST /api/v1/{chat,generate,summarize,classify,extract,enrich,embed}',
             'GET  /api/v1/workflows | templates | routes | providers | models | quotas | usage | audit',
+            'GET  /api/v1/creations      what AI can make (public, cached, CORS open); .md for Markdown',
+            'GET  /llms.txt              the same catalogue for AI readers',
             'GET  /api/health, /api/ready, /release.json',
             'GET  /runs/:id  your run receipt (OpenVibe.Network sign-in; your own runs only)',
             `GET  ${EXCHANGE}/privacy/keys   your own provider keys and session cookies`,
@@ -296,12 +340,12 @@ function createApp({ choices = null, searchFetch = null, config, db, registry, p
     app.get('/index.md', moved('/index.md'));
     app.get('/stats.md', moved('/models.md'));
     app.get('/updates.md', moved('/status.md'));
-    for (const p of ['/terms', '/privacy', '/dmca', '/sitemap.xml', '/llms.txt', '/llms-full.txt']) app.get(p, moved(p));
+    for (const p of ['/terms', '/privacy', '/dmca', '/sitemap.xml', '/llms-full.txt']) app.get(p, moved(p));
 
     // Discovery: the human site is Exchange, so this origin asks crawlers to leave it alone and names the map
     // that matters. Machine routes (the API, release.json, a run's receipt) are not crawled anyway.
     app.get('/robots.txt', (_req, res) => {
-        res.type('text/plain').send(`User-agent: *\nDisallow: /\nDisallow: /runs\nDisallow: /console\nDisallow: /auth/\nDisallow: /api/\n\n# The human site is OpenVibe.Exchange; the API stays here.\nSitemap: ${EXCHANGE}/sitemap.xml\n`);
+        res.type('text/plain').send(`User-agent: *\nAllow: /llms.txt\nAllow: /api/v1/creations\nAllow: /api/v1/creations.md\nDisallow: /\nDisallow: /runs\nDisallow: /console\nDisallow: /auth/\nDisallow: /api/\n\n# The human site is OpenVibe.Exchange; the API stays here.\nSitemap: ${EXCHANGE}/sitemap.xml\n`);
     });
 
     // A browser asking for a page that is not here goes to the Exchange home: the human site moved, and a

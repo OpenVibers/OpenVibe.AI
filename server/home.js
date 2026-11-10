@@ -8,7 +8,7 @@
  *
  *   renderHome({ siteUrl, stats })   the whole document (siteUrl: the public origin, config.baseUrl; stats: { days, rows })
  *   HOME_CSP                  its Content-Security-Policy (the Frame's scripts and calls to the Network)
- *   llmsTxt({ siteUrl })      /llms.txt, the same facts as plain text
+ *   llmsTxt({ siteUrl, creations })  /llms.txt, the same facts as plain text, with the live catalogue
  */
 const shell = require('openvibe-shared/shell');
 const frame = require('openvibe-shared/frame');
@@ -16,6 +16,7 @@ const showcase = require('openvibe-shared/showcase');
 const ovServe = require('openvibe-shared/serve');
 const appIcon = require('openvibe-shared/app-icon');
 const seo = require('openvibe-shared/seo');
+const { renderMarkdown } = require('./creations');
 
 const SITE_NAME = 'OpenVibe.AI';
 const NETWORK_URL = 'https://openvibe.network';
@@ -411,7 +412,7 @@ function llmsFullTxt({ siteUrl }) {
 
 // llmstxt.org: the pages as links, each of this site's own at its Markdown twin (AGT-5, openvibe-shared 4.108.0's markdown
 // mode); the developer-app facts as plain lines; ## Optional last.
-function llmsTxt({ siteUrl }) {
+function llmsTxt({ siteUrl, creations = [] }) {
     const head = seo.llmsTxt({
         name: SITE_NAME,
         summary: DESCRIPTION,
@@ -419,8 +420,9 @@ function llmsTxt({ siteUrl }) {
         base: siteUrl,
         sections: [
             { title: 'Start here', links: [
-                { title: 'Home', url: `${siteUrl}/` },
-                { title: 'Prices and measured latency per provider and model', url: `${siteUrl}/stats` },
+                { title: 'What AI can make (the same catalogue as data; public, cached, CORS open)', url: `${siteUrl}/api/v1/creations` },
+                { title: 'What AI can make, as Markdown', url: `${siteUrl}/api/v1/creations.md` },
+                { title: 'The human site (home, prices, status, console)', url: 'https://openvibe.exchange/' },
                 { title: 'Developer guide (tokens, limits, billing, sandbox)', url: GUIDE },
                 { title: 'API reference (OpenAPI, generated from the contracts)', url: API_DOCS_URL },
                 { title: 'Create a project and an app', url: PROJECTS_URL },
@@ -430,10 +432,7 @@ function llmsTxt({ siteUrl }) {
     const optional = seo.llmsTxt({ name: '', sections: [], optional: [
         { title: 'Owner AI operator console', url: 'https://openvibe.exchange/console' },
         { title: 'Your keys and accounts', url: 'https://openvibe.exchange/privacy/keys' },
-        { title: 'What shipped on OpenVibe.AI', url: `${siteUrl}/updates` },
         { title: 'Source (AGPL-3.0)', url: SOURCE },
-        { title: 'Sitemap', url: `${siteUrl}/sitemap.xml` },
-        { title: 'Full text for language models', url: `${siteUrl}/llms-full.txt` },
     ], markdown: true, base: siteUrl }).split('\n## Optional\n')[1];
     return [
         head.replace(/\n+$/, ''),
@@ -446,6 +445,12 @@ function llmsTxt({ siteUrl }) {
         `- An app's own provider: add x_openvibe.provider { base_url, model, secret } to name the project's own OpenAI-format API; secret is a project secret granted to ai for reveal to that origin (ADR-056), revealed per run and never stored.`,
         '- Every run response carries explain: the objective, the model selected and every candidate with its estimated cost, latency and excluded reason.',
         '- Sandbox apps run on free and local capacity only; runs, usage and the free allowance are per project; a person\'s own provider key is never used for an app.',
+        '',
+        '## What AI can make',
+        '',
+        `The live catalogue, built from the registered workflows and tasks: ${creations.length} creation${creations.length === 1 ? '' : 's'} today. Each line names what a person gives it, what comes back, who may use it, whether it can cost coins and where to start.`,
+        '',
+        renderMarkdown(creations, { heading: false }),
         '',
         `## Optional\n${optional}`,
     ].join('\n');

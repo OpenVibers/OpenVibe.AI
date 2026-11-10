@@ -78,6 +78,15 @@ const workflows = [
         // Not cached: a result made while the local model was down (or before a budget) must not outlive that, and
         // callers keep what they asked for (Live's vod_ai_state/clip_ai_state).
         cache_mode: 'none',
+        metadata: {
+            creation: {
+                id: 'recording-analysis', product: 'media', name: 'Analyse a recording', workflow: 'media.analyze',
+                gives: 'A video, clip or audio file.',
+                returns: 'Its scenes, speech, highlights and a short overview, measured on our own machines first.',
+                access: { guest: false, signed_in: true, floor_18: false }, costs_coins: true,
+                start_url: 'https://openvibe.media/',
+            },
+        },
     },
 ];
 
