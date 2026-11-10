@@ -220,7 +220,16 @@ function selfModelFor(cred, operation, req, ctx, prefs) {
     return { model, kind, why };
 }
 
-function createProviderPool({ db, registry, config, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, credentialFetch = null, machineModels = null, community = null, bench = null, variantEvidence = null, adultStatus = null, offPeak = null, creditGrants = null, ownerNotify = null }) {
+/** The prompt-cache switch is off for this kind: no cache marker and no warm-cache bias may be sent. */
+function withoutPromptCache(req) {
+    if (!req || typeof req !== 'object') return req;
+    const out = { ...req };
+    if (Array.isArray(out.system)) out.system = out.system.map((b) => (b && b.cache ? { ...b, cache: false } : b));
+    delete out.cacheKey;
+    return out;
+}
+
+function createProviderPool({ db, registry, config, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, credentialFetch = null, machineModels = null, community = null, bench = null, variantEvidence = null, adultStatus = null, offPeak = null, creditGrants = null, ownerNotify = null, ownerConfig = null }) {
     // A person's own machine as their model (credential provider node, server/machines.js).
     const machines = machineModels || require('../machines').createMachineModels({ config, env, fetchImpl });
     const cache = new Map();          // key -> { stamp, adapter }
@@ -235,7 +244,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
     // The owner's inference configuration (server/owner-config.js): spend caps, routing strategy
     // per capability (cheapest / fastest / fixed order with a ceiling and a denylist) and economy
     // toggles. Empty by installation: every check below is a no-op until the owner writes a row.
-    const ownerConfig = (() => { try { return require('../owner-config').createOwnerConfig({ db, registry, clock }); } catch { return null; } })();
+    const ownerSettings = ownerConfig || (() => { try { return require('../owner-config').createOwnerConfig({ db, registry, clock }); } catch { return null; } })();
     const ownerCapability = (operation, ctx = {}, req = null) => {
         if ((ctx.contentPolicy || 'standard') === 'uncensored') return 'uncensored';
         if (operation === 'embed' || operation === 'embedding') return 'embed';
@@ -246,18 +255,18 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
     };
     /** Apply the owner's routing row to an already-ranked order: denylist, ceiling, spend caps,
      * then cheapest / fastest / fixed ordering. Excluded offers keep their reason in explain. */
-    async function applyOwner(list, explain, { operation, ctx = {}, req = null }) {
-        if (!ownerConfig || !list || !list.length) return list;
+    async function applyOwner(list, explain, { operation, ctx = {}, req = null, economy = undefined }) {
+        if (!ownerSettings || !list || !list.length) return list;
         const capability = ownerCapability(operation, ctx, req);
-        const routing = await ownerConfig.routingFor(capability).catch(() => null);
-        const economy = await ownerConfig.getEconomy().catch(() => []);
-        const eco = economy.find((r) => r.capability === capability) || null;
+        const routing = await ownerSettings.routingFor(capability).catch(() => null);
+        const economyRows = economy === undefined ? await ownerSettings.getEconomy().catch(() => []) : null;
+        const eco = economy !== undefined ? economy : (economyRows.find((r) => r.capability === capability) || null);
         const denied = new Set((routing && routing.denylist) || []);
         const ceiling = routing ? routing.ceiling : null;
         const out = [];
         for (const c of list) {
             if (denied.has(c.provider)) { explain.candidates.push({ provider: c.provider, model: c.model || null, eligible: false, excluded_reason: `owner_denylist (${capability})`, cost: null, latency: null }); continue; }
-            const cap = await ownerConfig.capHit(c.provider).catch(() => null);
+            const cap = await ownerSettings.capHit(c.provider).catch(() => null);
             if (cap && cap.over) { explain.candidates.push({ provider: c.provider, model: c.model || null, eligible: false, excluded_reason: `spend_cap (today $${Number(cap.spent_today).toFixed(4)} of $${cap.daily == null ? '∞' : cap.daily}, month $${Number(cap.spent_month).toFixed(4)} of $${cap.monthly == null ? '∞' : cap.monthly})`, cost: null, latency: null }); continue; }
             if (ceiling != null) {
                 const price = await priceFor(c.provider, c.model).catch(() => null);
@@ -1310,7 +1319,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                 const latency = Date.now() - t0;
                 if (ctx.logRequest) {
                     ctx.logRequest({ ...base, model_key: result.model || model, status: 'ok', output_hash: sha256(result.json || result.text || ''), tokens_in: usage.input || 0, tokens_out: usage.output || 0,
-                        tokens_cached: usage.cached || 0, tokens_estimated: usage.estimated ? 1 : 0, cost_usd: cost, latency_ms: latency });
+                        tokens_cached: usage.cached || 0, tokens_cache_write: usage.cache_write || 0, tokens_estimated: usage.estimated ? 1 : 0, cost_usd: cost, latency_ms: latency });
                 }
                 return { result, provider: cred.providerKey, providerKind: cred.provider, model: result.model || model, fallbackUsed: false, usage, cost, latencyMs: latency, synthetic: false, tried: [],
                     startedAt: t0, explain: { ...explain, selected: `${cred.provider}/${result.model || model}`, openvibe: ownFacts } };
@@ -1608,9 +1617,15 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             }
             list = [...list].sort((a, b) => Number(free.get(b.provider)) - Number(free.get(a.provider)));
         }
+        // The owner's economy row for this kind, read once: the prompt-cache switch decides whether a
+        // warm-cache bias or a cache-control marker may be sent at all, before any candidate is tried.
+        const capability = ownerCapability(operation, ctx, req);
+        const ownerEconomy = ownerSettings ? await ownerSettings.economyFor(capability).catch(() => null) : null;
+        const promptCacheOn = !ownerEconomy || ownerEconomy.prompt_cache !== false;
+        if (!promptCacheOn) req = withoutPromptCache(req);
         // L36 Y7: pick for the task. The hard needs first (a model that cannot do the job is never tried), then
         // fit and cost: a light job takes the cheapest capable model, a heavy one the catalogue's strength tier.
-        const warmDeployment = warm.getDeployment(warmSubject(ctx, route), leadingText(req));
+        const warmDeployment = promptCacheOn ? warm.getDeployment(warmSubject(ctx, route), leadingText(req)) : null;
         const warmProvider = warmDeployment ? warmDeployment.provider : null;
         // L36 Y3: with free_first on, the free tiers lead (the price decides); with it off, the strength tier
         // leads and the free tiers are the failover, not the first choice.
@@ -1689,7 +1704,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         // here, on the authoritative list, so an owner's uncensored first/second always holds.
         // The floor (server/policy/floor.js) and the 18+ gate run before/after every attempt
         // regardless of this order; there is no switch that skips either.
-        if (!exact) list = await applyOwner(list, explain, { operation, ctx, req });
+        if (!exact) list = await applyOwner(list, explain, { operation, ctx, req, economy: ownerEconomy });
         // AI Exchange P7: an alias route (economy/fast/balanced/auto) is ranked by measured evidence when
         // AI_ROUTING_EVIDENCE is on. planAi (openvibe-sdk/placement) is the planner: this only prepares its
         // inputs, keeps the incumbent for N decisions and explains the answer. Private never leaves local
@@ -1973,7 +1988,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                     if (ctx.logRequest) {
                         ctx.logRequest({
                             ...base, model_key: result.model || model, status: 'ok', output_hash: sha256(result.json || result.text || result.vectors || result.segments || result.images || ''),
-                            tokens_in: usage.input || 0, tokens_out: usage.output || 0, tokens_cached: usage.cached || 0, tokens_estimated: usage.estimated ? 1 : 0,
+                            tokens_in: usage.input || 0, tokens_out: usage.output || 0, tokens_cached: usage.cached || 0, tokens_cache_write: usage.cache_write || 0, tokens_estimated: usage.estimated ? 1 : 0,
                             cost_usd: cost, latency_ms: latency,
                             debug_prompt: ctx.debugRaw ? JSON.stringify({ system: req.system, messages: req.messages }).slice(0, 200000) : null,
                             debug_response: ctx.debugRaw ? String(result.text || '').slice(0, 200000) : null,

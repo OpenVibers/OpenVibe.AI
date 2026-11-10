@@ -24,6 +24,7 @@ const { preferenceLines } = require('./user-modules');
 const { preferredTarget } = require('./providers/task');
 const latency = require('./latency');
 const tier = require('./policy/tier');
+const { capabilityOfRun } = require('./owner-config');
 const schemas = require('./schemas');
 const events = require('./events');
 const usageRecord = require('./usage-record');
@@ -125,7 +126,10 @@ function routePinRequest(value, principal, wf, internal = false) {
     return { provider, model };
 }
 
-function createRuns({ choices = null, db, registry, engine, cache, quotas, config, clock = { now: () => Date.now() }, log = console, userModules = null, credentials = null, preferences: personPreferences = null, tiers = null, projectSecrets = null, pool = null, runBudgets = null, credits = null, community = null, presets = null, receipts = null, abuse = null, webhooks = null, batchWaiting = null, batch = null }) {
+function createRuns({ choices = null, db, registry, engine, cache, quotas, config, clock = { now: () => Date.now() }, log = console, userModules = null, credentials = null, preferences: personPreferences = null, tiers = null, projectSecrets = null, pool = null, runBudgets = null, credits = null, community = null, presets = null, receipts = null, abuse = null, webhooks = null, batchWaiting = null, batch = null, ownerConfig = null }) {
+    // The owner's economy switches (server/owner-config.js). An unconfigured kind keeps its old
+    // behaviour (ECONOMY_DEFAULTS), so this only ever turns a way of paying less off.
+    const economyConfig = ownerConfig || (() => { try { return require('./owner-config').createOwnerConfig({ db, registry, clock }); } catch { return null; } })();
     const inflight = new Map();     // run id -> { controller, promise, release, caller }
     // BA2: the runs that wait for a provider's own batch API: they are created at once and finish later.
     const deferred = new Map();     // run id -> { controller, scope, ctx, input, hold, resolveDone }
@@ -204,9 +208,9 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
     }
 
     const insReq = db.prepare(`INSERT INTO requests (run_id, seq, operation, provider_key, model_key, route_key, route_version, status, skip_reason, fallback, prompt_hash, input_hash, output_hash,
-        tokens_in, tokens_out, tokens_cached, tokens_estimated, cost_usd, latency_ms, error, error_class, debug_prompt, debug_response, created_at)
+        tokens_in, tokens_out, tokens_cached, tokens_cache_write, tokens_estimated, cost_usd, latency_ms, error, error_class, debug_prompt, debug_response, created_at)
         VALUES (@run_id, @seq, @operation, @provider_key, @model_key, @route_key, @route_version, @status, @skip_reason, @fallback, @prompt_hash, @input_hash, @output_hash,
-        @tokens_in, @tokens_out, @tokens_cached, @tokens_estimated, @cost_usd, @latency_ms, @error, @error_class, @debug_prompt, @debug_response, @created_at)`);
+        @tokens_in, @tokens_out, @tokens_cached, @tokens_cache_write, @tokens_estimated, @cost_usd, @latency_ms, @error, @error_class, @debug_prompt, @debug_response, @created_at)`);
 
     // ── Create ─────────────────────────────────────────────
     function validateRefs(body) {
@@ -312,6 +316,14 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
         let latencyClass = resolvedLatency.class;         // BA3 may move a batch-class run to the background class
         // A faster class than the workflow allows was asked for: it runs in its own class, and the run's options say so.
         if (resolvedLatency.clamped) options.latency_clamped = resolvedLatency.clamped;
+        // The owner's economy row for this run's kind (chat, uncensored, embed, image, transcribe or
+        // batch). One read, used by the answer cache and by the batch decision below.
+        const runCapability = capabilityOfRun(wf, { contentPolicy, latencyClass });
+        const runEconomy = economyConfig ? await economyConfig.economyFor(runCapability).catch(() => null) : null;
+        const answerCacheOn = runCapability !== 'uncensored' && (!runEconomy || runEconomy.answer_cache !== false);
+        // The adult tier is never put on a provider batch in this release: its floor and 18+ answer
+        // checks run on the live path, and a batch answer would bypass them.
+        const batchesOn = runCapability !== 'uncensored' && (!runEconomy || runEconomy.batches !== false);
         // Community capacity is opt-in per request: a person's machine sees the prompt, so only a caller that says so
         // may be placed there. The OpenAI and Messages routes set body.community from x-openvibe-community.
         let communityOptIn = body.community === true || options.community === true;
@@ -482,7 +494,7 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
         // and another model's answer under the same prompt would silently break the pin. A run that may use the
         // person's own key is never cached either: their key must be used, and the answer is theirs, not the scope's.
         // A community or adult-tier answer cannot be reused by a request without the same policy.
-        const scope = taskChoice || options.cache === false || credentialSubject !== null || projectProvider || pinned || selfKeys || communityOptIn || contentPolicy !== 'standard' || advisorPolicy.enabled ? null : cache.scopeFor(wf.cache_mode, ctx);
+        const scope = taskChoice || options.cache === false || credentialSubject !== null || projectProvider || pinned || selfKeys || communityOptIn || contentPolicy !== 'standard' || advisorPolicy.enabled || !answerCacheOn ? null : cache.scopeFor(wf.cache_mode, ctx);
         let cacheKey = null;
         if (scope) {
             // Some workflows key the cache on less than their whole input (hooks.js CACHE_INPUT: a signed URL's signature).
@@ -527,9 +539,11 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
         // route has one whose real batch price fits the half-price card (the same money rule as capacity
         // route (d)). The run is created at once; the provider's answer finishes it on the ordinary path.
         // When no provider on the route can batch, the run runs in the background class at once and says so.
+        // The owner's batches switch for this run's kind is the gate (server/owner-config.js): off means
+        // the deferrable run still answers, at once, in the background class — it is never delayed.
         let autoBatch = null;
         let batchDeadline = null;
-        if (latencyClass === 'batch' && !(principal && principal.deferBatch)) {
+        if (latencyClass === 'batch' && !(principal && principal.deferBatch) && batchesOn) {
             batchDeadline = batchDeadlineHours(options.deadline_hours);
             // A run paid by somebody else's key or by a free allowance is not put on the network's batch
             // provider; a free-only app run cannot be placed on paid capacity either.
@@ -567,6 +581,15 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
                 ...(options.latency_clamped ? { latency_clamped: options.latency_clamped } : {}),
                 ...(autoBatch ? { deadline_hours: batchDeadline, batch: { provider: autoBatch.provider, model: autoBatch.model } } : {}),
             });
+        } else if (latencyClass === 'batch' && !(principal && principal.deferBatch) && !batchesOn) {
+            // The owner turned batches off for this kind: the run is not delayed and not queued. It
+            // answers in the background class now, and its options say which switch clamped it.
+            latencyClass = 'background';
+            ctx.latencyClass = 'background';
+            delete ctx.discount;
+            options.latency_clamped = { asked: 'batch', used: 'background', economy: `batches off for ${runCapability}` };
+            base.latency_class = latencyClass;
+            base.options = JSON.stringify({ ...parseJson(base.options, {}), latency_clamped: options.latency_clamped });
         }
 
         // Queue caps, then quota: both before any provider call (a refused run is not counted).
@@ -929,7 +952,7 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
             await insReq.run({
                 run_id: id, seq: seq++, operation: e.operation, provider_key: e.provider_key, model_key: e.model_key || null, route_key: e.route_key || null, route_version: e.route_version || null,
                 status: e.status, skip_reason: e.skip_reason || null, fallback: e.fallback || 0, prompt_hash: e.prompt_hash || null, input_hash: row.input_hash, output_hash: e.output_hash || null,
-                tokens_in: e.tokens_in || 0, tokens_out: e.tokens_out || 0, tokens_cached: e.tokens_cached || 0, tokens_estimated: e.tokens_estimated || 0, cost_usd: e.cost_usd || 0,
+                tokens_in: e.tokens_in || 0, tokens_out: e.tokens_out || 0, tokens_cached: e.tokens_cached || 0, tokens_cache_write: e.tokens_cache_write || 0, tokens_estimated: e.tokens_estimated || 0, cost_usd: e.cost_usd || 0,
                 latency_ms: e.latency_ms == null ? null : e.latency_ms, error: e.error || null, error_class: e.error_class || null,
                 debug_prompt: config.debugRawLog && opts.debug ? e.debug_prompt || null : null, debug_response: config.debugRawLog && opts.debug ? e.debug_response || null : null,
                 created_at: iso(clock.now()),
@@ -1119,7 +1142,7 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
                     .run(cancelled ? 'cancelled' : 'failed', code, extra ? `${detail} ${extra}` : detail, attempts, explain, iso(clock.now()), id);
                 if (f.changes) await events.runChanged(await getRow(id));
             });
-            const spent = await db.prepare("SELECT COALESCE(SUM(tokens_in),0)::bigint ti, COALESCE(SUM(tokens_out),0)::bigint tout, COALESCE(SUM(tokens_cached),0)::bigint tc, COALESCE(SUM(cost_usd),0) c FROM requests WHERE run_id = ? AND status = 'ok'").get(id);
+            const spent = await db.prepare("SELECT COALESCE(SUM(tokens_in),0)::bigint ti, COALESCE(SUM(tokens_out),0)::bigint tout, COALESCE(SUM(tokens_cached),0)::bigint tc, COALESCE(SUM(tokens_cache_write),0)::bigint tw, COALESCE(SUM(cost_usd),0) c FROM requests WHERE run_id = ? AND status = 'ok'").get(id);
             const lastAttempt = logged.filter(e => e.status !== 'skipped').at(-1);
             await writeReceipt({ row: { ...await getRow(id), cost_usd: Number(spent.c) || 0, provider_key: lastAttempt?.provider_key || null, model_key: lastAttempt?.model_key || null }, explain: parseJson(explain, null), usage: { input: Number(spent.ti), output: Number(spent.tout), cached: Number(spent.tc) } });
             // Balance: nothing reached a provider (or it failed before the first token) releases the hold; an abort
@@ -1392,7 +1415,7 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
     }
 
     async function requestsFor(runId) {
-        return await db.prepare('SELECT id, seq, operation, provider_key, model_key, route_key, route_version, status, skip_reason, fallback, prompt_hash, input_hash, output_hash, tokens_in, tokens_out, tokens_cached, tokens_estimated, cost_usd, latency_ms, error, error_class, created_at FROM requests WHERE run_id = ? ORDER BY seq').all(runId);
+        return await db.prepare('SELECT id, seq, operation, provider_key, model_key, route_key, route_version, status, skip_reason, fallback, prompt_hash, input_hash, output_hash, tokens_in, tokens_out, tokens_cached, tokens_cache_write, tokens_estimated, cost_usd, latency_ms, error, error_class, created_at FROM requests WHERE run_id = ? ORDER BY seq').all(runId);
     }
 
     /** Boot: runs interrupted by a restart are failed explicitly (retry is one call away). */

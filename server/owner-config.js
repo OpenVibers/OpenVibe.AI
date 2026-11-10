@@ -22,6 +22,49 @@ const { isUncensored } = require('./providers/pool-providers');
 
 const KINDS = ['chat', 'uncensored', 'embed', 'image', 'transcribe', 'batch'];
 const STRATEGIES = ['auto', 'cheapest', 'fastest', 'fixed'];
+/**
+ * A kind with no row keeps the behaviour it had before the owner configured it: batches, prompt caching
+ * and the answer cache are on, the small model first and the output limit are off. That is what the
+ * columns' defaults say (migrations/0072); an owner row is only ever needed to turn a way of paying
+ * less OFF. The uncensored kind never serves a stored answer, so its answer cache reads off.
+ */
+const ECONOMY_DEFAULTS = Object.freeze({ batches: true, prompt_cache: true, small_first: false, output_limit: null, answer_cache: true });
+const economyDefaultsFor = (capability) => ({ ...ECONOMY_DEFAULTS, ...(capability === 'uncensored' ? { answer_cache: false } : {}) });
+
+/** The kind of work a workflow is, from its own steps (server/workflows). */
+function workflowKind(wf) {
+    const steps = (wf && Array.isArray(wf.steps)) ? wf.steps : [];
+    if (steps.length && steps.every((s) => s && s.kind === 'embed')) return 'embed';
+    if (steps.length && steps.every((s) => s && s.kind === 'transcribe')) return 'transcribe';
+    if (steps.length && steps.every((s) => s && (s.kind === 'image' || s.kind === 'picture'))) return 'image';
+    return 'chat';
+}
+
+/**
+ * The economy kind of one run, as the router names it (server/providers/index.js ownerCapability):
+ * uncensored is its own kind, an embedding/image/transcription workflow keeps its kind, a deferrable
+ * run of any other workflow is 'batch' work, and everything else is chat. Batches of a kind are
+ * switched on that capability's row.
+ */
+function capabilityOfRun(wf, { contentPolicy = 'standard', latencyClass = null } = {}) {
+    if (contentPolicy === 'uncensored') return 'uncensored';
+    const kind = workflowKind(wf);
+    if (kind !== 'chat') return kind;
+    if (latencyClass === 'batch') return 'batch';
+    return 'chat';
+}
+
+/** The SQL for one run's economy kind, given aliases for runs and (optionally) requests. */
+function capabilitySql(runAlias = 'r', requestAlias = null) {
+    const r = runAlias;
+    const q = requestAlias;
+    const uncensored = `COALESCE(${r}.options, '') LIKE '%"policy":"uncensored"%'`;
+    const batch = `${r}.latency_class = 'batch'`;
+    const embed = q ? `${q}.operation = 'embed'` : `(${r}.workflow_key = 'ai.embed' OR ${r}.route_key LIKE '%embed%')`;
+    const image = q ? `${q}.operation = 'image'` : `(${r}.workflow_key = 'ai.image' OR ${r}.workflow_key LIKE '%picture%' OR ${r}.route_key LIKE '%image%')`;
+    const transcribe = q ? `${q}.operation = 'transcribe'` : `(${r}.workflow_key LIKE '%transcribe%' OR ${r}.route_key LIKE '%transcribe%')`;
+    return `CASE WHEN ${uncensored} THEN 'uncensored' WHEN ${batch} THEN 'batch' WHEN ${embed} THEN 'embed' WHEN ${image} THEN 'image' WHEN ${transcribe} THEN 'transcribe' ELSE 'chat' END`;
+}
 
 function createOwnerConfig({ db, registry, clock = { now: () => Date.now() } } = {}) {
     const now = () => new Date(clock.now()).toISOString();
@@ -119,18 +162,34 @@ function createOwnerConfig({ db, registry, clock = { now: () => Date.now() } } =
     // ── Economy toggles ────────────────────────────────────────
     async function getEconomy() {
         const rows = await db.prepare('SELECT * FROM owner_economy ORDER BY capability').all();
-        return rows.map((r) => ({ capability: r.capability, batches: !!r.batches, prompt_cache: !!r.prompt_cache, small_first: !!r.small_first, output_limit: r.output_limit, answer_cache: !!r.answer_cache, updated_by: r.updated_by, updated_at: r.updated_at }));
+        const saved = new Map(rows.map((r) => [r.capability, r]));
+        return KINDS.map((capability) => {
+            const r = saved.get(capability);
+            return {
+                capability,
+                ...economyDefaultsFor(capability),
+                ...(r ? { batches: !!r.batches, prompt_cache: !!r.prompt_cache, small_first: !!r.small_first, output_limit: r.output_limit, answer_cache: capability === 'uncensored' ? false : !!r.answer_cache } : {}),
+                updated_by: r ? r.updated_by : null,
+                updated_at: r ? r.updated_at : null,
+            };
+        });
+    }
+    async function economyFor(capability) {
+        return (await getEconomy()).find((r) => r.capability === capability) || { capability, ...economyDefaultsFor(capability) };
     }
     async function setEconomy(input, { actor = 'system', trace = null } = {}) {
         const capability = kind((input || {}).capability);
         const num = (v) => (v == null || v === '' ? null : Number(v));
         const output_limit = num((input || {}).output_limit);
         if (output_limit != null && !(Number.isFinite(output_limit) && output_limit > 0)) throw new AiError(422, 'ai.invalid', 'output_limit is a positive token count');
+        // The uncensored kind never serves a stored answer (server/runs.js), so its switch is recorded
+        // off whatever is sent: a row must never read as if a reused adult answer were possible.
+        const answer_cache = capability === 'uncensored' ? false : (input || {}).answer_cache === true;
         const t = now();
         await db.prepare(`INSERT INTO owner_economy (capability, batches, prompt_cache, small_first, output_limit, answer_cache, updated_by, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(capability) DO UPDATE SET batches = excluded.batches, prompt_cache = excluded.prompt_cache, small_first = excluded.small_first, output_limit = excluded.output_limit, answer_cache = excluded.answer_cache, updated_by = excluded.updated_by, updated_at = excluded.updated_at`)
-            .run(capability, (input || {}).batches === true, (input || {}).prompt_cache === true, (input || {}).small_first === true, output_limit, (input || {}).answer_cache === true, actor, t);
-        await registry.audit(actor, 'owner_economy.update', 'owner_economy', capability, { trace, metadata: { batches: (input || {}).batches === true, prompt_cache: (input || {}).prompt_cache === true, small_first: (input || {}).small_first === true, output_limit, answer_cache: (input || {}).answer_cache === true } });
+            .run(capability, (input || {}).batches === true, (input || {}).prompt_cache === true, (input || {}).small_first === true, output_limit, answer_cache, actor, t);
+        await registry.audit(actor, 'owner_economy.update', 'owner_economy', capability, { trace, metadata: { batches: (input || {}).batches === true, prompt_cache: (input || {}).prompt_cache === true, small_first: (input || {}).small_first === true, output_limit, answer_cache } });
         return (await getEconomy()).find((r) => r.capability === capability);
     }
 
@@ -165,15 +224,31 @@ function createOwnerConfig({ db, registry, clock = { now: () => Date.now() } } =
     async function savings(capability) {
         const since = new Date(clock.now() - 7 * 86400000).toISOString();
         const sinceDay = new Date(clock.now() - 6 * 86400000).toISOString().slice(0, 10);
-        const req = await db.prepare(`SELECT COALESCE(SUM(tokens_cached), 0)::bigint AS cached, COALESCE(SUM(tokens_in), 0)::bigint AS tin, COALESCE(SUM(tokens_out), 0)::bigint AS tout, COUNT(*)::bigint AS calls
-            FROM requests WHERE created_at >= ?`).get(since).catch(() => ({ cached: 0, tin: 0, tout: 0, calls: 0 }));
-        const cachedRuns = await db.prepare(`SELECT COUNT(*)::bigint AS n FROM runs WHERE created_at >= ? AND status = 'cached'`).get(since).catch(() => ({ n: 0 }));
-        // Batch savings are measurable: a batch run's cost is at the batch price; the retail card is
-        // the model's list price. Where the model row has no price, the row reports the batch count
-        // so the number stays honest (no invented savings).
+        // ── Prompt cache: the cached reads really served, and what they cost against the input price.
+        // The price book's cache-write price is part of the arithmetic: a write costs its premium, and
+        // it is only a saving when the reads have paid for it back. A model with no card counts no
+        // dollars (the tokens are still shown, never invented money).
+        const promptRows = await db.prepare(`WITH x AS (
+                SELECT ${capabilitySql('r', 'rq')} AS capability, rq.tokens_cached AS cached, rq.tokens_cache_write AS written, rq.tokens_in AS tin,
+                    rq.provider_key, rq.model_key
+                FROM requests rq LEFT JOIN runs r ON r.id = rq.run_id WHERE rq.created_at >= ?)
+            SELECT capability, COALESCE(SUM(cached), 0)::bigint AS cached, COALESCE(SUM(tin), 0)::bigint AS tin, COUNT(*)::bigint AS calls,
+                COALESCE(SUM(GREATEST(0,
+                    COALESCE(cached, 0) * (COALESCE(m.cost_in_per_mtok, 0) - COALESCE(m.cost_cached_per_mtok, COALESCE(m.cost_in_per_mtok, 0) * 0.1, 0))
+                    - COALESCE(written, 0) * (COALESCE(m.cost_cache_write_per_mtok, COALESCE(m.cost_in_per_mtok, 0)) - COALESCE(m.cost_in_per_mtok, 0))
+                )), 0) / 1000000 AS saved_usd
+            FROM x LEFT JOIN models m ON m.provider_key = x.provider_key AND m.model_key = x.model_key
+            WHERE capability = ? GROUP BY capability`).get(since, capability).catch(() => null);
+        // ── Answer cache: the reused runs, and the source run's cost that each one did not pay again.
+        const answerRow = await db.prepare(`SELECT COUNT(*)::bigint AS n, COALESCE(SUM(src.cost_usd), 0) AS saved_usd
+            FROM runs r JOIN runs src ON src.id = r.cached_from
+            WHERE r.created_at >= ? AND r.status = 'cached' AND ${capabilitySql('r')} = ?`).get(since, capability).catch(() => null);
+        // ── Batches: a batch run's cost is at the batch price; the retail card is the model's list
+        // price. Where the model row has no price, the row reports the batch count so the number stays
+        // honest (no invented savings).
         const batchRuns = await db.prepare(`SELECT m.provider_key, m.model_key, r.cost_usd, m.cost_in_per_mtok, m.cost_out_per_mtok, r.tokens_in, r.tokens_out
             FROM runs r LEFT JOIN models m ON m.provider_key = r.provider_key AND m.model_key = r.model_key
-            WHERE r.created_at >= ? AND r.options LIKE '%"batch"%' LIMIT 1000`).all(since).catch(() => []);
+            WHERE r.created_at >= ? AND r.latency_class = 'batch' AND ${capabilitySql('r')} = ? LIMIT 1000`).all(since, capability).catch(() => []);
         let batchSaved = 0, batchPriced = 0;
         for (const b of batchRuns) {
             const retail = (Number(b.tokens_in || 0) / 1e6) * Number(b.cost_in_per_mtok || 0) + (Number(b.tokens_out || 0) / 1e6) * Number(b.cost_out_per_mtok || 0);
@@ -181,13 +256,13 @@ function createOwnerConfig({ db, registry, clock = { now: () => Date.now() } } =
         }
         return {
             capability, window: '7d', since: sinceDay,
-            prompt_cache: { cached_tokens: Number(req.cached || 0), calls: Number(req.calls || 0) },
-            answer_cache: { cached_runs: Number(cachedRuns.n || 0) },
-            batches: { runs: batchRuns.length, priced: batchPriced, saved_usd: batchSaved ? Number(batchSaved.toFixed(6)) : null },
+            prompt_cache: { cached_tokens: Number(promptRows && promptRows.cached || 0), calls: Number(promptRows && promptRows.calls || 0), saved_usd: promptRows ? Number(Number(promptRows.saved_usd || 0).toFixed(6)) : 0 },
+            answer_cache: { cached_runs: Number(answerRow && answerRow.n || 0), saved_usd: answerRow ? Number(Number(answerRow.saved_usd || 0).toFixed(6)) : 0 },
+            batches: { runs: batchRuns.length, priced: batchPriced, saved_usd: batchPriced ? Number(batchSaved.toFixed(6)) : null },
         };
     }
 
-    return { KINDS, STRATEGIES, getCaps, setCap, capHit, spendFor, getRouting, setRouting, routingFor, getEconomy, setEconomy, costs, savings };
+    return { KINDS, STRATEGIES, getCaps, setCap, capHit, spendFor, getRouting, setRouting, routingFor, getEconomy, economyFor, setEconomy, costs, savings };
 }
 
-module.exports = { createOwnerConfig, KINDS, STRATEGIES };
+module.exports = { createOwnerConfig, KINDS, STRATEGIES, capabilityOfRun, workflowKind };

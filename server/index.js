@@ -88,7 +88,10 @@ async function start({ searchFetch = null, config, db: givenDb = null, clock = {
     const offPeak = require('./pricebook/offpeak').createOffPeak({ db, clock });
     const creditGrants = require('./providers/credit-grants').createCreditGrants({ db, env, fetchImpl, clock });
     const sessionCookies = require('./session-cookies').createSessionCookies({ db, config, clock });
-    const pool = createProviderPool({ db, registry, config, clock, fetchImpl, env, log, credentialFetch, machineModels: machines, community, bench, variantEvidence, adultStatus, offPeak, creditGrants, ownerNotify });
+    // The owner's inference configuration: one read for the router's economy switches and the runs'
+    // answer cache and batch decisions (server/owner-config.js).
+    const ownerConfig = require('./owner-config').createOwnerConfig({ db, registry, clock });
+    const pool = createProviderPool({ db, registry, config, clock, fetchImpl, env, log, credentialFetch, machineModels: machines, community, bench, variantEvidence, adultStatus, offPeak, creditGrants, ownerNotify, ownerConfig });
     // An open balance/auth circuit that was persisted by an earlier process is announced once (notified_at dedupes).
     if (listen && config.nodeEnv !== 'test') pool.notifyOpenCircuits().catch((err) => log.warn(`[ai] owner alerts: ${err && err.message}`));
     // The hourly provider balance probe (server/providers/balance.js): a gauge for the operator alert, started
@@ -166,7 +169,7 @@ async function start({ searchFetch = null, config, db: givenDb = null, clock = {
     // BA3: the runs and the batcher need each other (a batch-class run is created first, then queued), so
     // the runs hold this facade and the batcher fills it in below, before any request can arrive.
     const batchRef = {};
-    const runs = createRuns({ choices, db, registry, engine, cache, quotas, config, clock, log, userModules, credentials, preferences, tiers, projectSecrets, pool, runBudgets, credits: creditsRef, community, presets, receipts, abuse, webhooks, batch: batchRef,
+    const runs = createRuns({ choices, db, registry, engine, cache, quotas, config, clock, log, userModules, credentials, preferences, tiers, projectSecrets, pool, runBudgets, credits: creditsRef, community, presets, receipts, abuse, webhooks, batch: batchRef, ownerConfig,
         // BA2: a run that waits for a provider's batch answer is not interrupted by a restart: it stays
         // queued until the batcher finishes it (the provider is still working on it).
         batchWaiting: async (runId) => {
