@@ -103,7 +103,7 @@ async function seedPoolProviders({ registry, actor = 'system', env = process.env
                 defaults.metadata.models_endpoint = prev.base_url ? `${prev.base_url.replace(/\/+$/, '')}/models` : null;
                 defaults.metadata.check_endpoint = null;
             }
-            const metadata = { ...defaults.metadata, ...prev.metadata };
+            const metadata = { ...defaults.metadata, ...prev.metadata, search_adapters: [...new Set([...(prev.metadata.search_adapters || []), ...(defaults.metadata.search_adapters || [])])] };
             if (!configured && prev.base_url !== p.base_url) {
                 metadata.models_endpoint = defaults.metadata.models_endpoint;
                 metadata.api_family = defaults.metadata.api_family;
@@ -126,6 +126,8 @@ async function seedPoolProviders({ registry, actor = 'system', env = process.env
                 protocol.check_endpoint = null;
             }
             const additions = Object.fromEntries(Object.entries(protocol).filter(([k]) => ['api_family', 'models_endpoint', 'check_endpoint', 'models_public', 'models_dev_id', 'auth_header', 'docs_url', 'search_adapters'].includes(k) && prev.metadata[k] === undefined));
+            const engines = [...new Set([...(prev.metadata.search_adapters || []), ...(protocol.search_adapters || [])])];
+            if (engines.length !== (prev.metadata.search_adapters || []).length) additions.search_adapters = engines;
             if (Object.keys(additions).length) await registry.upsertProvider({ key: p.key, metadata: { ...prev.metadata, ...additions } }, { actor, origin: prev.origin });
         }
         for (const m of p.models) {

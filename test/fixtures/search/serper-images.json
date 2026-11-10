@@ -1,0 +1,23 @@
+{
+  "request": {
+    "host": "google.serper.dev",
+    "path": "/images",
+    "method": "POST"
+  },
+  "response": {
+    "images": [
+      {
+        "title": "Cat",
+        "imageUrl": "https://images.example.org/cat.jpg",
+        "thumbnailUrl": "https://images.example.org/thumb.jpg",
+        "imageWidth": 2400,
+        "imageHeight": 1600,
+        "link": "https://example.org/article"
+      }
+    ]
+  },
+  "expected": {
+    "title": "Cat",
+    "cost": 0.001
+  }
+}
