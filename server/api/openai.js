@@ -124,7 +124,7 @@ function openaiError(res, status, message, code, type) {
     res.status(status).json({ error: { message: String(message || 'error').slice(0, 1000), type: type || (status === 401 || status === 403 ? 'authentication_error' : status === 429 ? 'rate_limit_error' : status === 402 ? 'insufficient_quota' : status >= 500 ? 'api_error' : 'invalid_request_error'), code: code || null, param: null } });
 }
 
-function openaiRouter({ runs, auth, config, registry, presets = null, receipts = null, log = console }) {
+function openaiRouter({ runs, auth, config, registry, presets = null, receipts = null, db = null, log = console }) {
     const r = express.Router();
     // Developer apps call with ai.app.run, the public capability they already hold (ADR-014; AI Exchange D8').
     const allow = auth.appOrCap(CAPS.appRun, CAPS.runCreate);
@@ -155,7 +155,10 @@ function openaiRouter({ runs, auth, config, registry, presets = null, receipts =
     };
 
     r.post('/v1/chat/completions', asOpenAiErrors, allow, async (req, res) => {
-        const b = req.body && typeof req.body === 'object' ? req.body : {};
+        let b = req.body && typeof req.body === 'object' ? req.body : {};
+        if (db && req.principal.kind === 'user') {
+            try { b = await require('../exchange/compat-presets').createCompatPresets(db).expand(req.principal.subject.id, b, 'openai'); } catch (err) { return res.status(err.status || 400).json({ error: { message: err.message, code: err.code } }); }
+        }
         if (!Array.isArray(b.messages) || !b.messages.length) return openaiError(res, 400, 'messages must be a non-empty array', 'input.invalid');
         if (b.n != null && Number(b.n) !== 1) return openaiError(res, 400, 'n must be 1', 'input.invalid');
         const input = {};
@@ -197,6 +200,12 @@ function openaiRouter({ runs, auth, config, registry, presets = null, receipts =
                 }
             }
         }
+        try {
+            if (b.provider !== undefined || b.models !== undefined || (typeof b.model === 'string' && /:(free|floor|nitro)$/.test(b.model)) || (typeof b.model === 'string' && b.model.includes('/') && !b.model.startsWith('@preset/') && !b.model.startsWith('openvibe') && !EXACT_ID.test(b.model))) {
+                input.compat_routing = require('../exchange/compat-routing').request(b);
+                delete input.model;
+            }
+        } catch (err) { return openaiError(res, err.status || 400, err.message, err.code); }
         const maxTokens = b.max_completion_tokens != null ? b.max_completion_tokens : b.max_tokens;
         if (maxTokens != null) input.max_tokens = Math.max(1, Math.min(Number(maxTokens) || 1, 16000));
         // AI Exchange F: the caller's liability cap for the Balance hold (an OpenVibe extension, like x_openvibe).
@@ -238,6 +247,7 @@ function openaiRouter({ runs, auth, config, registry, presets = null, receipts =
             const created = await runs.create(body, req.principal, { trace: req.ov && req.ov.traceId, requestId: req.ov && req.ov.requestId, abuse: req.abuse,
                 ...(live ? { onDelta: live.delta } : {}),
                 ...(live && config.modelCatalog && config.modelCatalog.enabled ? { onRoute: (info) => live.route(info) } : {}) });
+            res.locals.inferenceAdmitted = true;
             if (created.created === false) res.setHeader('x-openvibe-replayed', '1');
             if (live) live.open(created.run);
             run = await runs.explained(await runs.wait(created, Math.max(config.runs.maxWaitMs, 120000)));
@@ -248,6 +258,7 @@ function openaiRouter({ runs, auth, config, registry, presets = null, receipts =
             if (status >= 500) log.warn(`[ai] /v1/chat/completions: ${err && err.message}`);
             return openaiError(res, status, err && (err.detail || err.message), err && err.code);
         }
+        if (['succeeded', 'cached'].includes(run.status) || (['failed', 'cancelled'].includes(run.status) && run.usage.attempts === 0)) res.locals.inferenceCharge = Number(run.usage.cost_usd || 0);
         if (live && (run.status === 'failed' || run.status === 'cancelled' || !run.output || !Array.isArray(run.output.choices))) {
             const code = (run.error && run.error.code) || (['failed', 'cancelled'].includes(run.status) ? 'run.failed' : 'run.timeout');
             return live.fail((run.error && run.error.detail) || (code === 'run.timeout' ? `the completion is still running; GET /api/v1/runs/${run.id}` : code), code);
@@ -275,6 +286,7 @@ function openaiRouter({ runs, auth, config, registry, presets = null, receipts =
         const id = `chatcmpl-${run.id}`;
         const model = run.output.model || (run.provenance && run.provenance.model) || 'openvibe';
         const usage = { prompt_tokens: run.usage.tokens_in || 0, completion_tokens: run.usage.tokens_out || 0, total_tokens: (run.usage.tokens_in || 0) + (run.usage.tokens_out || 0) };
+        if (b.usage?.include === true) Object.assign(usage, require('./compat-extra').accounting(run));
         const x = {
             run_id: run.id, provider: run.provenance && run.provenance.provider,
             fallback_used: Boolean(run.provenance && run.provenance.fallback_used), cost_usd: run.usage.cost_usd,
@@ -304,7 +316,7 @@ function openaiRouter({ runs, auth, config, registry, presets = null, receipts =
                 send({ ...base, choices: [{ index: c.index || 0, delta, finish_reason: null }] });
                 send({ ...base, choices: [{ index: c.index || 0, delta: {}, finish_reason: c.finish_reason || 'stop' }] });
             }
-            if (b.stream_options && b.stream_options.include_usage) send({ ...base, choices: [], usage });
+            if ((b.stream_options && b.stream_options.include_usage) || b.usage?.include === true) send({ ...base, choices: [], usage });
             // A stream's headers went out before the answer was known, so the receipt travels in the last chunk
             // (its id was in the headers, and the full receipt is one GET away).
             send({ ...base, choices: [], x_openvibe: disclosure ? { ...x, ...disclosure } : x, receipt: receiptView });

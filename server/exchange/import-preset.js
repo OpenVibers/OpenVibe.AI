@@ -14,7 +14,7 @@ const accepted = [
     'response_format',
 ];
 // Import preview is intentionally pure: no keys, URLs, provider calls or writes.
-function importPreset(source) {
+function normalizePreset(source) {
     const bad = (detail) => {
         throw new AiError(400, 'input.invalid', detail);
     };
@@ -92,6 +92,10 @@ function importPreset(source) {
             JSON.stringify(source.response_format),
         );
     }
+    return out;
+}
+function importPreset(source) {
+    const out = normalizePreset(source);
     return {
         valid: true,
         fields: Object.keys(out),
@@ -101,4 +105,4 @@ function importPreset(source) {
         ],
     };
 }
-module.exports = { importPreset };
+module.exports = { importPreset, normalizePreset };

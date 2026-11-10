@@ -21,7 +21,7 @@
  * server/runs.js decode(). Nothing is inferred.
  */
 const pkg = require('../package.json');
-const { paths: searchPaths } = require('./search/openapi');
+const searchPaths = { ...require('./search/openapi').paths, ...require('./exchange/compat-openapi').paths };
 
 const MOUNT = '/api/v1';
 // The public base of this API (BASE_URL in production).
@@ -556,6 +556,9 @@ route('get', '/exchange/key-usage', {
     description: 'Only a person. One row per day, key, model and status (settled, reserved, unresolved): requests, tokens and dollars. Private to the owner.',
     responses: { 200: json('The usage rows', { type: 'object', required: ['rows'], properties: { rows: arrayOf({ type: 'object' }) } }), ...errors([401, 403]) },
 });
+route('get', '/exchange/presets', { operationId: 'exchangeRequestPresets', summary: 'List your saved request presets', tags: ['exchange'], security: [{ bearer: [] }], responses: { 200: json('Owner presets', { type: 'object', properties: { data: arrayOf({ type: 'object' }) } }), ...errors([401, 403]) } });
+route('post', '/exchange/presets', { operationId: 'exchangeRequestPresetSave', summary: 'Save your request preset', tags: ['exchange'], security: [{ bearer: [] }], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object' } } } }, responses: { 200: json('Saved preset', { type: 'object' }), ...errors([400, 401, 403]) } });
+route('delete', '/exchange/presets/{name}', { operationId: 'exchangeRequestPresetDelete', summary: 'Delete your request preset', tags: ['exchange'], security: [{ bearer: [] }], parameters: [{ in: 'path', name: 'name', required: true, schema: str() }], responses: { 200: json('Deletion result', { type: 'object' }), ...errors([400, 401, 403]) } });
 route('get', '/exchange/search/engines', {
     operationId: 'exchangeSearchEngines', summary: 'The search engines behind web, image and icon search', tags: ['exchange'], security: [],
     description: 'Public. Engine IDs, kinds (web, images, icons, fetch), availability of shared keys, BYOK support, health, supported freshness filters, price_per_1000 in USD (null when variable), pricing_note, source URL and checked_on date. Personal key availability is private. Tariffs exclude free allowances and volume discounts.',
