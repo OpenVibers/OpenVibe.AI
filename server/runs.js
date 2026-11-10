@@ -1213,7 +1213,11 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
         const route = await registry.resolveRoute(routeKey);
         if (!route || route.disabled) throw new AiError(503, 'route.unavailable', `route ${routeKey} is not available, so the advisor cannot be selected`);
         const person = subjectOf(row);
-        const ctx = { requesterType: row.requester_type, requesterId: row.requester_id, ...(person ? { onBehalfOf: person } : {}), ...(opts.policy ? { contentPolicy: opts.policy } : {}) };
+        // A developer app's run may only use what its own run could use: a sandbox app (or any app run no tier
+        // budget governs) is limited to free and local capacity, so the advisor is chosen from those offers too.
+        const appRun = principal.kind === 'app';
+        const freeOnly = appRun && (principal.env === 'sandbox' || !(tiers && tiers.enabled));
+        const ctx = { requesterType: row.requester_type, requesterId: row.requester_id, ...(person ? { onBehalfOf: person } : {}), ...(opts.policy ? { contentPolicy: opts.policy } : {}), ...(appRun ? { appRun: true, freeOnly } : {}) };
         const offers = await pool.offers(route, 'chat', ctx);
         const asked = body.model == null ? null : String(body.model).trim();
         if (asked != null && !/^[A-Za-z0-9][A-Za-z0-9._:-]*\/[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}$/.test(asked)) throw new AiError(422, 'input.invalid', 'model must be provider/model from GET /api/v1/routes');
