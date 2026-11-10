@@ -21,13 +21,15 @@ const path = require('path');
 const { ProviderError, postJson, deadline, describeAbort, approxTokens, schemaInstruction } = require('./common');
 const { sseEvents, createAccumulator } = require('./stream');
 const usageParser = require('./usage');
+const effortPolicy = require('../effort/providers');
 
 const DEFAULT_BASE_URL = 'https://api.openai.com/v1';
 const TEXT_OPS = ['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich'];
 
-function isReasoningModel(m) { return /^(gpt-5|o\d)/i.test(m || ''); }
+function isReasoningModel(m) { return /^(gpt-[56]|o\d)/i.test(m || ''); }
 
-function buildBody({ model, system, messages, image, json, maxTokens, temperature, cacheKey, baseUrl, serviceTier }, jsonMode) {
+function buildBody(req, jsonMode) {
+    const { model, system, messages, image, json, maxTokens, temperature, cacheKey, baseUrl, serviceTier } = req;
     const msgs = [];
     // Stepped down from json_schema: the schema travels in the instructions instead.
     const hint = json && jsonMode !== 'schema' ? schemaInstruction(json) : '';
@@ -54,14 +56,15 @@ function buildBody({ model, system, messages, image, json, maxTokens, temperatur
     // The service tier (BA1): a Flex tier is slower and cheaper, and the provider may refuse it. The tier
     // travels in the request; the answer says which tier it really ran on (the pool prices that one).
     if (serviceTier) body.service_tier = String(serviceTier);
-    return body;
+    return effortPolicy.apply(body, req, { kind: 'openai', key: 'openai' });
 }
 
 /**
  * The Chat Completions body of a complete operation (ai.complete), for a provider batch request too:
  * the caller's own request with the routed model, a reasoning model's allowance, and the Flex tier.
  */
-function buildCompleteBody({ model, openai = {}, maxTokens, temperature, serviceTier } = {}) {
+function buildCompleteBody(req = {}) {
+    const { model, openai = {}, maxTokens, temperature, serviceTier } = req;
     const o = openai || {};
     const body = { model, messages: o.messages };
     for (const k of ['tools', 'tool_choice', 'parallel_tool_calls', 'response_format', 'stop', 'seed', 'top_p', 'presence_penalty', 'frequency_penalty']) {
@@ -77,7 +80,7 @@ function buildCompleteBody({ model, openai = {}, maxTokens, temperature, service
         if (temperature != null) body.temperature = temperature;
     }
     if (serviceTier) body.service_tier = String(serviceTier);
-    return body;
+    return effortPolicy.apply(body, req, { kind: 'openai', key: 'openai' });
 }
 
 function createOpenAiProvider(record, { apiKey = '', fetchImpl = globalThis.fetch } = {}) {
@@ -169,7 +172,7 @@ function createOpenAiProvider(record, { apiKey = '', fetchImpl = globalThis.fetc
      */
     async function complete(req) {
         const o = req.openai || {};
-        const body = buildCompleteBody({ model: req.model, openai: o, maxTokens: req.maxTokens, temperature: req.temperature, serviceTier: req.serviceTier });
+        const body = buildCompleteBody({ ...req, openai: o });
         if (typeof req.onDelta === 'function') return await completeStreaming(body, req);
         const j = await postJson(`${baseUrl}/chat/completions`, headers(), body, { signal: req.signal, timeoutMs: req.timeoutMs, fetchImpl });
         if (!Array.isArray(j.choices) || !j.choices.length) throw new ProviderError('completion has no choices', { code: 'provider.output' });
@@ -254,7 +257,7 @@ function createOpenAiProvider(record, { apiKey = '', fetchImpl = globalThis.fetc
         image: images,
     };
     for (const op of TEXT_OPS) if (op !== 'chat') adapter[op] = chat;   // the engine shapes the prompt per operation
-    return adapter;
+    return effortPolicy.wrapAdapter(adapter, { ...record, base_url: baseUrl });
 }
 
 module.exports = { createOpenAiProvider, buildBody, buildCompleteBody, DEFAULT_BASE_URL };

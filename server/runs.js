@@ -28,6 +28,8 @@ const schemas = require('./schemas');
 const events = require('./events');
 const usageRecord = require('./usage-record');
 const usageSamples = require('./usage-samples');
+const effortDefaults = require('./effort/defaults');
+const { receiptEffort } = require('./effort/receipt');
 const { buildReceipt } = require('./exchange/receipts');
 const privacy = require('./exchange/privacy');
 
@@ -127,10 +129,12 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
     let active = 0;
     let shuttingDown = false;
 
+    const agentDefaults = effortDefaults.createDefaults({ db, registry, clock });
     function decode(r) {
         if (!r) return null;
         return {
             id: r.id, status: r.status,
+            ...receiptEffort(r, parseJson(r.explain, null)),
             workflow: { key: r.workflow_key, version: r.workflow_version },
             template: r.template_key ? { key: r.template_key, version: r.template_version } : null,
             route: r.route_key ? { key: r.route_key, version: r.route_version } : null,
@@ -237,11 +241,13 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
         if (askedPolicy.error) throw new AiError(422, askedPolicy.error, askedPolicy.detail);
         const contentPolicy = askedPolicy.policy;
         const input = body.input === undefined ? {} : body.input;
+        const taskDefaults = choices ? (await choices.defaults())[body.task || wf.key] : null;
+        const effortPolicy = await effortDefaults.resolve(body, { ...wf, metadata: { ...wf.metadata, ...(taskDefaults?.effort ? { effort: taskDefaults.effort } : {}) } }, agentDefaults);
         const inputJson = stableStringify(input);
         if (Buffer.byteLength(inputJson) > config.runs.maxInputBytes) throw new AiError(413, 'input.too_large', `input is larger than ${config.runs.maxInputBytes} bytes`);
         const v = schemas.validate(wf.input_schema, input);
         if (!v.valid) throw new AiError(422, 'input.invalid', `input does not match ${wf.key} v${wf.version}`, { errors: v.errors });
-        const inputHash = sha256(body.choice || body.task ? { input: inputJson, choice: body.choice || null, task: body.task || null } : inputJson);
+        const inputHash = sha256({ input, effortPolicy, choice: body.choice || null, task: body.task || null });
         const requester = principal.subject;
         // A developer app (ADR-014): the requester IS its project, the run is metered with the project's
         // id on every Billing reading, and a sandbox run may use free/local capacity only (server/providers).
@@ -440,7 +446,7 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
             target: body.target ? JSON.stringify(body.target) : null, target_key: ctx.targetKey,
             input: null, input_hash: inputHash, idempotency_key: idem, trace_id: trace, request_id: requestId, retry_of: retryOf,
             latency_class: latencyClass,
-            options: JSON.stringify({ ...(taskChoice ? { task_choice: taskChoice } : {}), cache: options.cache !== false && credentialSubject === null && !projectProvider && !pinned && !selfKeys && !communityOptIn, debug: Boolean(options.debug), input_retained: kept.full,
+            options: JSON.stringify({ effort_policy: effortPolicy, ...(taskChoice ? { task_choice: taskChoice } : {}), cache: options.cache !== false && credentialSubject === null && !projectProvider && !pinned && !selfKeys && !communityOptIn, debug: Boolean(options.debug), input_retained: kept.full,
                 ...(options.latency_clamped ? { latency_clamped: options.latency_clamped } : {}),
                 ...(credentialSubject !== null ? { credential_subject: credentialSubject } : {}), ...(credentialProvider !== null ? { credential_provider: credentialProvider } : {}),
                 ...((selfKeys || taskChoice && runPerson) ? { self_subject: runPerson } : {}),
@@ -461,7 +467,7 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
         let cacheKey = null;
         if (scope) {
             // Some workflows key the cache on less than their whole input (hooks.js CACHE_INPUT: a signed URL's signature).
-            const keyInput = CACHE_INPUT[wf.key] ? sha256(stableStringify(CACHE_INPUT[wf.key](input))) : inputHash;
+            const keyInput = CACHE_INPUT[wf.key] ? sha256({ input: CACHE_INPUT[wf.key](input), effortPolicy }) : inputHash;
             cacheKey = cache.keyFor({ scope, workflowKey: wf.key, workflowVersion: wf.version, templateVersion: base.template_version, routeKey: base.route_key, routeVersion: base.route_version, inputHash: keyInput });
             const hit = await cache.get(cacheKey, scope);
             if (hit) {
@@ -511,13 +517,14 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
             const appFreeOnly = Boolean(ctx.appRun && (ctx.sandbox || !(tiers && tiers.enabled)));
             let prepared = null;
             if (batch && typeof batch.planRun === 'function' && engine.prepareBatch
-                && credentialSubject === null && !projectProvider && !selfKeys && !freeUse && !communityOptIn && !appFreeOnly) {
+                && credentialSubject === null && !projectProvider && !selfKeys && !freeUse && !communityOptIn && !appFreeOnly && !effortPolicy.role_default) {
                 try {
                     prepared = await engine.prepareBatch(wf, { template_key: tpl ? tpl.key : null, template_version: tpl ? tpl.version : null }, input, { ...ctx, runId: id });
                 } catch (err) {
                     log.warn(`[runs] ${id}: the batch request could not be prepared: ${(err && err.message) || err}`);
                 }
             }
+            if (prepared) prepared.effort = effortPolicy.effort_resolved;
             if (prepared && pool && typeof pool.offers === 'function') {
                 let offers = await pool.offers(prepared.route, prepared.operation, ctx).catch(() => []);
                 // A pinned run waits on the provider it pinned, never on another eligible one.
@@ -706,7 +713,7 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
             const money = usageRecord.moneyOf({ prices, tokens, paidBy: payer.paid_by, feeRate: (config.usage && config.usage.feeRate) || 0 });
             const rec = usageRecord.recordOf({
                 system: 'ai', run_id: row.id, subject: subjectOf(row), attribution: attributionOf(row), surface: row.workflow_key || '',
-                provider: payer.provider || provider || null, model: model || null, effort: opts.effort || null,
+                provider: payer.provider || provider || null, model: model || null, effort: parseJson(row.explain, {})?.effort_applied || opts.effort || null,
                 paid_by: payer.paid_by, paid_by_detail: payer.detail,
                 input: tokens.input, output: tokens.output, reasoning: tokens.reasoning, cache_read: tokens.cache_read,
                 cache_write: tokens.cache_write, cache_write_ttl: usage.cache_write_ttl || null,
@@ -774,10 +781,14 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
             const paidBy = (payer && payer.paid_by) || 'openvibe_key';
             const feeRate = paidBy === 'openvibe_key' ? Number((config.usage && config.usage.feeRate) || 0) : 0;
             const opts = parseJson(row.options, {});
+            if ((row.service_tier === 'batch' || row.status === 'failed') && opts.effort_policy && answerProvider && !Object.hasOwn(explain || {}, 'effort_applied')) {
+                const record = await registry.getProvider(answerProvider);
+                if (record) explain = { ...(explain || {}), effort_applied: require('./effort/providers').control({ ...record, model: answerModel }, opts.effort_policy.effort_resolved).applied };
+            }
             const receipt = buildReceipt({
                 run: {
                     id: row.id, workflow_key: row.workflow_key, route_key: row.route_key, route_version: row.route_version,
-                    provider_key: answerProvider, model_key: answerModel, cost_usd: row.cost_usd,
+                    provider_key: answerProvider, model_key: answerModel, cost_usd: row.cost_usd, options: row.options, status: row.status,
                 },
                 explain, usage, price: prices, privacy: privacy.view(label),
                 payer: { paid_by: paidBy, detail: (payer && payer.detail) || null, fee_rate: feeRate, fee_usd: money ? money.fee_usd : 0 },
@@ -952,7 +963,7 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
             if (batchAnswer && batchAnswer.ok && !batchAnswer.resume) {
                 r = { output: batchAnswer.output || { text: '' }, usage: batchAnswer.usage || { input: 0, output: 0, cached: 0, cache_write: 0 }, cost: Number(batchAnswer.cost) || 0, provider: batchAnswer.provider || null, model: batchAnswer.model || null, citations: [], explain: batchAnswer.explain || null, grounding: null, synthetic: false, fallbackUsed: false };
             }
-            if (!r) r = await engine.execute(wf, row, input, { signal: controller.signal, logRequest, debugRaw: Boolean(config.debugRawLog && opts.debug), inputHash: row.input_hash, preferences,
+            if (!r) r = await engine.execute(wf, row, input, { effortPolicy: opts.effort_policy, signal: controller.signal, logRequest, debugRaw: Boolean(config.debugRawLog && opts.debug), inputHash: row.input_hash, preferences,
                 // A developer app's run (ADR-014): the provider pool excludes a person's byok key, and the run is
                 // limited to free and local capacity when it is a sandbox run or when no tier budget governs its
                 // project (AI_GOVERN_TIERS off): metered capacity is only ever spent under a project budget.
@@ -1065,6 +1076,8 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
                 if (f.changes) await events.runChanged(await getRow(id));
             });
             const spent = await db.prepare("SELECT COALESCE(SUM(tokens_in),0)::bigint ti, COALESCE(SUM(tokens_out),0)::bigint tout, COALESCE(SUM(tokens_cached),0)::bigint tc, COALESCE(SUM(cost_usd),0) c FROM requests WHERE run_id = ? AND status = 'ok'").get(id);
+            const lastAttempt = logged.filter(e => e.status !== 'skipped').at(-1);
+            await writeReceipt({ row: { ...await getRow(id), cost_usd: Number(spent.c) || 0, provider_key: lastAttempt?.provider_key || null, model_key: lastAttempt?.model_key || null }, explain: parseJson(explain, null), usage: { input: Number(spent.ti), output: Number(spent.tout), cached: Number(spent.tc) } });
             // Balance: nothing reached a provider (or it failed before the first token) releases the hold; an abort
             // or a failure after tokens streamed settles the partial usage it did produce.
             if (credit && credit.holdId) {
