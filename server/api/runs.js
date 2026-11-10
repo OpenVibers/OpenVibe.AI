@@ -12,6 +12,8 @@
  *   run.explain.usage_readings (on every run response): each reading's idempotency key, delivery state (queued/sent/failed), last error, free_allowance_used
  *   POST /api/v1/runs/:id/cancel            (ai.run.create, owner)
  *   POST /api/v1/runs/:id/retry             (ai.run.create, owner) -> a new run with retry_of
+ *   POST /api/v1/runs/:id/advice            (ai.run.create, owner) -> one advisor call for a run that
+ *                                           asked for advisor: true; at most its max_uses, at most 100 words
  *   GET  /api/v1/runs/:id/citations         (ai.run.read)
  *   POST /api/v1/runs/:id/citations         attach sources/citations to a finished run (ai.run.create, owner)
  *   POST /api/v1/{chat,generate,summarize,classify,extract,enrich,embed}
@@ -153,6 +155,15 @@ function runsRouter({ choices = null, runs, registry, auth, config, log = consol
             const wait = Math.max(0, Math.min(Number(req.query.wait) || 0, config.runs.maxWaitMs));
             const run = await runs.explained(await runs.wait(created, wait));
             res.status(runs.TERMINAL.has(run.status) ? 201 : 202).json({ run });
+        } catch (err) { sendError(res, err, req.ov, log); }
+    });
+
+    // AL3: one advisor call for a run that asked for it. The executor sends its transcript; a stronger model
+    // answers with at most 100 words, every use is on the run's receipt with its cost, and the run's own cap
+    // (at most 3) is enforced here. The advice is guidance the executor feeds back into its own loop.
+    r.post('/api/v1/runs/:id/advice', createApp, async (req, res) => {
+        try {
+            res.status(201).json(await runs.advise(req.params.id, req.body || {}, req.principal, { trace: req.ov.traceId, principalHas: has(req) }));
         } catch (err) { sendError(res, err, req.ov, log); }
     });
 

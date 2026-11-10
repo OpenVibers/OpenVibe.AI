@@ -128,7 +128,7 @@ idempotent replay):
 
 | Route | Capability |
 |---|---|
-| `POST /api/v1/runs` (`?wait=ms`, `Idempotency-Key`), `POST /runs/:id/cancel`, `POST /runs/:id/retry`, `POST /runs/:id/citations` | `ai.run.create` |
+| `POST /api/v1/runs` (`?wait=ms`, `Idempotency-Key`), `POST /runs/:id/cancel`, `POST /runs/:id/retry`, `POST /runs/:id/advice` (an advisor call on a run that asked for one), `POST /runs/:id/citations` | `ai.run.create` |
 | `POST /api/v1/{chat,generate,summarize,classify,extract,enrich,embed,image}` — each a run of workflow `ai.<op>` | `ai.run.create` |
 | `POST /api/v1/research` — a run of `research.gather` ([MegaSource](#megasource-research)) | `ai.run.create` (namespace `research.*`) or `ai.app.run` (free sources only) |
 | `POST /api/v1/{chat,generate,summarize,classify,extract,embed,image}` (no `enrich`), `GET /runs/:id` (the app's own runs) | `ai.app.run` for a developer-app token ([Developer apps](#developer-apps)) |
