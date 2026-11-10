@@ -13,6 +13,7 @@ const { tokenCosts } = require('../gpu/token-cost');
 /** Read-only JSON read models for Exchange's owner console. Every query is bounded and the query module redacts runs. */
 function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, gpus = null, gpuMarket = null, abuse = null, priceBook = null, modelSync = null, creditGrants = null, sessionCookies = null, vault = null, settings = null, config = {}, log = console }) {
     const r = express.Router();
+    const providerOrder = require('../providers/order').createProviderOrder({ registry });
     const supply = require('../platform/supply').createSupply({ db, registry, clock });
     // The public marketplace readings and the per-token cost they imply, added to both console sections. Data only:
     // Exchange renders it with its existing console classes.
@@ -70,6 +71,7 @@ function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth,
             return { models: (await registry.listModels({ provider })).map(m => modelView(m, providers.find(p => p.key === m.provider_key))),
                 provider: provider || null, sync_log: modelSync ? await modelSync.read(provider) : [] };
         }
+        if (section === 'orders') return { orders: await providerOrder.list() };
         if (section === 'sync') return { sync_log: modelSync ? await modelSync.read() : [] };
         if (section === 'runs') {
             const { filters, form, bad } = q.parseRunFilters(req.query);
@@ -111,6 +113,7 @@ function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth,
     }));
     r.post('/api/v1/admin/console/supply/quotes', json, write, wrap(async req => ({ recorded: await require('../pricebook/gpus').recordGpuQuotes(db, JSON.stringify(req.body.quotes)), dry_run: true })));
     r.post('/api/v1/admin/console/supply', json, write, wrap(req => supply.save(req.body || {}, actor(req))));
+    r.post('/api/v1/admin/console/orders/:capability', json, write, wrap(req => providerOrder.save(req.params.capability, req.body, { actor: actor(req), trace: req.traceId })));
     r.post('/api/v1/admin/console/providers/:key/key', json, write, wrap(async (req) => {
         if (!vault || !settings) throw new AiError(503, 'vault.unavailable', 'provider keys cannot be stored on this host');
         const provider = await registry.getProvider(req.params.key);
