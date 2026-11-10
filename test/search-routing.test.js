@@ -55,7 +55,7 @@ const bob = 'usr_01JAB2C3D4E5F6G7H8J9K0MNPY';
     assert.equal(calls, afterFail + 1);
     time = 60001;
     assert.equal((await health.search('web', { q: 'x', freshness: 'day' })).receipt.engine, 'deepseek');
-    assert.equal(health.engines().find(e => e.id === 'deepseek').healthy, true);
+    assert.equal((await health.engines()).find(e => e.id === 'deepseek').healthy, true);
     // A possibly billed timeout consumes its ceiling, leaving no room to overspend on fallback.
     let budgetCalls = 0;
     const bounded = createSearch({ env: { SEARCH_DEEPSEEK_KEY: 'shared', SEARCH_SERPER_KEY: 'shared' }, fetchImpl: async () => { budgetCalls++; throw new Error('timeout with upstream details'); } });
