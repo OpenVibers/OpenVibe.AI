@@ -39,7 +39,7 @@ app.use(consoleDataRouter({
         assert.ok(added.filter((p) => p.key !== 'together').every((p) => p.provider_access === 'UNVERIFIED'));
         assert.strictEqual(providerData.presets.find((p) => p.key === 'together').provider_access, 'RESTRICTED');
         const models = await fetch(`${base}/api/v1/admin/console/models`);
-        assert.deepStrictEqual(await models.json(), { models: [] });
+        assert.deepStrictEqual(await models.json(), { models: [], provider: null, sync_log: [] });
         const book = await fetch(`${base}/api/v1/admin/console/pricebook`);
         assert.ok(Array.isArray((await book.json()).pending));
         const write = await fetch(`${base}/api/v1/admin/console/providers/openai/key`, {

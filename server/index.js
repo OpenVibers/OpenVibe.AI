@@ -202,6 +202,7 @@ async function start({ searchFetch = null, config, db: givenDb = null, clock = {
     // keeps the price the router charges in step with it. A change of more than 20% waits for the owner on the
     // operator console. Off in test mode (the tests replay the recorded listings) and off under a drill.
     const priceBook = require('./pricebook').createPriceBook({ db, registry, config, clock, log, offPeak });
+    const modelSync = require('./providers/model-sync').createModelSync({ db, registry, env, fetchImpl, clock, log });
     // The measured refusal rates (server/refusal/): the weekly job that asks every offer the same published,
     // harmless questions and publishes how often it refused them. Due-based, like the price book.
     const refusal = require('./refusal/job').createRefusalJob({ db, registry, pool, config, env, clock, log });
@@ -220,7 +221,7 @@ async function start({ searchFetch = null, config, db: givenDb = null, clock = {
         clientSecret: env.OV_OAUTH_CLIENT_SECRET, fetch: fetchImpl,
     }) : null;
     const benchEvents = createBenchEvents({ bench, accountData, accountSend, config, log, fetchImpl, clientSecret: env.OV_OAUTH_CLIENT_SECRET });
-    const app = createApp({ choices, searchFetch, config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, grants, vault, settings, benchEvents, runBudgets, memory, memoryImport, memoryServices, memorySharing, community, endpoints, webhooks, presets, receipts, balance, creditGrants, sessionCookies, gpus, abuse, priceBook, ownEndpoints, refusal, batches, gpuMarket, share });
+    const app = createApp({ choices, searchFetch, config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, grants, vault, settings, benchEvents, runBudgets, memory, memoryImport, memoryServices, memorySharing, community, endpoints, webhooks, presets, receipts, balance, creditGrants, sessionCookies, gpus, abuse, priceBook, modelSync, ownEndpoints, refusal, batches, gpuMarket, share });
     let jwks = null;
     let keyLoaded = Promise.resolve(null);
     if (!keys.pinned && config.nodeEnv !== 'test') {
@@ -275,6 +276,7 @@ async function start({ searchFetch = null, config, db: givenDb = null, clock = {
     if (listen && config.nodeEnv !== 'test' && memorySharing) memorySharing.start();
     // The price book reads the providers' listings once a week; it never starts in test mode or under a drill.
     if (listen && config.priceBook && config.priceBook.enabled) priceBook.start();
+    if (listen && config.nodeEnv !== 'test' && !/^(1|true|yes|on)$/i.test(String(env.AI_DRILL || ''))) modelSync.start();
     if (listen) measuredMetrics.start();
     if (listen) observations.start();
     // The public GPU price reader: public pages only, due-based, off in tests and under a drill.
@@ -325,6 +327,7 @@ async function start({ searchFetch = null, config, db: givenDb = null, clock = {
         memoryJobs.stop();
         if (memorySharing) memorySharing.stop();
         priceBook.stop();
+        await modelSync.stop();
         await measuredMetrics.stop();
         await observations.stop();
         gpuMarket.stop();
@@ -347,7 +350,7 @@ async function start({ searchFetch = null, config, db: givenDb = null, clock = {
         if (!givenDb) await db.close();
     }
 
-    return { config, db, registry, pool, quotas, tiers, cache, fetcher, engine, runs, keys, keyLoaded, auth, app, server, choices, bench, benchEvents, memory, memoryJobs, memoryServices, memorySharing, priceBook, refusal, batches, batcher, credits: creditsRef, settings, vault, community, endpoints, webhooks, gpus, gpuMarket, abuse, ownEndpoints, close };
+    return { config, db, registry, pool, quotas, tiers, cache, fetcher, engine, runs, keys, keyLoaded, auth, app, server, choices, bench, benchEvents, memory, memoryJobs, memoryServices, memorySharing, priceBook, modelSync, refusal, batches, batcher, credits: creditsRef, settings, vault, community, endpoints, webhooks, gpus, gpuMarket, abuse, ownEndpoints, close };
 }
 
 if (require.main === module) {

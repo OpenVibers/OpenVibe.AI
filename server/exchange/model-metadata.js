@@ -16,7 +16,7 @@ function indexMetadata(data) {
             // A reseller's name is not the maker. Prefer explicit canonical identity, then a
             // first-party record; unprefixed reseller-only records leave maker unknown.
             const maker = m.maker || (canonical.includes('/') ? canonical.split('/')[0] : null);
-            entries.push({ id: m.id || id, provider, maker, model: m });
+            entries.push({ id: m.id || id, provider, provider_api: p.api || null, maker, model: m });
         }
     }
     return entries;
@@ -41,31 +41,31 @@ function lookupMetadata(entries, id, provider) {
     };
 }
 
-function createModelMetadata({ db, fetchImpl = globalThis.fetch, now = Date.now, enabled = true, log = console }) {
+function createModelMetadata({ db, fetchImpl = globalThis.fetch, now = Date.now, enabled = true, log = console, sourceId = 'models.dev', sourceUrl = URL, index = indexMetadata }) {
     let snapshot = null; let loaded = false; let retryAt = 0; let pending = null;
     async function refresh() {
         if (!loaded) {
-            const row = await db.prepare('SELECT payload, checked_at FROM exchange_model_metadata WHERE id = ?').get('models.dev');
-            if (row) snapshot = { entries: indexMetadata(typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload), checked_at: new Date(row.checked_at).toISOString() };
+            const row = await db.prepare('SELECT payload, checked_at FROM exchange_model_metadata WHERE id = ?').get(sourceId);
+            if (row) snapshot = { entries: index(typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload), checked_at: new Date(row.checked_at).toISOString() };
             loaded = true;
         }
         const expired = !snapshot || now() - Date.parse(snapshot.checked_at) >= DAY_MS;
         if (expired && enabled && now() >= retryAt) {
             retryAt = now() + 60_000;
             try {
-                const response = await fetchImpl(URL, { signal: AbortSignal.timeout(15_000) });
+                const response = await fetchImpl(sourceUrl, { redirect: 'error', signal: AbortSignal.timeout(15_000) });
                 if (!response.ok) throw new Error('metadata HTTP failure');
                 const raw = await response.text();
                 if (raw.length > 32 * 1024 * 1024) throw new Error('metadata exceeds size limit');
-                const data = JSON.parse(raw); const entries = indexMetadata(data);
+                const data = JSON.parse(raw); const entries = index(data);
                 if (!entries.length) throw new Error('metadata has no models');
                 const checked_at = new Date(now()).toISOString();
                 await db.prepare(`INSERT INTO exchange_model_metadata (id, payload, checked_at) VALUES (?, ?::jsonb, ?)
-                    ON CONFLICT (id) DO UPDATE SET payload = EXCLUDED.payload, checked_at = EXCLUDED.checked_at`).run('models.dev', raw, checked_at);
+                    ON CONFLICT (id) DO UPDATE SET payload = EXCLUDED.payload, checked_at = EXCLUDED.checked_at`).run(sourceId, raw, checked_at);
                 snapshot = { entries, checked_at };
-            } catch (_) { log.warn?.('models.dev metadata refresh failed; keeping last copy'); }
+            } catch (_) { log.warn?.('model metadata refresh failed; keeping last copy'); }
         }
-        return { entries: snapshot?.entries || [], source: URL, checked_at: snapshot?.checked_at || null,
+        return { entries: snapshot?.entries || [], source: sourceUrl, checked_at: snapshot?.checked_at || null,
             stale: !snapshot || now() - Date.parse(snapshot.checked_at) >= DAY_MS };
     }
     return { read() { if (!pending) pending = refresh().finally(() => { pending = null; }); return pending; } };

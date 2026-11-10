@@ -147,7 +147,7 @@ function createRegistry(db, { clock = { now: () => Date.now() }, env = process.e
         if (!input.model_key || String(input.model_key).length > 200) throw new AiError(422, 'ai.invalid', 'model_key required');
         const prev = await getModel(input.provider_key, input.model_key);
         const type = input.type || (prev && prev.type) || 'chat';
-        if (!['chat', 'vision', 'embedding', 'stt', 'image'].includes(type)) throw new AiError(422, 'ai.invalid', 'model type must be chat, vision, embedding, stt or image');
+        if (!['chat', 'vision', 'embedding', 'stt', 'image', 'video', 'speech', 'rerank'].includes(type)) throw new AiError(422, 'ai.invalid', 'model type must be chat, vision, embedding, stt, image, video, speech or rerank');
         const status = input.status || (prev && prev.status) || 'active';
         if (!['active', 'disabled'].includes(status)) throw new AiError(422, 'ai.invalid', 'model status must be active or disabled');
         // A new cost replaces the old one whole: new prices never inherit the old ones' source or verification date.

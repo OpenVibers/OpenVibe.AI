@@ -30,6 +30,7 @@ function recordOf(p) {
             catalog: 'pool-providers',
             api_family: p.api_family, models_endpoint: p.models_endpoint,
             check_endpoint: p.check_endpoint || null,
+            models_public: p.models_public === true, models_dev_id: p.models_dev_id || null,
             auth_header: p.auth_header || null, docs_url: p.docs_url || null,
             search_adapters: p.search_adapters || [],
             data_policy: p.data_policy,
@@ -124,7 +125,7 @@ async function seedPoolProviders({ registry, actor = 'system', env = process.env
                 protocol.models_endpoint = prev.base_url ? `${prev.base_url.replace(/\/+$/, '')}/models` : null;
                 protocol.check_endpoint = null;
             }
-            const additions = Object.fromEntries(Object.entries(protocol).filter(([k]) => ['api_family', 'models_endpoint', 'check_endpoint', 'auth_header', 'docs_url', 'search_adapters'].includes(k) && prev.metadata[k] === undefined));
+            const additions = Object.fromEntries(Object.entries(protocol).filter(([k]) => ['api_family', 'models_endpoint', 'check_endpoint', 'models_public', 'models_dev_id', 'auth_header', 'docs_url', 'search_adapters'].includes(k) && prev.metadata[k] === undefined));
             if (Object.keys(additions).length) await registry.upsertProvider({ key: p.key, metadata: { ...prev.metadata, ...additions } }, { actor, origin: prev.origin });
         }
         for (const m of p.models) {
@@ -140,10 +141,12 @@ async function seedPoolProviders({ registry, actor = 'system', env = process.env
             const next = modelOf(p, m);
             await registry.upsertModel({
                 ...next,
+                display_name: row.metadata?.owner_display_name ? row.display_name : next.display_name,
                 status: row.status,
                 context_window: row.context_window ?? next.context_window,
                 max_output: row.max_output ?? next.max_output,
-                metadata: { ...row.metadata, ...next.metadata },
+                metadata: { ...row.metadata, ...next.metadata,
+                    ...(row.metadata?.owner_content_tier ? { uncensored: row.metadata.uncensored, min_age: row.metadata.min_age } : {}) },
             }, { actor });
         }
     }
