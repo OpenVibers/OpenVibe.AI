@@ -41,6 +41,7 @@ const EXAMPLES = {
     'ai.extract': { text: 'Order 42 ships to Berlin.', schema: { type: 'object', additionalProperties: false, required: ['order', 'city'], properties: { order: { type: 'string' }, city: { type: 'string' } } } },
     'ai.enrich': { record: { name: 'Widget' }, instructions: 'normalise the name' },
     'ai.embed': { input: ['one', 'two'] },
+    'ai.speak': { voice: 'gc_neural_chad', text: 'The build finally compiles.' },
     'ai.image': { prompt: 'A goose eating croutons, watercolour.', size: '1024x1024', n: 1 },
     'image.picture': { mode: 'find', query: 'SQLite', media_app: 'ai' },
     'wiki.generate_space': { topic: 'SQLite', max_pages: 6, sources: SRC(2) },

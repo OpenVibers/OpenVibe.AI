@@ -75,6 +75,9 @@ function buildReceipt({ run, explain = null, usage = {}, price = null, privacy =
         tokens_cached: int(usage.cached),
         tokens_cache_write: int(usage.cache_write),
         tokens_reasoning: int(usage.reasoning),
+        // Speech (ai.speak) is metered per character, like the providers bill: the same count the
+        // rate cards priced. Other runs carry no character count and omit the field.
+        ...(int(usage.characters) > 0 ? { characters: int(usage.characters) } : {}),
     };
     const paidBy = (payer && payer.paid_by) || 'openvibe_key';
     const byok = paidBy === 'own_key' || paidBy === 'own_machine';
@@ -132,7 +135,8 @@ function compact(receipt) {
         local: Boolean(offer.local),
         community: offer.community || null,
         price: { in: receipt.price && receipt.price.in_per_mtok, out: receipt.price && receipt.price.out_per_mtok, cached: receipt.price && receipt.price.cached_per_mtok },
-        tokens: { in: receipt.usage && receipt.usage.tokens_in, out: receipt.usage && receipt.usage.tokens_out, cached: receipt.usage && receipt.usage.tokens_cached },
+        tokens: { in: receipt.usage && receipt.usage.tokens_in, out: receipt.usage && receipt.usage.tokens_out, cached: receipt.usage && receipt.usage.tokens_cached,
+            ...(receipt.usage && receipt.usage.characters ? { characters: receipt.usage.characters } : {}) },
         cost_usd: receipt.cost_usd,
         fee_usd: receipt.fee_usd,
         fee_rate: receipt.fee_rate,

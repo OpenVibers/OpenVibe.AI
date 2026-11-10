@@ -40,6 +40,7 @@ const { createAnthropicProvider } = require('./anthropic');
 const { createGeminiProvider } = require('./gemini');
 const { createHttpSeamProvider } = require('./http');
 const { createWhisperProvider } = require('./whisper');
+const { createSpeechProvider } = require('./speech');
 const rates = require('./rate-cards');
 const tiers = require('./tiers');
 const latency = require('../latency');
@@ -365,6 +366,8 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             case 'gemini': return createGeminiProvider(p, { apiKey, fetchImpl });
             case 'http': return createHttpSeamProvider(p, { apiKey, fetchImpl });
             case 'whisper': return createWhisperProvider(p, { config });
+            case 'google-tts':
+            case 'polly': return createSpeechProvider(p, { apiKey, fetchImpl, env });
             default: throw new Error(`unknown provider kind ${p.kind}`);
         }
     }
