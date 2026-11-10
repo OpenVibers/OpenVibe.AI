@@ -96,16 +96,22 @@ async function seedPoolProviders({ registry, actor = 'system', env = process.env
             out.providers.push(p.key);
         } else if (prev.origin === 'catalog') {
             const defaults = recordOf(p);
-            if (prev.base_url !== p.base_url) defaults.metadata.models_endpoint = prev.base_url ? `${prev.base_url.replace(/\/+$/, '')}/models` : null;
+            const configured = prev.auth_mode === 'none' || Boolean(providerSecret(prev, env));
+            if (configured && prev.base_url !== p.base_url) defaults.metadata.models_endpoint = prev.base_url ? `${prev.base_url.replace(/\/+$/, '')}/models` : null;
+            const metadata = { ...defaults.metadata, ...prev.metadata };
+            if (!configured && prev.base_url !== p.base_url) {
+                metadata.models_endpoint = defaults.metadata.models_endpoint;
+                metadata.api_family = defaults.metadata.api_family;
+            }
             // A key is bound to its origin. A documentation refresh must never move a working
             // provider or change its wire format; endpoint changes are explicit owner edits.
             await registry.upsertProvider({
                 ...defaults,
-                base_url: prev.base_url, kind: prev.kind, auth_mode: prev.auth_mode,
-                status: prev.status === 'active' && prev.auth_mode !== 'none' && !providerSecret(prev, env) ? 'disabled' : prev.status,
+                ...(configured ? { base_url: prev.base_url, kind: prev.kind, auth_mode: prev.auth_mode } : {}),
+                status: prev.status === 'active' && !configured ? 'disabled' : prev.status,
                 secret_ref: prev.secret_ref,
                 provider_access: prev.provider_access || p.provider_access,
-                metadata: { ...defaults.metadata, ...prev.metadata },
+                metadata,
             }, { actor, origin: 'catalog' });
         } else {
             out.skipped.push(p.key);

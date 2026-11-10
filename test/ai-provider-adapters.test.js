@@ -150,6 +150,30 @@ t.test('the seed writes the privacy label, the quantization and the refusal rate
     assert.strictEqual(saved.get('qwen').base_url, 'https://proxy.example/v1');
 });
 
+t.test('seed refreshes unused endpoints while preserving configured and owner-managed bindings', async () => {
+    const source = pool.byKey.get('hyperbolic');
+    const records = new Map([['hyperbolic', {
+        ...seed.recordOf(source), status: 'active', origin: 'catalog',
+        base_url: 'https://legacy.example/v1', secret_ref: 'env:REGISTRY_TEST_KEY', metadata: {},
+    }]]);
+    const registry = {
+        getProvider: async key => records.get(key) || null,
+        upsertProvider: async (row, options) => records.set(row.key, { ...records.get(row.key), ...row, origin: options.origin }),
+        getModel: async () => null, upsertModel: async () => {},
+    };
+    await seed.seedPoolProviders({ registry, env: { REGISTRY_TEST_KEY: 'fixture-provider-credential' } });
+    assert.strictEqual(records.get('hyperbolic').base_url, 'https://legacy.example/v1');
+    assert.strictEqual(records.get('hyperbolic').status, 'active');
+    await seed.seedPoolProviders({ registry, env: {} });
+    assert.strictEqual(records.get('hyperbolic').base_url, source.base_url);
+    assert.strictEqual(records.get('hyperbolic').metadata.models_endpoint, source.models_endpoint);
+    assert.strictEqual(records.get('hyperbolic').status, 'disabled');
+    records.set('hyperbolic', { ...records.get('hyperbolic'), origin: 'admin', base_url: 'https://owner.example/v1', status: 'active' });
+    await seed.seedPoolProviders({ registry, env: {} });
+    assert.strictEqual(records.get('hyperbolic').base_url, 'https://owner.example/v1');
+    assert.strictEqual(records.get('hyperbolic').status, 'active');
+});
+
 t.test('the recorded shape of every provider is parsed by the OpenAI adapter, tool calls included', async () => {
     for (const key of pool.PROVIDERS.filter(p => p.kind === 'openai').map(p => p.key)) {
         const recorded = fixtures[key] || fixtures.openrouter;
