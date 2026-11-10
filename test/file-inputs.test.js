@@ -19,3 +19,5 @@ t.test('text attachments are resolved from Media references into the user turn',
     assert.equal(ignored.messages[0].content, 'Hi');
     await assert.rejects(() => attachFiles({ messages: [{ role: 'user', content: 'Hi' }], files: [{ media_id: 'bad' }] }, fetcher), /stored Media object/);
 });
+
+t.run();
