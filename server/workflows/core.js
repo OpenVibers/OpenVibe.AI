@@ -82,7 +82,7 @@ const workflows = [
     },
     {
         key: 'ai.embed', name: 'Embed text', namespace: 'ai',
-        input_schema: OBJ({ input: { anyOf: [STR(32000), { type: 'array', minItems: 1, maxItems: 64, items: STR(32000) }] } }, ['input']),
+        input_schema: OBJ({ compat_routing: { type: 'object' }, max_cost_usd: COMMON.max_cost_usd, input: { anyOf: [STR(32000), { type: 'array', minItems: 1, maxItems: 64, items: STR(32000) }] } }, ['input']),
         output_schema: OBJ({ vectors: { type: 'array', items: { type: 'array', items: { type: 'number' } } }, dimensions: { type: 'integer' } }, ['vectors', 'dimensions']),
         steps: [{ kind: 'embed', route: 'default.embedding' }], cache_mode: 'private',
     },
@@ -94,6 +94,7 @@ const workflows = [
         input_schema: OBJ({
             // CHECKPOINT D3: an exact id or a dynamic alias, when AI_MODEL_CATALOG is on (server/api/openai.js).
             model: STR(256),
+            compat_routing: { type: 'object' },
             messages: { type: 'array', minItems: 1, maxItems: 500, items: { type: 'object', required: ['role'], properties: {
                 role: { enum: ['system', 'developer', 'user', 'assistant', 'tool'] },
                 content: { anyOf: [{ type: 'string', maxLength: 400000 }, { type: 'array', maxItems: 100 }, { type: 'null' }] },
@@ -122,6 +123,7 @@ const workflows = [
         input_schema: OBJ({
             // CHECKPOINT D3: an exact id or a dynamic alias, when AI_MODEL_CATALOG is on (server/api/messages.js).
             model: STR(256),
+            compat_routing: { type: 'object' },
             messages: { type: 'array', minItems: 1, maxItems: 500, items: { type: 'object', required: ['role'], properties: {
                 role: { enum: ['user', 'assistant'] },
                 content: { anyOf: [STR(400000), { type: 'array', maxItems: 500 }, { type: 'null' }] },
@@ -148,7 +150,7 @@ const workflows = [
     {
         // Off until AI_IMAGE_MODEL seeds route default.image: without it a run answers 503 route.unavailable.
         key: 'ai.image', name: 'Generate an image', namespace: 'ai',
-        input_schema: OBJ({ prompt: STR(4000), size: { type: 'string', pattern: '^[0-9]{3,4}x[0-9]{3,4}$' }, n: { type: 'integer', minimum: 1, maximum: 4 } }, ['prompt']),
+        input_schema: OBJ({ compat_routing: { type: 'object' }, max_cost_usd: COMMON.max_cost_usd, prompt: STR(4000), size: { type: 'string', pattern: '^[0-9]{3,4}x[0-9]{3,4}$' }, n: { type: 'integer', minimum: 1, maximum: 4 } }, ['prompt']),
         output_schema: OBJ({ images: { type: 'array', minItems: 1, items: OBJ({ b64: { type: ['string', 'null'] }, url: { type: ['string', 'null'] } }) }, count: { type: 'integer', minimum: 1 } }, ['images', 'count']),
         // No cache: several MB of base64 per run, and a fresh image is what a caller asks for.
         steps: [{ kind: 'image', route: 'default.image' }], cache_mode: 'none',

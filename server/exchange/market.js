@@ -8,7 +8,7 @@ const recordKey = (provider, model) => `${provider}\0${String(model).toLowerCase
 const num = (v) => v == null || v === '' || !Number.isFinite(Number(v)) || Number(v) < 0 ? null : Number(v);
 const webUrl = (v) => typeof v === 'string' && /^https:\/\//.test(v) ? v : null;
 
-function buildOffers({ providers = [], rows = [], changes = [], catalogue = {}, metadata = {}, observations = [], presets = PROVIDERS }) {
+function buildOffers({ providers = [], rows = [], changes = [], catalogue = {}, metadata = {}, observations = [], presets = PROVIDERS, fidelity = null }) {
     const publicKeys = new Set([...presets.map(p => p.key), ...SOURCES.filter(s => s.role === 'own').map(s => s.provider)]);
     const byProvider = new Map(providers.filter(p => publicKeys.has(p.key)).map((p) => [p.key, p]));
     const seeds = new Map();
@@ -58,6 +58,9 @@ function buildOffers({ providers = [], rows = [], changes = [], catalogue = {}, 
             routed: routed.some(o => o.provider === p.key && String(o.model).toLowerCase() === String(row.model_key).toLowerCase()),
             uncensored: seed?.m.uncensored === true || presets.find(preset => preset.key === p.key)?.uncensored === true,
             provider_access: p.provider_access || 'UNVERIFIED', field_sources: {},
+            // The measured provider fidelity from Bench, when Bench has measured this exact endpoint;
+            // absent (null) when nobody measured it, never a zero.
+            fidelity: fidelity && typeof fidelity.get === 'function' ? (fidelity.get(recordKey(p.key, row.model_key)) || null) : null,
         };
         // Pending price changes are the latest observed own-page price, even before the router
         // approves charging it. Never publish the change log's actor, note or account data.
@@ -107,20 +110,21 @@ function pageMarket(snapshot, query = {}) {
         offers: offers.slice(offset, offset + limit), next_cursor: offset + limit < offers.length ? String(offset + limit) : null };
 }
 
-function createMarket({ db, registry, catalog, config, clock = { now: Date.now }, metadata = null }) {
+function createMarket({ db, registry, catalog, config, clock = { now: Date.now }, metadata = null, fidelity = null }) {
     const source = metadata || createModelMetadata({ db, now: () => clock.now(), enabled: config?.nodeEnv !== 'test' && process.env.NODE_ENV !== 'test' });
     let hit = null; let pending = null;
     async function snapshot() {
         if (hit && clock.now() < hit.until) return hit.value;
         if (!pending) pending = (async () => {
-            const [providers, rows, changes, catalogue, meta, observations] = await Promise.all([
+            const [providers, rows, changes, catalogue, meta, observations, fidelityMap] = await Promise.all([
                 registry.listProviders(), registry.listModels(),
                 db.prepare('SELECT provider_key, model_key, field, new_price, source, checked_at FROM price_changes ORDER BY checked_at DESC').all(),
                 catalog(), source.read(),
                 db.prepare('SELECT provider_key, model_key, price, source, checked_at FROM exchange_market_prices').all(),
+                fidelity ? fidelity.read() : Promise.resolve(new Map()),
             ]);
             const value = { generated_at: new Date(clock.now()).toISOString(), metadata: { source: URL, checked_at: meta.checked_at, stale: meta.stale },
-                offers: buildOffers({ providers, rows, changes, catalogue, metadata: meta, observations }) };
+                offers: buildOffers({ providers, rows, changes, catalogue, metadata: meta, observations, fidelity: fidelityMap }) };
             hit = { value, until: clock.now() + TTL_MS }; return value;
         })().finally(() => { pending = null; });
         return pending;

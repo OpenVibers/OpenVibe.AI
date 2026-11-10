@@ -42,6 +42,12 @@ const catalogOpenAi = (x) => ({
     created: epochOf(x.entry.created_at),
     owned_by: x.entry.provider_key,
     dynamic: false,
+    name: x.entry.display_name || x.entry.model_key,
+    context_length: x.entry.context_window,
+    pricing: { prompt: x.entry.cost.in_per_mtok == null ? null : String(x.entry.cost.in_per_mtok / 1e6),
+        completion: x.entry.cost.out_per_mtok == null ? null : String(x.entry.cost.out_per_mtok / 1e6) },
+    architecture: { input_modalities: x.entry.modalities || ['text'], output_modalities: [x.entry.type === 'image' ? 'image' : 'text'] },
+    top_provider: { context_length: x.entry.context_window, max_completion_tokens: x.entry.max_output },
 });
 const catalogAnthropic = (x) => ({
     ...x.entry,

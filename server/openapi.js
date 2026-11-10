@@ -21,7 +21,7 @@
  * server/runs.js decode(). Nothing is inferred.
  */
 const pkg = require('../package.json');
-const { paths: searchPaths } = require('./search/openapi');
+const searchPaths = { ...require('./search/openapi').paths, ...require('./exchange/compat-openapi').paths };
 
 const MOUNT = '/api/v1';
 // The public base of this API (BASE_URL in production).
@@ -454,6 +454,7 @@ const exchangeOffer = {
         refusal_rate: nullable('number', { minimum: 0, maximum: 1, description: 'The share of the published probe set this offer refused (0.75 is three probes out of four). null when nobody measured this offer, never 0.' }),
         refusal_measured_on: nullable('string', { description: 'The day the refusal rate was measured' }),
         refusal_prompt_set: nullable('string', { description: 'The version of the published probe set the rate was measured with' }),
+        fidelity: nullable('object', { description: 'Provider fidelity measured by OpenVibe.Bench: the same fixed objective set run through every provider that serves this open-weight model. score is the pass rate, n the answered items, interval its 95% Wilson band. Null when Bench has not measured this exact endpoint.', properties: { score: { type: 'number', minimum: 0, maximum: 1 }, n: integer({ minimum: 0 }), interval: { type: ['object', 'null'], properties: { lower: nullable('number'), upper: nullable('number') } }, compared_to: nullable('string'), measured_at: nullable('string'), prompt_set: nullable('string') } }),
         updated_at: nullable('string'),
     },
 };
@@ -491,6 +492,7 @@ route('get', '/exchange/market', {
                 maker: nullable('string'), context: nullable('number'), max_output: nullable('number'),
                 open_weights: nullable('boolean'), licence: nullable('string'), release_date: nullable('string'), knowledge_cutoff: nullable('string'),
                 modalities: { type: ['object', 'null'], properties: { input: arrayOf(str()), output: arrayOf(str()) } },
+                fidelity: nullable('object', { properties: { score: nullable('number'), n: integer(), interval: { type: ['object', 'null'], properties: { lower: nullable('number'), upper: nullable('number') } }, compared_to: nullable('string'), measured_at: nullable('string'), prompt_set: nullable('string') } }),
                 field_sources: { type: 'object', additionalProperties: str({ format: 'uri' }) },
             } }),
         },
@@ -556,6 +558,9 @@ route('get', '/exchange/key-usage', {
     description: 'Only a person. One row per day, key, model and status (settled, reserved, unresolved): requests, tokens and dollars. Private to the owner.',
     responses: { 200: json('The usage rows', { type: 'object', required: ['rows'], properties: { rows: arrayOf({ type: 'object' }) } }), ...errors([401, 403]) },
 });
+route('get', '/exchange/presets', { operationId: 'exchangeRequestPresets', summary: 'List your saved request presets', tags: ['exchange'], security: [{ bearer: [] }], responses: { 200: json('Owner presets', { type: 'object', properties: { data: arrayOf({ type: 'object' }) } }), ...errors([401, 403]) } });
+route('post', '/exchange/presets', { operationId: 'exchangeRequestPresetSave', summary: 'Save your request preset', tags: ['exchange'], security: [{ bearer: [] }], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object' } } } }, responses: { 200: json('Saved preset', { type: 'object' }), ...errors([400, 401, 403]) } });
+route('delete', '/exchange/presets/{name}', { operationId: 'exchangeRequestPresetDelete', summary: 'Delete your request preset', tags: ['exchange'], security: [{ bearer: [] }], parameters: [{ in: 'path', name: 'name', required: true, schema: str() }], responses: { 200: json('Deletion result', { type: 'object' }), ...errors([400, 401, 403]) } });
 route('get', '/exchange/search/engines', {
     operationId: 'exchangeSearchEngines', summary: 'The search engines behind web, image and icon search', tags: ['exchange'], security: [],
     description: 'Public. Engine IDs, kinds (web, images, icons, fetch), availability of shared keys, BYOK support, health, supported freshness filters, price_per_1000 in USD (null when variable), pricing_note, source URL and checked_on date. Personal key availability is private. Tariffs exclude free allowances and volume discounts.',
@@ -621,6 +626,21 @@ route('get', '/exchange/usage', {
         today: { type: 'object' }, totals: { type: 'object' },
         by_day: arrayOf({ type: 'object' }), by_model: arrayOf({ type: 'object' }), by_product: arrayOf({ type: 'object' }),
     } }) },
+});
+
+route('get', '/exchange/share', {
+    operationId: 'exchangeTrafficShare', summary: 'Real-traffic share by model and app category, published weekly', tags: ['exchange'], security: [], servers: [{ url: 'https://api.openvibe.exchange' }],
+    description: 'Public and aggregate only: never a prompt, an answer, a person or an app\'s name. Read from the Exchange receipts of a completed UTC week (succeeded, non-synthetic requests that a provider answered; runs whose person turned history off are excluded). Every cell needs at least k requests before it is published; smaller cells are withheld and counted only in withheld. Developer apps fold into one category, apps, so no app is named. The weekly answer is stored once and kept after the receipts it came from are pruned.',
+    parameters: [query('week', str(), 'A Monday, YYYY-MM-DD. Default: the last completed week')],
+    responses: { 200: json('The share', { type: 'object', required: ['$schema', 'week_start', 'week_end', 'k', 'totals', 'offers', 'models', 'categories', 'withheld'], properties: {
+        $schema: { const: 'exchange.traffic-share@1' }, week_start: str({ format: 'date' }), week_end: str({ format: 'date' }), generated_at: str({ format: 'date-time' }),
+        k: integer({ minimum: 20 }), source: str(), note: str(),
+        totals: { type: 'object', properties: { requests: integer(), tokens_in: integer(), tokens_out: integer(), tokens: integer() } },
+        offers: arrayOf({ type: 'object', properties: { provider: str(), model: str(), requests: integer(), tokens_in: integer(), tokens_out: integer(), tokens: integer(), request_share: nullable('number'), token_share: nullable('number') } }),
+        models: arrayOf({ type: 'object', properties: { model: str(), providers: integer(), requests: integer(), tokens: integer(), request_share: nullable('number'), token_share: nullable('number') } }),
+        categories: arrayOf({ type: 'object', properties: { category: str(), requests: integer(), tokens: integer(), request_share: nullable('number'), token_share: nullable('number') } }),
+        withheld: { type: 'object', properties: { cells: integer(), requests: integer(), tokens: integer(), share_of_requests: nullable('number') } },
+    } }), ...errors([404, 422]) },
 });
 
 route('get', '/exchange/price-changes', {

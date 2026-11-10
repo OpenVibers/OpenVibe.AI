@@ -1054,6 +1054,8 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
     }
 
     async function execute(route, operation, req, ctx = {}) {
+        if (ctx.compatRouting && (ctx.credential || ctx.byok || ctx.selfPreferences?.only_my_keys))
+            throw new AiError(400, 'input.invalid', 'Provider routing cannot be combined with an explicit credential or only_my_keys');
         if (ctx.taskChoice) return require('../choices/execute').executeChoice({ execute, registry, poolRates: rateCardsFor, maxAttempts: config.providerRetries + 1, route, operation, req, ctx });
         const contentPolicy = ctx.contentPolicy || 'standard';
         const refuseFloor = (r) => new AiError(403, 'policy.floor_refused', r.detail, { rule: r.rule, policy: contentPolicy });
@@ -1122,7 +1124,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         const selfAttempts = [];
         // The adult tier is network supply only: a person's own provider key is not an offer marked uncensored, and
         // only such an offer may answer an uncensored request. Their key is still used for every standard request.
-        const selfList = uncensored ? [] : (Array.isArray(ctx.selfCredentials) ? ctx.selfCredentials : []);
+        const selfList = uncensored || ctx.compatRouting ? [] : (Array.isArray(ctx.selfCredentials) ? ctx.selfCredentials : []);
         if (!uncensored && (selfList.length || (ctx.selfSubject && prefs.only_my_keys))) {
             const order = [...selfList].sort((a, b) => {
                 const rank = (x) => (x.status === 'failing' ? 2 : x.status === 'untested' ? 1 : 0);
@@ -1185,7 +1187,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         // Community placement runs before the catalog pool. A preset with price, privacy, region, or quality
         // rules must use the catalog path so those rules are checked before any offer is called.
         const communityPresetSafe = !ctx.presetPolicy || Object.keys(ctx.presetPolicy).every((key) => key === 'community');
-        if (community && ctx.communityOptIn && communityPresetSafe && !ctx.credential && !ctx.byok && !ctx.exact) {
+        if (!ctx.compatRouting && community && ctx.communityOptIn && communityPresetSafe && !ctx.credential && !ctx.byok && !ctx.exact) {
             // Community capacity is a free-tier source only when the allowlist names it: without that, the
             // ordinary network answers and the skip is named in the explain, never silently used.
             if (freeSources && !allowsCommunity(freeSources)) {
@@ -1224,6 +1226,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                 const card = row ? modelCatalog.retailRate(row) : null;
                 const policyOk = p ? await policyAllows(registry, p, offer.model, ctx.contentPolicy || 'standard') : false;
                 if (!p) why.push('unknown_provider');
+                else if (!appOffered(ctx, p)) why.push('app_provider_not_allowed');
                 else if (!policyOk) why.push('content_policy');
                 else if (ctx.creditsRequired && !isFreeProvider(p) && card && card.version) { why.push('payer_required'); payerSkipped = true; }
                 else if (freeSources && !allowsProvider(p.key, p, freeSources)) {
@@ -1364,6 +1367,45 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                 explain.policy = ctx.aliasPolicy;
                 explain.reasons = [picked.view.reason, ...(explain.reasons || [])];
             }
+        }
+        if (ctx.compatRouting) {
+            const { select, policyFor } = require('../exchange/compat-routing');
+            const ordered = [];
+            const ratingEvidence = require('../bench/evidence');
+            let ratings = [];
+            if (bench && ['quality', 'value'].includes(ctx.compatRouting.policy.sort)) {
+                // Messages shares completion ratings; this is a provider method, not a public capability.
+                const ratingOperation = operation === 'messages' ? 'complete' : operation;
+                const ratingRoute = operation === 'messages' ? { ...route, capability: ratingOperation } : route;
+                for (const kind of bench.kindCandidates(ratingRoute, ratingOperation)) {
+                    ratings = await bench.list(kind, bench.categoryFor(route));
+                    if (ratings.length) break;
+                }
+            }
+            for (const group of [...new Set(ctx.compatRouting.offers.map(o => o.group))]) {
+                const offers = ctx.compatRouting.offers.filter(o => o.group === group);
+                const variant = offers[0]?.variant;
+                const { policy: requestedPolicy } = policyFor({ model: 'openvibe/auto' + (variant ? ':' + variant : ''), provider: ctx.compatRouting.policy });
+                const groupList = list.filter(c => offers.some(o => o.provider === c.provider && o.model === c.model));
+                const result = await select(groupList, requestedPolicy, async c => {
+                    const d = await describeCandidate(c);
+                    const privacy = exchangePrivacy.dataPolicyOf(d.record) || {};
+                    const metrics = await createProviderMetrics({ db, clock }).get(c.provider, c.model);
+                    // Report's board pages read Bench. Use the same event-fed ratings, never a declared tier.
+                    const rating = ratings.find(row => ratingEvidence.usable(row) && (
+                        ratingEvidence.matchesOffer(row, c) || ratingEvidence.matchesOffer(row, {
+                            ...c, model: require('../exchange/catalog').canonicalOf(d.row, d.record),
+                        })
+                    ));
+                    return { priceIn: d.row?.cost?.in_per_mtok ?? null, priceOut: d.row?.cost?.out_per_mtok ?? null, training: privacy.training,
+                        retention: privacy.retention, latency: metrics?.ttft_ms, throughput: metrics?.decode_tps,
+                        quality: rating ? Number(rating.rating) : null };
+                });
+                ordered.push(...result.allowed);
+                for (const x of result.excluded) explain.candidates.push({ ...x, eligible: false, excluded_reason: x.reason });
+            }
+            list = ordered;
+            if (!list.length) throw new AiError(503, 'ai.routing_unavailable', 'No provider satisfies the requested routing policy', { explain });
         }
         const evidenceReason = explain.evidence ? explain.evidence.reason : null;
         explain.content_policy = contentPolicy;

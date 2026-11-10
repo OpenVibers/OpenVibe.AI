@@ -285,6 +285,33 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
      * never called, so today's route selection is unchanged.
      */
     async function selectedRoute(base, input) {
+        if (input.compat_routing) {
+            const routing = require('../exchange/compat-routing');
+            const source = input.compat_routing;
+            if (!Array.isArray(source.entries) || !source.entries.length || source.entries.length > 8)
+                throw new AiError(400, 'input.invalid', 'One to eight routing models are required');
+            const entries = source.entries.map(e => routing.modelName(e.model + (e.variant ? ':' + e.variant : '')));
+            const policy = routing.normalize(source.policy);
+            const providers = new Map((await registry.listProviders()).map(p => [p.key, p]));
+            const rows = await registry.listModels();
+            const offers = [];
+            for (const [group, entry] of entries.entries()) {
+                const dynamic = ['openvibe', 'openvibe/auto'].includes(entry.model);
+                for (const row of rows) {
+                    const provider = providers.get(row.provider_key);
+                    if (!provider || row.status !== 'active' || provider.status !== 'active') continue;
+                    const wantedType = base.capability === 'embed' ? 'embedding' : base.capability === 'image' ? 'image' : 'chat';
+                    if (row.type !== wantedType && !(wantedType === 'chat' && row.type === 'vision')) continue;
+                    if (!modelCatalog.managedAccessAllowed(provider) || provider.metadata?.hidden || provider.metadata?.synthetic) continue;
+                    if (!dynamic && require('../exchange/catalog').canonicalOf(row, provider) !== entry.model && row.metadata?.id !== entry.model) continue;
+                    if (row.metadata?.hidden || row.metadata?.synthetic || row.metadata?.restricted || row.metadata?.byok) continue;
+                    if (['CUSTOMER_BYOK', 'RESTRICTED'].includes(row.provider_access || row.metadata?.provider_access)) continue;
+                    offers.push({ provider: row.provider_key, model: row.model_key, group, variant: entry.variant });
+                }
+            }
+            if (!offers.length) throw new AiError(404, 'ai.model_not_found', 'No requested model is available');
+            return { route: base, selection: { kind: 'compat', offers, policy } };
+        }
         if (!(config.modelCatalog && config.modelCatalog.enabled) || typeof input.model !== 'string' || !input.model.trim()) return { route: base, selection: null };
         const selection = await modelCatalog.select({ registry, model: input.model.trim(), route: base });
         return { route: selection.route, selection };
@@ -292,6 +319,8 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
 
     function selectionCtx(selection) {
         if (!selection) return {};
+        if (selection.kind === 'compat') return { compatRouting: selection,
+            exact: { id: 'requested model fallbacks', offers: selection.offers } };
         return selection.kind === 'exact'
             ? { policy: 'exact', exact: { id: selection.id, offers: selection.offers.map((o) => ({ provider: o.provider, model: o.model })) } }
             : { policy: selection.policy, aliasPolicy: selection.policy };
@@ -418,20 +447,20 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
     }
 
     async function embedStep(step, input, wf, run, ctx) {
-        const route = await routeFor(step.route || 'default.embedding');
+        const { route, selection } = await selectedRoute(await routeFor(step.route || 'default.embedding'), input);
         const inputs = Array.isArray(input.input) ? input.input : [input.input];
-        const exec = await pool.execute(route, 'embed', { input: inputs, timeoutMs: route.timeout_ms || 30000 }, { ...ctx, routeKey: route.key, routeVersion: route.version, promptHash: null });
+        const exec = await pool.execute(route, 'embed', { input: inputs, timeoutMs: route.timeout_ms || 30000 }, { ...ctx, ...selectionCtx(selection), routeKey: route.key, routeVersion: route.version, promptHash: null });
         const vectors = exec.result.vectors || [];
         if (vectors.length !== inputs.length) throw new AiError(502, 'output.invalid', 'embedding count does not match the input');
         return { output: { vectors, dimensions: vectors[0] ? vectors[0].length : 0 }, exec, route };
     }
 
     async function imageStep(step, input, wf, run, ctx) {
-        const route = await routeFor(step.route || 'default.image');
+        const { route, selection } = await selectedRoute(await routeFor(step.route || 'default.image'), input);
         const prompt = String(input.prompt || '').trim();
         if (!prompt) throw new AiError(422, 'input.invalid', 'image needs a prompt');
         const req = { prompt, size: input.size || (step.params && step.params.size) || (config.image && config.image.size) || null, n: Math.max(1, Math.min(Number(input.n) || 1, 4)), timeoutMs: route.timeout_ms || 120000 };
-        const exec = await pool.execute(route, 'image', req, { ...ctx, routeKey: route.key, routeVersion: route.version, promptHash: sha256({ p: prompt }) });
+        const exec = await pool.execute(route, 'image', req, { ...ctx, ...(input.compat_routing ? { freeOnly: true } : {}), ...selectionCtx(selection), routeKey: route.key, routeVersion: route.version, promptHash: sha256({ p: prompt }) });
         const images = (exec.result.images || []).filter(i => i && (i.b64 || i.url));
         if (!images.length) throw new AiError(502, 'output.invalid', 'no image was returned');
         return { output: { images: images.map(i => ({ b64: i.b64 || null, url: i.url || null })), count: images.length }, exec, route };
