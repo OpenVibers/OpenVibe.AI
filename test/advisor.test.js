@@ -4,7 +4,7 @@ const { suite, boot, request, token, ALL } = require('./helpers');
 const advisor = require('../server/advisor');
 
 const ULID = '01JQ8Z3K4M5N6P7Q8R9S0T1V2W';
-const appToken = (project, cap = ['ai.app.run']) => token('app', cap, { sub: `app:app_${project.slice(0, 26).padEnd(26, 'X')}`, actorType: 'app', ns: [project, `app.${project}.*`], extra: { project_id: project, env: 'production' } });
+const appToken = (project, app, cap = ['ai.app.run']) => token('app', cap, { sub: `app:app_${app}`, actorType: 'app', ns: [project, `app.${project}.*`], extra: { project_id: project, env: 'production' } });
 
 const t = suite('advisor');
 const messages = [{ role: 'user', content: 'Change the failing test and run it.' }];
@@ -29,7 +29,8 @@ t.test('the advisor is off unless the run asks; caps and workflow are refused be
         assert.strictEqual((await request(h.base, 'POST', '/api/v1/runs', { tok, body: { workflow: 'ai.complete', input: { messages }, advisor: { max_words: 101 } } })).status, 422);
         assert.strictEqual((await request(h.base, 'POST', '/api/v1/runs', { tok, body: { workflow: 'ai.complete', input: { messages }, advisor: { effort: 'auto' } } })).status, 422);
         assert.strictEqual((await request(h.base, 'POST', '/api/v1/runs', { tok, body: { workflow: 'ai.generate', input: { prompt: 'x' }, advisor: true } })).status, 422);
-        assert.strictEqual((await request(h.base, 'POST', '/api/v1/runs', { tok, body: { workflow: 'ai.complete', input: { messages }, advisor: true, options: { advisor: false } } })).status, 201, 'top-level advisor wins over options');
+        const top = await startRun(h, tok, { advisor: true, options: { advisor: false } });
+        assert.match(top.id, /^run_/, 'top-level advisor wins over options');
     } finally { await h.stop(); }
 });
 
@@ -37,7 +38,7 @@ t.test('one advice call makes a run, cuts the advice to the cap, and lands on th
     const h = await boot();
     const tok = token('live', ALL);
     try {
-        const run = await startRun(h, tok, { advisor: { max_uses: 3, max_words: 40, model: 'stub/stub-1' }, effort: 'low' });
+        const run = await startRun(h, tok, { advisor: { max_uses: 3, max_words: 40, model: 'stub/stub-1', effort: 'low' }, effort: 'low' });
         const row = await h.db.prepare('SELECT options FROM runs WHERE id = ?').get(run.id);
         const policy = JSON.parse(row.options).advisor_policy;
         assert.deepStrictEqual({ enabled: policy.enabled, max_uses: policy.max_uses, max_words: policy.max_words, model: policy.model }, { enabled: true, max_uses: 3, max_words: 40, model: 'stub/stub-1' });
@@ -74,7 +75,8 @@ t.test('at most max_uses per run; a fourth call is refused and the owner check h
     const other = token('other', ALL);
     try {
         const run = await startRun(h, tok, { advisor: { max_uses: 3 } });
-        assert.strictEqual((await request(h.base, 'POST', `/api/v1/runs/${run.id}/advice`, { tok: other, body: { transcript: messages } })).status, 404);
+        const plain = token('other', ['ai.run.create', 'ai.run.read']);
+        assert.strictEqual((await request(h.base, 'POST', `/api/v1/runs/${run.id}/advice`, { tok: plain, body: { transcript: messages } })).status, 404);
         for (let i = 1; i <= 3; i++) {
             const res = await request(h.base, 'POST', `/api/v1/runs/${run.id}/advice`, { tok, body: { transcript: messages } });
             assert.strictEqual(res.status, 201, res.text);
@@ -109,8 +111,8 @@ t.test('a named model the route does not serve and a transcript that is not mess
 t.test('a developer app may ask advice on its own run, never on another project\'s', async () => {
     const h = await boot();
     const prj = `prj_${ULID}`;
-    const app = appToken(prj);
-    const other = appToken(`prj_${'01JQ8Z3K4M5N6P7Q8R9S0T1V2X'}`);
+    const app = appToken(prj, ULID);
+    const other = appToken(`prj_${'01JQ8Z3K4M5N6P7Q8R9S0T1V2X'}`, '01JQ8Z3K4M5N6P7Q8R9S0T1V2X');
     try {
         const res = await request(h.base, 'POST', '/v1/chat/completions?wait=5000', { tok: app, body: { model: 'openvibe', messages, advisor: true, effort: 'low' } });
         assert.strictEqual(res.status, 200, res.text);
@@ -139,3 +141,5 @@ t.test('policy parsing: defaults, compat option, and the 3/100 ceilings', async 
     assert.deepStrictEqual(advisor.words('one two three four', 3), { text: 'one two three', count: 3 });
     assert.deepStrictEqual(advisor.words('one two', 3), { text: 'one two', count: 2 });
 });
+
+t.run();

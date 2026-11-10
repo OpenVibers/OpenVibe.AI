@@ -104,8 +104,10 @@ function projectProviderOf(spec) {
 const ROUTE_PIN_KEYS = new Set(['provider', 'model']);
 function routePinRequest(value, principal, wf) {
     if (value == null) return null;
-    if (principal.kind === 'app') throw new AiError(403, 'capability.denied', 'a developer app may not pin a route; use the routing pool');
-    if (!principal.subject || principal.subject.type !== 'service') throw new AiError(403, 'capability.denied', 'only a first-party service may pin a route');
+    // A first-party service pins a route on the generate operation. An app may pin only the advisor's own
+    // ai.chat child run: no app-reachable route passes a caller's route field for that workflow.
+    if (principal.kind === 'app' && (!wf || wf.key !== 'ai.chat')) throw new AiError(403, 'capability.denied', 'a developer app may not pin a route; use the routing pool');
+    if (principal.kind !== 'app' && (!principal.subject || principal.subject.type !== 'service')) throw new AiError(403, 'capability.denied', 'only a first-party service may pin a route');
     if (!wf || !['ai.generate', 'ai.chat'].includes(wf.key)) throw new AiError(422, 'input.invalid', 'route pinning is available on the generate operation (ai.generate) and the advisor chat (ai.chat) only');
     if (typeof value !== 'object' || Array.isArray(value)) throw new AiError(422, 'input.invalid', 'route must be { provider, model }');
     for (const k of Object.keys(value)) if (!ROUTE_PIN_KEYS.has(k)) throw new AiError(422, 'input.invalid', `route has no field ${k}; send { provider, model }`);
@@ -1269,8 +1271,11 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
         const cost = Number(done.usage && done.usage.cost_usd) || 0;
         const tokensIn = Number(done.usage && done.usage.tokens_in) || 0;
         const tokensOut = Number(done.usage && done.usage.tokens_out) || 0;
+        // The offer may name only its provider (a stub or the host's own model leaves model null): the run's
+        // provenance names the artifact that actually answered.
+        const answeredModel = chosen.model || (done.provenance && done.provenance.model) || 'default';
         const entry = {
-            run_id: id, use: used.length + 1, advice_run_id: done.id, model: `${chosen.provider}/${chosen.model}`, effort,
+            run_id: id, use: used.length + 1, advice_run_id: done.id, model: `${chosen.provider}/${answeredModel}`, effort,
             tokens_in: tokensIn, tokens_out: tokensOut, cost_usd: cost, words: cut.count, created_at: iso(clock.now()),
         };
         await db.tx(async () => {
