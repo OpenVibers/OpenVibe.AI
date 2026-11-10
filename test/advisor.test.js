@@ -3,6 +3,9 @@ const assert = require('assert');
 const { suite, boot, request, token, ALL } = require('./helpers');
 const advisor = require('../server/advisor');
 
+const ULID = '01JQ8Z3K4M5N6P7Q8R9S0T1V2W';
+const appToken = (project, cap = ['ai.app.run']) => token('app', cap, { sub: `app:app_${project.slice(0, 26).padEnd(26, 'X')}`, actorType: 'app', ns: [project, `app.${project}.*`], extra: { project_id: project, env: 'production' } });
+
 const t = suite('advisor');
 const messages = [{ role: 'user', content: 'Change the failing test and run it.' }];
 
@@ -100,6 +103,26 @@ t.test('a named model the route does not serve and a transcript that is not mess
         assert.strictEqual((await request(h.base, 'POST', `/api/v1/runs/${run.id}/advice`, { tok, body: { transcript: messages, max_words: 5 } })).status, 422);
         assert.strictEqual((await request(h.base, 'POST', `/api/v1/runs/${run.id}/advice`, { tok, body: { transcript: messages, effort: 'auto' } })).status, 422);
         assert.strictEqual((await request(h.base, 'POST', `/api/v1/runs/${run.id}/advice`, { tok, body: { transcript: messages } })).status, 201);
+    } finally { await h.stop(); }
+});
+
+t.test('a developer app may ask advice on its own run, never on another project\'s', async () => {
+    const h = await boot();
+    const prj = `prj_${ULID}`;
+    const app = appToken(prj);
+    const other = appToken(`prj_${'01JQ8Z3K4M5N6P7Q8R9S0T1V2X'}`);
+    try {
+        const res = await request(h.base, 'POST', '/v1/chat/completions?wait=5000', { tok: app, body: { model: 'openvibe', messages, advisor: true, effort: 'low' } });
+        assert.strictEqual(res.status, 200, res.text);
+        const runId = res.headers.get('x-openvibe-run-id');
+        assert.match(runId, /^run_/);
+        assert.strictEqual((await request(h.base, 'POST', `/api/v1/runs/${runId}/advice`, { tok: other, body: { transcript: messages } })).status, 404);
+        const advice = await request(h.base, 'POST', `/api/v1/runs/${runId}/advice`, { tok: app, body: { transcript: messages } });
+        assert.strictEqual(advice.status, 201, advice.text);
+        assert.strictEqual(advice.body.use, 1);
+        const read = await request(h.base, 'GET', `/api/v1/runs/${runId}`, { tok: app });
+        assert.strictEqual(read.status, 200, read.text);
+        assert.strictEqual(read.body.run.explain.advisor.count, 1);
     } finally { await h.stop(); }
 });
 

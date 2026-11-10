@@ -161,7 +161,7 @@ function runsRouter({ choices = null, runs, registry, auth, config, log = consol
     // AL3: one advisor call for a run that asked for it. The executor sends its transcript; a stronger model
     // answers with at most 100 words, every use is on the run's receipt with its cost, and the run's own cap
     // (at most 3) is enforced here. The advice is guidance the executor feeds back into its own loop.
-    r.post('/api/v1/runs/:id/advice', create, async (req, res) => {
+    r.post('/api/v1/runs/:id/advice', createApp, async (req, res) => {
         try {
             res.status(201).json(await runs.advise(req.params.id, req.body || {}, req.principal, { trace: req.ov.traceId, principalHas: has(req) }));
         } catch (err) { sendError(res, err, req.ov, log); }
