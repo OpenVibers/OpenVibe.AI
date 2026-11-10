@@ -588,6 +588,15 @@ route('put', '/agent-role-defaults/{role}', {
     requestBody: body({ type: 'object', properties: { model: str(), choice_order: arrayOf(str()), effort: effortFields.effort } }),
     responses: { 200: json('Saved default', { type: 'object' }), ...errors([401, 403, 422]) },
 });
+route('get', '/exchange/metrics/status', {
+    operationId: 'exchangeMetricsStatus', summary: 'Daily measured metrics publication status', tags: ['exchange'], security: [],
+    description: 'Public, cached sixty seconds. Complete UTC days from retained run receipts; published cells and each timing measure require twenty samples. No caller or prompt data.',
+    responses: { 200: json('Rollup status', { type: 'object', properties: {
+        schema: { const: 'exchange.metrics@1' }, minimum_samples: { const: 20 }, published_cells: integer(),
+        completed_through: nullable('string', { format: 'date' }), completed_at: nullable('string', { format: 'date-time' }),
+        first_day: nullable('string', { format: 'date' }), last_day: nullable('string', { format: 'date' }),
+    } }) },
+});
 route('get', '/exchange/catalog', {
     operationId: 'exchangeCatalog', summary: 'Every model and every offer that serves it', tags: ['exchange'], security: [],
     description: 'Public. The live offers: measured status (up/degraded/down, with a plain reason and since when), price in, out and cached per million tokens, measured p50/p95, uptime, requests, and the provider data policy. Speed and uptime are read from the last seven days of real runs (time to the first token where a receipt recorded one, else the answering attempt\'s total); cached answers are counted apart and excluded from speed, uptime and requests. Uptime is succeeded / (succeeded + failed); null when no data, never 0. A prepaid offer has no price (free: true); free_tier says whether the free allowance and the anonymous Try it may use an offer at all (a named AI_FREE_PROVIDERS source under the output price ceiling). Models carry a kind (chat, embedding, stt, image); chat lists must use kind "chat" and never mix embeddings or speech-to-text.',
