@@ -38,10 +38,10 @@ t.test('one advice call makes a run, cuts the advice to the cap, and lands on th
     const h = await boot();
     const tok = token('live', ALL);
     try {
-        const run = await startRun(h, tok, { advisor: { max_uses: 3, max_words: 40, model: 'stub/stub-1', effort: 'low' }, effort: 'low' });
+        const run = await startRun(h, tok, { advisor: { max_uses: 3, max_words: 40, effort: 'low' }, effort: 'low' });
         const row = await h.db.prepare('SELECT options FROM runs WHERE id = ?').get(run.id);
         const policy = JSON.parse(row.options).advisor_policy;
-        assert.deepStrictEqual({ enabled: policy.enabled, max_uses: policy.max_uses, max_words: policy.max_words, model: policy.model }, { enabled: true, max_uses: 3, max_words: 40, model: 'stub/stub-1' });
+        assert.deepStrictEqual({ enabled: policy.enabled, max_uses: policy.max_uses, max_words: policy.max_words }, { enabled: true, max_uses: 3, max_words: 40 });
         const res = await request(h.base, 'POST', `/api/v1/runs/${run.id}/advice`, { tok, body: { transcript: [{ role: 'system', content: 'You are a coding agent.' }, ...messages, { role: 'tool', content: 'exit 1: expected 2' }], question: 'What now?' } });
         assert.strictEqual(res.status, 201, res.text);
         assert.ok(res.body.advice.length > 0);

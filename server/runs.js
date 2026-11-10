@@ -1232,7 +1232,8 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
         const freeOnly = appRun && (principal.env === 'sandbox' || !(tiers && tiers.enabled));
         const ctx = { requesterType: row.requester_type, requesterId: row.requester_id, ...(person ? { onBehalfOf: person } : {}), ...(opts.policy ? { contentPolicy: opts.policy } : {}), ...(appRun ? { appRun: true, freeOnly } : {}) };
         const offers = await pool.offers(route, 'chat', ctx);
-        const asked = body.model == null ? null : String(body.model).trim();
+        // The model may be named on the advice call or once on the run's advisor policy; the call wins.
+        const asked = body.model == null ? (policy.model || null) : String(body.model).trim();
         if (asked != null && !/^[A-Za-z0-9][A-Za-z0-9._:-]*\/[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}$/.test(asked)) throw new AiError(422, 'input.invalid', 'model must be provider/model from GET /api/v1/routes');
         let chosen = null;
         let why = null;
