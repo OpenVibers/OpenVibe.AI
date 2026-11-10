@@ -8,6 +8,14 @@ const models = [{ provider_key: 'openai', model_key: 'gpt-test', metadata: { id:
 const offers = [{ key: 'openai', provider: 'openai', keyModel: 'gpt-test', model: 'openai/gpt-test' }];
 const row = { provider: 'openai', model: 'gpt-test-2026-11-01', workflow: 'ai.complete', status: 'succeeded', latency_ms: 1000, ttft_ms: 200, tokens_out: 80, cost_usd: 0.01 };
 let testdb;
+t.test('historical receipts use recorded run duration and never invent first-token time', () => {
+    const historical = { ...row, latency_ms: null, ttft_ms: null, started_at: '2026-11-09T12:00:00Z', finished_at: '2026-11-09T12:00:02Z' };
+    const cell = aggregate(Array(20).fill(historical), offers)[0];
+    assert.equal(cell.metrics.latency_p50_ms, 2000);
+    assert.equal(cell.metrics.ttft_p50_ms, null);
+    assert.equal(cell.metrics.tokens_per_second_p50, null);
+    assert.equal(aggregate(Array(20).fill({ ...historical, finished_at: null }), offers)[0].metrics.latency_p50_ms, null);
+});
 t.test('each measure requires twenty valid observations; no caller data is copied', () => {
     assert.deepStrictEqual(aggregate(Array(19).fill(row), offers), []);
     const rows = Array.from({ length: 20 }, (_, i) => ({ ...row, latency_ms: 1000 + i * 100, owner_id: 'private', prompt: 'private' }));
@@ -46,11 +54,11 @@ t.test('durable due job backfills and survives restarts without losing older day
     const at = '2026-11-09T12:00:00Z';
     for (let i = 0; i < 21; i++) {
         const id = `metric_run_${i}`;
-        await db.prepare(`INSERT INTO runs (id, workflow_key, workflow_version, status, requester_type, requester_id, input, input_hash, synthetic, created_at)
-            VALUES (?, 'ai.complete', 1, 'succeeded', 'service', 'private-site', '{}', 'hash', ?, ?)`)
+        await db.prepare(`INSERT INTO runs (id, workflow_key, workflow_version, status, requester_type, requester_id, input, input_hash, synthetic, created_at, started_at, finished_at)
+            VALUES (?, 'ai.complete', 1, 'succeeded', 'service', 'private-site', '{}', 'hash', ?, ?, '2026-11-09T12:00:00Z', '2026-11-09T12:00:01Z')`)
             .run(id, i === 20 ? 1 : 0, at);
         await db.prepare('INSERT INTO ai_receipts (id, run_id, body, created_at) VALUES (?, ?, ?::jsonb, ?::timestamptz)').run(`rcpt_${i}`, id, JSON.stringify({
-            offer: { provider: 'openai', model: 'gpt-test' }, workflow: 'ai.complete', latency_ms: 1000, ttft_ms: 200, usage: { tokens_out: 80 }, cost_usd: 0.01,
+            offer: { provider: 'openai', model: 'gpt-test' }, workflow: 'ai.complete', latency_ms: null, ttft_ms: 200, usage: { tokens_out: 80 }, cost_usd: 0.01,
         }), at);
     }
     const first = await createMetricsRollup(options).tick();
@@ -72,6 +80,8 @@ t.test('durable due job backfills and survives restarts without losing older day
         assert(!JSON.stringify(body).includes('private'));
     } finally { await new Promise((resolve) => server.close(resolve)); }
     assert.equal((await createMetricsRollup(options).tick()).skipped, 'not_due');
+    await db.prepare('UPDATE exchange_metrics_job SET algorithm_version = 1 WHERE id = 1').run();
+    assert.equal((await createMetricsRollup(options).tick()).cells, 1, 'a new algorithm backfills retained days even before the next due time');
     await db.prepare('DELETE FROM ai_receipts').run();
     now += 5 * 86400000;
     await createMetricsRollup(options).tick();

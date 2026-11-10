@@ -56,16 +56,18 @@ t.test('hour job records receipts and daily catalogue prices once across restart
     const db = testdb.db;
     for (let i = 0; i < 20; i++) {
         const id = `health_${i}`;
-        await db.prepare(`INSERT INTO runs (id, workflow_key, workflow_version, status, requester_type, requester_id, input, input_hash, created_at)
-            VALUES (?, 'ai.complete', 1, 'succeeded', 'service', 'private', '{}', 'hash', ?)`)
+        await db.prepare(`INSERT INTO runs (id, workflow_key, workflow_version, status, requester_type, requester_id, input, input_hash, created_at, started_at, finished_at)
+            VALUES (?, 'ai.complete', 1, 'succeeded', 'service', 'private', '{}', 'hash', ?, '2026-11-10T11:00:00Z', '2026-11-10T11:00:01Z')`)
             .run(id, row.hour);
         await db.prepare('INSERT INTO ai_receipts (id, run_id, body, created_at) VALUES (?, ?, ?::jsonb, ?::timestamptz)').run(id, id,
-            JSON.stringify({ offer: { provider: row.provider, model: row.model }, latency_ms: row.latency_ms }), row.hour);
+            JSON.stringify({ offer: { provider: row.provider, model: row.model }, latency_ms: null }), row.hour);
     }
     const registry = { listProviders: async () => [{ key: 'openai', kind: 'openai' }], listModels: async () => [{ provider_key: 'openai', model_key: 'gpt-test', metadata: { id: 'openai/gpt-test' } }] };
     const catalog = { models: async () => ({ models: [{ slug: 'openai/gpt-test', offers: [{ provider: 'openai', model: 'gpt-test', price: { in: 0.1, out: 0.5 }, price_source: 'https://example.test/prices' }] }] }) };
     assert.deepEqual(await createObservations({ db, registry, catalog, clock }).tick(), { hours: 1, prices: 1 });
     assert.equal((await createObservations({ db, registry, catalog, clock }).tick()).skipped, 'not_due');
+    await db.prepare('UPDATE exchange_observations_job SET algorithm_version = 1 WHERE id = 1').run();
+    assert.deepEqual(await createObservations({ db, registry, catalog, clock }).tick(), { hours: 1, prices: 0 });
     const prices = await get('/prices/openai%2Fgpt-test');
     assert.equal(prices.body.series[0].price_out, 0.5);
     const health = await get('/providers/openai');

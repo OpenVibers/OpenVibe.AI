@@ -16,6 +16,12 @@ answering or final attempted offer. It is run health, not individual fallback at
 health. Latency percentiles use successful receipts' total latency. First token uses
 recorded streamed TTFT; decode throughput is output tokens / (latency - TTFT) seconds.
 Each timing metric needs twenty valid observations of its own. Unknown is null.
+Older receipts omitted timing because the workflow result did not forward provider
+timings. For those receipts, total latency is the recorded run finish minus start;
+missing or invalid timestamps stay null. New receipts record that same run-boundary
+duration and, for streaming, the time of the first content/reasoning/tool-argument
+delta. No historical first-token time is invented. Job algorithm version 2 recomputes
+retained daily and hourly cells once, without manual production writes.
 Mean cost per run includes failures with recorded cost; cost per thousand output
 tokens includes input cost. Samples, units and dates travel with every future read.
 
