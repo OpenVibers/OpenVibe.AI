@@ -314,6 +314,127 @@
       "terms_url": "Various OS licenses",
       "terms_effective": null,
       "checked": "2026-11-03"
+    },
+    {
+      "provider": "Parasail",
+      "api_format": "OpenAI-compatible",
+      "existing_adapter": "openai",
+      "byok": null,
+      "access_mode_default": "UNVERIFIED",
+      "resale_terms_quote": "No resale clause verified; terms silent on retention and training.",
+      "terms_url": "https://docs.parasail.io/parasail-docs/products/overview/models",
+      "terms_effective": null,
+      "checked": "2026-11-10"
+    },
+    {
+      "provider": "Particle AI (particle.ai)",
+      "api_format": "OpenAI-compatible",
+      "existing_adapter": "openai",
+      "byok": null,
+      "access_mode_default": "UNVERIFIED",
+      "resale_terms_quote": "No resale clause verified; terms silent on retention and training.",
+      "terms_url": "https://docs.particle.ai/",
+      "terms_effective": null,
+      "checked": "2026-11-10"
+    },
+    {
+      "provider": "Inference.net",
+      "api_format": "OpenAI-compatible",
+      "existing_adapter": "openai",
+      "byok": null,
+      "access_mode_default": "UNVERIFIED",
+      "resale_terms_quote": "No resale clause verified; terms silent on retention and training.",
+      "terms_url": "https://docs.inference.net/",
+      "terms_effective": null,
+      "checked": "2026-11-10"
+    },
+    {
+      "provider": "AtlasCloud",
+      "api_format": "OpenAI-compatible",
+      "existing_adapter": "openai",
+      "byok": null,
+      "access_mode_default": "UNVERIFIED",
+      "resale_terms_quote": "No resale clause verified; terms silent on retention and training.",
+      "terms_url": "https://www.atlascloud.ai/docs",
+      "terms_effective": null,
+      "checked": "2026-11-10"
+    },
+    {
+      "provider": "Avian (avian.io)",
+      "api_format": "OpenAI-compatible",
+      "existing_adapter": "openai",
+      "byok": null,
+      "access_mode_default": "UNVERIFIED",
+      "resale_terms_quote": "No resale clause verified; terms silent on retention and training.",
+      "terms_url": "https://avian.io/docs/",
+      "terms_effective": null,
+      "checked": "2026-11-10"
+    },
+    {
+      "provider": "Mancer",
+      "api_format": "OpenAI-compatible",
+      "existing_adapter": "openai",
+      "byok": null,
+      "access_mode_default": "UNVERIFIED",
+      "resale_terms_quote": "No resale clause verified; terms silent on retention and training.",
+      "terms_url": "https://mancer.tech/",
+      "terms_effective": null,
+      "checked": "2026-11-10"
+    },
+    {
+      "provider": "NanoGPT",
+      "api_format": "OpenAI-compatible",
+      "existing_adapter": "openai",
+      "byok": null,
+      "access_mode_default": "UNVERIFIED",
+      "resale_terms_quote": "PAYG terms explicitly allow reselling access to the Services as part of your own service offerings; subscription use prohibits commercial/resale use. No executed wholesale agreement, so still UNVERIFIED.",
+      "terms_url": "https://nano-gpt.com/pricing",
+      "terms_effective": null,
+      "checked": "2026-11-10"
+    },
+    {
+      "provider": "Infermatic",
+      "api_format": "OpenAI-compatible",
+      "existing_adapter": "openai",
+      "byok": null,
+      "access_mode_default": "UNVERIFIED",
+      "resale_terms_quote": "No resale clause verified; terms silent on retention and training.",
+      "terms_url": "https://ui.infermatic.ai/docs",
+      "terms_effective": null,
+      "checked": "2026-11-10"
+    },
+    {
+      "provider": "ArliAI",
+      "api_format": "OpenAI-compatible",
+      "existing_adapter": "openai",
+      "byok": null,
+      "access_mode_default": "UNVERIFIED",
+      "resale_terms_quote": "No resale clause verified; terms silent on retention and training.",
+      "terms_url": "https://www.arliai.com/",
+      "terms_effective": null,
+      "checked": "2026-11-10"
+    },
+    {
+      "provider": "Friendli",
+      "api_format": "OpenAI-compatible",
+      "existing_adapter": "openai",
+      "byok": null,
+      "access_mode_default": "UNVERIFIED",
+      "resale_terms_quote": "No resale clause verified; terms silent on retention and training.",
+      "terms_url": "https://friendli.ai/docs/guides/model-apis/introduction",
+      "terms_effective": null,
+      "checked": "2026-11-10"
+    },
+    {
+      "provider": "Scaleway Generative APIs",
+      "api_format": "OpenAI-compatible",
+      "existing_adapter": "openai",
+      "byok": null,
+      "access_mode_default": "UNVERIFIED",
+      "resale_terms_quote": "No resale clause verified; terms silent on retention and training.",
+      "terms_url": "https://www.scaleway.com/en/developers/api/generative-apis",
+      "terms_effective": null,
+      "checked": "2026-11-10"
     }
   ]
 }

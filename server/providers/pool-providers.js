@@ -716,6 +716,32 @@ const PROVIDERS = [
     { key: 'commons', display_name: 'Wikimedia Commons', kind: 'http', base_url: 'https://commons.wikimedia.org/w/api.php', auth_mode: 'none', models_endpoint: null,
         capabilities: ['image-search'], search_adapters: ['commons'], docs_url: 'https://www.mediawiki.org/wiki/API:Search' },
 
+    // Cheap hosted inference (owner, 2026-11-10): every endpoint below was read and probed keyless today.
+    // Each starts disabled with no key; the owner puts its key in the owner settings and syncs its model list.
+    { key: 'parasail', display_name: 'Parasail', base_url: 'https://api.parasail.io/v1',
+        docs_url: 'https://docs.parasail.io/parasail-docs/products/overview/models', capabilities: ['chat', 'embed'] },
+    { key: 'particle-ai', display_name: 'Particle AI', base_url: 'https://api.particle.ai/v1',
+        docs_url: 'https://docs.particle.ai/', capabilities: ['chat'] },
+    { key: 'inference-net', display_name: 'Inference.net', base_url: 'https://api.inference.net/v1', models_public: true,
+        docs_url: 'https://docs.inference.net/', capabilities: ['chat'] },
+    { key: 'atlas-cloud', display_name: 'AtlasCloud', base_url: 'https://api.atlascloud.ai/v1', models_public: true,
+        docs_url: 'https://www.atlascloud.ai/docs', capabilities: ['chat'] },
+    { key: 'avian', display_name: 'Avian', base_url: 'https://api.avian.io/v1', models_public: true,
+        docs_url: 'https://avian.io/docs/', capabilities: ['chat'] },
+    { key: 'mancer', display_name: 'Mancer', base_url: 'https://neuro.mancer.tech/oai/v1', models_public: true,
+        docs_url: 'https://mancer.tech/', capabilities: ['chat'] },
+    { key: 'nanogpt', display_name: 'NanoGPT', base_url: 'https://api.nano-gpt.com/v1', models_public: true,
+        docs_url: 'https://nano-gpt.com/pricing', capabilities: ['chat'] },
+    { key: 'infermatic', display_name: 'Infermatic', base_url: 'https://api.totalgpt.ai/v1',
+        docs_url: 'https://ui.infermatic.ai/docs', capabilities: ['chat'] },
+    { key: 'arliai', display_name: 'ArliAI', base_url: 'https://api.arliai.com/v1',
+        models_endpoint: 'https://api.arliai.com/model/all', models_public: true,
+        docs_url: 'https://www.arliai.com/', capabilities: ['chat', 'embed', 'image'] },
+    { key: 'friendli', display_name: 'Friendli', base_url: 'https://api.friendli.ai/serverless/v1', models_public: true,
+        docs_url: 'https://friendli.ai/docs/guides/model-apis/introduction', capabilities: ['chat'] },
+    { key: 'scaleway', display_name: 'Scaleway', base_url: 'https://api.scaleway.ai/v1',
+        docs_url: 'https://www.scaleway.com/en/developers/api/generative-apis', capabilities: ['chat', 'embed'] },
+
 ];
 
 // The seed, console and personal-key forms consume these same records.
