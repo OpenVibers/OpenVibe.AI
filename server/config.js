@@ -396,6 +396,34 @@ function load(env = process.env) {
             probesPerOffer: Math.max(1, int(env.AI_REFUSAL_PROBES, 4)),
             maxOffers: Math.max(1, int(env.AI_REFUSAL_MAX_OFFERS, 500)),
         },
+        // ── The 18+ board (server/willing/): two owner-budget measurement jobs, both OFF by default ──
+        // The willingness job asks every live offer the published 60 lawful adult prompts and records
+        // the refusal and hedge rates. The abliteration tax runs the objective set on each declared
+        // base/abliterated pair. Neither calls a provider until enabled AND given a budget above zero;
+        // `plan()` is the dry run and lists the estimated cost from the live rate cards. An uncensored
+        // offer is asked under the adult tier, which needs the adult measurement account below.
+        willingness: {
+            enabled: bool(env.AI_WILLINGNESS_JOB, false),
+            budgetUsd: Math.max(0, Number(env.AI_WILLINGNESS_BUDGET_USD) || 0),
+            intervalMs: Math.max(3600000, int(env.AI_WILLINGNESS_INTERVAL_MS, 7 * 24 * 60 * 60 * 1000)),
+            tickMs: Math.max(60000, int(env.AI_WILLINGNESS_TICK_MS, 60 * 60 * 1000)),
+            firstTickMs: Math.max(1000, int(env.AI_WILLINGNESS_FIRST_TICK_MS, 5 * 60 * 1000)),
+            claimTtlMs: Math.max(60000, int(env.AI_WILLINGNESS_CLAIM_TTL_MS, 15 * 60 * 1000)),
+            maxOffers: Math.max(1, int(env.AI_WILLINGNESS_MAX_OFFERS, 500)),
+            outputTokens: Math.max(1, int(env.AI_WILLINGNESS_OUTPUT_TOKENS, 256)),
+            adultSubject: /^usr_[0-9A-HJKMNP-TV-Z]{26}$/.test(String(env.AI_WILLINGNESS_SUBJECT || '')) ? String(env.AI_WILLINGNESS_SUBJECT) : null,
+        },
+        abliterationTax: {
+            enabled: bool(env.AI_ABLITERATION_TAX, false),
+            budgetUsd: Math.max(0, Number(env.AI_ABLITERATION_TAX_BUDGET_USD) || 0),
+            intervalMs: Math.max(3600000, int(env.AI_ABLITERATION_TAX_INTERVAL_MS, 7 * 24 * 60 * 60 * 1000)),
+            tickMs: Math.max(60000, int(env.AI_ABLITERATION_TAX_TICK_MS, 60 * 60 * 1000)),
+            firstTickMs: Math.max(1000, int(env.AI_ABLITERATION_TAX_FIRST_TICK_MS, 5 * 60 * 1000)),
+            claimTtlMs: Math.max(60000, int(env.AI_ABLITERATION_TAX_CLAIM_TTL_MS, 15 * 60 * 1000)),
+            outputTokens: Math.max(1, int(env.AI_ABLITERATION_TAX_OUTPUT_TOKENS, 256)),
+            adultSubject: /^usr_[0-9A-HJKMNP-TV-Z]{26}$/.test(String(env.AI_ABLITERATION_TAX_SUBJECT || env.AI_WILLINGNESS_SUBJECT || ''))
+                ? String(env.AI_ABLITERATION_TAX_SUBJECT || env.AI_WILLINGNESS_SUBJECT) : null,
+        },
         // ── The half-price batches (server/batch/) ──
         // Many prompts submitted at once, answered later, at half the retail price, billed through Billing.
         batches: {
