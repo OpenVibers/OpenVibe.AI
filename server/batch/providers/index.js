@@ -23,6 +23,8 @@
  * half and are therefore not eligible for a half-price customer batch, though the network's own
  * batches may still use them.
  */
+const { providerSecret } = require('../../util');
+
 const PROVIDERS = Object.freeze({
     // OpenAI's own Batch API: a JSONL file uploaded with purpose 'batch', a batch created with
     // completion_window '24h' and endpoint '/v1/chat/completions', and the answers in a file whose
@@ -77,6 +79,7 @@ const PROVIDERS = Object.freeze({
         discount: 0.5,
         window: '24h',
         enabled: false,                       // no production key yet: the adapter exists, the route does not
+        when_configured: true,                // and it turns on by itself for a provider with a key (batchProviderFor)
         limits: { maxItems: 100000, maxBytes: 256 * 1024 * 1024, oneModelPerFile: false },
         source: 'https://docs.anthropic.com/en/docs/build-with-claude/batch-processing',
     },
@@ -88,15 +91,38 @@ const PROVIDERS = Object.freeze({
         discount: 0.5,
         window: '24h',
         enabled: false,
+        when_configured: true,
         limits: { maxItems: 10000, maxBytes: 100 * 1024 * 1024, oneModelPerFile: true },
         source: 'https://ai.google.dev/gemini-api/docs/batch',
     },
 });
 
-/** The providers that are enabled for a native batch, and their configuration. */
-function enabledProviders() {
+/** Is this provider record actually configured (a key slot with a key, or a keyless local seam)? */
+function providerConfigured(provider, env = process.env) {
+    if (!provider) return false;
+    if (provider.auth_mode === 'none') return true;
+    return Boolean(providerSecret(provider, env));
+}
+
+/**
+ * The batch configuration usable for one provider record: a provider that is always on, or one
+ * written for a provider that is on and has a key (`when_configured`). Anthropic and Gemini ship
+ * their adapters this way: the route is off until the owner configures the provider.
+ */
+function batchProviderFor(key, provider = null, env = process.env) {
+    const cfg = PROVIDERS[String(key || '')] || null;
+    if (!cfg) return null;
+    if (cfg.enabled) return cfg;
+    if (cfg.when_configured && provider && provider.status === 'active' && providerConfigured(provider, env)) return cfg;
+    return null;
+}
+
+/** The providers that are enabled for a native batch, and their configuration. `configured` names the
+ * providers that are on and keyed, so a when_configured adapter can join them. */
+function enabledProviders({ configured = [] } = {}) {
+    const keys = configured instanceof Set ? configured : new Set(configured);
     const out = {};
-    for (const [key, cfg] of Object.entries(PROVIDERS)) if (cfg.enabled) out[key] = cfg;
+    for (const [key, cfg] of Object.entries(PROVIDERS)) if (cfg.enabled || (cfg.when_configured && keys.has(key))) out[key] = cfg;
     return out;
 }
 
@@ -105,4 +131,4 @@ function providerConfig(key) {
     return PROVIDERS[String(key || '')] || null;
 }
 
-module.exports = { PROVIDERS, enabledProviders, providerConfig };
+module.exports = { PROVIDERS, enabledProviders, providerConfig, providerConfigured, batchProviderFor };

@@ -26,7 +26,7 @@
  */
 const { retailRate } = require('../providers/model-catalog');
 const { insideWindow } = require('../pricebook/offpeak');
-const { enabledProviders } = require('./providers');
+const { PROVIDERS, batchProviderFor } = require('./providers');
 const { scaleCard, toCard } = require('./batcher');
 
 /** Half of a nano price, rounded down: the customer is never charged more than half. */
@@ -173,10 +173,11 @@ async function batchCapacity(model, at, { registry = null, community = null, pri
     // batch on a paid model then runs at any hour, instead of waiting for an off-peak window.
     if (registry) {
         const rows = await registry.listModels();
-        for (const [key, cfg] of Object.entries(enabledProviders())) {
-            if (Number(cfg.discount) > 0.5) continue;                 // the real price would not fit inside the charge
+        for (const [key, base] of Object.entries(PROVIDERS)) {
+            if (Number(base.discount) > 0.5) continue;                // the real price would not fit inside the charge
             const provider = await registry.getProvider(key);
-            if (!provider || provider.status !== 'active') continue;
+            const cfg = batchProviderFor(key, provider);
+            if (!cfg) continue;
             const row = (rows || []).find((r) => String(r.provider_key) === key && String(r.model_key) === String(model.model_key) && r.status === 'active');
             if (!row) continue;
             const retail = toCard(retailRate(row));

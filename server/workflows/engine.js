@@ -122,6 +122,17 @@ function collectCited(value, set = new Set()) {
     return set;
 }
 
+/**
+ * The stable part of a prompt first, the parts that change after it: prompt caching matches the
+ * longest identical prefix, so a system block the caller marked stable (cache: true) goes before a
+ * block that changes every request. Only the order changes; every word stays.
+ */
+function stableFirst(blocks) {
+    const list = (Array.isArray(blocks) ? blocks : []).filter((b) => b && String(b.text || '').trim());
+    if (list.length < 2) return list;
+    return [...list.filter((b) => b.cache), ...list.filter((b) => !b.cache)];
+}
+
 function normMessages(messages, user) {
     const out = [];
     for (const m of messages || []) {
@@ -262,8 +273,8 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
     async function passthroughStep(step, input, wf, run, ctx) {
         const routeKey = step.route || `${step.route_prefix || 'live'}.${input.role || 'legacy'}`;
         const route = await routeFor(routeKey);
-        const sys = typeof input.system === 'string' ? (input.system.trim() ? [{ text: input.system, cache: false }] : [])
-            : Array.isArray(input.system) ? input.system.filter(x => x && String(x.text || '').trim()).map(x => ({ text: String(x.text), cache: Boolean(x.cache) })) : [];
+        const sys = stableFirst(typeof input.system === 'string' ? (input.system.trim() ? [{ text: input.system, cache: false }] : [])
+            : Array.isArray(input.system) ? input.system.filter(x => x && String(x.text || '').trim()).map(x => ({ text: String(x.text), cache: Boolean(x.cache) })) : []);
         const base = { ...input, messages: normMessages(input.messages, input.user) };
         // Files on the turn (ai.file@1) become text or image content for this call only.
         const turn = Array.isArray(input.files) && input.files.length
@@ -378,8 +389,8 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
         if (step.kind === 'passthrough') {
             if (input.image) return null;
             const route = await routeFor(step.route || `${step.route_prefix || 'live'}.${input.role || 'legacy'}`);
-            const sys = typeof input.system === 'string' ? (input.system.trim() ? [{ text: input.system, cache: false }] : [])
-                : Array.isArray(input.system) ? input.system.filter(x => x && String(x.text || '').trim()).map(x => ({ text: String(x.text), cache: Boolean(x.cache) })) : [];
+            const sys = stableFirst(typeof input.system === 'string' ? (input.system.trim() ? [{ text: input.system, cache: false }] : [])
+                : Array.isArray(input.system) ? input.system.filter(x => x && String(x.text || '').trim()).map(x => ({ text: String(x.text), cache: Boolean(x.cache) })) : []);
             const messages = normMessages(input.messages, input.user);
             const json = input.json ? { name: input.json.name || 'result', schema: input.json.schema, strict: input.json.strict !== false, description: input.json.description } : null;
             const maxTokens = Math.max(1, Math.round(input.max_tokens || 400));

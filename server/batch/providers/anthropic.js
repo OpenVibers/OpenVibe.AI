@@ -28,6 +28,38 @@ const COMPLETION_WINDOW = '24h';
 /** Anthropic needs a max_tokens on every message; the batcher asks for a bounded answer. */
 const DEFAULT_MAX_TOKENS = 4096;
 
+/** One text content block, from a string or an array of OpenAI/Anthropic-style text parts. */
+function textOf(content) {
+    if (typeof content === 'string') return content;
+    if (!Array.isArray(content)) return String(content == null ? '' : content);
+    return content.map((p) => (typeof p === 'string' ? p : (p && (p.text || p.content)) || '')).filter(Boolean).join('\n');
+}
+
+/**
+ * The batcher builds an OpenAI Chat Completions body (server/workflows/engine.js buildBody). Anthropic's
+ * Message Batches take system separately and only user/assistant messages, so the same words are moved
+ * to the shape it documents: a system message becomes the system array, the rest keep their role order.
+ */
+function paramsOf(body = {}) {
+    const system = [];
+    const fromBody = body.system == null ? '' : (Array.isArray(body.system) ? body.system.map((b) => (typeof b === 'string' ? b : b && b.text || '')).join('\n\n') : String(body.system));
+    if (fromBody.trim()) system.push({ type: 'text', text: fromBody });
+    const messages = [];
+    for (const m of body.messages || []) {
+        if (!m || !m.role) continue;
+        const text = textOf(m.content);
+        if (m.role === 'system') { if (text.trim()) system.push({ type: 'text', text }); continue; }
+        messages.push({ role: m.role === 'assistant' ? 'assistant' : 'user', content: [{ type: 'text', text }] });
+    }
+    return {
+        model: body.model,
+        max_tokens: body.max_tokens || body.max_completion_tokens || DEFAULT_MAX_TOKENS,
+        messages,
+        ...(system.length ? { system } : {}),
+        ...(body.temperature != null ? { temperature: body.temperature } : {}),
+    };
+}
+
 function createAnthropicAdapter({ baseUrl, apiKey, fetchImpl = globalThis.fetch, limits = {}, timeoutMs = 60000 } = {}) {
     const base = String(baseUrl || '').replace(/\/+$/, '');
     const maxItems = Number(limits.maxItems) > 0 ? Number(limits.maxItems) : 100000;
@@ -69,7 +101,7 @@ function createAnthropicAdapter({ baseUrl, apiKey, fetchImpl = globalThis.fetch,
             if (items.length > maxItems) throw new BatchProviderError(`this provider takes at most ${maxItems} requests in one batch`, { code: 'batch.too_many_items', status: 422 });
             const bytes = Buffer.byteLength(JSON.stringify(items), 'utf8');
             if (bytes > maxBytes) throw new BatchProviderError(`this provider's limit is ${maxBytes} bytes and this batch is ${bytes}`, { code: 'batch.file_too_large', status: 422 });
-            return { requests: items.map((i) => ({ custom_id: i.customId, params: { model: i.body.model, max_tokens: i.body.max_tokens || DEFAULT_MAX_TOKENS, messages: i.body.messages } })), bytes };
+            return { requests: items.map((i) => ({ custom_id: i.customId, params: paramsOf(i.body) })), bytes };
         },
 
         async submit({ items, completionWindow = COMPLETION_WINDOW, metadata = null } = {}) {

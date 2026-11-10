@@ -25,6 +25,31 @@ const BatchProviderError = require('./openai-compatible').BatchProviderError;
 /** The window the provider promises for its answers. */
 const COMPLETION_WINDOW = '24h';
 
+function textOf(content) {
+    if (typeof content === 'string') return content;
+    if (!Array.isArray(content)) return String(content == null ? '' : content);
+    return content.map((p) => (typeof p === 'string' ? p : (p && (p.text || p.content)) || '')).filter(Boolean).join('\n');
+}
+
+/** The OpenAI Chat Completions body the batcher builds -> Gemini's contents/systemInstruction shape. */
+function requestOf(body = {}) {
+    const fromBody = body.system == null ? '' : (Array.isArray(body.system) ? body.system.map((b) => (typeof b === 'string' ? b : b && b.text || '')).join('\n\n') : String(body.system));
+    const contents = [];
+    const system = [];
+    if (String(fromBody).trim()) system.push(fromBody);
+    for (const m of body.messages || []) {
+        if (!m || !m.role) continue;
+        const text = textOf(m.content);
+        if (m.role === 'system') { if (text.trim()) system.push(text); continue; }
+        contents.push({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text }] });
+    }
+    return {
+        contents: contents.length ? contents : [{ role: 'user', parts: [{ text: '' }] }],
+        ...(system.length ? { systemInstruction: { parts: [{ text: system.join('\n\n') }] } } : {}),
+        ...(body.temperature != null ? { generationConfig: { temperature: body.temperature } } : {}),
+    };
+}
+
 function createGeminiAdapter({ baseUrl, apiKey, fetchImpl = globalThis.fetch, limits = {}, timeoutMs = 60000 } = {}) {
     const base = String(baseUrl || '').replace(/\/+$/, '');
     const maxItems = Number(limits.maxItems) > 0 ? Number(limits.maxItems) : 10000;
@@ -63,7 +88,7 @@ function createGeminiAdapter({ baseUrl, apiKey, fetchImpl = globalThis.fetch, li
         buildFile(items) {
             if (!Array.isArray(items) || !items.length) throw new BatchProviderError('a batch needs at least one request');
             if (items.length > maxItems) throw new BatchProviderError(`this provider takes at most ${maxItems} requests in one batch`, { code: 'batch.too_many_items', status: 422 });
-            const requests = items.map((i) => ({ request: { contents: [{ role: 'user', parts: [{ text: i.body.messages.map((m) => m.content).join('\n') }] }] } }));
+            const requests = items.map((i) => ({ request: requestOf(i.body) }));
             const bytes = Buffer.byteLength(JSON.stringify(requests), 'utf8');
             if (bytes > maxBytes) throw new BatchProviderError(`this provider's limit is ${maxBytes} bytes and this batch is ${bytes}`, { code: 'batch.file_too_large', status: 422 });
             return { requests, bytes };
