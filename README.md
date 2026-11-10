@@ -2,6 +2,9 @@
 
 > Providers, models, routing, prompt templates, workflows, runs, citations, cache and quotas for every product.
 
+**Live site:** https://ai.openvibe.services · **API docs:** https://openvibe.services · **For AI:** https://ai.openvibe.services/llms.txt
+**Run it:** `npm ci && npm run dev` (Node 20 or newer) · **Tests:** `npm test`
+
 **Status:** alpha (roadmap Wave 13). Deployed on the host since 2026-09-23 on `127.0.0.1:4700` and in
 production use: OpenVibe.Live runs with `AI_SERVICE=remote` and Network's footer copy runs
 `network.site_copy` here. Public since 2026-10-07 at [ai.openvibe.services](https://ai.openvibe.services):
