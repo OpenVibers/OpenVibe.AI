@@ -71,16 +71,22 @@ function hostAllowed(hostname, allowHosts) {
 function createFetcher(config, { transport = null } = {}) {
     const m = config.media;
     const internalOrigin = m.internalUrl ? new URL(m.internalUrl).origin : null;
+    // Picture sources (Commons, Openverse) and image providers are separate, narrow lists: a caller's
+    // media URL never gets them, only the image task's own fetchPicture does.
+    const pictureHosts = [
+        ...((config.pictures && config.pictures.sourceHosts) || []),
+        ...((config.pictures && config.pictures.providerHosts) || []),
+    ];
 
     /** Judge one URL. Returns { url, internal } or throws AiError 422 fetch.refused. */
-    function judge(raw) {
+    function judge(raw, hosts = m.allowHosts) {
         let u;
         try { u = new URL(String(raw)); } catch { throw new AiError(422, 'fetch.refused', 'not a valid URL'); }
         if (u.username || u.password) throw new AiError(422, 'fetch.refused', 'credentials in URLs are not allowed');
         if (internalOrigin && u.origin === internalOrigin) return { url: u, internal: true };
         if (u.protocol !== 'https:') throw new AiError(422, 'fetch.refused', `only https URLs on allow-listed OpenVibe hosts are fetched (got ${u.protocol})`);
         if (net.isIP(u.hostname.replace(/^\[|\]$/g, ''))) throw new AiError(422, 'fetch.refused', 'IP-literal hosts are not fetched');
-        if (!hostAllowed(u.hostname, m.allowHosts)) throw new AiError(422, 'fetch.refused', `host ${u.hostname} is not on the allow-list`);
+        if (!hostAllowed(u.hostname, hosts)) throw new AiError(422, 'fetch.refused', `host ${u.hostname} is not on the allow-list`);
         return { url: u, internal: false };
     }
 
@@ -89,10 +95,10 @@ function createFetcher(config, { transport = null } = {}) {
     const mediaPublicHost = (() => { try { return new URL(m.publicUrl).hostname.toLowerCase(); } catch { return null; } })();
     const fromMedia = (t) => t.internal || (mediaPublicHost && t.url.hostname.toLowerCase() === mediaPublicHost);
 
-    function follow(from, location) {
+    function follow(from, location, hosts = m.allowHosts) {
         let next;
         try {
-            next = judge(location);
+            next = judge(location, hosts);
         } catch (err) {
             // Media hands an offloaded recording to object storage with a 302 to a presigned URL: that storage (and
             // only it) is followed, only from Media, over https, never to an IP literal; connect-time checks still apply.
@@ -158,15 +164,23 @@ function createFetcher(config, { transport = null } = {}) {
         });
     }
 
-    async function fetchUrl(raw, { signal, maxBytes = m.maxBytes, timeoutMs = m.timeoutMs, toFile = null } = {}) {
-        let target = judge(raw);
+    async function fetchUrl(raw, { signal, maxBytes = m.maxBytes, timeoutMs = m.timeoutMs, toFile = null, hosts = m.allowHosts } = {}) {
+        let target = judge(raw, hosts);
         for (let hop = 0; hop < 4; hop++) {
             const r = await (transport || once)(target, { signal, maxBytes, timeoutMs, toFile });
             if (!r.redirect) return { ...r, url: target.url.toString() };
             if (hop === 3) throw new AiError(502, 'source.unavailable', 'too many redirects');
-            target = follow(target, r.redirect);
+            target = follow(target, r.redirect, hosts);
         }
         throw new AiError(502, 'source.unavailable', 'too many redirects');
+    }
+
+    /** A licensed picture (Commons/Openverse) or an image provider's own URL, fetched under the picture host lists. */
+    async function fetchPicture(raw, { signal, maxBytes = m.maxImageBytes, timeoutMs = 30000 } = {}) {
+        const r = await fetchUrl(raw, { signal, maxBytes, timeoutMs, hosts: [...m.allowHosts, ...pictureHosts] });
+        const type = String(r.contentType || '').split(';')[0].trim().toLowerCase();
+        if (!/^image\//.test(type)) throw new AiError(422, 'source.invalid', `expected an image, got ${type || 'unknown type'}`);
+        return { bytes: r.buffer, mime: type, url: r.url };
     }
 
     /**
@@ -261,7 +275,7 @@ function createFetcher(config, { transport = null } = {}) {
         return { file, url };
     }
 
-    return { judge, follow, fetchUrl, openStream, mediaUrlOf, mediaRefUrl, loadImage, loadMediaToFile, hostAllowed: (h) => hostAllowed(h, m.allowHosts) };
+    return { judge, follow, fetchUrl, fetchPicture, openStream, mediaUrlOf, mediaRefUrl, loadImage, loadMediaToFile, hostAllowed: (h) => hostAllowed(h, m.allowHosts) };
 }
 
 /** Any image -> downscaled JPEG (sharp, optional). Falls back to the original bytes. */

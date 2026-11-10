@@ -15,7 +15,7 @@ const PROVIDERS = ['wikipedia', 'fandom', 'wikidata', 'deepseek', 'commons', 'op
 const IMAGE = {
     type: 'object', additionalProperties: false, required: ['url', 'free', 'provider'],
     properties: {
-        url: STR(2048), original: NULLABLE(2048), width: { type: ['integer', 'null'] }, height: { type: ['integer', 'null'] }, mime: NULLABLE(40),
+        url: STR(2048), original: NULLABLE(2048), thumbnail: NULLABLE(2048), width: { type: ['integer', 'null'] }, height: { type: ['integer', 'null'] }, mime: NULLABLE(40),
         title: NULLABLE(300), description: NULLABLE(400), author: NULLABLE(200), license: NULLABLE(200), license_url: NULLABLE(2048),
         free: { type: 'boolean' }, source_url: NULLABLE(2048), provider: STR(80),
     },

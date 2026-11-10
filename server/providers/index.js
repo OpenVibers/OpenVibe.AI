@@ -1854,14 +1854,16 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                     const usage = result.usage || { input: 0, output: 0, cached: 0 };
                     await recordEvidence({ provider: c.provider, model, ok: true, timeout: false, ttftMs, latencyMs: latency,
                         outputTokens: usage.output || 0, inputTokens: usage.input || 0, cachedTokens: usage.cached || 0 });
-                    // An image is metered per image (usage.output = images), and no rate card prices one yet (an owner/T5
-                    // item): its cost is 0 rather than the image count read as output tokens on the token cards.
-                    // BA1: the cost is the tier the answer really ran on, and the wait's saving is the
-                    // standard price minus that one. A provider that does not say which tier it served is
-                    // priced at the list price: a saving nobody confirmed is not a saving.
+                    // An image is metered per image (usage.output = images). The image task (workflow image.picture)
+                    // sets ctx.imagePriceUsd from the offer's metadata.price_per_image_usd before the call, so the
+                    // measured count settles at that price; every other image run has no card and costs 0 rather
+                    // than the image count being read as output tokens.
                     const ranOn = tiers.tierOfAnswer(result, askedTier);
+                    const imagePrice = ctx.imagePriceUsd == null ? null : Number(ctx.imagePriceUsd);
                     const priced = operation === 'image'
-                        ? { cost: 0, standard: 0, saved: 0 }
+                        ? (Number.isFinite(imagePrice) && imagePrice >= 0
+                            ? { cost: imagePrice * (Number(usage.output) || 0), standard: imagePrice * (Number(usage.output) || 0), saved: 0 }
+                            : { cost: 0, standard: 0, saved: 0 })
                         : await costOnTier({ providerKey: c.provider, model: result.model || model, usage, tier: ranOn, p });
                     const cost = priced.cost;
                     statFor(c.provider).ok++;
