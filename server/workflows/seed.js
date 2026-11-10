@@ -91,11 +91,33 @@ function sharedProviderRecord(config, env) {
     };
 }
 
+function speechProviderRecords(config, env) {
+    const out = [];
+    const gkey = config.speech ? resolveSecret(config.speech.googleKeyRef, env) : '';
+    out.push({ key: 'google-tts', display_name: 'Google Cloud Text-to-Speech', kind: 'google-tts',
+        status: gkey ? 'active' : 'disabled',
+        base_url: (config.speech && config.speech.googleBaseUrl) || 'https://texttospeech.googleapis.com',
+        auth_mode: 'bearer', secret_ref: config.speech ? config.speech.googleKeyRef : 'env:AI_GOOGLE_TTS_API_KEY',
+        default_model: 'gc_smooth_operator', capabilities: ['speak'],
+        timeout_ms: (config.speech && config.speech.timeoutMs) || 60000, priority: 20, provider_access: 'OWN_DEPLOYMENT',
+        metadata: { configured_by: 'AI_GOOGLE_TTS_API_KEY', provider_name: 'google-tts', billing_profile: 'metered' } });
+    const pkey = config.speech ? resolveSecret(config.speech.pollyKeyRef, env) : '';
+    out.push({ key: 'polly', display_name: 'Amazon Polly', kind: 'polly',
+        status: pkey ? 'active' : 'disabled',
+        base_url: (config.speech && config.speech.pollyBaseUrl) || 'https://polly.amazonaws.com',
+        auth_mode: 'bearer', secret_ref: config.speech ? config.speech.pollyKeyRef : 'env:AI_POLLY_ACCESS_KEY_ID',
+        default_model: 'pl_joanna_std', capabilities: ['speak'],
+        timeout_ms: (config.speech && config.speech.timeoutMs) || 60000, priority: 20, provider_access: 'OWN_DEPLOYMENT',
+        metadata: { configured_by: 'AI_POLLY_ACCESS_KEY_ID', provider_name: 'polly', billing_profile: 'metered' } });
+    return out;
+}
+
 function providerRecords(config, env) {
     const out = [
-        { key: 'stub', display_name: 'Deterministic stub (synthetic output)', kind: 'stub', status: 'active', auth_mode: 'none', default_model: 'stub-1', capabilities: ['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich', 'embed', 'json', 'vision', 'transcribe'], timeout_ms: 10000, priority: 1000, provider_access: 'OWN_DEPLOYMENT', metadata: { synthetic: true, billing_profile: 'free' } },
+        { key: 'stub', display_name: 'Deterministic stub (synthetic output)', kind: 'stub', status: 'active', auth_mode: 'none', default_model: 'stub-1', capabilities: ['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich', 'embed', 'json', 'vision', 'transcribe', 'speak'], timeout_ms: 10000, priority: 1000, provider_access: 'OWN_DEPLOYMENT', metadata: { synthetic: true, billing_profile: 'free' } },
         sharedProviderRecord(config, env),
         deepseekProviderRecord(config, env),
+        ...speechProviderRecords(config, env),
         { key: 'whisper', display_name: 'whisper.cpp (local speech-to-text)', kind: 'whisper', status: 'active', auth_mode: 'none', default_model: 'whisper.cpp', capabilities: ['transcribe'], timeout_ms: 600000, priority: 20, provider_access: 'OWN_DEPLOYMENT', metadata: { configured_by: 'WHISPER_*', billing_profile: 'free' } },
     ];
     // A local model server (llama.cpp, Ollama) speaking the OpenAI API: no key, never paid (WS-O task 5).
@@ -170,6 +192,27 @@ async function seed({ registry, quotas, config, env = process.env, db }) {
         }
     }
     if (!await registry.getModel('stub', 'stub-1')) await registry.upsertModel({ provider_key: 'stub', model_key: 'stub-1', type: 'chat', supports: { json: true, vision: true }, metadata: { synthetic: true } }, { actor: 'seed' });
+    // Speech voices (the Exchange speech route): one model per Chat cloud voice id on its provider, priced per
+    // million characters at the provider's own list price (docs/provider-adapters.md#speech). The rate cards
+    // price `in_per_mtok` as dollars per million characters for these models; `unit` in the metadata says so.
+    try {
+        const { VOICES, googleTierOf } = require('../providers/speech');
+        for (const [id, v] of Object.entries(VOICES)) {
+            const prev = await registry.getModel(v.provider, id);
+            if (prev && !(prev.metadata && prev.metadata.configured_by === 'AI_SPEECH_SEED')) continue;
+            const source = v.provider === 'google-tts' ? 'https://cloud.google.com/text-to-speech/pricing' : 'https://aws.amazon.com/polly/pricing/';
+            await registry.upsertModel({ provider_key: v.provider, model_key: id,
+                display_name: v.voiceId ? `${v.voiceId} (${v.engine})` : v.voice,
+                type: 'speech', status: 'active', context_window: null, max_output: null,
+                cost: { in_per_mtok: v.price_per_million_chars_usd, out_per_mtok: 0, cached_per_mtok: null,
+                    effective_from: '2026-11-10', source, verified_at: '2026-11-10' },
+                supports: { json: false, tools: false, streaming: false, vision: false },
+                metadata: { configured_by: 'AI_SPEECH_SEED', unit: 'characters', price_per_million_chars_usd: v.price_per_million_chars_usd,
+                    cloud_voice: v.voice || v.voiceId, cloud_engine: v.engine || googleTierOf(v.voice),
+                    ...(v.voice && /Journey/i.test(v.voice) ? { pricing_note: 'Journey has no row on the current pricing page; priced at the Neural2 SKU until Google publishes one.' } : {}) },
+            }, { actor: 'seed' });
+        }
+    } catch (err) { console.warn(`[seed] speech voices were not seeded: ${String((err && err.message) || err).slice(0, 160)}`); }
     if (!await registry.getModel('whisper', 'whisper.cpp')) await registry.upsertModel({ provider_key: 'whisper', model_key: 'whisper.cpp', type: 'stt', supports: { json: false } }, { actor: 'seed' });
     const embeddingModel = env.AI_EMBEDDING_MODEL || 'text-embedding-3-small';
     if (!await registry.getModel('shared', embeddingModel)) await registry.upsertModel({ provider_key: 'shared', model_key: embeddingModel, type: 'embedding' }, { actor: 'seed' });
@@ -213,6 +256,9 @@ async function seed({ registry, quotas, config, env = process.env, db }) {
     // Meme captions need fluency, not factual precision; choose the cheapest eligible JSON route by default.
     await registry.seedVersioned('route', 'meme.caption', pool(30000, { constraints: { objective: 'cheapest', latency_class: 'interactive' }, options: { temperature: 0.85 }, max_output_tokens: 700, response_format: 'json' }));
     await registry.seedVersioned('route', 'default.embedding', pool(30000, { 'capability': 'embed', constraints: { objective: 'balanced' } }));
+    // Speech (the Exchange speech route): the voice pins the exact offer, so the pool is only the fallback
+    // order when no voice is pinned; every provider that declares `speak` may answer it.
+    await registry.seedVersioned('route', 'default.speech', pool(60000, { 'capability': 'speak', constraints: { objective: 'balanced' } }));
     // media.analyze (WS-O task 5): the local model when there is one; the paid route is used only under a media.paid budget.
     // Both are background work (BA1): nobody watches a VOD's overview arrive, so the route says it may wait.
     // The run's own route (media.analysis) exists whatever the host has: it carries the class of the work, and the

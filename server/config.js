@@ -152,6 +152,16 @@ function load(env = process.env) {
             apiKeyRef: String(env.AI_DEEPSEEK_KEY_REF || 'env:DEEPSEEK_API_KEY').trim(),
             timeoutMs: int(env.AI_DEEPSEEK_TIMEOUT_MS, 90000),
         },
+        // ── Speech synthesis (the Exchange speech route): Google Cloud TTS and Amazon Polly as AI
+        // providers. Each reads its own env names (never printed, never moved); the test seam may
+        // point the base URLs at a local fake (AI_GOOGLE_TTS_BASE_URL / AI_POLLY_BASE_URL).
+        speech: {
+            googleKeyRef: String(env.AI_GOOGLE_TTS_KEY_REF || 'env:AI_GOOGLE_TTS_API_KEY').trim(),
+            googleBaseUrl: trimUrl(env.AI_GOOGLE_TTS_BASE_URL || 'https://texttospeech.googleapis.com'),
+            pollyKeyRef: String(env.AI_POLLY_KEY_REF || 'env:AI_POLLY_ACCESS_KEY_ID').trim(),
+            pollyBaseUrl: trimUrl(env.AI_POLLY_BASE_URL || ''),
+            timeoutMs: int(env.AI_SPEECH_TIMEOUT_MS, 60000),
+        },
         // ── Spend safety for runs nobody pays for (the free allowance, the anonymous Try it) ──
         // A run with no person's own token, no app project, no service run-token budget and no own key may
         // use only offers from these sources (provider keys; `local` is every local model server and

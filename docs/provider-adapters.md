@@ -101,3 +101,30 @@ catalogued and its key stored, but the router does not resell it.
 Refuseless, Abliteration.ai and the abliterated models Featherless lists are marked `uncensored: true` in the
 catalogue. The tier that lets an 18+ account ask for such an offer — the gate, the hard floor and the label on every
 answer — is `docs/uncensored-policy.md`; the catalogue only records which offers are marked.
+
+## Speech (the Exchange speech route)
+
+`POST /v1/audio/speech` speaks text in a Chat voice (OpenAI's audio/speech shape: `model`, `input` of at most
+4096 characters, `voice`, `response_format` `mp3|ogg_opus|wav`, `speed` 0.25–4). Each request is a run of workflow
+`ai.speak`, so it rides the same account, quota, price-book and receipt path as chat completions; the answer is
+the audio bytes with `x-openvibe-receipt-id` and `x-openvibe-receipt` headers. The route is in
+`server/exchange/compat-openapi.js` (`compatSpeech`) and the served OpenAPI document.
+
+Two providers, each its own adapter (`server/providers/speech.js`), each a registry provider seeded by
+`server/workflows/seed.js` (active when its key resolves, off otherwise):
+
+| key | provider | voices | env (AI's own names) |
+|---|---|---|---|
+| `google-tts` | Google Cloud TTS | 24 Chat voice ids (`gc_*`, `voice_*`) | `AI_GOOGLE_TTS_API_KEY`, else `AI_GOOGLE_TTS_SERVICE_ACCOUNT_JSON` |
+| `polly` | Amazon Polly | 22 Chat voice ids (`pl_*`) | `AI_POLLY_ACCESS_KEY_ID` + `AI_POLLY_SECRET_ACCESS_KEY` + `AI_POLLY_REGION` |
+
+Voices are Chat's voice ids one to one (so Chat switches without anyone hearing a difference); an unknown
+voice is refused 404, never spoken in another voice. The voice pins its exact offer, so the run never lands
+on another voice. Each voice is a `speech`-type model in the price book at the provider's own list price per
+million characters (read 2026-11-10): Google
+([its pricing page](https://cloud.google.com/text-to-speech/pricing)) Standard $4, WaveNet $4, Neural2 $16,
+Studio $160 (Journey has no row on the current page, so it is priced at the Neural2 SKU until Google publishes
+one); Polly ([its pricing page](https://aws.amazon.com/polly/pricing/)) standard $4, neural $16, long-form $100,
+generative $30. Metering is per character: the run's `usage.input` carries the characters and the voice models'
+`in_per_mtok` is dollars per million characters (the model's `unit` metadata says `characters`); the receipt
+carries the same count in `usage.characters`.

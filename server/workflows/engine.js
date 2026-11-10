@@ -506,6 +506,32 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
         return { output: { images: images.map(i => ({ b64: i.b64 || null, url: i.url || null })), count: images.length }, exec, route };
     }
 
+    /**
+     * speak: the caller's text spoken in the named voice (ai.speak, POST /v1/audio/speech). The voice
+     * pins the exact offer, so the run never lands on another voice; an unknown voice is refused before
+     * the run (the API layer checks the same map). Metered per character: usage.input carries the
+     * characters (the voice models' rate cards price `in_per_mtok` per million characters).
+     */
+    async function speakStep(step, input, wf, run, ctx) {
+        const { route, selection } = await selectedRoute(await routeFor(step.route || 'default.speech'), input);
+        const { VOICES } = require('../providers/speech');
+        const voice = String(input.voice || '');
+        const entry = VOICES[voice];
+        if (!entry) throw new AiError(404, 'ai.model_not_found', `unknown voice ${voice.slice(0, 80)}`);
+        const text = String(input.text || '');
+        if (!text.trim()) throw new AiError(422, 'input.invalid', 'speech needs text');
+        const format = input.response_format || 'mp3';
+        const speed = input.speed == null ? 1 : Number(input.speed);
+        const exact = { id: `voice:${voice}`, offers: [{ provider: entry.provider, model: voice }] };
+        const exec = await pool.execute(route, 'speak', { voice, text, format, speed, model: voice,
+            timeoutMs: route.timeout_ms || 60000 }, { ...ctx, ...selectionCtx(selection), exact: ctx.exact || exact,
+            routeKey: route.key, routeVersion: route.version, promptHash: sha256({ v: voice, t: text, f: format, s: speed }) });
+        const audio = exec.result.audio;
+        if (!audio || !audio.length) throw new AiError(502, 'output.invalid', 'the provider answered, but with no audio');
+        return { output: { audio: Buffer.isBuffer(audio) ? audio.toString('base64') : String(audio),
+            mime_type: exec.result.mimeType || 'audio/mpeg', voice, characters: text.length }, exec, route };
+    }
+
     /** research: no model call. A developer app's run leaves the paid web search out (its DeepSeek calls are ours). */
     async function researchStep(step, input, wf, run, ctx) {
         let output, answered = null, engineIndex = 0, candidates = [];
@@ -582,7 +608,7 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
         return { output, exec: { ...last.exec, usage, cost, savedUsd }, route: last.route };
     }
 
-    const STEP = { devblog: devblogStep, llm: llmStep, passthrough: passthroughStep, complete: completeStep, messages: messagesStep, transcribe: transcribeStep, embed: embedStep, image: imageStep, picture: pictures.step, media_analysis: mediaAnalysis.step, research: researchStep };
+    const STEP = { devblog: devblogStep, llm: llmStep, passthrough: passthroughStep, complete: completeStep, messages: messagesStep, transcribe: transcribeStep, embed: embedStep, image: imageStep, speak: speakStep, picture: pictures.step, media_analysis: mediaAnalysis.step, research: researchStep };
 
     /**
      * Run a workflow. ctx: { signal, logRequest, debugRaw, inputHash }
@@ -590,7 +616,7 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
      */
     async function execute(wf, run, input, ctx) {
         let last = null;
-        const usage = { input: 0, output: 0, cached: 0 };
+        const usage = { input: 0, output: 0, cached: 0, characters: 0 };
         let cost = 0;
         // BA1: what the wait earned, over every call the run made (a run may call a provider more than once).
         let saved = 0;
@@ -617,6 +643,7 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
                 usage.input += exec.usage.input || 0;
                 usage.output += exec.usage.output || 0;
                 usage.cached += exec.usage.cached || 0;
+                usage.characters += exec.usage.characters || 0;
                 cost += exec.cost || 0;
                 saved += Number(exec.savedUsd) || 0;
             }

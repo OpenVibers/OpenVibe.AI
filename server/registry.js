@@ -13,11 +13,11 @@ const { sha256, parseJson, iso, AiError, secretRefValid, providerSecret } = requ
 const schemas = require('./schemas');
 const { provenance } = require('./providers/rate-cards');
 
-const PROVIDER_KINDS = ['stub', 'openai', 'responses', 'anthropic', 'http', 'whisper'];
+const PROVIDER_KINDS = ['stub', 'openai', 'responses', 'anthropic', 'http', 'whisper', 'google-tts', 'polly'];
 const BILLING_PROFILES = ['metered', 'subscription', 'payg', 'free', 'byok'];
 // AI Exchange D3: who may resell this offer's capacity. Defaults to UNVERIFIED (migrations/0024).
 const PROVIDER_ACCESS = ['OWN_DEPLOYMENT', 'AUTHORIZED_WHOLESALE', 'CUSTOMER_BYOK', 'RESTRICTED', 'UNVERIFIED'];
-const FEATURES = ['chat', 'complete', 'messages', 'generate', 'summarize', 'classify', 'extract', 'enrich', 'embed', 'vision', 'json', 'tools', 'transcribe', 'image', 'video', 'speech', 'rerank', 'web-search', 'image-search'];
+const FEATURES = ['chat', 'complete', 'messages', 'generate', 'summarize', 'classify', 'extract', 'enrich', 'embed', 'vision', 'json', 'tools', 'transcribe', 'image', 'video', 'speech', 'speak', 'rerank', 'web-search', 'image-search'];
 const LIFECYCLE = ['draft', 'active', 'deprecated', 'archived'];
 const KEY_RE = /^[a-z][a-z0-9_-]*(\.[a-z0-9_-]+)*$/;
 const flag = (v) => v === true || v === 1 || /^(1|true|yes|on)$/i.test(String(v == null ? '' : v));
@@ -361,7 +361,7 @@ function createRegistry(db, { clock = { now: () => Date.now() }, env = process.e
         schemas.assertSchema(w.output_schema, 'output_schema');
         if (!Array.isArray(w.steps) || !w.steps.length) throw new AiError(422, 'ai.invalid', 'workflow needs at least one step');
         for (const s of w.steps) {
-            if (!s || !['llm', 'passthrough', 'complete', 'messages', 'transcribe', 'embed', 'image', 'picture', 'media_analysis', 'research', 'devblog'].includes(s.kind)) throw new AiError(422, 'ai.invalid', 'step kind must be llm, passthrough, complete, messages, transcribe, embed, image, picture, media_analysis or research');
+            if (!s || !['llm', 'passthrough', 'complete', 'messages', 'transcribe', 'embed', 'image', 'speak', 'picture', 'media_analysis', 'research', 'devblog'].includes(s.kind)) throw new AiError(422, 'ai.invalid', 'step kind must be llm, passthrough, complete, messages, transcribe, embed, image, speak, picture, media_analysis or research');
             if ((s.kind === 'llm' || (s.kind === 'media_analysis' && s.template)) && !(s.template && await latestAny('templates', s.template))) throw new AiError(422, 'ai.invalid', `step references unknown template ${s.template}`);
         }
         if (!['none', 'private', 'service'].includes(w.cache_mode)) throw new AiError(422, 'ai.invalid', 'cache_mode must be none, private or service');

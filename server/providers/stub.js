@@ -231,6 +231,20 @@ function createStubProvider(record = { key: 'stub', metadata: {} }, { stats = nu
         return { message, text: content.filter(c => c.type === 'text').map(c => c.text).join(''), model, synthetic: true, usage: { input: inTok, output: outTok, cached: 0, estimated: true } };
     }
 
+    /** speak: deterministic fake MP3 bytes, metered per character like the real speech providers. */
+    async function speak(req) {
+        if (stats) stats.calls = (stats.calls || 0) + 1;
+        if (req.signal && req.signal.aborted) throw new ProviderError('cancelled', { code: 'provider.cancelled' });
+        if (fail === 'error') throw new ProviderError('stub drill: provider error', { status: 503, code: 'provider.http' });
+        if (fail === 'timeout') { await sleep(Math.min(req.timeoutMs || 1000, 60000), req.signal); throw new ProviderError('stub drill: timeout', { code: 'provider.timeout' }); }
+        const characters = String(req.text || '').length;
+        // Minimal valid MP3 frame header + padding: players accept the bytes, and the bytes are stable per text.
+        const digest = crypto.createHash('sha256').update(String(req.text || '')).digest();
+        const audio = Buffer.concat([Buffer.from([0xff, 0xfb, 0x90, 0x00]), digest, Buffer.alloc(64, 0)]);
+        return { audio, mimeType: 'audio/mpeg', model: req.model || 'stub-1', synthetic: true,
+            usage: { input: characters, output: 0, cached: 0, characters } };
+    }
+
     const adapter = {
         key: record.key,
         kind: 'stub',
@@ -241,6 +255,7 @@ function createStubProvider(record = { key: 'stub', metadata: {} }, { stats = nu
         transcribe: async (req) => await run('transcribe', req),
         embed: async (req) => await run('embed', req),
         image: async (req) => await run('image', req),
+        speak,
     };
     for (const op of ['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich']) adapter[op] = async (req) => await run(op, req);
     return adapter;

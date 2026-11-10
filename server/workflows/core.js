@@ -90,6 +90,28 @@ const workflows = [
         steps: [{ kind: 'llm', template: 'ai.enrich', operation: 'enrich', output: 'json', prepare: 'ai.enrich', params: { max_tokens: 1200, temperature: 0.2 } }], cache_mode: 'private',
     },
     {
+        // The Exchange speech route (POST /v1/audio/speech, server/api/speech.js): the caller's text spoken in the
+        // named voice (a Chat voice id, one per provider voice — server/providers/speech.js). Metered per
+        // character like the providers bill: usage.input carries the characters and the voice models' rate
+        // cards price `in_per_mtok` as dollars per million characters. The run keeps its usage, cost, quota,
+        // free allowance and receipt exactly like ai.complete; the answer is the audio, base64 inline (as images).
+        key: 'ai.speak', name: 'Synthesize speech (Exchange TTS)', namespace: 'ai',
+        input_schema: OBJ({
+            voice: STR(80),
+            text: STR(4096),
+            response_format: { enum: ['mp3', 'ogg_opus', 'wav'] },
+            speed: { type: ['number', 'null'], minimum: 0.25, maximum: 4 },
+            ...COMMON,
+        }, ['voice', 'text']),
+        output_schema: OBJ({
+            audio: STR(8000000),
+            mime_type: STR(80),
+            voice: STR(80),
+            characters: { type: 'integer', minimum: 1 },
+        }, ['audio', 'mime_type', 'voice', 'characters']),
+        steps: [{ kind: 'speak', route: 'default.speech' }], cache_mode: 'none',
+    },
+    {
         key: 'ai.embed', name: 'Embed text', namespace: 'ai',
         input_schema: OBJ({ compat_routing: { type: 'object' }, max_cost_usd: COMMON.max_cost_usd, input: { anyOf: [STR(32000), { type: 'array', minItems: 1, maxItems: 64, items: STR(32000) }] } }, ['input']),
         output_schema: OBJ({ vectors: { type: 'array', items: { type: 'array', items: { type: 'number' } } }, dimensions: { type: 'integer' } }, ['vectors', 'dimensions']),
