@@ -17,16 +17,20 @@
  */
 
 const pool = require('./pool-providers');
+const { providerSecret } = require('../util');
 
 /** The registry row of one catalogued provider. */
 function recordOf(p) {
     return {
-        key: p.key, display_name: p.display_name, kind: 'openai', status: 'active',
-        base_url: p.base_url, auth_mode: 'bearer', secret_ref: `vault:${p.key}`,
+        key: p.key, display_name: p.display_name, kind: p.kind, status: 'disabled',
+        base_url: p.base_url, auth_mode: p.auth_mode, secret_ref: p.auth_mode === 'none' ? null : `vault:${p.key}`,
         default_model: p.default_model || null, capabilities: p.capabilities, timeout_ms: p.timeout_ms,
         priority: p.priority, billing_profile: 'metered', provider_access: p.provider_access,
         metadata: {
             catalog: 'pool-providers',
+            api_family: p.api_family, models_endpoint: p.models_endpoint,
+            auth_header: p.auth_header || null, docs_url: p.docs_url || null,
+            search_adapters: p.search_adapters || [],
             data_policy: p.data_policy,
             // The privacy label of the provider: `private` only where its own terms say it keeps nothing and trains on
             // nothing, `anonymized` for everyone else. The wording and the page it was read from travel with it.
@@ -83,7 +87,7 @@ function cataloguePrice(row) {
  *
  * → { providers: [key], models: [key], skipped: [key] }
  */
-async function seedPoolProviders({ registry, actor = 'system' }) {
+async function seedPoolProviders({ registry, actor = 'system', env = process.env }) {
     const out = { providers: [], models: [], skipped: [] };
     for (const p of pool.PROVIDERS) {
         const prev = await registry.getProvider(p.key);
@@ -91,16 +95,24 @@ async function seedPoolProviders({ registry, actor = 'system' }) {
             await registry.upsertProvider(recordOf(p), { actor, origin: 'catalog' });
             out.providers.push(p.key);
         } else if (prev.origin === 'catalog') {
-            // The catalogue owns this row: keep the owner's status and key slot, refresh the rest.
+            const defaults = recordOf(p);
+            if (prev.base_url !== p.base_url) defaults.metadata.models_endpoint = prev.base_url ? `${prev.base_url.replace(/\/+$/, '')}/models` : null;
+            // A key is bound to its origin. A documentation refresh must never move a working
+            // provider or change its wire format; endpoint changes are explicit owner edits.
             await registry.upsertProvider({
-                ...recordOf(p),
-                status: prev.status,
-                secret_ref: prev.secret_ref || `vault:${p.key}`,
+                ...defaults,
+                base_url: prev.base_url, kind: prev.kind, auth_mode: prev.auth_mode,
+                status: prev.status === 'active' && prev.auth_mode !== 'none' && !providerSecret(prev, env) ? 'disabled' : prev.status,
+                secret_ref: prev.secret_ref,
                 provider_access: prev.provider_access || p.provider_access,
-                metadata: { ...prev.metadata, ...recordOf(p).metadata },
+                metadata: { ...defaults.metadata, ...prev.metadata },
             }, { actor, origin: 'catalog' });
         } else {
-            out.skipped.push(p.key);   // the owner's own provider: never touched
+            out.skipped.push(p.key);
+            const protocol = recordOf(p).metadata;
+            if (prev.base_url !== p.base_url) protocol.models_endpoint = prev.base_url ? `${prev.base_url.replace(/\/+$/, '')}/models` : null;
+            const additions = Object.fromEntries(Object.entries(protocol).filter(([k]) => ['api_family', 'models_endpoint', 'auth_header', 'docs_url', 'search_adapters'].includes(k) && prev.metadata[k] === undefined));
+            if (Object.keys(additions).length) await registry.upsertProvider({ key: p.key, metadata: { ...prev.metadata, ...additions } }, { actor, origin: prev.origin });
         }
         for (const m of p.models) {
             const row = await registry.getModel(p.key, m.model_key);

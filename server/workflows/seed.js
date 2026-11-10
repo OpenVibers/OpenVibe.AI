@@ -147,7 +147,7 @@ async function seed({ registry, quotas, config, env = process.env, db }) {
     // DeepInfra, Novita, Featherless, Refuseless, Abliteration.ai and OpenRouter. Each is registered off until its key
     // is in the owner settings; the pool skips one whose key does not resolve. Prices come from each provider's own
     // page, with that page and the day they were read (server/providers/pool-providers.js).
-    await poolSeed.seedPoolProviders({ registry, actor: 'seed' });
+    await poolSeed.seedPoolProviders({ registry, actor: 'seed', env });
     const shared = await registry.getProvider('shared');
 
     // Models
