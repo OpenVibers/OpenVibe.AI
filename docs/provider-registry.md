@@ -67,3 +67,30 @@ latency and check time are stored; no upstream response text is logged or return
 endpoint access, not that a particular model can run. Missing keys result in zero requests.
 
 For Fable: key marker/date, explicit check button, check status/latency and remove-and-disable controls in each provider.
+
+Model discovery uses the existing `providers/catalog.js` sync and the existing `models` table. The registered
+models endpoint is authoritative, uses the provider's authentication on its bound origin, and must return a complete
+list before removals are considered. A provider can sync from the console or on an hourly, six-hour or daily
+schedule. Schedules start off and only run for active providers. Duplicate syncs for one provider are refused.
+`provider_model_syncs` records results, counts and safe error codes, never upstream bodies. Console reads return
+the most recent 50 results. Lists support root arrays and token pagination, including
+[Cohere's page token protocol](https://docs.cohere.com/reference/list-models).
+
+New models are disabled unless the owner selects `auto_list_new_models`. Uncensored models always arrive disabled,
+carry their 18+ floor and continue through the existing adult policy gate. Previously listed models that disappear
+are retained disabled with `missing_since`; a model that returns stays disabled until explicitly enabled. Invalid
+or incomplete listings never retire models. Owner names, content tiers, prices and price-book decisions survive
+sync and boot-time seeding. The existing owner price override remains the charged rate.
+
+The provider list can supply token prices directly. Missing prices and context use the already cached
+[models.dev data](https://models.dev/) and [OpenRouter public list](https://openrouter.ai/docs/api/api-reference/models/list-all-models-and-their-properties).
+Prices are taken only from the matching provider, retain their source and date, and never replace a known price.
+Another reseller's price is not used as a provider's cost. Missing fields stay null; stale enrichment never fills a
+price. The public metadata cache is reused for both sources and never receives a provider key.
+
+Owner API: `POST /api/v1/admin/console/providers/:key/sync`, `POST .../:key/model-settings`,
+`GET /api/v1/admin/console/models?provider=:key`, and `GET /api/v1/admin/console/sync`. Model settings use the existing
+`PATCH /api/v1/models/:provider/:model` with display name, status, content tier and owner price override.
+
+For Fable: provider model links, sync button/schedule and automatic-listing preference; per-provider models with
+name, content tier, gone state and price provenance; the model sync log. Added controls are plain kit markup.

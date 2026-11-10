@@ -616,6 +616,7 @@ const PROVIDERS = [
     },
     {
         key: 'openrouter', keys_url: 'https://openrouter.ai/settings/keys',
+        models_public: true,
         check_endpoint: 'https://openrouter.ai/api/v1/key',
         docs_url: 'https://openrouter.ai/docs/api-reference/overview',
         display_name: 'OpenRouter (the last fallback)',
@@ -648,17 +649,17 @@ const PROVIDERS = [
         ['chutes', 'Chutes', 'https://llm.chutes.ai/v1', 'Qwen/Qwen3-32B-TEE', 'https://www.chutes.ai/pricing', 'UNKNOWN', 'UNVERIFIED', { in: 0.104, cached: null, out: 0.416 }, 40960, false],
         ['siliconflow', 'SiliconFlow', 'https://api.siliconflow.com/v1', 'Qwen/Qwen3-32B', 'https://docs.siliconflow.com/', 'UNKNOWN', 'UNVERIFIED', { in: null, cached: null, out: null }, null, false],
         ['nebius', 'Nebius Token Factory', 'https://api.tokenfactory.nebius.com/v1', 'Qwen/Qwen3-30B-A3B-Instruct-2507', 'https://nebius.com/services/token-factory/models/qwen-models-inference', 'UNKNOWN', 'UNVERIFIED', { in: 0.10, cached: null, out: 0.30 }, 262144, false, 'https://docs.tokenfactory.nebius.com/quickstart'],
-        ['together', 'Together AI', 'https://api.together.ai/v1', 'openai/gpt-oss-120b', 'https://www.together.ai/pricing', 'UNKNOWN', 'RESTRICTED', { in: 0.15, cached: null, out: 0.60 }, 131072, false, 'https://docs.together.ai/docs/openai-api-compatibility', 'https://api.together.ai/settings/api-keys', ''],
+        ['together', 'Together AI', 'https://api.together.ai/v1', 'openai/gpt-oss-120b', 'https://www.together.ai/pricing', 'UNKNOWN', 'RESTRICTED', { in: 0.15, cached: null, out: 0.60 }, 131072, false, 'https://docs.together.ai/docs/openai-api-compatibility', 'https://api.together.ai/settings/api-keys', '', 'togetherai'],
         ['fireworks', 'Fireworks AI', 'https://api.fireworks.ai/inference/v1', 'accounts/fireworks/models/gpt-oss-120b', 'https://fireworks.ai/models', 'UNKNOWN', 'UNVERIFIED', { in: 0.15, cached: null, out: 0.60 }, 131072, false, 'https://docs.fireworks.ai/tools-sdks/openai-compatibility', 'https://fireworks.ai/account/api-keys', ''],
         ['groq', 'Groq', 'https://api.groq.com/openai/v1', 'openai/gpt-oss-120b', 'https://console.groq.com/docs/model/openai/gpt-oss-120b', 'UNKNOWN', 'UNVERIFIED', { in: 0.15, cached: 0.075, out: 0.60 }, 131072, false, 'https://console.groq.com/docs/openai', 'https://console.groq.com/keys', 'openai/gpt-oss-20b'],
         ['cerebras', 'Cerebras', 'https://api.cerebras.ai/v1', 'gpt-oss-120b', 'https://api.cerebras.ai/public/v1/models', 'UNKNOWN', 'UNVERIFIED', { in: null, cached: null, out: null }, 131072, false, 'https://inference-docs.cerebras.ai/api-reference/models', 'https://cloud.cerebras.ai/', ''],
         ['sambanova', 'SambaNova', 'https://api.sambanova.ai/v1', 'gpt-oss-120b', 'https://cloud.sambanova.ai/plans/pricing', 'UNKNOWN', 'UNVERIFIED', { in: 0.22, cached: null, out: 0.59 }, 131072, false, 'https://docs-prod.sambanova.ai/docs/api-reference/endpoints/model-list'],
         ['baseten', 'Baseten', 'https://inference.baseten.co/v1', 'openai/gpt-oss-120b', 'https://www.baseten.co/pricing/', 'UNKNOWN', 'UNVERIFIED', { in: null, cached: null, out: null }, 131072, false],
         ['hyperbolic', 'Hyperbolic', 'https://api.hyperbolic.ai/inference/v1', 'openai/gpt-oss-120b', 'https://docs.hyperbolic.xyz/docs/hyperbolic-ai-inference-pricing', 'UNKNOWN', 'UNVERIFIED', { in: null, cached: null, out: null }, 131072, false, 'https://docs.hyperbolic.ai/inference/quickstart'],
-    ].map(([key, display_name, base_url, model_key, source, privacyLabel, provider_access, prices, context_window, uncensored, docs_url, keys_url, credential_default_model]) => {
+    ].map(([key, display_name, base_url, model_key, source, privacyLabel, provider_access, prices, context_window, uncensored, docs_url, keys_url, credential_default_model, models_dev_id]) => {
         const privateTier = privacyLabel === 'PRIVATE';
         return {
-            key, display_name, base_url, docs_url, keys_url, credential_default_model, default_model: model_key, timeout_ms: 60000,
+            key, display_name, base_url, docs_url, keys_url, credential_default_model, models_dev_id, default_model: model_key, timeout_ms: 60000,
             capabilities: ['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich', 'json', 'tools'],
             provider_access, priority: 40, ...(uncensored ? { uncensored: true } : {}),
             privacy: privacy({ label: privateTier ? 'private' : 'anonymized', terms_url: privateTier ? source : null,
@@ -686,7 +687,7 @@ const PROVIDERS = [
         docs_url: 'https://platform.claude.com/docs/en/api/overview', capabilities: ['chat', 'messages', 'vision', 'tools'] },
     { key: 'openai', keys_url: 'https://platform.openai.com/api-keys', display_name: 'OpenAI', base_url: 'https://api.openai.com/v1', default_model: 'gpt-5-mini',
         docs_url: 'https://platform.openai.com/docs/api-reference/models/list', capabilities: ['chat', 'vision', 'tools', 'image', 'video', 'speech', 'transcribe', 'embed'] },
-    { key: 'gemini', keys_url: 'https://aistudio.google.com/apikey', display_name: 'Google Gemini', base_url: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    { key: 'gemini', models_dev_id: 'google', keys_url: 'https://aistudio.google.com/apikey', display_name: 'Google Gemini', base_url: 'https://generativelanguage.googleapis.com/v1beta/openai',
         api_family: 'google', docs_url: 'https://ai.google.dev/gemini-api/docs/openai', capabilities: ['chat', 'vision', 'tools', 'embed'] },
     { key: 'xai', keys_url: 'https://console.x.ai/', display_name: 'xAI', base_url: 'https://api.x.ai/v1',
         docs_url: 'https://docs.x.ai/docs/api-reference', capabilities: ['chat', 'vision', 'tools', 'image', 'video'] },

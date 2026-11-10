@@ -81,6 +81,29 @@ t.test("Anthropic's list (paged, with limits and capabilities) and OpenRouter's 
     } finally { await openrouter.close(); }
 });
 
+t.test('array lists and token pagination are complete before a sync can retire models', async () => {
+    const provider = { kind: 'openai', base_url: 'https://catalog.example/v1', auth_mode: 'bearer' };
+    const json = data => new Response(JSON.stringify(data));
+    const array = await catalog.listRemote(provider, 'test-only', { fetchImpl: async () => json([{ id: 'flux', type: 'image' }]) });
+    assert.strictEqual(catalog.describe(array[0].id, array[0].hints).type, 'image');
+    const seen = [];
+    const paged = await catalog.listRemote(provider, 'test-only', { fetchImpl: async (url, options) => {
+        assert.strictEqual(options.headers.Authorization, 'Bearer test-only');
+        seen.push(url);
+        return json(seen.length === 1 ? { models: [{ name: 'command' }], next_page_token: 'next-page' } : { models: [{ name: 'rerank-v4' }] });
+    } });
+    assert.deepStrictEqual(paged.map(m => m.id), ['command', 'rerank-v4']);
+    assert.strictEqual(new URL(seen[1]).searchParams.get('page_token'), 'next-page');
+    let writes = 0;
+    await assert.rejects(() => catalog.sync({ provider, apiKey: 'test-only', registry: { listModels() { writes++; } },
+        fetchImpl: async () => json({ models: [{ name: 'command' }], next_page_token: 'repeating' }),
+    }), e => e.code === 'provider.catalog_invalid');
+    assert.strictEqual(writes, 0, 'a partial list never begins applying changes');
+    await assert.rejects(() => catalog.listRemote({ ...provider, metadata: { models_endpoint: 'https://different.example/models' } }, 'test-only', {
+        fetchImpl: async () => { throw new Error('must not send the key'); },
+    }), e => e.code === 'provider.config');
+});
+
 t.test('sync: new models arrive switched off; a known one keeps its status and prices; an unlisted one is marked', async () => {
     const rdb = await testDb();
     const registry = createRegistry(rdb.db, { env: {} });
