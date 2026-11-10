@@ -826,7 +826,7 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
                 explain, usage, price: prices, privacy: privacy.view(label),
                 payer: { paid_by: paidBy, detail: (payer && payer.detail) || null, fee_rate: feeRate, fee_usd: money ? money.fee_usd : 0 },
                 preset: opts.preset || null,
-                latencyMs, ttftMs,
+                latencyMs: latencyMs ?? require('./exchange/timing').durationMs(row.started_at, row.finished_at), ttftMs,
                 provider: answerProvider, model: answerModel,
                 createdAt: row.finished_at || new Date(clock.now()).toISOString(),
             });
@@ -916,7 +916,8 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
     async function execute(id, { controller, reserved, scope, ctx, input, hold = null }) {
         const row = await getRow(id);
         if (!row || row.status !== 'queued') { inflight.delete(id); return; }
-        await db.prepare("UPDATE runs SET status = 'running', started_at = ? WHERE id = ? AND status = 'queued'").run(iso(clock.now()), id);
+        const startedAt = clock.now();
+        await db.prepare("UPDATE runs SET status = 'running', started_at = ? WHERE id = ? AND status = 'queued'").run(iso(startedAt), id);
         const wf = await registry.getWorkflow(row.workflow_key, row.workflow_version);
         const opts = parseJson(row.options, {});
         let seq = 0;
@@ -936,6 +937,7 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
         };
         let credit = null;
         let billingDelta = null;
+        let firstDeltaAt = null;
         let onRoute = null;
         try {
             // AI Exchange F: hold prepaid Balance before the first managed provider call (AI_CREDITS, off by
@@ -950,7 +952,13 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
                 ctx.creditsRequired = !credit && !ctx.byok && !ctx.serviceBudgeted;
             }
             billingDelta = typeof ctx.onDelta === 'function'
-                ? (credit ? (d) => { credit.observe(d); ctx.onDelta(d); } : ctx.onDelta)
+                ? (d) => {
+                    const delta = d && d.delta;
+                    if (firstDeltaAt === null && (delta?.content || delta?.reasoning_content || delta?.thinking
+                        || delta?.tool_calls?.some((c) => c.function?.arguments))) firstDeltaAt = clock.now();
+                    if (credit) credit.observe(d);
+                    ctx.onDelta(d);
+                }
                 : null;
             // Balance holds first (a 402 must land before the provider), then the router's own disclosure hook.
             onRoute = (credit || typeof ctx.onRoute === 'function')
@@ -1068,12 +1076,15 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
                 catch (err) { log.warn(`[runs] ${id}: the abuse counters were not written: ${err && err.message}`); }
             }
             // The record of the run (L40): the tokens with the cache apart, the money and who paid.
-            const published = await publishUsage({ row: await getRow(id), outcome: 'succeeded', usage: r.usage, provider: r.provider, model: r.model, attempts, latencyMs: r.latencyMs, ttftMs: r.ttftMs });
+            const finishedRun = await getRow(id);
+            const timing = { latencyMs: require('./exchange/timing').durationMs(finishedRun.started_at, finishedRun.finished_at),
+                ttftMs: firstDeltaAt === null ? null : Math.max(0, firstDeltaAt - startedAt) };
+            const published = await publishUsage({ row: finishedRun, outcome: 'succeeded', usage: r.usage, provider: r.provider, model: r.model, attempts, ...timing });
             // The receipt of the answer (server/exchange/receipts.js): the offer, the price, the tokens, the cache,
             // the latency, why the router chose it, the fallbacks it would have used, the payer and the privacy label.
             await writeReceipt({
-                row: await getRow(id), explain: r.explain, usage: r.usage, provider: r.provider, model: r.model,
-                latencyMs: r.latencyMs, ttftMs: r.ttftMs, money: published && published.money, payer: published && published.payer,
+                row: finishedRun, explain: r.explain, usage: r.usage, provider: r.provider, model: r.model,
+                ...timing, money: published && published.money, payer: published && published.payer,
             });
             // What the run spent goes on the budget of its run token (Codes C3): the same tokens and cost the
             // quota accounting counts, so the next request of a run over its budget is refused.

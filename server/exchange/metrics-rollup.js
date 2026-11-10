@@ -3,6 +3,7 @@
 const { canonicalOf, slugOf } = require('./catalog');
 const { modelMatches } = require('./observed');
 const { upstreamOf } = require('../providers/upstream');
+const { latencyOf } = require('./timing');
 const DAY = 86400000;
 const MIN_SAMPLES = 20;
 const TASK_KINDS = ['chat', 'code', 'design', 'search', 'vision', 'speech', 'embedding', 'image', 'video', 'other'];
@@ -60,7 +61,7 @@ function aggregate(rows, offers) {
         cell.runs++;
         const success = row.status === 'succeeded';
         if (success) cell.successes++;
-        const latency = number(row.latency_ms), ttft = number(row.ttft_ms), out = number(row.tokens_out), cost = number(row.cost_usd);
+        const latency = latencyOf(row), ttft = number(row.ttft_ms), out = number(row.tokens_out), cost = number(row.cost_usd);
         if (success && latency != null) cell.latency.push(latency);
         if (success && ttft != null && (latency == null || ttft <= latency)) cell.ttft.push(ttft);
         if (success && latency > ttft && ttft != null && out > 0) cell.tps.push(out * 1000 / (latency - ttft));
@@ -86,7 +87,7 @@ function aggregate(rows, offers) {
 function createMetricsRollup({ db, registry, clock = { now: () => Date.now() }, log = console, retentionDays = 30, enabled = true }) {
     let timer = null, pending = null, stopped = true;
     const receipts = db.prepare(`SELECT c.body->'offer'->>'provider' AS provider, c.body->'offer'->>'model' AS model,
-        c.body->>'kind' AS kind, c.body->>'workflow' AS workflow, r.status,
+        c.body->>'kind' AS kind, c.body->>'workflow' AS workflow, r.status, r.started_at, r.finished_at,
         c.body->>'latency_ms' AS latency_ms, c.body->>'ttft_ms' AS ttft_ms,
         c.body->'usage'->>'tokens_out' AS tokens_out, c.body->>'cost_usd' AS cost_usd
         FROM ai_receipts c JOIN runs r ON r.id = c.run_id
@@ -96,7 +97,7 @@ function createMetricsRollup({ db, registry, clock = { now: () => Date.now() }, 
         if (!enabled) return { skipped: 'disabled' };
         const now = clock.now(), today = Date.parse(`${dayOf(now)}T00:00:00Z`);
         return db.tx(async () => {
-            const state = await db.prepare('SELECT * FROM exchange_metrics_job WHERE id = 1 AND next_due <= ?::timestamptz FOR UPDATE SKIP LOCKED').get(iso(now));
+            const state = await db.prepare('SELECT * FROM exchange_metrics_job WHERE id = 1 AND (next_due <= ?::timestamptz OR algorithm_version < 2) FOR UPDATE SKIP LOCKED').get(iso(now));
             if (!state) return { skipped: 'not_due' };
             const providers = await registry.listProviders();
             if (providers.some((p) => p.metadata?.drill || p.metadata?.fail)) return { skipped: 'drill' };
@@ -105,7 +106,7 @@ function createMetricsRollup({ db, registry, clock = { now: () => Date.now() }, 
             const retainedFrom = today - Math.max(1, Math.min(90, retentionDays - 1)) * DAY;
             const savedDay = state.completed_through instanceof Date ? dayOf(state.completed_through.getTime()) : String(state.completed_through || '').slice(0, 10);
             const through = savedDay ? Date.parse(savedDay + 'T00:00:00Z') : null;
-            const from = through == null ? retainedFrom : Math.max(retainedFrom, through - DAY);
+            const from = through == null || state.algorithm_version < 2 ? retainedFrom : Math.max(retainedFrom, through - DAY);
             let days = 0, cells = 0;
             for (let start = from; start < today; start += DAY) {
                 const day = dayOf(start);
@@ -117,7 +118,7 @@ function createMetricsRollup({ db, registry, clock = { now: () => Date.now() }, 
                 }
                 days++; cells += values.length;
             }
-            await db.prepare('UPDATE exchange_metrics_job SET next_due = ?::timestamptz, completed_through = ?::date, completed_at = ?::timestamptz WHERE id = 1')
+            await db.prepare('UPDATE exchange_metrics_job SET algorithm_version = 2, next_due = ?::timestamptz, completed_through = ?::date, completed_at = ?::timestamptz WHERE id = 1')
                 .run(iso(today + DAY + 5 * 60000), dayOf(today - DAY), iso(now));
             return { days, cells, completed_through: dayOf(today - DAY) };
         });
