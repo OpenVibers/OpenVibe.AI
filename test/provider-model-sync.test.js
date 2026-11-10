@@ -163,6 +163,25 @@ t.test('boot-time provider seeds preserve owner names and content tiers too', as
     }
 });
 
+t.test('pinned routes skip disabled and gone models and keep the reason on the receipt', async () => {
+    for (const key of ['sync-first', 'sync-next']) {
+        await h.registry.upsertProvider({ key, kind: 'stub', status: 'active', auth_mode: 'none', capabilities: ['chat'], default_model: 'm' });
+        await h.registry.upsertModel({ provider_key: key, model_key: 'm', status: 'active' });
+    }
+    const route = { key: 'sync-fallback', primary: { provider: 'sync-first', model: 'm' }, fallbacks: [{ provider: 'sync-next', model: 'm' }] };
+    const run = () => h.pool.execute(route, 'chat', { messages: [{ role: 'user', content: 'hello' }], maxTokens: 20 });
+    const first = await run();
+    assert.strictEqual(first.provider, 'sync-first');
+    await h.registry.upsertModel({ provider_key: 'sync-first', model_key: 'm', status: 'disabled' });
+    const disabled = await run();
+    assert.strictEqual(disabled.provider, 'sync-next');
+    assert.ok(disabled.explain.attempts.some(a => a.provider === 'sync-first' && a.error === 'model_disabled'));
+    await h.registry.upsertModel({ provider_key: 'sync-first', model_key: 'm', status: 'active', metadata: { missing_since: new Date(time).toISOString() } });
+    const gone = await run();
+    assert.strictEqual(gone.provider, 'sync-next');
+    assert.ok(gone.explain.attempts.some(a => a.provider === 'sync-first' && a.error === 'model_gone'));
+});
+
 t.test('metadata prices use a matching provider, preserve zero and refuse stale price data', () => {
     const dev = { entries: [{ provider: 'other', id: 'm', model: { cost: { input: 99 } } }, { provider: 'p', id: 'm', model: { cost: { input: 0 } } }], source: 'https://models.dev/api.json', checked_at: new Date(time).toISOString(), stale: false };
     const router = { entries: [], stale: true };
