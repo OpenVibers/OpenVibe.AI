@@ -10,7 +10,7 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
-const { boot, request, suite, silent } = require('./helpers');
+const { boot, request, token, suite, silent } = require('./helpers');
 const parsers = require('../server/pricebook/parsers');
 const { readListing } = require('../server/pricebook/read');
 const { createPriceBook } = require('../server/pricebook/job');
@@ -301,6 +301,108 @@ t.test('a run that reads no listing leaves the book due', async () => {
     assert.ok(report.unreadable.length > 0, 'every listing is unreadable');
     const row = await h.db.prepare("SELECT last_run_at FROM price_book_state WHERE id = 'pricebook'").get();
     assert.ok(!row || row.last_run_at == null, 'the book is still due');
+});
+
+
+t.test('a reviewed reading waits as pending and never moves the live price', async () => {
+    const book = createPriceBook({ db: h.db, registry: h.registry, config: { priceBook: { enabled: true }, nodeEnv: 'test' }, clock: CLOCK, log: silent });
+    const before = await h.registry.getModel('deepinfra', 'Qwen/Qwen3-14B');
+    const oldIn = Number(before.cost.in_per_mtok);
+    const out = await book.propose([
+        { provider_key: 'deepinfra', model_key: 'Qwen/Qwen3-14B', in_per_mtok: oldIn * 2, out_per_mtok: 0.99,
+            source: 'https://api.deepinfra.com/v1/models', checked_at: DAY },
+        { provider_key: 'parasail', model_key: 'parasail-deepseek-v4-flash', in_per_mtok: 0.14, cached_per_mtok: 0.07,
+            out_per_mtok: 0.28, context_window: 1048576, quantization: 'fp8', type: 'chat',
+            source: 'https://docs.parasail.io/parasail-docs/products/overview/models', checked_at: DAY },
+    ]);
+    assert.strictEqual(out.proposed.length, 2);
+    assert.strictEqual(out.models_created.length, 1, 'the unknown model got a row to approve against');
+    // The live price did not move: only the owner's approval does that.
+    const after = await h.registry.getModel('deepinfra', 'Qwen/Qwen3-14B');
+    assert.strictEqual(Number(after.cost.in_per_mtok), oldIn);
+    // The new model is off, has no price, and is not marked price-book-owned until a price is approved.
+    const made = await h.registry.getModel('parasail', 'parasail-deepseek-v4-flash');
+    assert.strictEqual(made.status, 'disabled');
+    assert.strictEqual(made.context_window, 1048576);
+    assert.strictEqual(made.metadata.quantization, 'fp8');
+    assert.strictEqual(made.cost.in_per_mtok, null);
+    assert.strictEqual(made.metadata.price_book, undefined);
+    // Three fields wait for the owner, each with the provider's own listing and the day it was read.
+    const waiting = await h.db.prepare("SELECT * FROM price_changes WHERE status = 'pending' AND provider_key = 'parasail'").all();
+    assert.strictEqual(waiting.length, 3);
+    for (const row of waiting) {
+        assert.strictEqual(row.source, 'https://docs.parasail.io/parasail-docs/products/overview/models');
+        assert.strictEqual(String(row.checked_at).slice(0, 10), DAY);
+    }
+    // A second reading replaces the first pending one instead of stacking a second.
+    const again = await book.propose([{ provider_key: 'parasail', model_key: 'parasail-deepseek-v4-flash', in_per_mtok: 0.15,
+        source: 'https://docs.parasail.io/parasail-docs/products/overview/models', checked_at: '2026-11-14' }]);
+    assert.strictEqual(again.proposed.length, 1);
+    const now = await h.db.prepare("SELECT * FROM price_changes WHERE status = 'pending' AND provider_key = 'parasail' AND field = 'in_per_mtok'").all();
+    assert.strictEqual(now.length, 1);
+    assert.strictEqual(Number(now[0].new_price), 0.15);
+    // Approving one field writes that price and marks the row price-book-owned.
+    const ok = await book.decide(now[0].id, { decision: 'approve', actor: 'usr_owner' });
+    assert.strictEqual(ok.ok, true);
+    const live = await h.registry.getModel('parasail', 'parasail-deepseek-v4-flash');
+    assert.strictEqual(Number(live.cost.in_per_mtok), 0.15);
+    assert.strictEqual(live.metadata.price_book.source, 'https://docs.parasail.io/parasail-docs/products/overview/models');
+});
+
+t.test('a reading at the live price changes nothing', async () => {
+    const book = createPriceBook({ db: h.db, registry: h.registry, config: { nodeEnv: 'test' }, clock: CLOCK, log: silent });
+    const cur = await h.registry.getModel('deepinfra', 'Qwen/Qwen3-14B');
+    const out = await book.propose([{
+        provider_key: 'deepinfra', model_key: 'Qwen/Qwen3-14B',
+        in_per_mtok: Number(cur.cost.in_per_mtok), out_per_mtok: Number(cur.cost.out_per_mtok),
+        source: 'https://api.deepinfra.com/v1/models', checked_at: DAY,
+    }]);
+    assert.strictEqual(out.proposed.length, 0);
+    assert.strictEqual(out.unchanged.length, 1);
+    assert.strictEqual(out.models_created.length, 0);
+});
+
+t.test('a dry run writes nothing', async () => {
+    const book = createPriceBook({ db: h.db, registry: h.registry, config: { nodeEnv: 'test' }, clock: CLOCK, log: silent });
+    const out = await book.propose([{ provider_key: 'parasail', model_key: 'parasail-dry-run-model', in_per_mtok: 1.23,
+        source: 'https://docs.parasail.io/parasail-docs/products/overview/models', checked_at: DAY }], { dryRun: true });
+    assert.strictEqual(out.proposed.length, 1);
+    assert.strictEqual(out.models_created.length, 1);
+    assert.strictEqual(await h.registry.getModel('parasail', 'parasail-dry-run-model'), null);
+    const logged = await h.db.prepare("SELECT * FROM price_changes WHERE model_key = 'parasail-dry-run-model'").all();
+    assert.strictEqual(logged.length, 0);
+});
+
+t.test('the reviewed 2026-11-10 readings are a valid batch', async () => {
+    const readings = require('../scripts/pricebook-proposals-2026-11-10.json');
+    assert.strictEqual(readings.length, 43);
+    for (const p of readings) {
+        assert.match(p.source, /^https:\/\//);
+        assert.strictEqual(p.checked_at, '2026-11-10');
+    }
+    const book = createPriceBook({ db: h.db, registry: h.registry, config: { nodeEnv: 'test' }, clock: CLOCK, log: silent });
+    const out = await book.propose(readings, { dryRun: true });
+    assert.strictEqual(out.proposed.length, 43);
+    let known = 0;
+    for (const p of readings) if (await h.registry.getModel(p.provider_key, p.model_key)) known++;
+    assert.strictEqual(out.models_created.length, 43 - known, 'only models the registry does not know are created');
+});
+
+t.test('the owner-only proposal route puts a reading in the queue', async () => {
+    const owner = token('exchange', ['ai.provider.manage', 'ai.usage.read']);
+    const reader = token('exchange', ['ai.usage.read']);
+    const body = { proposals: [{ provider_key: 'parasail', model_key: 'parasail-route-model', in_per_mtok: 0.42,
+        source: 'https://docs.parasail.io/parasail-docs/products/overview/models', checked_at: '2026-11-15' }] };
+    const denied = await request(h.base, 'POST', '/api/v1/admin/console/pricebook/proposals', { tok: reader, body });
+    assert.strictEqual(denied.status, 403);
+    const res = await request(h.base, 'POST', '/api/v1/admin/console/pricebook/proposals', { tok: owner, body });
+    assert.strictEqual(res.status, 200, res.text);
+    assert.strictEqual(res.body.proposed.length, 1);
+    const waiting = await h.db.prepare("SELECT * FROM price_changes WHERE status = 'pending' AND model_key = 'parasail-route-model'").all();
+    assert.strictEqual(waiting.length, 1);
+    assert.strictEqual(waiting[0].source, 'https://docs.parasail.io/parasail-docs/products/overview/models');
+    const audit = await h.db.prepare("SELECT * FROM audit_log WHERE action = 'price_changes.proposed' ORDER BY id DESC LIMIT 1").get();
+    assert.ok(audit, 'the proposal is audited');
 });
 
 t.test('stop', async () => {

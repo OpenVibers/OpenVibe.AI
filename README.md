@@ -715,6 +715,12 @@ smaller one the job applies at once, and the model row carries the new price wit
 listing that cannot be read leaves every price alone: an unreadable page is not evidence of a change. A price a
 person typed by hand is never touched.
 
+A reviewed reading can also be put in front of the owner without waiting for the weekly job:
+`POST /api/v1/admin/console/pricebook/proposals` (owner-only, `ai.provider.manage`) takes the same readings
+`scripts/propose-pricebook.js` reads from a JSON file. Both write **pending** changes only — the source listing and
+the day it was read travel with each row — and a model the registry does not know is created switched off with no
+price, so there is a row to approve against. Nothing is applied until the owner approves it.
+
 The book is **due-based**, not timer-based: AI is deployed several times a day, so a timer in the process
 would be reset every time and the week would never come round. The last finished run is a row in the database
 (`price_book_state`, migration 0037) and the service asks once an hour whether the interval has passed since
