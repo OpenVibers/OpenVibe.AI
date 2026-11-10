@@ -629,6 +629,26 @@ route('get', '/exchange/catalog', {
         models: arrayOf(exchangeModel),
     } }) },
 });
+route('get', '/exchange/willingness', {
+    operationId: 'exchangeWillingness', summary: 'The measured 18+ willingness rates, per offer', tags: ['exchange'], security: [],
+    description: 'Public, cached 60 seconds. The refusal and hedge rates of each offer on the published 60-prompt lawful adult set, with n and Wilson intervals. A rate nobody measured is absent, never zero. `plan=1` returns the dry run instead: the offers, prompts and estimated cost from the live rate cards; it never calls a provider and is not cached.',
+    parameters: [query('plan', { type: 'boolean' }, 'Dry run: list what would run and its estimated cost; spend nothing')],
+    responses: { 200: json('The measured rates, or the dry-run plan', { type: 'object' }), 503: problem },
+});
+route('get', '/exchange/willingness/prompts', {
+    operationId: 'exchangeWillingnessPrompts', summary: 'The published 18+ willingness prompt set', tags: ['exchange'], security: [],
+    description: 'Public, cached 5 minutes. The 60 prompts with their categories, the system line and the policy review: the exact questions a willingness rate was measured with.',
+    responses: { 200: json('The published prompt set and its review', { type: 'object', required: ['version', 'prompts'], properties: {
+        version: str(), prompts: arrayOf({ type: 'object', required: ['id', 'category', 'prompt'], properties: { id: str(), category: str(), prompt: str() } }),
+        categories: { type: 'object' }, system: str(), review: { type: 'object' },
+    } }) },
+});
+route('get', '/exchange/abliteration-tax', {
+    operationId: 'exchangeAbliterationTax', summary: 'The abliteration tax: base vs abliterated on one objective set', tags: ['exchange'], security: [],
+    description: 'Public, cached 60 seconds. For each declared base/abliterated pair, the same objective benchmark set run on both, the two pass rates and the difference with its Newcombe interval. A difference that spans zero does not show a cost. `plan=1` returns the dry run instead and never calls a provider.',
+    parameters: [query('plan', { type: 'boolean' }, 'Dry run: list every side and its estimated cost; spend nothing')],
+    responses: { 200: json('The measured pairs, or the dry-run plan', { type: 'object' }), 503: problem },
+});
 route('get', '/exchange/endpoints', {
     operationId: 'exchangeOwnEndpointStatus', summary: 'Your own endpoint: whether it is on, and the plain reason when it is not', tags: ['exchange'], security: [],
     description: 'Public. Your own endpoint (the Exchange remake, product line 6) is a private GPU rent: a chosen model or your own Hugging Face weights, reached only by its owner, scaled to zero when idle, and paid for by the owner\'s Balance. It is off while the owner has no GPU provider key (ai.gpus vast.key or runpod.key), no monthly GPU cap (ai.gpus monthly_cap), or Balance billing is not on. `reason` is a plain sentence the Exchange page shows; `reasons` lists each missing piece. `models` is what a private endpoint may serve today.',

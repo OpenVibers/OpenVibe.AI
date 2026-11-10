@@ -1,0 +1,41 @@
+{
+  "request": {
+    "host": "api.meta.ai",
+    "path": "/v1/responses",
+    "method": "POST"
+  },
+  "response": {
+    "usage": {
+      "input_tokens": 100,
+      "input_tokens_details": {
+        "cached_tokens": 20
+      },
+      "output_tokens": 10
+    },
+    "output": [
+      {
+        "type": "web_search_call",
+        "status": "completed",
+        "action": {
+          "type": "search",
+          "queries": [
+            "lantern",
+            "new lantern"
+          ]
+        },
+        "results": [
+          {
+            "type": "text_result",
+            "title": "Lantern",
+            "url": "https://example.org/article",
+            "snippet": "A new lantern"
+          }
+        ]
+      }
+    ]
+  },
+  "expected": {
+    "title": "Lantern",
+    "cost": 0.0051455
+  }
+}

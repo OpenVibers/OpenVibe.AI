@@ -35,23 +35,23 @@ const json = value => new Response(JSON.stringify(value), { status: 200 });
         if (kind === 'web') {
             assert.equal(out.results[0].url, 'https://example.org/article');
             assert.equal(out.results[0].snippet, 'A new lantern', a.id);
-            assert.equal(out.results[0].published, a.id === 'google' ? null : '2026-11-08T12:00:00Z');
+            assert.equal(out.results[0].published, ['google', 'meta'].includes(a.id) ? null : '2026-11-08T12:00:00Z');
         } else if (kind === 'images') {
             const row = out.results[0];
             assert.equal(row.url, 'https://images.example.org/cat.jpg');
             assert.equal(row.thumbnail, 'https://images.example.org/thumb.jpg');
             assert.deepEqual([row.width, row.height], [2400, 1600]);
             assert.equal(row.source_page, 'https://example.org/article');
-            assert.equal(row.author, a.id === 'brave-images' ? null : 'Alex');
-            if (a.id === 'brave-images') assert.deepEqual([row.license, row.attribution], [null, null]);
+            assert.equal(row.author, ['brave-images', 'serper-images'].includes(a.id) ? null : 'Alex');
+            if (['brave-images', 'serper-images'].includes(a.id)) assert.deepEqual([row.license, row.attribution], [null, null]);
             else assert.ok(row.license && row.attribution.includes('Alex'));
         }
-        const card = search.engines().find(e => e.id === a.id);
+        const card = (await search.engines()).find(e => e.id === a.id);
         assert.equal(card.price_per_1000, a.price_per_1000);
         assert.equal(card.source, a.source);
-        assert.equal(card.checked_on, '2026-11-09');
+        assert.equal(card.checked_on, ['meta', 'serper-images'].includes(a.id) ? '2026-11-10' : '2026-11-09');
         if (a.byok) {
-            assert.equal(createSearch({ env: {} }).engines().find(e => e.id === a.id).available, false);
+            assert.equal((await createSearch({ env: {} }).engines()).find(e => e.id === a.id).available, false);
             await assert.rejects(createSearch({ env: {}, fetchImpl: () => assert.fail('unconfigured engine called') }).search(kind, { q: 'x', engine: a.id }));
         }
         if (a.freshness.length) {

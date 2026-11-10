@@ -209,6 +209,10 @@ async function start({ searchFetch = null, config, db: givenDb = null, clock = {
     // The measured refusal rates (server/refusal/): the weekly job that asks every offer the same published,
     // harmless questions and publishes how often it refused them. Due-based, like the price book.
     const refusal = require('./refusal/job').createRefusalJob({ db, registry, pool, config, env, clock, log });
+    // The 18+ board (server/willing/): the willingness rates and the abliteration tax. Both are
+    // owner-budget jobs, default off; plan() is the dry run that spends nothing.
+    const willingness = require('./willing/job').createWillingnessJob({ db, registry, pool, config, env, clock, log, adultFor: adultStatus.adultFor });
+    const abliterationTax = require('./willing/abliteration').createAbliterationTax({ db, pool, config, clock, log, adultFor: adultStatus.adultFor });
     // The native batcher (BA2): the providers' own batch APIs, behind one queue.
     const batcher = require('./batch/batcher').createBatcher({ db, runs, registry, credits: creditsRef, config, clock, log, env, fetchImpl });
     // BA3: a batch-class run asks the batcher where it may wait, and hands its own run to the queue.
@@ -224,7 +228,7 @@ async function start({ searchFetch = null, config, db: givenDb = null, clock = {
         clientSecret: env.OV_OAUTH_CLIENT_SECRET, fetch: fetchImpl,
     }) : null;
     const benchEvents = createBenchEvents({ bench, accountData, accountSend, config, log, fetchImpl, clientSecret: env.OV_OAUTH_CLIENT_SECRET });
-    const app = createApp({ choices, searchFetch, config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, grants, vault, settings, benchEvents, runBudgets, memory, memoryImport, memoryServices, memorySharing, community, endpoints, webhooks, presets, receipts, balance, creditGrants, sessionCookies, gpus, abuse, priceBook, modelSync, ownEndpoints, refusal, batches, gpuMarket, share });
+    const app = createApp({ choices, searchFetch, config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, grants, vault, settings, benchEvents, runBudgets, memory, memoryImport, memoryServices, memorySharing, community, endpoints, webhooks, presets, receipts, balance, creditGrants, sessionCookies, gpus, gpuMarket, abuse, priceBook, modelSync, ownEndpoints, refusal, willingness, abliterationTax, batches, share });
     let jwks = null;
     let keyLoaded = Promise.resolve(null);
     if (!keys.pinned && config.nodeEnv !== 'test') {
@@ -287,6 +291,8 @@ async function start({ searchFetch = null, config, db: givenDb = null, clock = {
     // The refusal job asks the offers the same questions once a week; it never starts in test mode (the
     // tests drive it by hand) and never under a restore drill.
     if (listen && config.refusal && config.refusal.enabled) refusal.start();
+    if (listen && config.willingness && config.willingness.enabled) willingness.start();
+    if (listen && config.abliterationTax && config.abliterationTax.enabled) abliterationTax.start();
     // The batch worker picks up the queued batches. The queue is in the database, so a restart keeps it.
     if (listen && config.batches && config.batches.enabled && config.nodeEnv !== 'test') batches.start();
     // The native batcher submits the queued groups and settles the answers. It is in the database, so a
@@ -335,6 +341,8 @@ async function start({ searchFetch = null, config, db: givenDb = null, clock = {
         await observations.stop();
         gpuMarket.stop();
         refusal.stop();
+        willingness.stop();
+        abliterationTax.stop();
         batches.stop();
         batcher.stop();
         webhooks.stop();
@@ -353,7 +361,7 @@ async function start({ searchFetch = null, config, db: givenDb = null, clock = {
         if (!givenDb) await db.close();
     }
 
-    return { config, db, registry, pool, quotas, tiers, cache, fetcher, engine, runs, keys, keyLoaded, auth, app, server, choices, bench, benchEvents, memory, memoryJobs, memoryServices, memorySharing, priceBook, modelSync, refusal, batches, batcher, credits: creditsRef, settings, vault, community, endpoints, webhooks, gpus, gpuMarket, abuse, ownEndpoints, close };
+    return { config, db, registry, pool, quotas, tiers, cache, fetcher, engine, runs, keys, keyLoaded, auth, app, server, choices, bench, benchEvents, memory, memoryJobs, memoryServices, memorySharing, priceBook, modelSync, refusal, willingness, abliterationTax, batches, batcher, credits: creditsRef, settings, vault, community, endpoints, webhooks, gpus, gpuMarket, abuse, ownEndpoints, close };
 }
 
 if (require.main === module) {

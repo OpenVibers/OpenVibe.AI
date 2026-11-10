@@ -5,12 +5,12 @@ const { AiError, sendError } = require('../util');
 const { createKeys } = require('./keys');
 const { claimRequest } = require('./idempotency');
 const { createSearch, CHARGE } = require('../search');
-function platform({ db, auth, clock, log, searchFetch, credentials, env = process.env }) {
+function platform({ db, auth, clock, log, searchFetch, credentials, registry, env = process.env }) {
     const keys = createKeys({ db, clock });
     const presets = require('../exchange/compat-presets').createCompatPresets(db);
     const search = createSearch({
         ...(searchFetch ? { fetchImpl: searchFetch } : {}),
-        now: () => clock.now(), credentials, env,
+        now: () => clock.now(), credentials, registry, env,
     });
     const r = express.Router();
     const wrap = (fn) => async (req, res) => {
@@ -64,8 +64,8 @@ function platform({ db, auth, clock, log, searchFetch, credentials, env = proces
         subject: req.principal?.kind === 'user' ? req.principal.subject.id : null,
         plan: req.searchPlan, budget: req.searchBudget,
     });
-    r.get('/api/v1/exchange/search/engines', (_req, res) =>
-        res.json({ engines: search.engines() }),
+    r.get('/api/v1/exchange/search/engines', wrap(async () =>
+        ({ engines: await search.engines() })),
     );
     const allow = auth.appOrCap(CAPS.appRun, CAPS.runCreate);
     const searchWindows = new Map();
