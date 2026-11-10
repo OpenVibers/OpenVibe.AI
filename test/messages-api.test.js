@@ -105,7 +105,7 @@ t.test('a message answers Anthropic\'s shape, from a run of ai.messages that kee
     const res = await post({ model: 'claude-sonnet-4-5', max_tokens: 64, system: 'Be brief.', messages: [{ role: 'user', content: 'Say hello' }] });
     assert.strictEqual(res.status, 200);
     const body = await res.json();
-    assert.deepStrictEqual([body.type, body.role, body.id], ['message', 'assistant', 'msg_test_1']);
+    assert.deepStrictEqual([body.type, body.role, body.id], ['message', 'assistant', 'msg_' + res.headers.get('x-openvibe-run-id')]);
     assert.deepStrictEqual(body.content, [{ type: 'text', text: 'Hello there' }]);
     assert.deepStrictEqual([body.stop_reason, body.usage.input_tokens, body.usage.output_tokens], ['end_turn', 11, 2]);
     const runId = res.headers.get('x-openvibe-run-id');
@@ -136,16 +136,18 @@ t.test('tools and tool_choice pass through; a tool_use comes back as Anthropic s
 });
 
 t.test('stream: Anthropic\'s events in order, and the run ends with the whole message', async () => {
-    const res = await post({ max_tokens: 64, stream: true, messages: [{ role: 'user', content: 'Stream please' }] });
+    const res = await post({ max_tokens: 64, stream: true, usage: { include: true }, messages: [{ role: 'user', content: 'Stream please' }] });
     assert.strictEqual(res.status, 200);
     assert.match(res.headers.get('content-type'), /^text\/event-stream/);
     const runId = res.headers.get('x-openvibe-run-id');
     const events = await sse(res);
     assert.deepStrictEqual(events.map((e) => e.event), FRAMES.map(([name]) => name));
-    assert.deepStrictEqual(events[0].data.message.id, 'msg_stream_1');
+    assert.deepStrictEqual(events[0].data.message.id, 'msg_' + runId);
     const text = events.filter((e) => e.data.type === 'content_block_delta').map((e) => e.data.delta.text).join('');
     assert.strictEqual(text, 'Hello there');
     assert.strictEqual(events[events.length - 1].data.type, 'message_stop');
+    assert.equal(events.at(-1).data.usage.provider, 'anthropic-fake');
+    assert.equal(typeof events.at(-1).data.usage.cost, 'number');
     const run = await request(h.base, 'GET', `/api/v1/runs/${runId}`, { tok: service });
     assert.strictEqual(run.body.run.output.content[0].text, text, 'the run kept the whole answer the stream sent');
     assert.strictEqual(run.body.run.output.stop_reason, 'end_turn');

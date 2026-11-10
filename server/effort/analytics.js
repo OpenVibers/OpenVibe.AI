@@ -83,7 +83,7 @@ async function cacheShares(db, clock) {
     const rows = await db.prepare(`SELECT q.provider_key, q.model_key, SUM(q.tokens_in)::numeric input,
         SUM(q.tokens_cached)::numeric cached FROM requests q JOIN runs r ON r.id = q.run_id
         WHERE q.created_at >= ? AND q.status = 'ok' AND r.synthetic = 0
-        GROUP BY q.provider_key, q.model_key`).all(new Date(clock.now() - 7 * 86400000).toISOString());
+        GROUP BY q.provider_key, q.model_key HAVING COUNT(*) >= 20`).all(new Date(clock.now() - 7 * 86400000).toISOString());
     return new Map(rows.map(r => [`${r.provider_key}/${r.model_key}`, Number(r.input) > 0 ? Math.min(1, Math.max(0, Number(r.cached) / Number(r.input))) : null]));
 }
 module.exports = { createAnalytics, cacheShares };

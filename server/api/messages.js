@@ -70,6 +70,7 @@ function createEventStream(res) {
     let routeInfo = null;
     let commented = false;
     let finalEvent = null;
+    let responseId = null;
     const waiting = [];
     const alive = () => !res.writableEnded && !res.destroyed;
     const comment = () => {
@@ -82,6 +83,7 @@ function createEventStream(res) {
         if (!data) return;
         // message_stop is held until the run has settled: the final chunk carries the whole x_openvibe object (run_id,
         // provider, cost_usd and the route disclosure), and the cost is only known once the provider's usage is recorded.
+        if (event === 'message_start' && data.message && responseId) data = { ...data, message: { ...data.message, id: responseId } };
         if (event === 'message_stop') { finalEvent = data; return; }
         write(event, data);
     };
@@ -95,6 +97,7 @@ function createEventStream(res) {
             emit(e.event, e.data);
         },
         open(r) {
+            responseId = 'msg_' + r.id;
             res.status(200);
             res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
             res.setHeader('Cache-Control', 'no-store');
@@ -110,10 +113,10 @@ function createEventStream(res) {
         emit,
         sentAny: () => any,
         /** The held message_stop with the final x_openvibe object (and the receipt), then end the stream. */
-        finish(xOpenVibe, receipt) {
+        finish(xOpenVibe, receipt, usage) {
             const data = finalEvent || { type: 'message_stop' };
             finalEvent = null;
-            write('message_stop', xOpenVibe ? { ...data, x_openvibe: xOpenVibe, ...(receipt ? { receipt } : {}) } : data);
+            write('message_stop', xOpenVibe ? { ...data, x_openvibe: xOpenVibe, ...(receipt ? { receipt } : {}), ...(usage ? { usage } : {}) } : data);
             return out.done();
         },
         fail(message, code) {
@@ -143,7 +146,7 @@ function replay(res, message, run) {
     res.emit('message_stop', { type: 'message_stop' });
 }
 
-function messagesRouter({ runs, auth, config, registry, presets = null, receipts = null, log = console }) {
+function messagesRouter({ runs, auth, config, registry, presets = null, receipts = null, db = null, log = console }) {
     const r = express.Router();
     // Developer apps call with ai.app.run, the public capability they already hold (ADR-014; AI Exchange D8').
     const allow = auth.appOrCap(CAPS.appRun, CAPS.runCreate);
@@ -170,7 +173,10 @@ function messagesRouter({ runs, auth, config, registry, presets = null, receipts
     };
 
     r.post('/v1/messages', asAnthropicErrors, allow, async (req, res) => {
-        const b = req.body && typeof req.body === 'object' ? req.body : {};
+        let b = req.body && typeof req.body === 'object' ? req.body : {};
+        if (db && req.principal.kind === 'user') {
+            try { b = await require('../exchange/compat-presets').createCompatPresets(db).expand(req.principal.subject.id, b, 'messages'); } catch (err) { return res.status(err.status || 400).json({ error: { message: err.message, code: err.code } }); }
+        }
         if (!Array.isArray(b.messages) || !b.messages.length) return anthropicError(res, 400, 'messages: must be a non-empty array');
         if (!Number.isInteger(b.max_tokens) || b.max_tokens < 1) return anthropicError(res, 400, 'max_tokens: must be a positive integer');
         if (/^claude-(opus|sonnet)-5-5/.test(String(b.model || '').split('/').pop()) && b.thinking && Object.hasOwn(b.thinking, 'budget_tokens')) return anthropicError(res, 400, 'Opus/Sonnet 5.5 require adaptive thinking; budget_tokens is refused');
@@ -214,6 +220,12 @@ function messagesRouter({ runs, auth, config, registry, presets = null, receipts
                 }
             }
         }
+        try {
+            if (b.provider !== undefined || b.models !== undefined || (typeof b.model === 'string' && /:(free|floor|nitro)$/.test(b.model)) || (typeof b.model === 'string' && b.model.includes('/') && !b.model.startsWith('@preset/') && !b.model.startsWith('openvibe') && !EXACT_ID.test(b.model))) {
+                input.compat_routing = require('../exchange/compat-routing').request(b);
+                delete input.model;
+            }
+        } catch (err) { return anthropicError(res, err.status || 400, err.message, null, err.code); }
         let body = { ...controls(b), workflow: 'ai.messages', input, idempotency_key: req.get('idempotency-key') || undefined };
         // The preset's rules ride the run into the router.
         if (preset) body = { ...body, preset: { name: preset.name, scope: preset.scope, policy: preset.policy } };
@@ -237,6 +249,7 @@ function messagesRouter({ runs, auth, config, registry, presets = null, receipts
             const created = await runs.create(body, req.principal, { trace: req.ov && req.ov.traceId, requestId: req.ov && req.ov.requestId, abuse: req.abuse,
                 ...(live ? { onDelta: live.event } : {}),
                 ...(live && config.modelCatalog && config.modelCatalog.enabled ? { onRoute: (info) => live.route(info) } : {}) });
+            res.locals.inferenceAdmitted = true;
             if (created.created === false) res.setHeader('x-openvibe-replayed', '1');
             if (live) live.open(created.run);
             run = await runs.explained(await runs.wait(created, Math.max(config.runs.maxWaitMs, 120000)));
@@ -245,6 +258,7 @@ function messagesRouter({ runs, auth, config, registry, presets = null, receipts
             if ((err && err.status) >= 500) log.warn(`[ai] /v1/messages: ${err && err.message}`);
             return anthropicError(res, (err && err.status) || 500, err && (err.detail || err.message), err && err.code === 'credential.unsupported' ? 'invalid_request_error' : null);
         }
+        if (['succeeded', 'cached'].includes(run.status) || (['failed', 'cancelled'].includes(run.status) && run.usage.attempts === 0)) res.locals.inferenceCharge = Number(run.usage.cost_usd || 0);
         if (live && (run.status === 'failed' || run.status === 'cancelled' || !run.output || !Array.isArray(run.output.content))) {
             const code = (run.error && run.error.code) || (['failed', 'cancelled'].includes(run.status) ? 'run.failed' : 'run.timeout');
             return live.fail((run.error && run.error.detail) || (code === 'run.timeout' ? `the message is still running; GET /api/v1/runs/${run.id}` : code), code);
@@ -264,7 +278,7 @@ function messagesRouter({ runs, auth, config, registry, presets = null, receipts
         }
         const out = run.output;
         const message = {
-            id: out.id || `msg_${run.id}`, type: 'message', role: 'assistant',
+            id: `msg_${run.id}`, type: 'message', role: 'assistant',
             model: out.model || (run.provenance && run.provenance.model) || 'openvibe',
             content: out.content, stop_reason: out.stop_reason || 'end_turn', stop_sequence: out.stop_sequence || null,
             usage: {
@@ -274,6 +288,7 @@ function messagesRouter({ runs, auth, config, registry, presets = null, receipts
                 ...(out.usage && out.usage.cache_creation_input_tokens != null ? { cache_creation_input_tokens: out.usage.cache_creation_input_tokens } : {}),
             },
         };
+        if (b.usage?.include === true) Object.assign(message.usage, require('./compat-extra').accounting(run));
         const disclosure = await models.disclosureOf({ registry, config, run });
         const community = (disclosure && disclosure.community) || (run.explain && run.explain.community) || null;
         if (live) live.route(disclosure || (community ? { community } : null));
@@ -290,13 +305,13 @@ function messagesRouter({ runs, auth, config, registry, presets = null, receipts
             message.policy = run.output.policy || 'uncensored';
             res.setHeader('X-OpenVibe-Content-Policy', message.policy);
         }
-        const xOpenVibe = (disclosure || community || run.output.label || receipt) ? { ...x, ...(disclosure || {}) } : null;
+        const xOpenVibe = { ...x, ...(disclosure || {}) };
         if (live) {
             // The events already went out as they arrived; an answer that came in one piece (an upstream that cannot
             // stream, a replayed run) is sent as the events it is. finish() sends the held message_stop with the whole
             // x_openvibe object, then ends the stream.
             if (!live.sentAny()) replay(live, message, run);
-            return live.finish(xOpenVibe, receiptView);
+            return live.finish(xOpenVibe, receiptView, b.usage?.include ? message.usage : null);
         }
         res.setHeader('X-OpenVibe-Run-Id', run.id);
         if (receipt) {
