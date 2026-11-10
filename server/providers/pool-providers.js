@@ -91,6 +91,24 @@ const privacy = (o) => ({
     checked: o.checked || CHECKED,
 });
 
+/**
+ * The traits beyond price (2026-11-10 provider wave): the classes of work, the concurrency cap, a free
+ * allowance with its end date, how it is paid, and the OpenRouter routing an offer pins. An absent key
+ * means the provider states nothing, never a guessed value. Every record names where and when it was read.
+ */
+const traits = (o) => ({
+    ...(Array.isArray(o.latency_classes) ? { latency_classes: o.latency_classes.filter((c) => ['interactive', 'background', 'batch'].includes(c)) } : {}),
+    ...(o.tier_latency && typeof o.tier_latency === 'object' ? { tier_latency: o.tier_latency } : {}),
+    ...(Number.isInteger(o.concurrency) && o.concurrency > 0 ? { concurrency: o.concurrency } : {}),
+    ...(o.free_allowance ? { free_allowance: o.free_allowance } : {}),
+    ...(o.payment ? { payment: o.payment } : {}),
+    ...(o.free_only === true ? { free_only: true } : {}),
+    ...(o.batch_window_hours ? { batch_window_hours: o.batch_window_hours } : {}),
+    ...(o.trains_note ? { trains_note: o.trains_note } : {}),
+    source: o.source || null,
+    checked: o.checked || NEW_CHECKED,
+});
+
 const PROVIDERS = [
     {
         key: 'qwen',
@@ -639,8 +657,21 @@ const PROVIDERS = [
             resale: 'UNVERIFIED (2026-11-03 matrix does not list OpenRouter). The price book (2026-10-30) records that its terms contemplate selling capacity inside your own product; that is not the same as an executed agreement.',
         }),
         // OpenRouter lists hundreds of models and prices each one itself; the catalogue sync reads its own list with
-        // the key. No model is seeded here: a price we did not read from OpenRouter is not one of ours to publish.
-        models: [],
+        // the key. One offer is pinned here because the owner asked for it exactly: DeepSeek V4.1 Flash 1017 on
+        // Particle AI's Flex endpoint, at the price OpenRouter's own endpoint list gives it, with the routing
+        // object that keeps the call on Particle (no fallback) and the data policy at deny.
+        models: [{
+            model_key: 'deepseek/deepseek-v4.1-flash-1017',
+            display_name: 'DeepSeek V4.1 Flash 1017 (Particle Flex)', family: 'deepseek',
+            context_window: 1048576, max_output: 131072,
+            cost: { in_per_mtok: 0.025, cached_per_mtok: 0.003, out_per_mtok: 0.25 },
+            source: 'https://openrouter.ai/api/v1/models/deepseek/deepseek-v4.1-flash-1017/endpoints', checked: '2026-11-10',
+            supports: { json: true, tools: true, streaming: true, vision: true },
+            quantization: null, refusal_rate: null,
+            service_tier: 'flex',
+            routing: { only: ['particle-ai'], allow_fallbacks: false, service_tier: 'flex', data_collection: 'deny' },
+            note: 'the Particle AI endpoint at service tier flex ($0.025 in / $0.25 out / $0.003 cached, read from OpenRouter on 2026-11-10); pinning it with no fallback keeps the price honest',
+        }],
     },
     ...[
         ['venice', 'Venice AI', 'https://api.venice.ai/api/v1', 'venice-uncensored-1-2', 'https://docs.venice.ai/overview/pricing', 'PRIVATE', 'UNVERIFIED', { in: 0.20, cached: null, out: 0.90 }, 131072, true],
@@ -721,8 +752,32 @@ const PROVIDERS = [
     // Each starts disabled with no key; the owner puts its key in the owner settings and syncs its model list.
     { key: 'parasail', display_name: 'Parasail', base_url: 'https://api.parasail.io/v1',
         docs_url: 'https://docs.parasail.io/parasail-docs/products/overview/models', capabilities: ['chat', 'embed'] },
-    { key: 'particle-ai', display_name: 'Particle AI', base_url: 'https://api.particle.ai/v1',
-        docs_url: 'https://docs.particle.ai/', capabilities: ['chat'] },
+    {
+        key: 'particle-ai', keys_url: 'https://platform.particle.ai', display_name: 'Particle AI',
+        base_url: 'https://api.particle.ai/v1', default_model: 'particle-1', timeout_ms: 900000,
+        docs_url: 'https://docs.particle.ai/', capabilities: ['chat', 'tools', 'vision'],
+        provider_access: 'UNVERIFIED', priority: 35,
+        // Particle's own Flex tier is 50% off every token price and may wait up to 15 minutes for capacity
+        // (https://docs.particle.ai/service-tiers, read 2026-11-10). It is a background/batch tier: never an
+        // answer in front of a person. Direct prices differ from OpenRouter's listing, so no model price is
+        // seeded here: the owner syncs the direct catalogue and its own reading fills the price.
+        tier_rates: { flex: 0.5 },
+        traits: traits({
+            latency_classes: ['interactive', 'background', 'batch'], tier_latency: { flex: ['background', 'batch'] },
+            payment: 'prepaid', source: 'https://docs.particle.ai/service-tiers', checked: '2026-11-10',
+        }),
+        privacy: privacy({
+            label: 'private', terms_url: 'https://docs.particle.ai/data-retention',
+            wording: '"Particle operates zero-data-retention for inference traffic: prompts and completions are processed in memory and never persisted." (data retention, 2026-11-10)',
+            checked: '2026-11-10',
+        }),
+        data_policy: policy({
+            trains: false, retention: 'none', trust: 'first-party', region: null,
+            retention_note: 'prompts and completions are processed in memory and never persisted; prefix caches are transient',
+            terms: 'https://docs.particle.ai/data-retention', checked: '2026-11-10',
+        }),
+        models: [],
+    },
     { key: 'inference-net', display_name: 'Inference.net', base_url: 'https://api.inference.net/v1', models_public: true,
         docs_url: 'https://docs.inference.net/', capabilities: ['chat'] },
     { key: 'atlas-cloud', display_name: 'AtlasCloud', base_url: 'https://api.atlascloud.ai/v1', models_public: true,
@@ -740,6 +795,123 @@ const PROVIDERS = [
         docs_url: 'https://friendli.ai/docs/guides/model-apis/introduction', capabilities: ['chat'] },
     { key: 'scaleway', display_name: 'Scaleway', base_url: 'https://api.scaleway.ai/v1',
         docs_url: 'https://www.scaleway.com/en/developers/api/generative-apis', capabilities: ['chat', 'embed'] },
+
+    // The 2026-11-10 provider wave. Each was read on its own page or keyless list that day; each starts
+    // disabled with no key. The owner adds the key and the money; nothing is created or spent here.
+    {
+        key: 'iteracompute', keys_url: 'https://iteracompute.com/console/api-keys', display_name: 'IteraCompute',
+        base_url: 'https://api.iteracompute.com/v1', default_model: 'Auto', timeout_ms: 180000,
+        docs_url: 'https://iteracompute.com/docs.html', capabilities: ['chat', 'tools'],
+        provider_access: 'UNVERIFIED', priority: 20,
+        traits: traits({
+            latency_classes: ['background', 'batch'], concurrency: 1,
+            free_allowance: {
+                tokens: 30000000, period: 'month', shared: true, ends_at: '2026-11-24T08:00:00Z',
+                context_window: 131072, max_output: 8192,
+                note: '30M tokens a month across every key and free route, input and output including reasoning, resets at 00:00 UTC on the 1st, no rollover; the promotion ends at 00:00 Pacific on 2026-11-24',
+            },
+            payment: 'none', free_only: true,
+            source: 'https://iteracompute.com/free/', checked: '2026-11-10',
+        }),
+        privacy: privacy({
+            label: 'anonymized', terms_url: 'https://iteracompute.com/privacy.html',
+            wording: 'the free tier page says "Auto does not provide a zero-data-retention guarantee; review the data policy before sending sensitive information" (read 2026-11-10)',
+            checked: '2026-11-10',
+        }),
+        data_policy: policy({
+            trains: null, retention: null, trust: 'first-party', region: null,
+            retention_note: 'no zero-retention guarantee is stated; the model and precision may change between requests',
+            terms: 'https://iteracompute.com/privacy.html', checked: '2026-11-10',
+        }),
+        models: [{
+            model_key: 'Auto', display_name: 'Auto (free shared pool)', family: 'auto', context_window: 131072, max_output: 8192,
+            cost: { in_per_mtok: 0, cached_per_mtok: null, out_per_mtok: 0 },
+            source: 'https://iteracompute.com/free/', checked: '2026-11-10',
+            supports: { json: true, tools: false, streaming: true, vision: false },
+            quantization: null, refusal_rate: null,
+            note: 'one queued or running request per account; the model, version and precision behind Auto may change',
+        }],
+    },
+    {
+        key: 'sable', keys_url: 'https://sableapi.com/auth/sign-in', display_name: 'Sable',
+        base_url: 'https://sableapi.com/v1', default_model: 'deepseek-v4.1-flash-1017-uncensored', timeout_ms: 120000,
+        docs_url: 'https://sableapi.com/docs', capabilities: ['chat', 'tools', 'vision'],
+        provider_access: 'UNVERIFIED', priority: 20, uncensored: true,
+        traits: traits({
+            latency_classes: ['interactive', 'background'],
+            payment: 'crypto-prepaid', source: 'https://sableapi.com/models', checked: '2026-11-10',
+        }),
+        privacy: privacy({
+            label: 'anonymized', terms_url: 'https://sableapi.com/privacy',
+            wording: '"Prompts and outputs: Never logged, stored or used for training." but "prompt cache ... is discarded when newer entries need the space, usually within an hour to a few days" (privacy, last updated 2026-11-09)',
+            checked: '2026-11-10',
+        }),
+        data_policy: policy({
+            trains: false, retention: 'limited', trust: 'first-party', region: null,
+            retention_note: 'prompts and outputs are not logged or stored; prompt-cache state is kept for an hour to a few days',
+            terms: 'https://sableapi.com/privacy', checked: '2026-11-10',
+        }),
+        models: [{
+            model_key: 'deepseek-v4.1-flash-1017-uncensored', display_name: 'DeepSeek V4.1 Flash 1017 (uncensored)',
+            family: 'deepseek', context_window: 512000,
+            cost: { in_per_mtok: 0.15, cached_per_mtok: 0.01, out_per_mtok: 0.60 },
+            source: 'https://sableapi.com/models', checked: '2026-11-10',
+            supports: { json: true, tools: true, streaming: true, vision: true },
+            quantization: null, refusal_rate: null, uncensored: true,
+            note: 'refusals removed; 512K context; prepaid balance (crypto accepted); the 18+ floor still runs before it',
+        }],
+    },
+    {
+        key: 'inception', keys_url: 'https://platform.inceptionlabs.ai', display_name: 'Inception Labs',
+        base_url: 'https://api.inceptionlabs.ai/v1', default_model: 'mercury-3', timeout_ms: 90000,
+        docs_url: 'https://docs.inceptionlabs.ai/get-started/models', capabilities: ['chat', 'tools', 'json'],
+        provider_access: 'UNVERIFIED', priority: 25,
+        traits: traits({
+            latency_classes: ['interactive', 'background', 'batch'], payment: 'prepaid',
+            free_allowance: { tokens: 100000000, period: 'once', shared: true, ends_at: null, note: '100M tokens once per new account, shared across Inception models; no end date published' },
+            trains_note: 'trains on submissions unless the "Improve the model for everyone" setting is off',
+            source: 'https://docs.inceptionlabs.ai/resources/faq', checked: '2026-11-10',
+        }),
+        privacy: privacy({
+            label: 'anonymized', terms_url: 'https://www.inceptionlabs.ai/docs/privacy-policy',
+            wording: 'the FAQ states submissions are used to improve the model unless "Improve the model for everyone" is switched off (read 2026-11-10); the setting is off only when the owner records that it is',
+            checked: '2026-11-10',
+        }),
+        data_policy: policy({
+            trains: true, retention: 'standard', trust: 'first-party', region: null,
+            retention_note: 'trains on submissions unless the owner records that "Improve the model for everyone" is off',
+            terms: 'https://www.inceptionlabs.ai/docs/privacy-policy', checked: '2026-11-10',
+        }),
+        models: [{
+            model_key: 'mercury-3', display_name: 'Mercury 3', family: 'mercury', context_window: 1000000, max_output: 131072,
+            cost: { in_per_mtok: 0.20, cached_per_mtok: 0.02, out_per_mtok: 0.70 },
+            source: 'https://docs.inceptionlabs.ai/get-started/models', checked: '2026-11-10',
+            supports: { json: true, tools: true, streaming: true, vision: false },
+            quantization: null, refusal_rate: null,
+            note: 'launch price is $0.10 in / $0.35 out with $0.01 cached and no published end date; the list price is recorded here so a budget does not assume the discount lasts',
+        }],
+    },
+    {
+        key: 'dosai', keys_url: 'https://platform.dos.ai', display_name: 'DOS.AI',
+        base_url: 'https://api.dos.ai/v1', default_model: 'deepseek-v4.1-flash', timeout_ms: 900000,
+        docs_url: 'https://docs.dos.ai/api-reference/batches', capabilities: ['chat', 'tools'],
+        provider_access: 'UNVERIFIED', priority: 20,
+        // A batch-only offer: 50% off retail with a 24-hour completion window, and batch volume does not
+        // consume interactive rate limits (https://docs.dos.ai/api-reference/batches, read 2026-11-10).
+        // No absolute price is published for the six models, so the book records the multiplier, not a guess.
+        tier_rates: { batch: 0.5 },
+        traits: traits({
+            latency_classes: ['batch'], batch_window_hours: 24, payment: 'prepaid',
+            source: 'https://docs.dos.ai/api-reference/batches', checked: '2026-11-10',
+        }),
+        privacy: privacy({
+            label: 'anonymized', terms_url: 'https://docs.dos.ai',
+            wording: 'retention and training terms were not confirmed on the batch page read on 2026-11-10',
+            checked: '2026-11-10',
+        }),
+        data_policy: policy({ trains: null, retention: null, terms: 'https://docs.dos.ai', checked: '2026-11-10' }),
+        models: [],
+    },
 
 ];
 
