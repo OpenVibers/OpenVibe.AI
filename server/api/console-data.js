@@ -260,6 +260,17 @@ function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth,
         await registry.audit(actor(req), 'pricebook.run', 'pricebook', 'run', { trace: req.ov && req.ov.traceId, metadata: { sources: (report.sources || []).length, applied: (report.applied || []).length, pending: (report.pending || []).length } });
         return report;
     }));
+    // A reviewed reading goes into the log as pending; only the owner's approve writes the live price. This is how
+    // a provider or a model the weekly job has not read yet gets in front of the owner.
+    r.post('/api/v1/admin/console/pricebook/proposals', write, json, wrap(async (req) => {
+        if (!priceBook) throw new AiError(409, 'ai.conflict', 'the price book is off on this host');
+        const body = req.body || {};
+        const proposals = Array.isArray(body) ? body : body.proposals;
+        const out = await priceBook.propose(proposals, { actor: actor(req) });
+        await registry.audit(actor(req), 'price_changes.proposed', 'price_book', 'propose', { trace: req.ov && req.ov.traceId,
+            metadata: { proposed: out.proposed.length, unchanged: out.unchanged.length, models_created: out.models_created.length } });
+        return out;
+    }));
     r.post('/api/v1/admin/console/runs/:id/cancel', workflowWrite, wrap(async (req) => {
         const subject = actor(req);
         const run = await runs.cancel(req.params.id, { sub: subject, subject: { type: 'user', id: subject } }, {

@@ -8,7 +8,8 @@
  */
 const { createPriceBook } = require('./job');
 const { createPriceStore } = require('./store');
+const { proposePriceChanges } = require('./propose');
 const { SOURCES } = require('./sources');
 const { readListing } = require('./read');
 
-module.exports = { createPriceBook, createPriceStore, SOURCES, readListing };
+module.exports = { createPriceBook, createPriceStore, proposePriceChanges, SOURCES, readListing };

@@ -45,3 +45,9 @@ description = "Made-up provider key in test/account-data.test.js (L36: the accou
 condition = "AND"
 paths = ['''^test/account-data\.test\.js$''']
 regexes = ['''sk-self-ada-0123456789LEAK''']
+
+[[allowlists]]
+description = "Model id in the 2026-11-10 price-book proposal data, flagged as a generic API key by entropy (a public model name, not a secret)"
+condition = "AND"
+paths = ['''^scripts/pricebook-proposals-2026-11-10\.json$''']
+regexes = ['''^llama-3\.3-70b-instruct$''']
