@@ -262,6 +262,15 @@ function load(env = process.env) {
         // Image generation (POST /api/v1/image, workflow ai.image): off until AI_IMAGE_MODEL names the shared
         // provider's image model (dall-e-3, gpt-image-1); then boot seeds that model and route default.image.
         image: { model: String(env.AI_IMAGE_MODEL || '').trim(), size: String(env.AI_IMAGE_SIZE || '').trim() || '1024x1024' },
+        // The image task (workflow image.picture, rich-content plan §4/§5): pictures found on Wikimedia Commons and
+        // Openverse are fetched only from these hosts (the same SSRF rules as every other fetch) and stored in
+        // Media under AI_MEDIA_APP. An image model's per-image price lives on the model row's
+        // metadata.price_per_image_usd; the task refuses a paid, unpriced offer rather than guess.
+        pictures: {
+            sourceHosts: list(env.AI_PICTURE_SOURCE_HOSTS, ['upload.wikimedia.org', '*.wikimedia.org', 'api.openverse.org', '*.openverse.org']),
+            providerHosts: list(env.AI_PICTURE_PROVIDER_HOSTS, ['*.openai.com', '*.googleusercontent.com', '*.fal.media', '*.replicate.delivery']),
+            defaultDailyCap: int(env.AI_PICTURE_DAILY_CAP, 24),
+        },
         // MegaSource (server/research/, workflow research.gather): web search asks the Search Fabric's web scope
         // first (OpenVibe.Search POST /api/v1/query, capability search.fabric.query) as AI's service principal;
         // DeepSeek's paid search stays as the fallback when the fabric is off, refuses or answers nothing. The
@@ -459,6 +468,9 @@ function load(env = process.env) {
         media: {
             publicUrl: trimUrl(env.OV_MEDIA_URL || 'https://openvibe.media'),
             internalUrl: trimUrl(env.OV_MEDIA_INTERNAL_URL || ''),
+            // The Media tenant (and namespace) AI's pictures are stored in. Network grants the AI service
+            // media.object.upload there; Media seeds the tenant at boot.
+            app: String(env.AI_MEDIA_APP || 'ai').trim() || 'ai',
             // https hostnames (exact, or *.suffix) that media/image URLs may point at.
             allowHosts: list(env.AI_FETCH_ALLOW_HOSTS, ['openvibe.media', 'openvibe.live', 'openvibe.network', '*.openvibe.network', 'openvibe.community', 'openvibe.tools', 'openvibe.games']),
             // Object storage Media hands recordings off to (a 302 to a presigned URL), and Media's origin shield

@@ -155,7 +155,7 @@ function batchExec(b, result) {
     };
 }
 
-function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spawnImpl, log = console, research = null }) {
+function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spawnImpl, log = console, research = null, db = null, clock = { now: () => Date.now() }, mediaStore = null }) {
     pool = require('../effort/pool').wrapPool(pool);
     // One loopback reader for everything that streams media (server/media-proxy.js): transcripts and media.analyze.
     let proxy = null;
@@ -169,6 +169,8 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
         if (r.disabled) throw new AiError(503, 'route.unavailable', `route ${key} is disabled`);
         return r;
     }
+    // The shared image task (image.picture): find licensed pictures or make one with the owner's model.
+    const pictures = require('./pictures').createPictures({ registry, pool, fetcher, config, db, clock, mediaStore, routeFor, research: megasource, log });
 
     /**
      * Everything an llm step needs before its provider call: the template it pinned, the rendered system and
@@ -569,7 +571,7 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
         return { output, exec: { ...last.exec, usage, cost, savedUsd }, route: last.route };
     }
 
-    const STEP = { devblog: devblogStep, llm: llmStep, passthrough: passthroughStep, complete: completeStep, messages: messagesStep, transcribe: transcribeStep, embed: embedStep, image: imageStep, media_analysis: mediaAnalysis.step, research: researchStep };
+    const STEP = { devblog: devblogStep, llm: llmStep, passthrough: passthroughStep, complete: completeStep, messages: messagesStep, transcribe: transcribeStep, embed: embedStep, image: imageStep, picture: pictures.step, media_analysis: mediaAnalysis.step, research: researchStep };
 
     /**
      * Run a workflow. ctx: { signal, logRequest, debugRaw, inputHash }

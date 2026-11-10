@@ -123,12 +123,12 @@ route('get', '/creations.md', {
 // ── AI tasks and choices (rich-content plan §1) ──────────────────────────────────────────────
 route('get', '/tasks', {
     operationId: 'listTasks', summary: 'The task catalogue: every named piece of AI work', tags: ['choices'], security: [],
-    description: 'Public. A task names its service, its kind (text, code, vision, image, search), one sentence and its built-in default choice. A service registers its own with POST /api/v1/tasks.',
+    description: 'Public. A task names its service, its kind (text, code, vision, image, search), one sentence and its built-in default choice. A service registers its own with POST /api/v1/tasks. image.picture is the shared image task: find licensed Commons/Openverse pictures or make one with the owner\'s configured image model, every picture stored in Media and returned by Media id.',
     responses: { 200: json('The catalogue', { type: 'object', required: ['tasks'], properties: { tasks: arrayOf(ref('Task')) } }), ...errors([429]) },
 });
 route('post', '/tasks', {
     operationId: 'registerTask', summary: 'Register a task in the caller’s own namespace', tags: ['choices'], security: SERVICE,
-    description: 'ai.workflow.manage. Only a service token registers tasks, and only under its own namespace: the workflow is the service’s own or a general AI workflow (ai.generate, ai.complete, ai.image, research.gather). A registration is audited.',
+    description: 'ai.workflow.manage. Only a service token registers tasks, and only under its own namespace: the workflow is the service’s own or a general AI workflow (ai.generate, ai.complete, ai.image, image.picture, research.gather). A registration is audited.',
     requestBody: body({ type: 'object', required: ['name', 'kind', 'sentence', 'default'], properties: {
         name: str({ pattern: '^[a-z][a-z0-9_-]*\\.[a-z0-9_.-]{1,100}$' }), kind: str({ enum: ['text', 'code', 'vision', 'image', 'search'] }),
         sentence: str({ maxLength: 300 }), default: ref('Choice'), workflow: str(),

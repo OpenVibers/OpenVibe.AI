@@ -47,6 +47,7 @@ function imageFrom(page, provider, fallbackSource, { allowSvg = false } = {}) {
         original: untracked(ii.url),
         width: ii.thumbwidth || width,
         height: ii.thumbheight || height,
+        thumbnail: untracked(ii.thumburl || ii.url),
         mime: svg ? 'image/png' : ii.mime,
         title: stripTags(v('ObjectName')) || String(page.title || '').replace(/^File:/, '').replace(/\.[a-z0-9]{2,5}$/i, '').replace(/_/g, ' '),
         description: clip(stripTags(v('ImageDescription')), 300) || null,
