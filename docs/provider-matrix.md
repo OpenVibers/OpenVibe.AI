@@ -65,6 +65,23 @@ These presets are seeded disabled in practice until the owner adds a provider ke
 | Baseten | `https://inference.baseten.co/v1` | Retention/training unstated | `UNVERIFIED` | [Pricing](https://www.baseten.co/pricing/) |
 | Hyperbolic | `https://api.hyperbolic.xyz/v1` | Retention/training unstated | `UNVERIFIED` | [Inference pricing](https://docs.hyperbolic.xyz/docs/hyperbolic-ai-inference-pricing) |
 
+## Cheap hosted inference added 2026-11-10
+
+Endpoints, keyless model lists and key requirements were probed on 2026-11-10 (no account, no key, no paid call). Retention, training and resale terms are unstated for all ten; NanoGPT's terms alone explicitly allow reselling PAYG access, which still keeps its default `UNVERIFIED` until an executed agreement exists. Prices are not read by the price book for these ten (it takes per-1M figures; the catalogue sync takes the per-token strings Inference.net, AtlasCloud and Friendli publish). Avian publishes per-million figures the existing sync cannot read, so its prices stay on the owner's panel.
+
+| Provider | Base URL | Privacy facts confirmed | Access default | Own provider listing / terms |
+|---|---|---|---|---|
+| Parasail | `https://api.parasail.io/v1` | Retention/training unstated; model list needs a key | `UNVERIFIED` | [Model docs](https://docs.parasail.io/parasail-docs/products/overview/models) |
+| Particle AI | `https://api.particle.ai/v1` | Retention/training unstated; model list needs a key | `UNVERIFIED` | [Docs](https://docs.particle.ai/) |
+| Inference.net | `https://api.inference.net/v1` | Retention/training unstated; keyless model list with per-token prices | `UNVERIFIED` | [Docs](https://docs.inference.net/) |
+| AtlasCloud | `https://api.atlascloud.ai/v1` | Retention/training unstated; keyless model list with per-token prices | `UNVERIFIED` | [Docs](https://www.atlascloud.ai/docs) |
+| Avian | `https://api.avian.io/v1` | Retention/training unstated; keyless model list, per-million prices not readable by sync | `UNVERIFIED` | [Docs](https://avian.io/docs/) |
+| NanoGPT | `https://api.nano-gpt.com/v1` | Terms allow reselling PAYG access (no markup); keyless model list carries no prices | `UNVERIFIED` | [Pricing](https://nano-gpt.com/pricing) |
+| Infermatic | `https://api.totalgpt.ai/v1` | Retention/training unstated; model list needs a key | `UNVERIFIED` | [Docs](https://ui.infermatic.ai/docs) |
+| ArliAI | `https://api.arliai.com/v1` | Retention/training unstated; keyless custom model list at `/model/all` | `UNVERIFIED` | [Site](https://www.arliai.com/) |
+| Friendli | `https://api.friendli.ai/serverless/v1` | Retention/training unstated; keyless model list with per-token prices | `UNVERIFIED` | [Model APIs intro](https://friendli.ai/docs/guides/model-apis/introduction) |
+| Scaleway | `https://api.scaleway.ai/v1` | Retention/training unstated; model list needs a key | `UNVERIFIED` | [Generative APIs](https://www.scaleway.com/en/developers/api/generative-apis) |
+
 ## Cheapest confirmed open-weight prices
 
 These are the lowest prices confirmed among the listed provider-owned source pages; an unpriced provider is not assumed to cost more. Cached prices are `—` when the provider does not publish one.
