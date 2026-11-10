@@ -35,8 +35,10 @@ function publicOffers(providers, models) {
     return models.flatMap((m) => {
         const provider = byKey.get(m.provider_key);
         const upstream = provider && upstreamOf(provider);
-        if (!upstream || m.metadata?.hidden || m.metadata?.uncensored || /uncensored|abliterat/i.test(m.model_key)) return [];
-        return [{ key: provider.key, provider: upstream.key, keyModel: m.model_key, model: slugOf(canonicalOf(m, { key: upstream.key })) }];
+        if (!upstream) return [];
+        const canonical = canonicalOf(m, { key: upstream.key });
+        if (m.metadata?.hidden || m.metadata?.uncensored || /uncensor|abliterat/i.test(`${m.model_key} ${canonical} ${m.metadata?.variant || ''}`)) return [];
+        return [{ key: provider.key, provider: upstream.key, keyModel: m.model_key, model: slugOf(canonical) }];
     }).sort((a, b) => b.keyModel.length - a.keyModel.length);
 }
 

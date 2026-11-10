@@ -128,6 +128,9 @@ async function start({ searchFetch = null, config, db: givenDb = null, clock = {
     const receipts = require('./exchange/receipts').createReceipts({ db, clock, log });
     const measuredMetrics = require('./exchange/metrics-rollup').createMetricsRollup({ db, registry, clock, log,
         retentionDays: config.runs.retentionDays, enabled: config.nodeEnv !== 'test' && !/^(1|true)$/i.test(env.AI_DRILL || '') });
+    const observations = require('./exchange/metrics-observations').createObservations({ db, registry, clock, log,
+        catalog: require('./exchange/catalog').createCatalog({ db, registry, pool, config, env, clock }),
+        enabled: config.nodeEnv !== 'test' && !/^(1|true)$/i.test(env.AI_DRILL || '') });
     // The weekly real-traffic share (stage B8): the public read stores the week; the housekeeping pass
     // publishes it even when nobody reads it, before the receipts it came from are pruned.
     const share = require('./exchange/share').createShare({ db, clock, log, k: config.trafficShare.k });
@@ -273,6 +276,7 @@ async function start({ searchFetch = null, config, db: givenDb = null, clock = {
     // The price book reads the providers' listings once a week; it never starts in test mode or under a drill.
     if (listen && config.priceBook && config.priceBook.enabled) priceBook.start();
     if (listen) measuredMetrics.start();
+    if (listen) observations.start();
     // The public GPU price reader: public pages only, due-based, off in tests and under a drill.
     if (listen && config.gpuMarket && config.gpuMarket.enabled) gpuMarket.start();
     // The refusal job asks the offers the same questions once a week; it never starts in test mode (the
@@ -322,6 +326,7 @@ async function start({ searchFetch = null, config, db: givenDb = null, clock = {
         if (memorySharing) memorySharing.stop();
         priceBook.stop();
         await measuredMetrics.stop();
+        await observations.stop();
         gpuMarket.stop();
         refusal.stop();
         batches.stop();

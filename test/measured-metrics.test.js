@@ -33,6 +33,8 @@ t.test('private and synthetic providers cannot form published cells', () => {
         { ...providers[0], kind: 'stub' },
     ];
     for (const provider of privateProviders) assert.deepStrictEqual(publicOffers([provider], models), []);
+    assert.deepStrictEqual(publicOffers(providers, [{ ...models[0], metadata: { variant: 'abliterated' } }]), []);
+    assert.deepStrictEqual(publicOffers(providers, [{ ...models[0], metadata: { id: 'acme/uncensored' } }]), []);
     assert.equal(aggregate([{ ...row, provider: 'byo:private' }, ...Array(19).fill(row)], offers).length, 0);
 });
 t.test('durable due job backfills and survives restarts without losing older days', async () => {
