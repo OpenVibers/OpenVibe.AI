@@ -107,6 +107,10 @@ function createQuotas(db, { clock = { now: () => Date.now() }, registry, freeAll
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(scope_type, scope_id, "window", window_start, workflow_prefix)
         DO UPDATE SET requests = usage_counters.requests + excluded.requests, tokens = usage_counters.tokens + excluded.tokens, cost_usd = usage_counters.cost_usd + excluded.cost_usd`);
+    const bumpFiles = db.prepare(`INSERT INTO usage_counters (scope_type, scope_id, "window", window_start, workflow_prefix, files, file_bytes)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(scope_type, scope_id, "window", window_start, workflow_prefix)
+        DO UPDATE SET files = usage_counters.files + excluded.files, file_bytes = usage_counters.file_bytes + excluded.file_bytes`);
 
     const reserveTx = async (ctx) => await db.tx(async () => {
         const qs = await applicable(ctx);
@@ -149,6 +153,49 @@ function createQuotas(db, { clock = { now: () => Date.now() }, registry, freeAll
             });
         }
         return r.quotas;
+    }
+
+    /**
+     * Check + count the files a turn attaches, before any provider is called. A quota may cap the number
+     * of files and/or their total bytes in its window (max_files, max_file_bytes); the counts go into the
+     * same per-scope counters requests/tokens/cost use, so a per-person (actor) quota limits that person's
+     * attachments and a global one limits everyone. A quota that leaves both fields null is unaffected.
+     */
+    async function chargeFiles(ctx, files) {
+        const list = Array.isArray(files) ? files : [];
+        if (!list.length) return null;
+        const count = list.length;
+        const bytes = list.reduce((n, f) => n + Math.max(0, Number(f && f.size) || 0), 0);
+        return await db.tx(async () => {
+            const qs = await applicable(ctx);
+            const t = nowSec();
+            let worst = null;
+            for (const { q, cid } of qs) {
+                const ws = windowStart(q.window, t);
+                const c = await getCounter.get(q.scope_type, cid, q.window, ws, q.workflow_prefix || '') || { requests: 0, tokens: 0, cost_usd: 0, files: 0, file_bytes: 0 };
+                let reason = null;
+                if (q.max_files != null && (Number(c.files) || 0) + count > q.max_files) reason = `${q.max_files} files per ${q.window}`;
+                else if (q.max_file_bytes != null && (Number(c.file_bytes) || 0) + bytes > q.max_file_bytes) reason = `${q.max_file_bytes} file bytes per ${q.window}`;
+                if (reason) {
+                    const retryAfter = ws + WINDOWS[q.window] - t;
+                    if (!worst || retryAfter > worst.retryAfter) worst = { q, cid, reason, retryAfter };
+                }
+            }
+            if (worst) throw new AiError(429, 'quota.exceeded', `quota exceeded for ${worst.q.scope_type} ${worst.cid}: ${worst.reason}`, {
+                retry_after_seconds: Math.max(1, worst.retryAfter), quota: { id: worst.q.id, scope_type: worst.q.scope_type, scope_id: worst.cid, window: worst.q.window },
+            });
+            // The file counts follow the same scope x window rule as reserve(): every scope gets the
+            // running total, and a workflow-prefix quota gets its own counter.
+            const keys = new Map();
+            for (const [st, sid] of scopesFor(ctx)) {
+                for (const w of Object.keys(WINDOWS)) keys.set(`${st}|${sid}|${w}|`, { scope_type: st, scope_id: sid, window: w, workflow_prefix: '', ws: windowStart(w, t) });
+            }
+            for (const { q, cid } of qs) {
+                if (q.workflow_prefix) keys.set(`${q.scope_type}|${cid}|${q.window}|${q.workflow_prefix}`, { scope_type: q.scope_type, scope_id: cid, window: q.window, workflow_prefix: q.workflow_prefix, ws: windowStart(q.window, t) });
+            }
+            for (const k of keys.values()) await bumpFiles.run(k.scope_type, k.scope_id, k.window, k.ws, k.workflow_prefix, count, bytes);
+            return { files: count, file_bytes: bytes };
+        });
     }
 
     const insDaily = db.prepare(`INSERT INTO usage_daily (day, requester, attribution, workflow_key, provider_key, model_key, requests, tokens_in, tokens_out, tokens_cached, cost_usd)
@@ -265,21 +312,21 @@ function createQuotas(db, { clock = { now: () => Date.now() }, registry, freeAll
         const scopeId = q.scope_type === 'global' ? '*' : String(q.scope_id || '');   // '*' on other scopes = each one separately
         if (!scopeId || scopeId.length > 200) throw new AiError(422, 'ai.invalid', 'scope_id required');
         const num = (v) => (v == null || v === '' ? null : Number(v));
-        for (const k of ['max_requests', 'max_tokens', 'max_cost_usd']) if (q[k] != null && !(Number(q[k]) >= 0)) throw new AiError(422, 'ai.invalid', `${k} must be >= 0`);
+        for (const k of ['max_requests', 'max_tokens', 'max_cost_usd', 'max_files', 'max_file_bytes']) if (q[k] != null && !(Number(q[k]) >= 0)) throw new AiError(422, 'ai.invalid', `${k} must be >= 0`);
         const status = q.status || 'active';
         if (!['active', 'disabled'].includes(status)) throw new AiError(422, 'ai.invalid', 'status must be active or disabled');
         const t = iso(clock.now());
         const prefix = q.workflow_prefix || null;
         const prev = await db.prepare("SELECT * FROM quotas WHERE scope_type = ? AND scope_id = ? AND \"window\" = ? AND COALESCE(workflow_prefix, '') = ?").get(q.scope_type, scopeId, q.window, prefix || '');
         if (prev) {
-            await db.prepare('UPDATE quotas SET max_requests = ?, max_tokens = ?, max_cost_usd = ?, status = ?, updated_at = ? WHERE id = ?')
-                .run(num(q.max_requests), num(q.max_tokens), num(q.max_cost_usd), status, t, prev.id);
+            await db.prepare('UPDATE quotas SET max_requests = ?, max_tokens = ?, max_cost_usd = ?, max_files = ?, max_file_bytes = ?, status = ?, updated_at = ? WHERE id = ?')
+                .run(num(q.max_requests), num(q.max_tokens), num(q.max_cost_usd), num(q.max_files), num(q.max_file_bytes), status, t, prev.id);
         } else {
-            await db.prepare('INSERT INTO quotas (scope_type, scope_id, "window", max_requests, max_tokens, max_cost_usd, workflow_prefix, status, origin, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-                .run(q.scope_type, scopeId, q.window, num(q.max_requests), num(q.max_tokens), num(q.max_cost_usd), prefix, status, origin, t, t);
+            await db.prepare('INSERT INTO quotas (scope_type, scope_id, "window", max_requests, max_tokens, max_cost_usd, max_files, max_file_bytes, workflow_prefix, status, origin, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+                .run(q.scope_type, scopeId, q.window, num(q.max_requests), num(q.max_tokens), num(q.max_cost_usd), num(q.max_files), num(q.max_file_bytes), prefix, status, origin, t, t);
         }
         const row = await db.prepare("SELECT * FROM quotas WHERE scope_type = ? AND scope_id = ? AND \"window\" = ? AND COALESCE(workflow_prefix, '') = ?").get(q.scope_type, scopeId, q.window, prefix || '');
-        if (registry) await registry.audit(actor, prev ? 'quota.update' : 'quota.create', 'quota', row.id, { trace, metadata: { scope_type: row.scope_type, scope_id: row.scope_id, window: row.window, max_requests: row.max_requests, max_tokens: row.max_tokens, max_cost_usd: row.max_cost_usd, status: row.status, origin } });
+        if (registry) await registry.audit(actor, prev ? 'quota.update' : 'quota.create', 'quota', row.id, { trace, metadata: { scope_type: row.scope_type, scope_id: row.scope_id, window: row.window, max_requests: row.max_requests, max_tokens: row.max_tokens, max_cost_usd: row.max_cost_usd, max_files: row.max_files, max_file_bytes: row.max_file_bytes, status: row.status, origin } });
         return row;
     }
 
@@ -362,8 +409,8 @@ function createQuotas(db, { clock = { now: () => Date.now() }, registry, freeAll
         const t = nowSec();
         return (await Promise.all(qs.map(async ({ q, cid }) => {
             const ws = windowStart(q.window, t);
-            const c = await getCounter.get(q.scope_type, cid, q.window, ws, q.workflow_prefix || '') || { requests: 0, tokens: 0, cost_usd: 0 };
-            return { quota: q, scope_id: cid, window_start: iso(ws * 1000), resets_in_seconds: ws + WINDOWS[q.window] - t, used: { requests: c.requests, tokens: c.tokens, cost_usd: c.cost_usd } };
+            const c = await getCounter.get(q.scope_type, cid, q.window, ws, q.workflow_prefix || '') || { requests: 0, tokens: 0, cost_usd: 0, files: 0, file_bytes: 0 };
+            return { quota: q, scope_id: cid, window_start: iso(ws * 1000), resets_in_seconds: ws + WINDOWS[q.window] - t, used: { requests: c.requests, tokens: c.tokens, cost_usd: c.cost_usd, files: Number(c.files) || 0, file_bytes: Number(c.file_bytes) || 0 } };
         })));
     }
 
@@ -381,7 +428,7 @@ function createQuotas(db, { clock = { now: () => Date.now() }, registry, freeAll
         return { max_cost_usd: Math.min(...rows.map((r) => r.max_cost_usd)), spent, window: 'day' };
     }
 
-    return { reserve, account, statsFor, list, upsert, usage, usageSeries, counters, paidBudget, freeAllowance, WINDOWS };
+    return { reserve, chargeFiles, account, statsFor, list, upsert, usage, usageSeries, counters, paidBudget, freeAllowance, WINDOWS };
 }
 
 module.exports = { createQuotas, WINDOWS };

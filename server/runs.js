@@ -583,6 +583,16 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
             // BA2/BA3: a batch run reserves its quota when the answer is here, not while it waits.
             reserved = credentialSubject !== null || selfKeys || (principal && principal.deferBatch) || autoBatch ? null : await quotas.reserve(ctx);
         } catch (err) { if (hold) await tiers.release(hold); throw err; }
+        // Files on the turn (ai.file@1): the per-turn caps first, then the per-person quota's file limits
+        // (server/quota.js chargeFiles). Both are checked before the run is stored or a provider is called;
+        // the references only are counted here, never the bytes.
+        const filesOnTurn = Array.isArray(input && input.files) ? input.files : [];
+        if (filesOnTurn.length) {
+            try {
+                require('./file-inputs').checkLimits(filesOnTurn);
+                await quotas.chargeFiles(ctx, filesOnTurn);
+            } catch (err) { if (hold) await tiers.release(hold); throw err; }
+        }
 
         try {
             await db.tx(async () => {

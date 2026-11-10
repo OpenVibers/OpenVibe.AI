@@ -38,7 +38,7 @@ const { EXACT_ID } = modelCatalog;
 const { resolveRequest } = require('../exchange/presets');
 const { compact, receiptId } = require('../exchange/receipts');
 
-const FIELDS = ['system', 'tools', 'tool_choice', 'stop_sequences', 'temperature', 'top_p', 'top_k', 'metadata'];
+const FIELDS = ['system', 'tools', 'tool_choice', 'stop_sequences', 'temperature', 'top_p', 'top_k', 'metadata', 'files'];
 const MAX_TOKENS = 64000;
 
 // Anthropic's error types by HTTP status (docs.anthropic.com/en/api/errors).
