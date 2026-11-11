@@ -46,6 +46,26 @@ pages only, never signs in, never rents, and a failed source keeps its last rows
 
 Migration 0052 is expand-only. These changes need money/security review before deployment; this PR does not deploy.
 
+## Opening an offer
+
+The owner console's Models section reads one route per model (`GET /api/v1/admin/console/models/:provider/:model/route`)
+with the gates the catalogue and router apply: provider on, key present, model on and still listed, commercial access
+resellable, and an input and output price approved. `POST /api/v1/admin/console/models/:provider/:model/open` is the one
+owner action: it approves that model's waiting price-book changes (or writes the owner's fixed per-token `price`), switches
+the provider and model on, and records `offer.opened` with the prices and gates. A provider with no key is refused with
+`offer.no_key` before anything is written. Nothing in this action rents, spends or calls a provider.
+
+## Live GPU supply
+
+`exchange_supply_settings.settings.enabled` is a per-model owner switch (default off). A plan can always be saved and
+priced; turning it on also needs the provider key, the monthly cap, `ai.gpus.costs_bounded`, `ai.gpus.extra_hourly_nano`
+and `ai.gpus.dry_run=false`, or `save` answers `gpu.owner_gate` and changes nothing. The provisioner's minute tick asks the
+supply planner first: when an enabled plan's measured demand makes renting cheaper than buying the same tokens, it queues
+one `gpu_requests` launch (never more while a request or instance is open). The provisioner still checks the key, the
+monthly reservation and the plan's approved hourly/monthly ceilings before it rents; the selected marketplace offer above
+either ceiling is not selected. The registered GPU offer keeps the plan's fixed input/output prices
+(`urn:openvibe:owner-fixed-price`), so the catalogue and router serve the fixed route.
+
 ## Public market observations
 
 `GET https://api.openvibe.exchange/api/v1/exchange/market` returns

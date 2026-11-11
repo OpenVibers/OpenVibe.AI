@@ -93,6 +93,30 @@ t.test('the cheapest offer that fits is rented, registered as an offer and healt
     } finally { await h.stop(); }
 });
 
+t.test('the approved supply ceiling bounds what the provisioner may rent', async () => {
+    const api = createGpuFetch();
+    let now = T0;
+    const h = await boot({ clock: { now: () => now }, fetchImpl: api.fetchImpl });
+    const savePlan = (hourlyCeiling) => h.db.prepare(`INSERT INTO exchange_supply_settings (model, settings, updated_at, actor)
+        VALUES ('deepseek-r1-32b', ?, ?, 'test') ON CONFLICT(model) DO UPDATE SET settings = excluded.settings, updated_at = excluded.updated_at`)
+        .run(JSON.stringify({ model: 'deepseek-r1-32b', runtime: 'vllm', input_per_million: 1, output_per_million: 2,
+            hourly_ceiling_usd: hourlyCeiling, monthly_ceiling_usd: 1000, required_vram_mb: 24000, idle_minutes: 10 }), new Date(now).toISOString());
+    try {
+        await settings(h, { cap: '50000000000' });
+        await savePlan(0.1);   // cheaper than any offer in the recorded marketplace answer
+        const quote = await h.gpus.preview('deepseek-r1-32b');
+        assert.strictEqual(quote.selected, null, 'no offer above the approved hour is selected');
+        assert.ok(quote.reasons.some((r) => /approved supply ceiling/.test(r)), quote.reasons.join('; '));
+        const refused = await h.gpus.launch('deepseek-r1-32b');
+        assert.strictEqual(refused.ok, false);
+        assert.strictEqual(refused.code, 'gpu.no_offer');
+        assert.strictEqual(api.calls.create.length, 0, 'nothing over the approved ceiling was rented');
+        await savePlan(0.2);
+        const allowed = await h.gpus.preview('deepseek-r1-32b');
+        assert.strictEqual(String(allowed.selected && allowed.selected.id), '111', 'the cheapest offer under the ceiling is selected');
+    } finally { await h.stop(); }
+});
+
 t.test('the monthly cap is never passed: the launch is refused and says why', async () => {
     const api = createGpuFetch();
     let now = T0;
