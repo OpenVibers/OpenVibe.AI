@@ -186,6 +186,24 @@ function parseTensordock(html) {
     return out;
 }
 
+/** RunPod's Serverless flex rates: the same pricing page, the per-second flex column. */
+function parseRunpodServerless(html) {
+    const out = [];
+    for (const chunk of String(html).split(/class="gpu_table-row"/).slice(1)) {
+        const name = (chunk.match(/class="gpu_name[^"]*">([^<]+)</) || [])[1];
+        if (!name) continue;
+        const target = targetFor(name);
+        if (!target) continue;
+        const flex = (chunk.match(/data-serverless="([\d.]+)"/) || [])[1];
+        const row = reading(target, 'on_demand', flex, {
+            note: 'Serverless flex, billed per second from worker start to stop and scaling to zero; the OpenAI-compatible vLLM endpoint is the same card hour',
+            variant: name.trim(), source: 'https://www.runpod.io/pricing',
+        });
+        if (row) out.push(row);
+    }
+    return out;
+}
+
 /** A plain public price page: the card name followed by its published hourly rate. */
 function parsePlainPrices(html, source, rows) {
     const text = String(html).replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ')
@@ -314,6 +332,12 @@ const SOURCES = Object.freeze([
         id: 'thunder', label: 'Thunder Compute', source: 'https://www.thundercompute.com/pricing',
         async read({ fetchImpl, timeoutMs }) {
             return parseThunder(await read(fetchImpl, 'https://www.thundercompute.com/pricing', { timeoutMs }));
+        },
+    },
+    {
+        id: 'runpod_serverless', label: 'RunPod Serverless', source: 'https://www.runpod.io/pricing',
+        async read({ fetchImpl, timeoutMs }) {
+            return parseRunpodServerless(await read(fetchImpl, 'https://www.runpod.io/pricing', { timeoutMs }));
         },
     },
     {
@@ -496,6 +520,6 @@ function createGpuMarket({ db, config = {}, clock = { now: () => Date.now() }, f
 }
 
 module.exports = {
-    createGpuMarket, parseVast, parseRunpod, parseSalad, parseTensordock, parseCloudrift, parseVerda, parseThunder, parseShadeform, targetFor, lowest,
+    createGpuMarket, parseVast, parseRunpod, parseSalad, parseTensordock, parseCloudrift, parseVerda, parseThunder, parseShadeform, parseRunpodServerless, targetFor, lowest,
     TARGETS, SOURCES, SOURCE_BY_ID, HOUR_MS,
 };
