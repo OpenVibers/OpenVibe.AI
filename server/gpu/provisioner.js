@@ -118,7 +118,7 @@ function createGpuProvisioner({
         for (const name of PROVIDER_KEYS) if (!keys[name] && v.provider_keys && typeof v.provider_keys === 'object') keys[name] = String(v.provider_keys[name] || '');
         const anyKey = PROVIDER_KEYS.some((name) => Boolean(keys[name]));
         let reason = '';
-        if (!anyKey) reason = 'no GPU provider key';
+        if (!anyKey) reason = 'no GPU provider key (marketplace API key)';
         else if (cap == null || cap <= 0n) reason = 'no monthly cap';
         else if (!bounded) reason = 'storage and network costs need an explicit hourly bound';
         return {
