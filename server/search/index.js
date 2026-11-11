@@ -5,6 +5,7 @@ const { AiError, providerSecret } = require('../util');
 const { validate } = require('openvibe-contracts');
 const net = require('node:net');
 const { createHash } = require('node:crypto');
+const { rankImages } = require('./image-rank');
 const adapters = ['openverse', 'commons', 'searxng', 'openvibe', 'iconify',
     'deepseek', 'brave', 'exa', 'tavily', 'serper', 'serpapi', 'jina',
     'openvibe-egress', 'perplexity', 'kagi', 'google', 'unsplash', 'pexels', 'pixabay', 'brave-images',
@@ -30,7 +31,11 @@ function inputFor(kind, b) {
     if (b.max_cost_usd != null && (!Number.isFinite(b.max_cost_usd) || b.max_cost_usd < 0)) throw invalid('max_cost_usd must be nonnegative');
     if (b.freshness && !['day', 'month', 'year'].includes(b.freshness)) throw invalid('freshness must be day, month or year');
     if (b.orientation && !['square', 'portrait', 'landscape'].includes(b.orientation)) throw invalid('orientation must be square, portrait or landscape');
-    if (b.colour || b.color || b.type && b.type !== 'icon') throw invalid('This filter is not supported');
+    if (b.colour) throw invalid('Use color for the colour filter');
+    if (b.color && !['black_and_white', 'black', 'white', 'yellow', 'orange', 'red', 'purple', 'magenta', 'green', 'teal', 'blue'].includes(b.color)) throw invalid('color is not supported');
+    if (b.type && !['icon', 'photo', 'illustration', 'vector'].includes(b.type)) throw invalid('type is not supported');
+    if (b.after && (!/^\d{4}-\d{2}-\d{2}$/.test(b.after) || !Number.isFinite(Date.parse(b.after)))) throw invalid('after must be a date in YYYY-MM-DD');
+    if (b.safe_search != null && b.safe_search !== 'strict') throw invalid('safe_search must be strict');
     if (b.size && !['small', 'medium', 'large'].includes(b.size)) throw invalid('size must be small, medium or large');
     return { ...b, q: kind === 'fetch' ? undefined : b.q.trim(), limit: b.limit || 10 };
 }
@@ -53,7 +58,11 @@ function normalize(rows, engine, kind, b) {
     if (b.orientation) out = out.filter(r => r.width && r.height && (b.orientation === 'square' ? r.width === r.height : b.orientation === 'portrait' ? r.height > r.width : r.width > r.height));
     if (b.size) out = out.filter(r => r.width && r.height && (b.size === 'small' ? Math.max(r.width, r.height) < 800 : b.size === 'medium' ? Math.max(r.width, r.height) >= 800 && Math.max(r.width, r.height) < 2000 : Math.max(r.width, r.height) >= 2000));
     if (b.style && b.style !== 'any') out = out.filter(r => r.style === b.style);
-    return out.slice(0, b.limit);
+    if (b.after) out = out.filter(r => r.published && Date.parse(r.published) >= Date.parse(b.after));
+    if (b.type === 'vector') out = out.filter(r => r.format === 'svg' || new URL(r.url).pathname.toLowerCase().endsWith('.svg'));
+    if (b.type === 'photo') out = out.filter(r => ['unsplash', 'pexels', 'pixabay'].includes(engine));
+    if (b.type === 'illustration') out = out.filter(r => !['unsplash', 'pexels'].includes(engine));
+    return kind === 'images' ? rankImages(out, b.limit) : out.slice(0, b.limit);
 }
 function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () => Date.now(), credentials = null, registry = null, targetGuard = publicTarget } = {}) {
     const health = new Map();
@@ -89,6 +98,10 @@ function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () =>
             if (a.manual_only && (!b.engine || b.engine === 'auto')) continue;
             if (!a.kinds.includes(kind) || b.engine && b.engine !== 'auto' && b.engine !== a.id ||
                 b.freshness && !a.freshness.includes(b.freshness) || (a.requires || []).some(k => !env[k])) continue;
+            if (kind === 'images' && b.color && a.id !== 'unsplash') continue;
+            if (kind === 'images' && b.after && a.id !== 'unsplash') continue;
+            if (kind === 'images' && b.type === 'photo' && !['unsplash', 'pexels', 'pixabay'].includes(a.id)) continue;
+            if (kind === 'images' && b.type === 'vector' && !['openverse', 'commons'].includes(a.id)) continue;
             if (kind !== 'fetch' && a.max_query && [...b.q].length + (b.freshness ? 17 : 0) > a.max_query) continue;
             const own = a.byok && subject && credentials ? await credentials.searchForRun(subject, credentialId(a)) : null;
             const state = binding(a, providers);
