@@ -16,6 +16,7 @@ Environment=NODE_ENV=production
 Environment=AI_CAPTURE_HOST=127.0.0.1
 Environment=AI_CAPTURE_PORT=4710
 Environment=AI_CAPTURE_CHROME=/usr/bin/google-chrome
+Environment=OV_MEDIA_INTERNAL_URL=http://127.0.0.1:4100
 # Chrome writes its profile and its caches under HOME; the code tree stays read-only.
 Environment=HOME=/var/lib/openvibe-ai-capture
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
