@@ -22,6 +22,8 @@ const { ProviderError, deadline, describeAbort } = require('./common');
 
 // Each family: the id it matches, then what it is. First match wins, so the narrower come first.
 const FAMILIES = [
+    [/^muse-ember/i, { tier: 'fast', vision: true, tools: true, reasoning: true, note: 'high-volume repeated work and agent sub-steps' }],
+    [/^muse-spark/i, { tier: 'strong', vision: true, tools: true, reasoning: true, note: 'general and agentic work' }],
     [/rerank/i, { type: 'rerank', tier: 'fast' }],
     [/tts|text-to-speech|speech-/i, { type: 'speech', tier: 'fast' }],
     [/embed/i, { type: 'embedding', tier: 'fast' }],
@@ -174,7 +176,9 @@ async function sync({ registry, provider, apiKey, fetchImpl = globalThis.fetch, 
         seen.add(m.id);
         const prev = known.get(m.id);
         const uncensored = require('./pool-providers').isUncensored(provider, { model_key: m.id, metadata: prev?.metadata || {} });
+        const contributor = provider.key === 'meta' && /-contributor$/i.test(m.id);
         const metadata = { tier: d.tier, reasoning: d.reasoning, note: d.note, ...prev?.metadata, synced_at: at, listed: true,
+            ...(contributor ? { routing_excluded: true, routing_excluded_reason: 'Meta Contributor mode permits training on prompts and is not allowed in OpenVibe routing.' } : {}),
             ...(uncensored ? { uncensored: true, min_age: 18 } : {}),
             ...(extra.source ? { catalogue_enrichment: { source: extra.source, checked_at: extra.checked_at } } : {}) };
         delete metadata.missing_since;
@@ -184,7 +188,7 @@ async function sync({ registry, provider, apiKey, fetchImpl = globalThis.fetch, 
         await registry.upsertModel({
             provider_key: provider.key, model_key: m.id, display_name: prev?.display_name || m.name || m.id, type: d.type,
             // A new model is switched off until a person turns it on; a known one keeps its status (and its prices).
-            status: prev ? prev.status : provider.metadata?.auto_list_new_models === true && !uncensored ? 'active' : 'disabled',
+            status: contributor ? 'disabled' : prev ? prev.status : provider.metadata?.auto_list_new_models === true && !uncensored ? 'active' : 'disabled',
             context_window: d.contextWindow ?? (prev && prev.context_window) ?? null, max_output: d.maxOutput ?? (prev && prev.max_output) ?? null,
             supports: { json: true, tools: d.tools, streaming: true, vision: d.vision }, metadata, ...(cost ? { cost } : {}),
         }, { actor });

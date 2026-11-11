@@ -33,6 +33,7 @@ const { retryable, sleep, ProviderError, schemaInstruction, insufficientBalance 
 const { classifyFailure, reasonForClass, circuitStatus, offerStatus, iso } = require('./failure');
 const { createOwnerNotifier } = require('./owner-notify');
 const { sourcesOf, ceilingOf, allowsProvider, allowsCommunity } = require('../free-tier');
+const { isRoutingExcludedModel } = require('./pool-providers');
 const { createStubProvider } = require('./stub');
 const { createOpenAiProvider } = require('./openai');
 const { createResponsesProvider } = require('./responses');
@@ -954,7 +955,9 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             // A trait keeps the offer out of the call, not out of placement: it stays in the pool with its
             // reason (status down, like a credential-less offer), so explain has one entry per placement offer.
             let traitReason = null;
-            if (!traits.latencyAllows(p, row, latencyClass, 'standard', { allowLimitedInteractive, allowFlexInteractive })) {
+            if (isRoutingExcludedModel(model, row)) {
+                traitReason = 'model is explicitly excluded from routing';
+            } else if (!traits.latencyAllows(p, row, latencyClass, 'standard', { allowLimitedInteractive, allowFlexInteractive })) {
                 traitReason = `latency_class ${latencyClass} not offered (${(traits.latencyClassesOf(p, row) || []).join('/') || 'interactive only'})`;
             } else if (!allowPrivateTraining && traits.isPrivateRequest(ctx) && traits.trainsOrRetains(p)) {
                 traitReason = 'private data: the provider trains on or retains prompts';

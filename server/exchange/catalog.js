@@ -211,10 +211,12 @@ function createCatalog({ db, registry, pool, env = process.env, clock = { now: (
             const provider = byKey.get(row.provider_key);
             if (!provider || provider.kind === 'stub' || (provider.metadata && provider.metadata.synthetic)) continue;
             if (provider.metadata && provider.metadata.hidden === true) continue;
-            if (row.status !== 'active' || provider.status !== 'active') continue;
+            if (row.status !== 'active' || (provider.status !== 'active' && provider.key !== 'meta')) continue;
             // A model is an offer only when the key its provider needs is configured now. A record with no
             // usable upstream (the internal `shared` label with no real provider behind it) is never shown.
-            if (!upstream.configured(provider, env)) continue;
+            // Meta's hand-kept Muse entries remain visible with their published prices while the owner switch is off.
+            // They are explicitly marked down below and cannot be placed by the router until the provider is enabled.
+            if (!upstream.configured(provider, env) && (provider.key !== 'meta' || provider.status === 'active')) continue;
             const up = upstreamByKey.get(provider.key);
             if (!up || !upstream.serves(up, provider, row)) continue;
             // Capacity the network may not resell is never an offer: a person's own key, or a restricted one.
@@ -253,8 +255,8 @@ function createCatalog({ db, registry, pool, env = process.env, clock = { now: (
                 // output price is at or below AI_FREE_MAX_OUTPUT_PRICE_USD_PER_MTOK.
                 free_tier: allowsOffer({ providerKey: provider.key, providerRecord: provider, outputPrice: price ? price.out : null }, freeUse),
                 // up | degraded | down, measured from this offer's circuit and the last hour of requests.
-                status: health.status,
-                status_reason: health.status_reason,
+                status: provider.status === 'active' ? health.status : 'down',
+                status_reason: provider.status === 'active' ? health.status_reason : 'off until the owner turns it on',
                 status_since: health.status_since,
                 status_class: health.status_class,
                 // Rounded to the micro-dollar: a derived cached price was printed as 0.020000000000000004.

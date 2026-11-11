@@ -710,10 +710,32 @@ const PROVIDERS = [
             ],
         };
     }),
-    // Providers without a hand-kept model list: the owner syncs and enables their models.
-    { key: 'meta', display_name: 'Meta Model API', base_url: 'https://api.meta.ai/v1',
-        docs_url: 'https://dev.meta.ai/docs/api-reference', capabilities: ['chat', 'vision', 'tools', 'web-search'],
-        search_adapters: ['meta'] },
+    // Meta Model API (prices/specs read from Meta's own pages on 2026-11-10). Contributor variants are
+    // intentionally absent: they permit Meta to train on prompts and must never enter the managed pool.
+    { key: 'meta', keys_url: 'https://dev.meta.ai/', display_name: 'Meta Model API', base_url: 'https://api.meta.ai/v1',
+        default_model: 'muse-spark-1.3', docs_url: 'https://dev.meta.ai/docs/api-reference',
+        capabilities: ['chat', 'vision', 'tools', 'json', 'web-search'], search_adapters: ['meta'],
+        traits: traits({ latency_classes: ['interactive', 'background', 'batch'], source: 'https://dev.meta.ai/docs/pricing-rate-limits', checked: '2026-11-10' }),
+        privacy: privacy({ label: 'anonymized', terms_url: 'https://dev.meta.ai/docs/pricing-rate-limits',
+            wording: 'Standard mode content is not used to train Meta models; Contributor mode is excluded.', checked: '2026-11-10' }),
+        data_policy: policy({ trains: false, retention: null, trust: 'first-party',
+            retention_note: 'Standard mode content is not used to train Meta models; retention is not stated on the pricing page.',
+            terms: 'https://dev.meta.ai/docs/pricing-rate-limits', checked: '2026-11-10' }),
+        models: [
+            { model_key: 'muse-ember-1.0', display_name: 'Muse Ember 1.0', family: 'muse-ember', context_window: 1048576, max_output: 524288,
+                cost: { in_per_mtok: 0.10, cached_per_mtok: 0.004, out_per_mtok: 0.50 },
+                source: 'https://dev.meta.ai/docs/pricing-rate-limits', checked: '2026-11-10',
+                supports: { json: true, tools: true, streaming: true, vision: true },
+                quantization: null, refusal_rate: null,
+                note: 'Standard mode only; reasoning effort minimal to max (default max). Requests above 200K input tokens bill the entire request at 3x: $0.30 input, $0.012 cached input, $1.50 output per 1M.' },
+            { model_key: 'muse-spark-1.3', display_name: 'Muse Spark 1.3', family: 'muse-spark', context_window: 1048576,
+                cost: { in_per_mtok: 1.25, cached_per_mtok: 0.15, out_per_mtok: 4.25 },
+                source: 'https://dev.meta.ai/docs/pricing-rate-limits', checked: '2026-11-10',
+                supports: { json: true, tools: true, streaming: true, vision: true },
+                quantization: null, refusal_rate: null,
+                note: 'Standard mode only; reasoning effort minimal to max. Contributor mode is excluded.' },
+        ],
+    },
     { key: 'deepseek', keys_url: 'https://platform.deepseek.com/api_keys', display_name: 'DeepSeek', base_url: 'https://api.deepseek.com/v1', default_model: 'deepseek-flash',
         docs_url: 'https://api-docs.deepseek.com/', capabilities: ['chat', 'vision', 'tools', 'web-search'], search_adapters: ['deepseek'] },
     { key: 'anthropic', keys_url: 'https://console.anthropic.com/settings/keys', display_name: 'Anthropic', kind: 'anthropic', base_url: 'https://api.anthropic.com/v1', auth_mode: 'x-api-key',
@@ -985,4 +1007,9 @@ function isUncensored(provider, model) {
     return /abliterated|uncensored/i.test(id);
 }
 
-module.exports = { PROVIDERS, PROVIDER_KEYS, CHECKED, byKey, priceOf, isUncensored, leaf };
+/** Contributor variants let Meta train on prompts and must never enter OpenVibe routing. */
+function isRoutingExcludedModel(modelKey, model = null) {
+    return /-contributor$/i.test(String(modelKey || '')) || Boolean(model && model.metadata && model.metadata.routing_excluded === true);
+}
+
+module.exports = { PROVIDERS, PROVIDER_KEYS, CHECKED, byKey, priceOf, isUncensored, isRoutingExcludedModel, leaf };
