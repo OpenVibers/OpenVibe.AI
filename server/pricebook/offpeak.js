@@ -52,6 +52,23 @@ function insideWindow(window, at) {
     return start <= end ? (hour >= start && hour < end) : (hour >= start || hour < end);
 }
 
+/**
+ * The next moment at or after `from` that is inside the window, or null when the window has no usable
+ * hours. The weekday blocks are honoured; a bounded search (eight days) never loops.
+ */
+function nextWindowAt(window, from = Date.now()) {
+    if (!window) return null;
+    const start = Number(window.start_hour);
+    const end = Number(window.end_hour);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || start === end) return null;
+    const days = Array.isArray(window.weekdays) ? window.weekdays : [];
+    for (let step = 0; step <= 8 * 24; step += 1) {
+        const at = Number(from) + step * 60 * 60 * 1000;
+        if (insideWindow(window, at)) return new Date(at).toISOString();
+    }
+    return null;
+}
+
 function createOffPeak({ db, clock = { now: () => Date.now() } }) {
     const iso = () => new Date(clock.now()).toISOString();
 
@@ -192,4 +209,4 @@ function createOffPeak({ db, clock = { now: () => Date.now() } }) {
     return { record, clear, offPeakRows, recordBlock, clearBlocks, offPeakBlocks, windows, priceAt };
 }
 
-module.exports = { createOffPeak, FIELDS, insideWindow, isoWeekday, parseWeekdays, formatWeekdays };
+module.exports = { nextWindowAt, createOffPeak, FIELDS, insideWindow, isoWeekday, parseWeekdays, formatWeekdays };

@@ -191,6 +191,7 @@ async function batchCapacity(model, at, { registry = null, community = null, pri
                 cost: cost.nano_usd_per_m,
                 batch_discount: cfg.discount,
                 window: cfg.window,
+                window_hours: Number(String(cfg.window).replace(/[^0-9.]/g, '')) || 24,
             });
         }
     }
@@ -198,4 +199,40 @@ async function batchCapacity(model, at, { registry = null, community = null, pri
     return { charge, routes };
 }
 
-module.exports = { batchCapacity, chargeOf, within, insideWindow: insideWindowLegacy, halfOf };
+/**
+ * May this route meet a deadline? A provider's own batch API promises a completion window (24h for
+ * every adapter here); a deadline sooner than that cannot use it. Every other route answers now.
+ */
+function meetsDeadline(route, deadlineAt, now = Date.now()) {
+    const hours = Number(route && route.window_hours);
+    if (!Number.isFinite(hours) || hours <= 0) return true;
+    const deadline = new Date(deadlineAt).getTime();
+    // A minute of grace: a 24-hour window against a deadline set 24 hours from the same moment does
+    // meet it; only a deadline genuinely sooner than the window is refused.
+    return Number.isFinite(deadline) && now + hours * 3600 * 1000 <= deadline + 60_000;
+}
+
+/** The total per-million cost of a route, for the cheapest-route comparison (input + output). */
+function totalCost(route) {
+    const cost = (route && route.cost) || {};
+    const add = (a, b) => BigInt(a == null ? 0 : String(a)) + BigInt(b == null ? 0 : String(b));
+    return add(cost.input, cost.output);
+}
+
+/** The plain sentence the run receipt carries: which route answered and why it was the one. */
+function routeReason(route) {
+    if (!route) return 'the ordinary route (the deadline passed and the loss budget covered it)';
+    if (route.source === 'native-batch') {
+        return `${route.provider} batch API at ${Math.round((Number(route.batch_discount) || 0.5) * 100)}% of the list price, ${route.window || '24h'} window`;
+    }
+    if (route.source === 'discount-window') {
+        const w = route.window || {};
+        return `${route.provider} off-peak price inside ${w.start_hour}:00-${w.end_hour}:00 UTC`;
+    }
+    if (route.source === 'community') return 'a community machine offer inside half the retail card';
+    if (route.source === 'own') return 'OpenVibe\'s own GPU capacity, already paid for';
+    if (route.source === 'free') return 'a free provider route';
+    return String(route.source || 'low-cost capacity');
+}
+
+module.exports = { batchCapacity, chargeOf, within, insideWindow: insideWindowLegacy, halfOf, meetsDeadline, totalCost, routeReason };
