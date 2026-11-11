@@ -25,6 +25,9 @@ function fixtureFetch({ fail = null } = {}) {
         else if (String(url).includes('salad.com')) name = 'salad-pricing.html';
         else if (String(url).includes('tensordock.com')) name = 'tensordock-pricing.html';
         else if (String(url).includes('cloudrift.ai')) name = 'cloudrift-pricing.html';
+        else if (String(url).includes('verda.ai')) name = 'verda-pricing.html';
+        else if (String(url).includes('thundercompute.com')) name = 'thunder-pricing.html';
+        else if (String(url).includes('shadeform.ai')) name = 'shadeform-pricing.html';
         else throw new Error(`no saved fixture for ${url}`);
         const text = fixture(name);
         return { ok: true, status: 200, text: async () => text };
@@ -77,16 +80,29 @@ t.test('the saved provider pages parse into the same reading shape', async () =>
     assert.equal(cloudrift.find((r) => r.gpu_key === 'rtx-4090').hourly_usd, 0.45);
     assert.equal(cloudrift.find((r) => r.gpu_key === 'rtx-5090').hourly_usd, 0.65);
     assert.equal(cloudrift.some((r) => r.gpu_key === 'h100'), false, 'CloudRift quotes H100 on demand on request');
+
+    const verda = marketLib.parseVerda(fixture('verda-pricing.html'));
+    assert.equal(verda.find((r) => r.gpu_key === 'h100' && r.kind === 'on_demand').hourly_usd, 3.17);
+    assert.equal(verda.find((r) => r.gpu_key === 'h100' && r.kind === 'spot').hourly_usd, 1.29);
+    assert.equal(verda.find((r) => r.gpu_key === 'a100-80gb' && r.kind === 'spot').hourly_usd, 0.89);
+    const thunder = marketLib.parseThunder(fixture('thunder-pricing.html'));
+    assert.equal(thunder.find((r) => r.gpu_key === 'h100').hourly_usd, 3.2);
+    assert.equal(thunder.find((r) => r.gpu_key === 'a100-80gb').hourly_usd, 1.09);
+    assert.match(thunder[0].note, /per minute/);
+    const shadeform = marketLib.parseShadeform(fixture('shadeform-pricing.html'));
+    assert.equal(shadeform.find((r) => r.gpu_key === 'h100').hourly_usd, 1.99);
+    assert.equal(shadeform.find((r) => r.gpu_key === 'a100-80gb').hourly_usd, 1.1);
+    assert.match(shadeform[0].note, /no fee/);
 });
 
 t.test('the cache keeps the lowest reading per provider, card and kind', async () => {
     db = await testDb();
     market = marketLib.createGpuMarket({ db: db.db, config: { gpuMarket: { enabled: false } }, clock: { now: () => now } });
     const out = await market.refresh({ fetchImpl: fixtureFetch() });
-    assert.equal(out.refreshed, 5);
+    assert.equal(out.refreshed, 8);
     assert.equal(out.failed, 0);
     goodReport = await market.report();
-    assert.equal(goodReport.sources.length, 5);
+    assert.equal(goodReport.sources.length, 8);
     assert.ok(goodReport.sources.every((s) => s.status === 'ok' && s.stale === false));
     const g = (key) => goodReport.gpus.find((x) => x.key === key);
     assert.equal(g('rtx-4090').on_demand.provider, 'vast');
@@ -109,7 +125,7 @@ t.test('a source that fails keeps its last reading, marked stale', async () => {
     now += 10 * 60 * 1000;
     const out = await market.refresh({ fetchImpl: fixtureFetch({ fail: 'runpod.io' }) });
     assert.equal(out.failed, 1);
-    assert.equal(out.refreshed, 4);
+    assert.equal(out.refreshed, 7);
     const report = await market.report();
     const runpod = report.sources.find((s) => s.provider === 'runpod');
     assert.equal(runpod.status, 'failed');
@@ -159,7 +175,7 @@ t.test('the admin API exposes both to the GPUs and supply console sections', asy
     const read = token('console', ['ai.usage.read']);
     const gpus = await request(h.base, 'GET', '/api/v1/admin/console/gpus', { tok: read });
     assert.equal(gpus.status, 200, gpus.text);
-    assert.equal(gpus.body.market.sources.length, 5);
+    assert.equal(gpus.body.market.sources.length, 8);
     assert.equal(gpus.body.token_costs.length, 22);
     assert.ok(gpus.body.state && Array.isArray(gpus.body.state.models));
     const supply = await request(h.base, 'GET', '/api/v1/admin/console/supply', { tok: read });
