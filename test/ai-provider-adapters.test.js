@@ -36,7 +36,7 @@ const DOMAIN = {
     baseten: 'baseten.co', hyperbolic: 'hyperbolic.xyz', parasail: 'parasail.io', 'particle-ai': 'particle.ai',
     'inference-net': 'inference.net', 'atlas-cloud': 'atlascloud.ai', avian: 'avian.io',
     nanogpt: 'nano-gpt.com', infermatic: 'totalgpt.ai', arliai: 'arliai.com', friendli: 'friendli.ai', scaleway: 'scaleway.com',
-    iteracompute: 'iteracompute.com', sable: 'sableapi.com', inception: 'inceptionlabs.ai', dosai: 'dos.ai', 'runpod-vllm': 'runpod.io',
+    iteracompute: 'iteracompute.com', sable: 'sableapi.com', inception: 'inceptionlabs.ai', dosai: 'dos.ai', 'runpod-vllm': 'runpod.io', meta: 'meta.ai',
 };
 const onItsOwnSite = (url, key) => {
     const host = new URL(url).hostname;

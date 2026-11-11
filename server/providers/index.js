@@ -33,6 +33,7 @@ const { retryable, sleep, ProviderError, schemaInstruction, insufficientBalance 
 const { classifyFailure, reasonForClass, circuitStatus, offerStatus, iso } = require('./failure');
 const { createOwnerNotifier } = require('./owner-notify');
 const { sourcesOf, ceilingOf, allowsProvider, allowsCommunity } = require('../free-tier');
+const { isRoutingExcludedModel } = require('./pool-providers');
 const { createStubProvider } = require('./stub');
 const { createOpenAiProvider } = require('./openai');
 const { createResponsesProvider } = require('./responses');
@@ -676,7 +677,9 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
     }
     async function costOf(providerKey, model, usage) {
         const cards = await rateCardsFor(providerKey, model);
-        return cards ? rates.costOfUsage(cards, usage) : 0;
+        if (!cards) return 0;
+        const longContext = providerKey === 'meta' && model === 'muse-ember-1.0' && Number(usage && usage.input) > 200000;
+        return rates.costOfUsage(longContext ? rates.applyMultiplier(cards, 3, 'long_context') : cards, usage);
     }
 
     // ── The tier a run is priced on (BA1) ────────────────────────────
@@ -773,7 +776,10 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
     async function costOnTier({ providerKey, model, usage, tier, p }) {
         const cards = await rateCardsFor(providerKey, model);
         if (!cards) return { cost: 0, standard: 0, saved: 0 };
-        const standard = rates.costOfUsage(cards, usage);
+        // Meta's Muse Ember long-context tier applies to the whole request when input (cached included) exceeds 200K.
+        const longContext = providerKey === 'meta' && model === 'muse-ember-1.0' && Number(usage && usage.input) > 200000;
+        const billable = longContext ? rates.applyMultiplier(cards, 3, 'long_context') : cards;
+        const standard = rates.costOfUsage(billable, usage);
         if (tier === 'standard' || tier === 'local') return { cost: standard, standard, saved: 0 };
         if (tier === 'offpeak') {
             const off = offPeak ? await offPeak.priceAt(providerKey, model, clock.now()) : null;
@@ -954,7 +960,9 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             // A trait keeps the offer out of the call, not out of placement: it stays in the pool with its
             // reason (status down, like a credential-less offer), so explain has one entry per placement offer.
             let traitReason = null;
-            if (!traits.latencyAllows(p, row, latencyClass, 'standard', { allowLimitedInteractive, allowFlexInteractive })) {
+            if (isRoutingExcludedModel(model, row)) {
+                traitReason = 'model is explicitly excluded from routing';
+            } else if (!traits.latencyAllows(p, row, latencyClass, 'standard', { allowLimitedInteractive, allowFlexInteractive })) {
                 traitReason = `latency_class ${latencyClass} not offered (${(traits.latencyClassesOf(p, row) || []).join('/') || 'interactive only'})`;
             } else if (!allowPrivateTraining && traits.isPrivateRequest(ctx) && traits.trainsOrRetains(p)) {
                 traitReason = 'private data: the provider trains on or retains prompts';
@@ -1118,17 +1126,19 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             const access = accessOffered(p);
             const policyOk = p ? await policyAllows(registry, p, modelId, ctx.contentPolicy || 'standard') : false;
             const row = p && modelId ? await registry.getModel(p.key, modelId) : null;
+            const excludedModel = isRoutingExcludedModel(modelId, row);
             const latencyOk = p ? traits.latencyAllows(p, row, (ctx.latencyClass && ['interactive', 'background', 'batch'].includes(ctx.latencyClass)) ? ctx.latencyClass : ((route.constraints && route.constraints.latency_class) || 'interactive'), 'standard', { allowLimitedInteractive, allowFlexInteractive }) : false;
             const privateOk = p ? !(!allowPrivateTraining && traits.isPrivateRequest(ctx) && traits.trainsOrRetains(p)) : false;
-            const excluded = !policyOk ? 'content_policy'
+            const excluded = excludedModel ? 'model is explicitly excluded from routing'
+                : !policyOk ? 'content_policy'
                 : !offered ? (p && billingProfile(p) === 'byok' ? 'byok' : 'free_only')
                 : !access ? `provider_access ${modelCatalog.accessOf(p)}` : !latencyOk ? 'latency_class'
                 : !privateOk ? 'private_data_training' : why;
             explain.candidates.push({
-                provider: c.provider, model: modelId, eligible: offered && access && policyOk && latencyOk && privateOk && !why,
+                provider: c.provider, model: modelId, eligible: !excludedModel && offered && access && policyOk && latencyOk && privateOk && !why,
                 excluded_reason: excluded, cost: null, latency: null,
             });
-            if (offered && access && policyOk && latencyOk && privateOk) order.push({ provider: c.provider, model: c.model || null });
+            if (!excludedModel && offered && access && policyOk && latencyOk && privateOk) order.push({ provider: c.provider, model: c.model || null });
         }
         return { order, explain };
     }
