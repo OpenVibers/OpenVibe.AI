@@ -23,7 +23,8 @@
     "ai.memory.write",
     "ai.me.read",
     "ai.me.manage",
-    "ai.config.manage"
+    "ai.config.manage",
+    "ai.layout.suggest"
   ],
   "capabilitiesRegistered": true,
   "providers": [

@@ -76,7 +76,10 @@ Implemented here (the service manifest's `capabilities`, audience `openvibe.ai`;
 `ai.quota.attribution.manage` (per-streamer quotas), `ai.memory.read` and `ai.memory.write` (Memory M2a,
 `/api/v1/memory/*`), `ai.me.read` and `ai.me.manage` ("Your AI", `/api/v1/me/*`: a person's own keys and
 routing preferences; only the person's own token or AI-site session) and `ai.app.run` (developer apps, ADR-014; public,
-registered since openvibe-contracts 0.109.0). A service token's `ns`
+registered since openvibe-contracts 0.109.0), and `ai.layout.suggest` (`POST /api/v1/ui/layout/suggest`: a surface catalog,
+the layout shown now and the person's words in, a validated `ui.layout@1` with a one-sentence summary or an honest
+refusal out; one retry with the validator's reasons, on the cheap structured-output route, as the person named in
+`X-OV-Subject`). A service token's `ns`
 claim limits which workflow namespaces it may run; an app token is fixed to its project's.
 
 A first-party service may also open a batch of the network's own with the `ai.batches.create` grant
