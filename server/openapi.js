@@ -629,6 +629,14 @@ route('get', '/exchange/catalog', {
         models: arrayOf(exchangeModel),
     } }) },
 });
+route('get', '/exchange/directory', {
+    operationId: 'exchangeDirectory', summary: 'Listed, preview and retired registry models', tags: ['exchange'], security: [],
+    description: 'Public model directory feed. Registry entries include provider listing status and dated price sources; disabled entries are not routable.',
+    responses: { 200: json('Complete public model registry', { type: 'object', required: ['generated_at', 'count', 'models'], properties: {
+        generated_at: str({ format: 'date-time' }), count: integer(),
+        models: arrayOf({ type: 'object', additionalProperties: true }),
+    } }) },
+});
 route('get', '/exchange/willingness', {
     operationId: 'exchangeWillingness', summary: 'The measured 18+ willingness rates, per offer', tags: ['exchange'], security: [],
     description: 'Public, cached 60 seconds. The refusal and hedge rates of each offer on the published 60-prompt lawful adult set, with n and Wilson intervals. A rate nobody measured is absent, never zero. `plan=1` returns the dry run instead: the offers, prompts and estimated cost from the live rate cards; it never calls a provider and is not cached.',
