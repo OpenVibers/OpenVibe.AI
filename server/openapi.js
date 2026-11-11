@@ -756,6 +756,13 @@ route('get', '/exchange/models/{org}/{model}', {
     parameters: [path('org', str()), path('model', str())],
     responses: { 200: json('The model', exchangeModel), 404: problem },
 });
+route('get', '/exchange/spotted', {
+    operationId: 'exchangeSpottedModels', summary: 'Sourced model sightings before provider listing', tags: ['exchange'], security: [],
+    description: 'Public sightings with sources and dates. A sighting is not an available model or a routable offer.',
+    responses: { 200: json('Spotted models', { type: 'object', required: ['models'], properties: {
+        models: arrayOf({ type: 'object', additionalProperties: true }),
+    } }) },
+});
 route('get', '/exchange/usage', {
     operationId: 'exchangeUsage', summary: 'Requests, tokens and spend by day, model and product', tags: ['exchange'], security: [],
     description: 'Public and aggregate only: never a prompt, an answer or a person. Read from the finished runs: a product is the service whose run answered (runs.requester_id), and each product\'s models are the provider and model that actually answered, not the route it asked for. Cached answers called no provider and are not counted; only aggregate rows are returned.',

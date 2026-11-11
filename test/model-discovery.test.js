@@ -12,6 +12,7 @@ t.test('official source adapters extract exact model ids without treating them a
     assert.deepEqual(findings({ provider: 'openrouter', kind: 'openrouter' }, JSON.stringify({ data: [{ id: 'google/gemini-4', created: 1794355200 }] }), at).map(x => x.id), ['openrouter/google/gemini-4']);
     assert.deepEqual(findings({ provider: 'huggingface', kind: 'huggingface' }, JSON.stringify([{ id: 'google/gemma-4', createdAt: at }]), at).map(x => x.id), ['huggingface/google/gemma-4']);
 });
+
 t.test('daily refresh dedupes sightings, keeps sources and never adds a routable model', async () => {
     h = await boot({ env: { AI_USER_MODULES: 'off' } });
     const sources = [{ id: 'official', provider: 'gemini', kind: 'text', url: 'https://example.com/notes' },
@@ -34,6 +35,7 @@ t.test('daily refresh dedupes sightings, keeps sources and never adds a routable
     assert.equal(await discovery.setStatus('gemini/gemini-9-pro', 'dismissed'), true);
     assert.equal((await discovery.list()).length, 0);
 });
+
 t.test('public spots and owner promotion are capability gated', async () => {
     const publicRead = await request(h.base, 'GET', '/api/v1/exchange/spotted');
     assert.equal(publicRead.status, 200, publicRead.text);
@@ -44,3 +46,5 @@ t.test('public spots and owner promotion are capability gated', async () => {
     assert.equal((await request(h.base, 'GET', '/api/v1/exchange/spotted')).body.models[0].promoted, true);
     await h.close();
 });
+
+t.run();
