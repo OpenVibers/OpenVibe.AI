@@ -111,13 +111,13 @@ async function testProviderKey(provider, key, { fetchImpl }) {
     if (provider.kind === 'anthropic') {
         headers = /anthropic\.com/i.test(base) ? { 'x-api-key': key, 'anthropic-version': '2023-06-01' } : { 'x-api-key': key, Authorization: `Bearer ${key}`, 'anthropic-version': '2023-06-01' };
         if (!/\/v1$/.test(base) && /anthropic\.com/i.test(base)) url = `${base}/v1/models`;
-    } else if (provider.kind === 'gemini') {
-        url = `${base}/models?pageSize=1`;
+    } else if (provider.key === 'gemini' || provider.kind === 'gemini' || provider.metadata?.api_family === 'google') {
+        url = 'https://generativelanguage.googleapis.com/v1beta/models';
         headers = { 'x-goog-api-key': key };
     }
     if (provider.metadata && provider.metadata.models_endpoint) url = provider.metadata.models_endpoint;
     if (provider.auth_mode === 'none') headers = {};
-    else if (provider.kind !== 'anthropic' && provider.kind !== 'gemini' && provider.auth_mode === 'x-api-key') headers = { 'x-api-key': key };
+    else if (provider.kind !== 'anthropic' && provider.key !== 'gemini' && provider.kind !== 'gemini' && provider.metadata?.api_family !== 'google' && provider.auth_mode === 'x-api-key') headers = { 'x-api-key': key };
     // A configured models endpoint receives a key only on the origin the owner entered it for.
     try { if (new URL(url).origin !== new URL(base).origin) return { ok: false, message: `${name} has a model-list address on a different origin.` }; }
     catch { return { ok: false, message: `${name} has an invalid model-list address.` }; }
@@ -125,7 +125,7 @@ async function testProviderKey(provider, key, { fetchImpl }) {
     if (r.status >= 200 && r.status < 300) {
         const list = r.json && (Array.isArray(r.json.data) ? r.json.data : Array.isArray(r.json.models) ? r.json.models : null);
         if (!list) return { ok: false, message: `${name} answered without a model list.` };
-        return { ok: true, message: `${name} accepted the key${list ? ` and lists ${list.length} model${list.length === 1 ? '' : 's'}` : ''}.` };
+        return { ok: true, message: `${name} accepted the key and lists ${list.length} model${list.length === 1 ? '' : 's'}.`, models: list.map(m => m.id || m.name).filter(x => typeof x === 'string') };
     }
     return { ok: false, message: refused(name, r) };
 }
