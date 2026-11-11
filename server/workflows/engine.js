@@ -168,6 +168,17 @@ function batchExec(b, result) {
 
 function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spawnImpl, log = console, research = null, db = null, clock = { now: () => Date.now() }, mediaStore = null }) {
     pool = require('../effort/pool').wrapPool(pool);
+    // Turn attachments use only the host's local speech recognizer. Reading an audio file must never
+    // select a paid transcription provider as a side effect of a chat request.
+    let localAsr = null;
+    async function transcribeAttachment({ bytes, signal }) {
+        localAsr ||= require('../providers/whisper').createWhisperProvider({ key: 'whisper' }, { config });
+        if (!localAsr.supports('transcribe')) throw new AiError(503, 'files.audio_unavailable', 'local speech recognition is unavailable');
+        const file = path.join(os.tmpdir(), `openvibe-ai-attachment-${require('crypto').randomBytes(12).toString('hex')}`);
+        fs.writeFileSync(file, bytes, { mode: 0o600, flag: 'wx' });
+        try { return await localAsr.transcribe({ filePath: file, language: 'auto', signal, timeoutMs: 180000 }); }
+        finally { try { fs.unlinkSync(file); } catch { /* already removed */ } }
+    }
     // One loopback reader for everything that streams media (server/media-proxy.js): transcripts and media.analyze.
     let proxy = null;
     const reader = () => proxy || (proxy = require('../media-proxy').createMediaProxy({ fetcher, log }));
@@ -278,7 +289,7 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
         const base = { ...input, messages: normMessages(input.messages, input.user) };
         // Files on the turn (ai.file@1) become text or image content for this call only.
         const turn = Array.isArray(input.files) && input.files.length
-            ? await fileInputs.attachFiles(base, fetcher, { signal: ctx.signal, format: 'openai', vision: true })
+            ? await fileInputs.attachFiles(base, fetcher, { signal: ctx.signal, format: 'openai', vision: true, transcribe: transcribeAttachment })
             : base;
         const messages = turn.messages;
         const image = input.image ? await fetcher.loadImage({ ...input.image, max_width: input.image.max_width || 1024 }, { signal: ctx.signal }) : null;
@@ -408,7 +419,7 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
         const { route, selection } = await selectedRoute(await routeFor(step.route || 'default.chat'), input);
         // Media-backed files on the turn (ai.file@1) become text or image content for this call only.
         const turn = Array.isArray(input.files) && input.files.length
-            ? await fileInputs.attachFiles(input, fetcher, { signal: ctx.signal, format: 'openai', vision: true })
+            ? await fileInputs.attachFiles(input, fetcher, { signal: ctx.signal, format: 'openai', vision: true, transcribe: transcribeAttachment })
             : input;
         const openai = {};
         for (const k of ['messages', 'tools', 'tool_choice', 'parallel_tool_calls', 'response_format', 'stop', 'seed', 'top_p', 'presence_penalty', 'frequency_penalty']) {
@@ -431,9 +442,22 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
         if (!c || !Array.isArray(c.choices) || !c.choices.length) throw new AiError(502, 'output.empty', 'the provider answered, but with no choices');
         // Files the model produced beside its text: Media references pass through; inline bytes need the
         // configured Media store (server/artifacts.js), never the run's output.
-        const subject = ctx.onBehalfOf && ctx.onBehalfOf.id ? ctx.onBehalfOf.id : null;
-        const artifacts = await filesOut.collectArtifacts(c.choices[0] && c.choices[0].message, { store: filesOut.storeOf(config), subject });
-        return { output: { choices: c.choices, system_fingerprint: c.system_fingerprint || null, model: exec.model, ...(artifacts.length ? { artifacts } : {}) }, exec, route };
+        const subject = typeof ctx.onBehalfOf === 'string' ? ctx.onBehalfOf : ctx.onBehalfOf?.id || null;
+        const artifacts = [];
+        const choices = [];
+        const artifactStore = filesOut.storeOf(config, mediaStore);
+        for (const choice of c.choices) {
+            const saved = await filesOut.collectArtifacts(choice && choice.message, { store: artifactStore, subject });
+            if (input.output_file) saved.push(...await filesOut.collectTextArtifact(choice && choice.message && choice.message.content, input.output_file, { store: artifactStore, subject }));
+            artifacts.push(...saved);
+            if (artifacts.length > filesOut.MAX_ARTIFACTS) throw new AiError(413, 'files.too_many', `a model may return at most ${filesOut.MAX_ARTIFACTS} files`);
+            const message = { ...(choice.message || {}) };
+            delete message.files;
+            delete message.artifacts;
+            if (saved.length) message.artifacts = saved;
+            choices.push({ ...choice, message });
+        }
+        return { output: { choices, system_fingerprint: c.system_fingerprint || null, model: exec.model, ...(artifacts.length ? { artifacts } : {}) }, exec, route };
     }
 
     /**
@@ -444,7 +468,7 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
         const { route, selection } = await selectedRoute(await routeFor(step.route || 'default.messages'), input);
         // Media-backed files on the turn (ai.file@1): text parts, or base64 image sources for a vision model.
         const turn = Array.isArray(input.files) && input.files.length
-            ? await fileInputs.attachFiles(input, fetcher, { signal: ctx.signal, format: 'anthropic', vision: true })
+            ? await fileInputs.attachFiles(input, fetcher, { signal: ctx.signal, format: 'anthropic', vision: true, transcribe: transcribeAttachment })
             : input;
         const req = {
             messages: turn.messages,
@@ -460,9 +484,14 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
         const exec = await pool.execute(route, 'messages', req, { ...ctx, ...selectionCtx(selection), routeKey: route.key, routeVersion: route.version, promptHash: sha256({ m: turn.messages, t: input.tools || null }) });
         const m = exec.result.message;
         if (!m || !Array.isArray(m.content)) throw new AiError(502, 'output.empty', 'the provider answered, but not with a message');
-        const subject = ctx.onBehalfOf && ctx.onBehalfOf.id ? ctx.onBehalfOf.id : null;
-        const artifacts = await filesOut.collectArtifacts(m, { store: filesOut.storeOf(config), subject });
-        return { output: { ...m, model: m.model || exec.model, ...(artifacts.length ? { artifacts } : {}) }, exec, route };
+        const subject = typeof ctx.onBehalfOf === 'string' ? ctx.onBehalfOf : ctx.onBehalfOf?.id || null;
+        const artifactStore = filesOut.storeOf(config, mediaStore);
+        const artifacts = await filesOut.collectArtifacts(m, { store: artifactStore, subject });
+        if (input.output_file) artifacts.push(...await filesOut.collectTextArtifact(m.content.filter((part) => part && part.type === 'text').map((part) => part.text).join('\n'), input.output_file, { store: artifactStore, subject }));
+        const message = { ...m };
+        delete message.files;
+        delete message.artifacts;
+        return { output: { ...message, model: m.model || exec.model, ...(artifacts.length ? { artifacts } : {}) }, exec, route };
     }
 
     async function transcribeStep(step, input, wf, run, ctx) {

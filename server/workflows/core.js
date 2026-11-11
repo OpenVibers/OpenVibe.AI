@@ -17,6 +17,7 @@ const FILE_REF = { type: 'object', additionalProperties: false, properties: {
     read: { type: 'object' }, role: { enum: ['input', 'artifact'] },
 } };
 const TURN_FILES = { type: 'array', maxItems: 10, items: FILE_REF };
+const OUTPUT_FILE = OBJ({ name: STR(255), media_type: { enum: ['text/plain', 'text/markdown', 'text/csv', 'application/json'] } }, ['name', 'media_type']);
 const COMMON = { max_tokens: { type: 'integer', minimum: 1, maximum: 16000 }, temperature: { type: ['number', 'null'], minimum: 0, maximum: 2 },
     // AI Exchange F: a liability cap on the Balance hold for this request (optional; nothing when unset).
     max_cost_usd: { type: ['number', 'string', 'null'] } };
@@ -141,6 +142,7 @@ const workflows = [
             presence_penalty: { type: ['number', 'null'], minimum: -2, maximum: 2 },
             frequency_penalty: { type: ['number', 'null'], minimum: -2, maximum: 2 },
             files: TURN_FILES,
+            output_file: OUTPUT_FILE,
             ...COMMON,
         }, ['messages']),
         output_schema: OBJ({ choices: { type: 'array', minItems: 1, maxItems: 8, items: { type: 'object' } }, system_fingerprint: { type: ['string', 'null'] }, model: { type: ['string', 'null'] }, artifacts: { type: 'array', maxItems: 10, items: { type: 'object' } } }, ['choices']),
@@ -171,6 +173,7 @@ const workflows = [
             top_k: { type: ['integer', 'null'], minimum: 0 },
             metadata: { type: 'object' },
             files: TURN_FILES,
+            output_file: OUTPUT_FILE,
         }, ['messages', 'max_tokens']),
         output_schema: OBJ({
             id: STR(200), type: STR(20), role: STR(20), model: { type: ['string', 'null'] },
