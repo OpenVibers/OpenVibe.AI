@@ -54,7 +54,7 @@ function createModelSync({ db, registry, env = process.env, fetchImpl = globalTh
                 model, occurred_at: row.finished_at, sync_id: row.id })),
             ...ids(row.missing_models).map(model => ({ id: `${row.id}:retired:${model}`, type: 'model.retired', provider: row.provider_key,
                 model, occurred_at: row.finished_at, sync_id: row.id })),
-        ]).slice(0, 200);
+        ]);
     }
 
     function run(key, { actor = 'system', trigger = 'manual' } = {}) {
