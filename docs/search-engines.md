@@ -2,6 +2,8 @@
 
 `POST /v1/search`, `/v1/search/images`, `/v1/search/icons` and `/v1/fetch` use the existing Exchange key, person, service or app authentication. The routes and JSON schemas are in `/openapi.json`. Search responses validate against `exchange.search-result@1` and `exchange.image-result@1`. Contracts **0.399.0** carries the search receipts and their optional ordered attempts.
 
+The icons route also takes the first-party capability `exchange.search.icons` (Contracts **0.407.0**): a service holding it and nothing else reaches `/v1/search/icons` and gets its own free-search bucket (`AI_EXCHANGE_ICONS_RPM`, 60 calls a minute by default), never web, image or fetch search. OpenVibe.Design holds it for the references shown beside a glyph draft, so no Exchange key is needed there.
+
 ```json
 {"q":"solar lantern","engine":"auto","freshness":"month","limit":10,"max_cost_usd":0.01}
 ```
