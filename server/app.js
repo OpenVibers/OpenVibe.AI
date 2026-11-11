@@ -151,7 +151,7 @@ function createApp({ choices = null, searchFetch = null, config, db, registry, p
     app.use(exchangePlatform.router);
     // OpenVibe.Exchange's read API (server/api/exchange.js): the public catalog and aggregate usage. Public on
     // purpose — the site and anyone comparing prices reads the same numbers the router ranks on.
-    app.use(require('./api/exchange').exchangeRouter({ config, db, registry, pool, quotas, env, clock, presets, receipts, auth, log, ownEndpoints, fetchImpl, share }));
+    app.use(require('./api/exchange').exchangeRouter({ config, db, registry, pool, quotas, env, clock, presets, receipts, auth, log, ownEndpoints, fetchImpl, share, modelSync }));
     if (modelDiscovery) app.use(require('./api/model-spots').modelSpotsRouter({ discovery: modelDiscovery, auth, registry, log }));
     // The 18+ board's public read API (server/willing/): the measured willingness rates, the published
     // prompt set, and the abliteration tax. Read-only; plan=1 is the dry run and never calls a provider.

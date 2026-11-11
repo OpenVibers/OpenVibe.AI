@@ -637,6 +637,13 @@ route('get', '/exchange/directory', {
         models: arrayOf({ type: 'object', additionalProperties: true }),
     } }) },
 });
+route('get', '/exchange/model-events', {
+    operationId: 'exchangeModelEvents', summary: 'New and retired models from provider syncs', tags: ['exchange'], security: [],
+    description: 'Public, bounded recent model events. Each event is tied to the provider sync that recorded it.',
+    responses: { 200: json('Recent model events', { type: 'object', required: ['count', 'events'], properties: {
+        count: integer(), events: arrayOf({ type: 'object', additionalProperties: true }),
+    } }) },
+});
 route('get', '/exchange/willingness', {
     operationId: 'exchangeWillingness', summary: 'The measured 18+ willingness rates, per offer', tags: ['exchange'], security: [],
     description: 'Public, cached 60 seconds. The refusal and hedge rates of each offer on the published 60-prompt lawful adult set, with n and Wilson intervals. A rate nobody measured is absent, never zero. `plan=1` returns the dry run instead: the offers, prompts and estimated cost from the live rate cards; it never calls a provider and is not cached.',

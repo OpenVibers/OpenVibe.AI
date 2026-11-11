@@ -35,7 +35,7 @@ function memo(fn, ttlMs, clock) {
     };
 }
 
-function exchangeRouter({ db, registry, pool, quotas = null, env = process.env, clock = { now: () => Date.now() }, config = null, presets, receipts, auth, log = console, ownEndpoints = null, fetchImpl = globalThis.fetch, fidelity = null, share = null }) {
+function exchangeRouter({ db, registry, pool, quotas = null, env = process.env, clock = { now: () => Date.now() }, config = null, presets, receipts, auth, log = console, ownEndpoints = null, fetchImpl = globalThis.fetch, fidelity = null, share = null, modelSync = null }) {
     // Bench's provider-fidelity read (stage B5): optional and fail-soft. Off in tests, where no Bench runs.
     const fidelitySource = fidelity || require('../exchange/fidelity').createFidelitySource({
         url: config && config.bench ? config.bench.url : null, fetchImpl, clock, log,
@@ -171,6 +171,11 @@ function exchangeRouter({ db, registry, pool, quotas = null, env = process.env, 
             return http.sendProblem(res, 422, 'exchange.market_filter_invalid', { detail: error.message, ctx: req.ov });
         }
         try { res.json(await market.read(req.query)); } catch (error) { next(error); }
+    });
+
+    r.get('/api/v1/exchange/model-events', publicCache(30), async (_req, res, next) => {
+        try { const events = modelSync ? await modelSync.events() : []; res.json({ count: events.length, events }); }
+        catch (err) { next(err); }
     });
 
     r.get('/api/v1/exchange/catalog', publicCache(30), async (req, res, next) => {
