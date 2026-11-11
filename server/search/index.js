@@ -58,10 +58,10 @@ function normalize(rows, engine, kind, b) {
     if (b.orientation) out = out.filter(r => r.width && r.height && (b.orientation === 'square' ? r.width === r.height : b.orientation === 'portrait' ? r.height > r.width : r.width > r.height));
     if (b.size) out = out.filter(r => r.width && r.height && (b.size === 'small' ? Math.max(r.width, r.height) < 800 : b.size === 'medium' ? Math.max(r.width, r.height) >= 800 && Math.max(r.width, r.height) < 2000 : Math.max(r.width, r.height) >= 2000));
     if (b.style && b.style !== 'any') out = out.filter(r => r.style === b.style);
-    if (b.after) out = out.filter(r => r.published && Date.parse(r.published) >= Date.parse(b.after));
+    if (b.after) out = out.filter(r => (r.published || r.indexed_on) && Date.parse(r.published || r.indexed_on) >= Date.parse(b.after));
     if (b.type === 'vector') out = out.filter(r => r.format === 'svg' || new URL(r.url).pathname.toLowerCase().endsWith('.svg'));
-    if (b.type === 'photo') out = out.filter(r => ['unsplash', 'pexels', 'pixabay'].includes(engine));
-    if (b.type === 'illustration') out = out.filter(r => !['unsplash', 'pexels'].includes(engine));
+    if (b.type === 'photo') out = out.filter(r => ['unsplash', 'pexels', 'pixabay'].includes(engine) || r.type === 'photo');
+    if (b.type === 'illustration') out = out.filter(r => r.type === 'illustration');
     return kind === 'images' ? rankImages(out, b.limit) : out.slice(0, b.limit);
 }
 function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () => Date.now(), credentials = null, registry = null, targetGuard = publicTarget } = {}) {
@@ -99,8 +99,9 @@ function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () =>
             if (!a.kinds.includes(kind) || b.engine && b.engine !== 'auto' && b.engine !== a.id ||
                 b.freshness && !a.freshness.includes(b.freshness) || (a.requires || []).some(k => !env[k])) continue;
             if (kind === 'images' && b.color && a.id !== 'unsplash') continue;
-            if (kind === 'images' && b.after && a.id !== 'unsplash') continue;
-            if (kind === 'images' && b.type === 'photo' && !['unsplash', 'pexels', 'pixabay'].includes(a.id)) continue;
+            if (kind === 'images' && b.after && !['unsplash', 'openverse'].includes(a.id)) continue;
+            if (kind === 'images' && b.type === 'photo' && !['unsplash', 'pexels', 'pixabay', 'openverse'].includes(a.id)) continue;
+            if (kind === 'images' && b.type === 'illustration' && a.id !== 'openverse') continue;
             if (kind === 'images' && b.type === 'vector' && !['openverse', 'commons'].includes(a.id)) continue;
             if (kind !== 'fetch' && a.max_query && [...b.q].length + (b.freshness ? 17 : 0) > a.max_query) continue;
             const own = a.byok && subject && credentials ? await credentials.searchForRun(subject, credentialId(a)) : null;

@@ -27,7 +27,7 @@ for (const kind of ['web', 'images', 'icons']) {
                 orientation: { type: 'string', enum: ['landscape', 'portrait', 'square'] },
                 size: { type: 'string', enum: ['small', 'medium', 'large'], description: 'Longest side: below 800px, 800–1999px, or 2000px and above. Missing dimensions do not match.' },
                 color: { type: 'string', enum: ['black_and_white', 'black', 'white', 'yellow', 'orange', 'red', 'purple', 'magenta', 'green', 'teal', 'blue'], description: 'Available through Unsplash. Requires a configured Unsplash key.' },
-                after: { type: 'string', format: 'date', description: 'Only results with a known publication date on or after this day. Available through Unsplash.' },
+                after: { type: 'string', format: 'date', description: 'Only results on or after this day: original publication date where known, otherwise the Openverse indexing date. Results without a date are omitted.' },
                 safe_search: { type: 'string', enum: ['strict'], default: 'strict' },
                 type: { type: 'string', enum: ['icon', 'photo', 'illustration', 'vector'] }, set: { type: 'string' },
                 style: { type: 'string', enum: ['any', 'line', 'solid'] },

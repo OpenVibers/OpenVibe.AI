@@ -29,6 +29,8 @@ module.exports = {
                         : b[a],
                 );
         if (b.commercial) q.set('license_type', 'commercial');
+        if (b.type === 'photo') q.set('category', 'photograph');
+        if (b.type === 'illustration') q.set('category', 'illustration');
         const out = await get('https://api.openverse.org/v1/images/?' + q);
         return (out.results || []).map((r) => ({
             title: r.title,
@@ -42,6 +44,8 @@ module.exports = {
             source_page: r.foreign_landing_url,
             attribution: r.attribution,
             format: r.filetype,
+            type: r.category === 'photograph' ? 'photo' : r.category || null,
+            indexed_on: r.indexed_on || null,
             published: null,
         }));
     },

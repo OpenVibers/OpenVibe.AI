@@ -71,6 +71,14 @@ const json = value => new Response(JSON.stringify(value), { status: 200 });
         assert.equal(out.text, '# Lantern\nA new lantern');
         assert.equal(out.receipt.cost_usd, id === 'deepseek' ? .00075 : .0001);
     }
+    let openverseUrl;
+    const openverse = createSearch({ env: {}, fetchImpl: async (url) => { openverseUrl = new URL(url); return json(fixture('openverse').response); } });
+    const photos = await openverse.search('images', { q: 'cat', engine: 'openverse', type: 'photo', after: '2026-11-01' });
+    assert.equal(photos.results.length, 1);
+    assert.equal(photos.results[0].indexed_on, '2026-11-08T12:00:00Z');
+    assert.equal(openverseUrl.searchParams.get('category'), 'photograph');
+    assert.equal((await openverse.search('images', { q: 'cat', engine: 'openverse', type: 'photo', after: '2026-12-01' })).results.length, 0);
+    assert.equal((await openverse.search('images', { q: 'cat', engine: 'openverse', type: 'illustration' })).results.length, 0);
     // Explicit SSRF targets are rejected before a network connection, including remote readers.
     for (const url of ['http://localhost', 'https://127.0.0.1', 'https://[::1]', 'https://user:pass@example.org']) {
         await assert.rejects(createSearch({ env: { SEARCH_JINA_KEY: KEY }, fetchImpl: () => assert.fail('unsafe call') }).read({ engine: 'jina', url }));
