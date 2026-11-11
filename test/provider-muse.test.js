@@ -19,7 +19,7 @@ t.test('Meta Muse records are dated, standard mode, priced, capable, and seeded 
     assert.deepStrictEqual(meta.models.map((m) => m.model_key), ['muse-ember-1.0', 'muse-spark-1.3']);
     const ember = model('muse-ember-1.0');
     assert.deepStrictEqual(ember.cost, { in_per_mtok: 0.10, cached_per_mtok: 0.004, out_per_mtok: 0.50 });
-    assert.match(ember.note, /over 200K input tokens bill the entire request at 3x/);
+    assert.match(ember.note, /above 200K input tokens bill the entire request at 3x/);
     assert.strictEqual(ember.checked, '2026-11-10');
     assert.strictEqual(ember.context_window, 1048576);
     assert.strictEqual(ember.max_output, 524288);
@@ -100,3 +100,5 @@ t.test('the owner check path sends one tiny model-list read and never exposes cr
     assert.strictEqual(result.requests, 1);
     assert.ok(!JSON.stringify(result).includes('synthetic-meta-key'));
 });
+
+t.run();

@@ -1121,17 +1121,19 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             const access = accessOffered(p);
             const policyOk = p ? await policyAllows(registry, p, modelId, ctx.contentPolicy || 'standard') : false;
             const row = p && modelId ? await registry.getModel(p.key, modelId) : null;
+            const excludedModel = isRoutingExcludedModel(modelId, row);
             const latencyOk = p ? traits.latencyAllows(p, row, (ctx.latencyClass && ['interactive', 'background', 'batch'].includes(ctx.latencyClass)) ? ctx.latencyClass : ((route.constraints && route.constraints.latency_class) || 'interactive'), 'standard', { allowLimitedInteractive, allowFlexInteractive }) : false;
             const privateOk = p ? !(!allowPrivateTraining && traits.isPrivateRequest(ctx) && traits.trainsOrRetains(p)) : false;
-            const excluded = !policyOk ? 'content_policy'
+            const excluded = excludedModel ? 'model is explicitly excluded from routing'
+                : !policyOk ? 'content_policy'
                 : !offered ? (p && billingProfile(p) === 'byok' ? 'byok' : 'free_only')
                 : !access ? `provider_access ${modelCatalog.accessOf(p)}` : !latencyOk ? 'latency_class'
                 : !privateOk ? 'private_data_training' : why;
             explain.candidates.push({
-                provider: c.provider, model: modelId, eligible: offered && access && policyOk && latencyOk && privateOk && !why,
+                provider: c.provider, model: modelId, eligible: !excludedModel && offered && access && policyOk && latencyOk && privateOk && !why,
                 excluded_reason: excluded, cost: null, latency: null,
             });
-            if (offered && access && policyOk && latencyOk && privateOk) order.push({ provider: c.provider, model: c.model || null });
+            if (!excludedModel && offered && access && policyOk && latencyOk && privateOk) order.push({ provider: c.provider, model: c.model || null });
         }
         return { order, explain };
     }
