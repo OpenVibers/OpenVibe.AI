@@ -55,6 +55,10 @@ t.test('Exchange catalog carries Muse prices and an explicit off state before ow
             assert.strictEqual(entry.offers[0].status, 'down');
             assert.strictEqual(entry.offers[0].status_reason, 'off until the owner turns it on');
         }
+        const under = await host.pool.costOf('meta', 'muse-ember-1.0', { input: 200000, cached: 100000, output: 100000 });
+        const over = await host.pool.costOf('meta', 'muse-ember-1.0', { input: 200001, cached: 100000, output: 100000 });
+        assert.ok(Math.abs(under - 0.0604) < 1e-10, `200K uses standard rates across uncached, cached and output tokens: ${under}`);
+        assert.ok(Math.abs(over - 0.1812003) < 1e-10, `over 200K scales the entire request, not only excess tokens: ${over}`);
         await host.registry.upsertProvider({ key: 'meta', status: 'active' });
         const choices = require('../server/choices').createChoices({ db: host.db, registry: host.registry, catalog, ratings: async () => [] });
         await choices.seed();

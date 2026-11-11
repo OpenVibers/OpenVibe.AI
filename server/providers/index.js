@@ -677,7 +677,9 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
     }
     async function costOf(providerKey, model, usage) {
         const cards = await rateCardsFor(providerKey, model);
-        return cards ? rates.costOfUsage(cards, usage) : 0;
+        if (!cards) return 0;
+        const longContext = providerKey === 'meta' && model === 'muse-ember-1.0' && Number(usage && usage.input) > 200000;
+        return rates.costOfUsage(longContext ? rates.applyMultiplier(cards, 3, 'long_context') : cards, usage);
     }
 
     // ── The tier a run is priced on (BA1) ────────────────────────────
@@ -774,7 +776,10 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
     async function costOnTier({ providerKey, model, usage, tier, p }) {
         const cards = await rateCardsFor(providerKey, model);
         if (!cards) return { cost: 0, standard: 0, saved: 0 };
-        const standard = rates.costOfUsage(cards, usage);
+        // Meta's Muse Ember long-context tier applies to the whole request when input (cached included) exceeds 200K.
+        const longContext = providerKey === 'meta' && model === 'muse-ember-1.0' && Number(usage && usage.input) > 200000;
+        const billable = longContext ? rates.applyMultiplier(cards, 3, 'long_context') : cards;
+        const standard = rates.costOfUsage(billable, usage);
         if (tier === 'standard' || tier === 'local') return { cost: standard, standard, saved: 0 };
         if (tier === 'offpeak') {
             const off = offPeak ? await offPeak.priceAt(providerKey, model, clock.now()) : null;
