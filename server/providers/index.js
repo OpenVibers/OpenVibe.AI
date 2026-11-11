@@ -746,6 +746,15 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
     async function tierFor({ p, model, operation, at }) {
         if (!p) return 'standard';
         if (isLocalModel(p)) return 'local';
+        // The owner's tier choice for this provider (migration 0075) is the first word; a provider that does
+        // not sell Flex keeps the standard tier rather than being asked for a tier it refused.
+        const control = ownerSettings && ownerSettings.controlFor ? await ownerSettings.controlFor(p.key).catch(() => null) : null;
+        if (control && control.tier === 'standard') return 'standard';
+        if (control && control.tier === 'flex' && tiers.TIERED_OPS.has(operation)) {
+            const row = model ? await registry.getModel(p.key, model) : null;
+            if (tiers.multiplierOf(p, 'flex') != null || (row && row.metadata && row.metadata.service_tier === 'flex')) return 'flex';
+            return 'standard';
+        }
         if (tiers.TIERED_OPS.has(operation) && tiers.multiplierOf(p, 'flex') != null) return 'flex';
         if (offPeak && model) {
             const off = await offPeak.priceAt(p.key, model, at);
