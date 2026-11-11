@@ -29,7 +29,8 @@
     "ai.run.create",
     "ai.run.read",
     "ai.usage.read",
-    "ai.workflow.manage"
+    "ai.workflow.manage",
+    "exchange.search.icons"
   ],
   "eventsProduced": [
     "ai.run.queued",

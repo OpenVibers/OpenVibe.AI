@@ -30,7 +30,12 @@ const PROVIDER_GROUP = 'Provider keys';
 const GPU_GROUP = 'OpenVibe GPUs';
 // The marketplaces the GPU provisioner rents from. AI owns these origins and writes them into the
 // namespace, so the owner's key is sealed to the marketplace it was entered for.
-const GPU_ORIGINS = Object.freeze({ vast: 'https://console.vast.ai', runpod: 'https://api.runpod.io' });
+const GPU_ORIGINS = Object.freeze({
+    vast: 'https://console.vast.ai', runpod: 'https://api.runpod.io',
+    salad: 'https://api.salad.com', tensordock: 'https://dashboard.tensordock.com',
+    shadeform: 'https://api.shadeform.ai', verda: 'https://api.verda.com',
+    thunder: 'https://api.thundercompute.com:8443',
+});
 
 /**
  * Bounds from server/config.js (load()), so the schema and the code agree. Every field has a title in plain words and
@@ -233,6 +238,12 @@ const GPU_SCHEMA = Object.freeze({
             },
             'x-required-for': 'Renting GPUs and own endpoints',
         },
+        ...Object.fromEntries(Object.entries(GPU_ORIGINS).filter(([name]) => !['vast', 'runpod'].includes(name)).flatMap(([name]) => [
+            [`${name}.origin`, { type: 'string', title: `${name} API origin`, 'x-group': GPU_GROUP, 'x-advanced': true,
+                description: `AI locks the ${name} key to this provider-owned API origin.` }],
+            [`${name}.key`, { type: 'string', title: `${name} API key`, 'x-group': GPU_GROUP, 'x-bind': `${name}.origin`,
+                description: `The owner's write-only ${name} API key. Only its last four characters are shown after saving.` }],
+        ])),
         monthly_cap: {
             type: 'integer', title: 'Most the GPUs may cost in a month', 'x-group': GPU_GROUP, 'x-unit': 'nano_usd', 'x-danger': true,
             minimum: 0, 'x-example': 50000000000,
@@ -475,6 +486,7 @@ async function createGpuSettings({ db, env = process.env, log = console, onChang
             vast_key: String(v['vast.key'] || ''),
             runpod_origin: String(v['runpod.origin'] || ''),
             runpod_key: String(v['runpod.key'] || ''),
+            provider_keys: Object.fromEntries(Object.keys(GPU_ORIGINS).map(name => [name, String(v[`${name}.key`] || '')])),
             monthly_cap: v.monthly_cap == null ? null : String(v.monthly_cap),
             idle_minutes: v.idle_minutes == null ? null : Number(v.idle_minutes),
             max_runtime_minutes: v.max_runtime_minutes == null ? null : Number(v.max_runtime_minutes),

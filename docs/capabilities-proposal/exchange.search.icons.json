@@ -1,0 +1,20 @@
+{
+  "id": "exchange.search.icons",
+  "version": "1.0",
+  "owner": "ai",
+  "status": "active",
+  "visibility": "first-party",
+  "description": "Search icon references through the Exchange platform API (POST /v1/search/icons at api.openvibe.exchange, served by OpenVibe.AI). A first-party service holds only this route and its own free-search quota: no Exchange key, no inference, no web, image or fetch search. The receipt names the engine, the provider cost and each skipped attempt; results carry the icon set, author and licence. OpenVibe.Design uses it to show references beside a glyph draft.",
+  "permissions": [
+    "exchange:search:icons"
+  ],
+  "resourceConstraints": [
+    "none"
+  ],
+  "quotaClass": "search-icons",
+  "events": [],
+  "implementedBy": [
+    "POST /v1/search/icons"
+  ],
+  "outputSchema": "exchange.image-result@1"
+}
