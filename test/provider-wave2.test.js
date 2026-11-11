@@ -45,7 +45,7 @@ t.test('each new provider is a record, off, keyless, with its traits, price and 
     assert.strictEqual(seed.recordOf(sable).metadata.data_policy.trains, false);
     assert.strictEqual(seed.recordOf(sable).metadata.data_policy.retention, 'limited', 'prompt cache hours to days');
     const sableModel = seed.modelOf(sable, sable.models[0]);
-    assert.deepStrictEqual([sableModel.cost.in_per_mtok, sableModel.cost.out_per_mtok, sableModel.cost.cached_per_mtok], [0.15, 0.6, 0.01]);
+    assert.deepStrictEqual([sableModel.cost.in_per_mtok, sableModel.cost.out_per_mtok], [null, null], 'the confirmed price waits in the price book');
     assert.strictEqual(sableModel.metadata.uncensored, true);
     assert.strictEqual(sableModel.supports.tools && sableModel.supports.vision, true, 'tools and vision');
 
@@ -54,7 +54,7 @@ t.test('each new provider is a record, off, keyless, with its traits, price and 
     assert.strictEqual(seed.recordOf(inception).metadata.traits.free_allowance.tokens, 100000000);
     assert.strictEqual(seed.recordOf(inception).metadata.traits.free_allowance.period, 'once');
     const mercury = seed.modelOf(inception, inception.models[0]);
-    assert.deepStrictEqual([mercury.cost.in_per_mtok, mercury.cost.out_per_mtok, mercury.cost.cached_per_mtok], [0.2, 0.7, 0.02], 'the list price is recorded');
+    assert.strictEqual(mercury.cost.in_per_mtok, null, 'the confirmed price waits in the price book');
     assert.match(mercury.metadata.note, /\$0\.10|\$0\.35/, 'the launch price is noted, not assumed');
 
     assert.strictEqual(seed.recordOf(by('particle-ai')).metadata.tier_rates.flex, 0.5, 'Particle Flex is half price');
@@ -63,7 +63,8 @@ t.test('each new provider is a record, off, keyless, with its traits, price and 
 
     const openrouter = by('openrouter');
     const pinned = seed.modelOf(openrouter, openrouter.models[0]);
-    assert.deepStrictEqual([pinned.cost.in_per_mtok, pinned.cost.out_per_mtok, pinned.cost.cached_per_mtok], [0.025, 0.25, 0.003], 'the Particle Flex price read from OpenRouter');
+    assert.strictEqual(pinned.cost.in_per_mtok, null, 'the Particle Flex price waits in the price book');
+    assert.match(pinned.metadata.note, /pending price-book change/);
     assert.deepStrictEqual(pinned.metadata.routing, { only: ['particle-ai'], allow_fallbacks: false, service_tier: 'flex', data_collection: 'deny' });
     assert.strictEqual(pinned.metadata.service_tier, 'flex');
     assert.strictEqual(traits.latencyAllows({ metadata: {} }, pinned, 'interactive'), false, 'a Flex offer never answers in front of a person');
@@ -185,6 +186,20 @@ t.test('an uncensored offer (Sable) answers only the 18+ policy, never a standar
 t.test('a caller may name its data policy, and a bad one is refused', async () => {
     const bad = await request(h.base, 'POST', '/api/v1/generate', { tok: token('svc', ALL), body: { prompt: 'hi', options: { data_policy: 'nonsense' } } });
     assert.strictEqual(bad.status, 422, bad.text);
+});
+
+t.test('the Exchange API accepts service_tier flex and a data policy', async () => {
+    const h2 = await boot({ env: { AI_STUB_FALLBACK: 'true', AI_FREE_PROVIDERS: 'stub' } });
+    const tok = token('exchange', ALL);
+    try {
+        const badTier = await request(h2.base, 'POST', '/v1/chat/completions', { tok, body: { messages: [{ role: 'user', content: 'hi' }], service_tier: 'turbo' } });
+        assert.strictEqual(badTier.status, 400, badTier.text);
+        const badPolicy = await request(h2.base, 'POST', '/v1/chat/completions', { tok, body: { messages: [{ role: 'user', content: 'hi' }], data_policy: 'secret' } });
+        assert.strictEqual(badPolicy.status, 400, badPolicy.text);
+        const run = await request(h2.base, 'POST', '/v1/chat/completions', { tok, body: { messages: [{ role: 'user', content: 'hi' }], service_tier: 'flex', data_policy: 'anonymized' } });
+        assert.strictEqual(run.status, 200, run.text);
+        assert.ok(run.body && run.body.choices && run.body.choices.length, 'the flex request answered');
+    } finally { await h2.stop(); }
 });
 
 t.run(() => h && h.stop());

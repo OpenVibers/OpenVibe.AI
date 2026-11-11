@@ -17,8 +17,12 @@
  * (server/policy/tier.js) are not configurable here and have no switch: they run in the pool
  * before and after every attempt, including an owner's fixed order for uncensored.
  */
+const fs = require('fs');
+const path = require('path');
 const { AiError, parseJson } = require('./util');
 const { isUncensored } = require('./providers/pool-providers');
+const traits = require('./providers/traits');
+const computeProviders = require('./gpu/compute-providers');
 
 const KINDS = ['chat', 'uncensored', 'embed', 'image', 'transcribe', 'batch'];
 const STRATEGIES = ['auto', 'cheapest', 'fastest', 'fixed'];
@@ -29,6 +33,12 @@ const STRATEGIES = ['auto', 'cheapest', 'fastest', 'fixed'];
  * less OFF. The uncensored kind never serves a stored answer, so its answer cache reads off.
  */
 const ECONOMY_DEFAULTS = Object.freeze({ batches: true, prompt_cache: true, small_first: false, output_limit: null, answer_cache: true });
+/**
+ * The routing rules of the provider wave (migration 0075). Every one starts at its safe value; the owner may
+ * change it on the inference page, and the pool reads the row before each placement.
+ */
+const RULE_DEFAULTS = Object.freeze({ private_training: false, flex_interactive: false, latency_limited_interactive: false, free_allowance_first: true });
+const CONFIRMED_PRICES_FILE = path.join(__dirname, '..', 'scripts', 'pricebook-proposals-2026-11-10b.json');
 const economyDefaultsFor = (capability) => ({ ...ECONOMY_DEFAULTS, ...(capability === 'uncensored' ? { answer_cache: false } : {}) });
 
 /** The kind of work a workflow is, from its own steps (server/workflows). */
@@ -193,6 +203,168 @@ function createOwnerConfig({ db, registry, clock = { now: () => Date.now() } } =
         return (await getEconomy()).find((r) => r.capability === capability);
     }
 
+    // ── The provider wave's controls (migration 0075) ──────────
+    /** The safe routing rules, merged with the owner's row when there is one. */
+    async function getRules() {
+        const row = await db.prepare("SELECT * FROM owner_inference_rules WHERE id = 'default'").get();
+        return {
+            ...RULE_DEFAULTS,
+            ...(row ? {
+                private_training: !!row.private_training, flex_interactive: !!row.flex_interactive,
+                latency_limited_interactive: !!row.latency_limited_interactive, free_allowance_first: !!row.free_allowance_first,
+            } : {}),
+            updated_by: row ? row.updated_by : null,
+            updated_at: row ? row.updated_at : null,
+        };
+    }
+    async function setRules(input, { actor = 'system', trace = null } = {}) {
+        const b = input || {};
+        const val = (v, fallback) => (typeof v === 'boolean' ? v : fallback);
+        const prev = await getRules();
+        const next = {
+            private_training: val(b.private_training, prev.private_training),
+            flex_interactive: val(b.flex_interactive, prev.flex_interactive),
+            latency_limited_interactive: val(b.latency_limited_interactive, prev.latency_limited_interactive),
+            free_allowance_first: val(b.free_allowance_first, prev.free_allowance_first),
+        };
+        const t = now();
+        await db.prepare(`INSERT INTO owner_inference_rules (id, private_training, flex_interactive, latency_limited_interactive, free_allowance_first, updated_by, updated_at)
+            VALUES ('default', ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET private_training = excluded.private_training, flex_interactive = excluded.flex_interactive,
+              latency_limited_interactive = excluded.latency_limited_interactive, free_allowance_first = excluded.free_allowance_first, updated_by = excluded.updated_by, updated_at = excluded.updated_at`)
+            .run(next.private_training ? true : false, next.flex_interactive ? true : false, next.latency_limited_interactive ? true : false, next.free_allowance_first ? true : false, actor, t);
+        await registry.audit(actor, 'owner_inference.rules', 'owner_inference', 'default', { trace, metadata: next });
+        return await getRules();
+    }
+    async function controlFor(providerKey) {
+        return await db.prepare('SELECT * FROM provider_controls WHERE provider_key = ?').get(providerKey);
+    }
+    async function controls() {
+        return await db.prepare('SELECT * FROM provider_controls ORDER BY provider_key').all();
+    }
+    /** What a free allowance has used this period, from usage_daily. */
+    async function allowanceUsedFor(providerKey, since = null) {
+        const row = since
+            ? await db.prepare('SELECT COALESCE(SUM(tokens_in + tokens_out), 0)::bigint AS t FROM usage_daily WHERE provider_key = ? AND day >= ?').get(providerKey, since)
+            : await db.prepare('SELECT COALESCE(SUM(tokens_in + tokens_out), 0)::bigint AS t FROM usage_daily WHERE provider_key = ?').get(providerKey);
+        return Number(row && row.t || 0);
+    }
+    /**
+     * Every provider with a trait the wave added, the owner's control of it, and the allowance that is left.
+     * A provider with no traits row is not repeated here: nothing about it changed.
+     */
+    async function providerState() {
+        const seen = new Map((await controls()).map((r2) => [r2.provider_key, r2]));
+        const out = [];
+        for (const p of await registry.listProviders()) {
+            const t = (p.metadata && p.metadata.traits) || null;
+            if (!t && !seen.has(p.key)) continue;
+            const c = seen.get(p.key) || null;
+            let allowance = null;
+            if (t && t.free_allowance) {
+                const used = await allowanceUsedFor(p.key, traits.allowancePeriodStart(p, clock.now()));
+                allowance = traits.allowanceLeft(p, { used, now: clock.now() });
+            }
+            let endpoint = null;
+            if (c && c.base_url) {
+                const hourly = Number(c.hourly_usd);
+                const throughput = Number(c.throughput_tokens_per_hour);
+                endpoint = {
+                    base_url: c.base_url, model_key: c.model_key || null, hourly_usd: Number.isFinite(hourly) ? hourly : null,
+                    throughput_tokens_per_hour: Number.isFinite(throughput) ? throughput : null,
+                    usd_per_mtok: Number.isFinite(hourly) && hourly > 0 && Number.isFinite(throughput) && throughput > 0 ? (hourly * 1e6) / throughput : null,
+                };
+            }
+            out.push({
+                key: p.key, display_name: p.display_name, status: p.status, base_url: p.base_url,
+                enabled: c && c.enabled != null ? !!c.enabled : p.status === 'active',
+                tier: c && c.tier ? c.tier : null,
+                traits: t, data_policy: (p.metadata && p.metadata.data_policy) || null, privacy: (p.metadata && p.metadata.privacy) || null,
+                allowance, endpoint, updated_at: c ? c.updated_at : null,
+            });
+        }
+        return out;
+    }
+    /** Turn one provider on or off, and choose the tier the owner wants it asked for. */
+    async function setProvider(input, { actor = 'system', trace = null } = {}) {
+        const key = String((input || {}).provider_key || '').trim();
+        const p = key ? await registry.getProvider(key) : null;
+        if (!p) throw new AiError(404, 'ai.not_found', `no provider ${key || '(empty)'}`);
+        const tier = (input || {}).tier == null || (input || {}).tier === '' ? null : String((input || {}).tier);
+        if (tier != null && !['standard', 'flex'].includes(tier)) throw new AiError(422, 'ai.invalid', 'tier must be standard or flex');
+        const hasEnabled = typeof (input || {}).enabled === 'boolean';
+        const prev = await controlFor(key);
+        const t = now();
+        await db.prepare(`INSERT INTO provider_controls (provider_key, enabled, tier, base_url, model_key, hourly_usd, throughput_tokens_per_hour, updated_by, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(provider_key) DO UPDATE SET enabled = excluded.enabled, tier = excluded.tier, updated_by = excluded.updated_by, updated_at = excluded.updated_at`)
+            .run(key, hasEnabled ? (input.enabled ? true : false) : (prev ? prev.enabled : null), tier,
+                prev ? prev.base_url : null, prev ? prev.model_key : null, prev ? prev.hourly_usd : null, prev ? prev.throughput_tokens_per_hour : null, actor, t);
+        if (hasEnabled) await registry.upsertProvider({ key, status: input.enabled ? 'active' : 'disabled' }, { actor, trace });
+        await registry.audit(actor, 'provider.control', 'provider', key, { trace, metadata: { enabled: hasEnabled ? input.enabled === true : (prev ? prev.enabled : null), tier } });
+        return (await providerState()).find((r2) => r2.key === key) || null;
+    }
+    /**
+     * The owner's own OpenAI-compatible endpoint on a rented GPU: its URL, model, hourly price and measured
+     * throughput. The key is saved in the provider's sealed key slot, never here. The model is priced per
+     * million tokens from the hour and the throughput (server/gpu/token-cost.js does the same arithmetic).
+     */
+    async function setEndpoint(input, { actor = 'system', trace = null } = {}) {
+        const b = input || {};
+        let url = null;
+        try { url = new URL(String(b.base_url || '')); } catch { /* refused below */ }
+        if (!url || url.protocol !== 'https:' || url.username || url.password) throw new AiError(422, 'ai.invalid', 'base_url must be an https URL');
+        const model = String(b.model_key || '').trim();
+        if (!model || model.length > 200) throw new AiError(422, 'ai.invalid', 'model_key is required');
+        const hourly = Number(b.hourly_usd);
+        const throughput = Number(b.throughput_tokens_per_hour);
+        if (!Number.isFinite(hourly) || hourly <= 0 || hourly > 1000) throw new AiError(422, 'ai.invalid', 'hourly_usd must be a positive dollar amount');
+        if (!Number.isInteger(throughput) || throughput <= 0) throw new AiError(422, 'ai.invalid', 'throughput_tokens_per_hour must be a positive whole number of tokens an hour');
+        const key = 'runpod-vllm';
+        const provider = await registry.getProvider(key);
+        if (!provider) throw new AiError(404, 'ai.not_found', `no provider ${key}`);
+        await registry.upsertProvider({
+            key, base_url: url.href.replace(/\/+$/, ''), default_model: model, status: 'disabled', auth_mode: 'bearer', secret_ref: `vault:${key}`,
+            capabilities: ['chat', 'tools'],
+        }, { actor, trace });
+        const usdPerMtok = (hourly * 1e6) / throughput;
+        await registry.upsertModel({
+            provider_key: key, model_key: model, display_name: `${model} (my endpoint)`, type: 'chat', status: 'active',
+            context_window: b.context_window ? Number(b.context_window) : null, max_output: b.max_output ? Number(b.max_output) : null,
+            cost: { in_per_mtok: usdPerMtok, out_per_mtok: usdPerMtok, cached_per_mtok: null, source: url.href, verified_at: new Date(clock.now()).toISOString().slice(0, 10) },
+            supports: { json: true, tools: true, streaming: true, vision: false },
+            metadata: { catalog: 'owner-endpoint', hourly_usd: hourly, throughput_tokens_per_hour: throughput, compute_provider: 'runpod', throughput_source: 'owner-measured' },
+        }, { actor, trace });
+        const prev = await controlFor(key);
+        const t = now();
+        await db.prepare(`INSERT INTO provider_controls (provider_key, enabled, tier, base_url, model_key, hourly_usd, throughput_tokens_per_hour, updated_by, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(provider_key) DO UPDATE SET base_url = excluded.base_url, model_key = excluded.model_key,
+              hourly_usd = excluded.hourly_usd, throughput_tokens_per_hour = excluded.throughput_tokens_per_hour, updated_by = excluded.updated_by, updated_at = excluded.updated_at`)
+            .run(key, prev ? prev.enabled : false, prev ? prev.tier : null, url.href, model, hourly, throughput, actor, t);
+        await registry.audit(actor, 'provider.endpoint', 'provider', key, { trace, metadata: { base_url: url.href, model_key: model, hourly_usd: hourly, throughput_tokens_per_hour: throughput, usd_per_mtok: Number(usdPerMtok.toFixed(6)) } });
+        return (await providerState()).find((r2) => r2.key === key) || null;
+    }
+    /** The capacity we rent ourselves and the owner's endpoint choice. */
+    async function compute() {
+        const c = await controlFor('runpod-vllm');
+        const hourly = c ? Number(c.hourly_usd) : null;
+        const throughput = c ? Number(c.throughput_tokens_per_hour) : null;
+        return {
+            providers: computeProviders.COMPUTE_PROVIDERS,
+            endpoint: c && c.base_url ? {
+                base_url: c.base_url, model_key: c.model_key || null,
+                hourly_usd: Number.isFinite(hourly) ? hourly : null,
+                throughput_tokens_per_hour: Number.isFinite(throughput) ? throughput : null,
+                usd_per_mtok: Number.isFinite(hourly) && hourly > 0 && Number.isFinite(throughput) && throughput > 0 ? (hourly * 1e6) / throughput : null,
+                key_state: 'see the provider key slot',
+            } : null,
+            checked: computeProviders.CHECKED,
+        };
+    }
+    /** The confirmed readings bundled with this release, as pending price-book changes for the owner to accept. */
+    async function confirmedPrices() {
+        try { return JSON.parse(fs.readFileSync(CONFIRMED_PRICES_FILE, 'utf8')); }
+        catch { return []; }
+    }
+
     // ── Costs (24 h / 7 d) and savings (7 d) ───────────────────
     async function costs(window = '7d') {
         const days = window === '24h' ? 1 : 7;
@@ -262,7 +434,8 @@ function createOwnerConfig({ db, registry, clock = { now: () => Date.now() } } =
         };
     }
 
-    return { KINDS, STRATEGIES, getCaps, setCap, capHit, spendFor, getRouting, setRouting, routingFor, getEconomy, economyFor, setEconomy, costs, savings };
+    return { KINDS, STRATEGIES, RULE_DEFAULTS, getCaps, setCap, capHit, spendFor, getRouting, setRouting, routingFor, getEconomy, economyFor, setEconomy,
+        getRules, setRules, controlFor, controls, providerState, setProvider, setEndpoint, compute, confirmedPrices, costs, savings };
 }
 
 module.exports = { createOwnerConfig, KINDS, STRATEGIES, capabilityOfRun, workflowKind };

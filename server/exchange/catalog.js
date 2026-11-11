@@ -16,6 +16,7 @@ const rates = require('../providers/rate-cards');
 const upstream = require('../providers/upstream');
 const observed = require('./observed');
 const privacy = require('./privacy');
+const traits = require('../providers/traits');
 const { allowsOffer } = require('../free-tier');
 const { offerStatus } = require('../providers/failure');
 
@@ -187,6 +188,23 @@ function createCatalog({ db, registry, pool, env = process.env, clock = { now: (
         const refusalRows = await db.prepare('SELECT provider_key, model_key, refusal_rate, prompt_set, measured_at, measured_on FROM refusal_rates').all().catch(() => []);
         const refusalBy = new Map((refusalRows || []).map((r) => [`${r.provider_key}/${r.model_key}`, r]));
 
+        // The free allowance a provider states, and what it has used this period (usage_daily): the Exchange
+        // shows the tokens that are left and their end date, beside the offer.
+        const allowanceUsedCache = new Map();
+        const allowanceUsedFor = async (providerKey, since) => {
+            const cacheKey = `${providerKey}|${since || ''}`;
+            if (allowanceUsedCache.has(cacheKey)) return allowanceUsedCache.get(cacheKey);
+            let used = 0;
+            try {
+                const row = since
+                    ? await db.prepare('SELECT COALESCE(SUM(tokens_in + tokens_out), 0)::bigint AS t FROM usage_daily WHERE provider_key = ? AND day >= ?').get(providerKey, since)
+                    : await db.prepare('SELECT COALESCE(SUM(tokens_in + tokens_out), 0)::bigint AS t FROM usage_daily WHERE provider_key = ?').get(providerKey);
+                used = Number((row && row.t) || 0);
+            } catch { used = 0; }
+            allowanceUsedCache.set(cacheKey, used);
+            return used;
+        };
+
         const groups = new Map();
         const drafts = [];
         for (const row of await registry.listModels()) {
@@ -215,6 +233,11 @@ function createCatalog({ db, registry, pool, env = process.env, clock = { now: (
             // The refusal rate of this offer, as the refusal job measured it.
             const refusal = refusalBy.get(`${row.provider_key}/${row.model_key}`) || null;
             const health = statusFor(provider.key, row.model_key);
+            const providerTraits = (provider.metadata && provider.metadata.traits) || null;
+            const allowanceRecord = traits.freeAllowanceOf(provider);
+            const allowance = allowanceRecord
+                ? traits.allowanceLeft(provider, { used: await allowanceUsedFor(provider.key, traits.allowancePeriodStart(provider, now)), now })
+                : null;
             const offer = {
                 provider: up.key,
                 provider_name: up.name,
@@ -244,6 +267,16 @@ function createCatalog({ db, registry, pool, env = process.env, clock = { now: (
                 price_checked_at: checkedAt && checkedAt !== rates.UNKNOWN_DATE ? checkedAt : null,
                 // The same day in words: what the catalog shows under the price is when somebody read it.
                 price_checked: checkedAt && checkedAt !== rates.UNKNOWN_DATE ? `price checked ${checkedAt}` : null,
+                // The tier the offer runs on: an offer that names Flex (the OpenRouter Particle pin) says so;
+                // a provider that sells a Flex tier is marked with the tier, never assumed to be serving it.
+                service_tier: (row.metadata && row.metadata.service_tier) || null,
+                // The classes of work the offer may answer. null means every class (the usual case).
+                latency_class: traits.latencyClassesOf(provider, row),
+                // The free allowance the provider states: tokens left, the period and its end date.
+                free_allowance: allowance ? {
+                    tokens: allowance.tokens, used: allowance.used, left: allowance.left, period: allowance.period,
+                    shared: allowance.shared, ends_at: allowance.ends_at, ended: allowance.ended,
+                } : null,
                 data_policy: policyOf(provider),
                 // The privacy label of this offer, from the same facts the router uses (server/exchange/privacy.js):
                 // Private (zero retention, no training, or the host's own deployment), Anonymized, Community.
