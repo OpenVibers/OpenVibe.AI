@@ -17,7 +17,8 @@ function rankImages(rows, limit) {
     for (const row of ordered) {
         const exact = key(row);
         const title = String(row.title || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
-        const near = title.length > 15 && `${title}|${Math.round((row.width || 0) / Math.max(1, row.height || 1) * 10)}`;
+        const author = String(row.author || '').toLowerCase().trim();
+        const near = title.length > 15 && author && `${title}|${author}|${Math.round((row.width || 0) / Math.max(1, row.height || 1) * 10)}`;
         if (seen.has(exact) || near && seen.has(near)) continue;
         seen.add(exact);
         if (near) seen.add(near);
