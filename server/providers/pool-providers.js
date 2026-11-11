@@ -739,7 +739,19 @@ const PROVIDERS = [
     { key: 'deepseek', keys_url: 'https://platform.deepseek.com/api_keys', display_name: 'DeepSeek', base_url: 'https://api.deepseek.com/v1', default_model: 'deepseek-flash',
         docs_url: 'https://api-docs.deepseek.com/', capabilities: ['chat', 'vision', 'tools', 'web-search'], search_adapters: ['deepseek'] },
     { key: 'anthropic', keys_url: 'https://console.anthropic.com/settings/keys', display_name: 'Anthropic', kind: 'anthropic', base_url: 'https://api.anthropic.com/v1', auth_mode: 'x-api-key',
-        docs_url: 'https://platform.claude.com/docs/en/api/overview', capabilities: ['chat', 'messages', 'vision', 'tools'] },
+        docs_url: 'https://platform.claude.com/docs/en/api/overview', capabilities: ['chat', 'messages', 'vision', 'tools'],
+        default_model: 'claude-opus-5-5',
+        // Design's signed-in icon task names this model. The provider remains disabled and UNVERIFIED until
+        // the owner supplies a key and confirms the commercial access and retail price.
+        models: [{
+            model_key: 'claude-opus-5-5', display_name: 'Claude Opus 5.5', family: 'claude',
+            context_window: 1000000, max_output: 128000,
+            cost: { in_per_mtok: 4, cached_per_mtok: 0.2, out_per_mtok: 20 },
+            source: 'https://platform.claude.com/docs/en/models/opus-5-5/overview', checked: '2026-11-11',
+            supports: { json: true, tools: true, streaming: true, vision: true },
+            quantization: null, refusal_rate: null,
+        }],
+    },
     { key: 'openai', keys_url: 'https://platform.openai.com/api-keys', display_name: 'OpenAI', base_url: 'https://api.openai.com/v1', default_model: 'gpt-5-mini',
         docs_url: 'https://platform.openai.com/docs/api-reference/models/list', capabilities: ['chat', 'vision', 'tools', 'image', 'video', 'speech', 'transcribe', 'embed'] },
     { key: 'gemini', models_dev_id: 'google', keys_url: 'https://aistudio.google.com/apikey', display_name: 'Google AI Studio (Gemini API)', base_url: 'https://generativelanguage.googleapis.com/v1beta/openai',
