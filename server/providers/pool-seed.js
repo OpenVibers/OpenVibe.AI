@@ -144,7 +144,17 @@ async function seedPoolProviders({ registry, actor = 'system', env = process.env
                 out.models.push(`${p.key}/${m.model_key}`);
                 continue;
             }
-            if (row.status !== 'active') continue;                       // the owner turned it off: it stays off
+            if (row.status !== 'active') {
+                // The owner turned the model off: it stays off, and its price and status are the owner's. The
+                // catalogue still records the offer's own routing and service tier (the OpenRouter Particle pin),
+                // because those are facts about the offer, not a price or a switch.
+                const next = modelOf(p, m);
+                const facts = {};
+                if (m.routing && JSON.stringify((row.metadata && row.metadata.routing) || null) !== JSON.stringify(m.routing)) facts.routing = m.routing;
+                if (m.service_tier && !(row.metadata && row.metadata.service_tier)) facts.service_tier = m.service_tier;
+                if (Object.keys(facts).length) await registry.upsertModel({ ...row, metadata: { ...(row.metadata || {}), ...facts } }, { actor });
+                continue;
+            }
             if (row.metadata && row.metadata.price_book) continue;    // the price book owns this price: it refreshes it
             if (row.cost.in_per_mtok != null && !cataloguePrice(row)) continue;   // a person's own price: it stays
             const next = modelOf(p, m);
