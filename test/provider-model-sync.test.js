@@ -43,6 +43,10 @@ t.test('boot and sync the registered endpoint into the existing model table, off
     const r = await api('POST', prefix + '/sync');
     assert.strictEqual(r.status, 200, r.text);
     assert.deepStrictEqual(r.body.added, ['alpha', 'beta']);
+    const events = await api('GET', '/api/v1/exchange/model-events');
+    assert.strictEqual(events.status, 200, events.text);
+    assert.deepStrictEqual(events.body.events.filter(e => e.provider === 'sync-test').map(e => [e.type, e.model]),
+        [['model.added', 'alpha'], ['model.added', 'beta']]);
     const alpha = await h.registry.getModel('sync-test', 'alpha');
     assert.strictEqual(alpha.status, 'disabled');
     assert.strictEqual(alpha.context_window, 2048, 'the provider context wins');
@@ -87,6 +91,8 @@ t.test('removed models are retained disabled; a reappearing model still needs an
     const gone = await h.registry.getModel('sync-test', 'gamma');
     assert.strictEqual(gone.status, 'disabled');
     assert.ok(gone.metadata.missing_since);
+    const retired = await api('GET', '/api/v1/exchange/model-events');
+    assert.ok(retired.body.events.some(e => e.type === 'model.retired' && e.provider === 'sync-test' && e.model === 'gamma'));
     assert.strictEqual((await api('PATCH', '/api/v1/models/sync-test/gamma', { status: 'active' })).status, 409);
     listing.push({ id: 'gamma' });
     assert.strictEqual((await api('POST', prefix + '/sync')).status, 200);

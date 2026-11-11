@@ -46,6 +46,16 @@ function createModelSync({ db, registry, env = process.env, fetchImpl = globalTh
     let stopped = false;
     const iso = () => new Date(now()).toISOString();
     const read = provider => db.prepare(`SELECT * FROM provider_model_syncs ${provider ? 'WHERE provider_key = ?' : ''} ORDER BY id DESC LIMIT 50`).all(...(provider ? [provider] : []));
+    const ids = value => Array.isArray(value) ? value : typeof value === 'string' ? JSON.parse(value) : [];
+    async function events() {
+        const rows = await read();
+        return rows.filter(row => row.status === 'succeeded').flatMap(row => [
+            ...ids(row.added_models).map(model => ({ id: `${row.id}:added:${model}`, type: 'model.added', provider: row.provider_key,
+                model, occurred_at: row.finished_at, sync_id: row.id })),
+            ...ids(row.missing_models).map(model => ({ id: `${row.id}:retired:${model}`, type: 'model.retired', provider: row.provider_key,
+                model, occurred_at: row.finished_at, sync_id: row.id })),
+        ]);
+    }
 
     function run(key, { actor = 'system', trigger = 'manual' } = {}) {
         if (stopped) throw new AiError(503, 'ai.unavailable', 'model sync is stopping');
@@ -62,8 +72,8 @@ function createModelSync({ db, registry, env = process.env, fetchImpl = globalTh
                 const [dev, router] = await Promise.all([source.read(), provider.key === 'openrouter' ? Promise.resolve({ entries: [], stale: true }) : routerSource.read()]);
                 const result = await catalog.sync({ registry, provider, apiKey, actor, now, enrich: enrichment(provider, dev, router),
                     fetchImpl: fetchImpl === globalThis.fetch ? guardedFetch : fetchImpl });
-                await db.prepare("UPDATE provider_model_syncs SET status = 'succeeded', finished_at = ?, added = ?, updated = ?, missing = ? WHERE id = ?")
-                    .run(iso(), result.added.length, result.updated.length, result.missing.length, row.id);
+                await db.prepare("UPDATE provider_model_syncs SET status = 'succeeded', finished_at = ?, added = ?, updated = ?, missing = ?, added_models = ?, missing_models = ? WHERE id = ?")
+                    .run(iso(), result.added.length, result.updated.length, result.missing.length, JSON.stringify(result.added), JSON.stringify(result.missing), row.id);
                 return { id: row.id, provider: key, ...result };
             } catch (err) {
                 const safe = ['provider.auth', 'provider.http', 'provider.unreachable', 'provider.timeout', 'provider.catalog_invalid', 'provider.catalog_unsupported', 'provider.config', 'provider.no_credentials'].includes(err.code) ? err.code : 'provider.sync_failed';
@@ -89,7 +99,7 @@ function createModelSync({ db, registry, env = process.env, fetchImpl = globalTh
             }
         } finally { ticking = false; }
     }
-    return { run, read, tick,
+    return { run, read, events, tick,
         start() { if (!timer) { timer = setInterval(() => tick().catch(() => log.warn('model sync schedule failed')), 60_000); timer.unref?.(); } },
         async stop() { stopped = true; clearInterval(timer); timer = null; await Promise.allSettled([...active.values()]); },
     };
