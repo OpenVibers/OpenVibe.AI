@@ -29,6 +29,7 @@ function recordOf(p) {
         metadata: {
             catalog: 'pool-providers',
             api_family: p.api_family, models_endpoint: p.models_endpoint,
+            model_sync_interval_minutes: p.models_endpoint ? 1440 : 0,
             check_endpoint: p.check_endpoint || null,
             models_public: p.models_public === true, models_dev_id: p.models_dev_id || null,
             auth_header: p.auth_header || null, docs_url: p.docs_url || null,
@@ -111,6 +112,8 @@ async function seedPoolProviders({ registry, actor = 'system', env = process.env
                 defaults.metadata.check_endpoint = null;
             }
             const metadata = { ...defaults.metadata, ...prev.metadata, search_adapters: [...new Set([...(prev.metadata.search_adapters || []), ...(defaults.metadata.search_adapters || [])])] };
+            if (p.key === 'gemini' && prev.base_url === p.base_url && prev.metadata.models_endpoint === `${p.base_url}/models`)
+                metadata.models_endpoint = defaults.metadata.models_endpoint;
             if (!configured && prev.base_url !== p.base_url) {
                 metadata.models_endpoint = defaults.metadata.models_endpoint;
                 metadata.api_family = defaults.metadata.api_family;
@@ -132,7 +135,9 @@ async function seedPoolProviders({ registry, actor = 'system', env = process.env
                 protocol.models_endpoint = prev.base_url ? `${prev.base_url.replace(/\/+$/, '')}/models` : null;
                 protocol.check_endpoint = null;
             }
-            const additions = Object.fromEntries(Object.entries(protocol).filter(([k]) => ['api_family', 'models_endpoint', 'check_endpoint', 'models_public', 'models_dev_id', 'auth_header', 'docs_url', 'search_adapters'].includes(k) && prev.metadata[k] === undefined));
+            const additions = Object.fromEntries(Object.entries(protocol).filter(([k]) => ['api_family', 'models_endpoint', 'model_sync_interval_minutes', 'check_endpoint', 'models_public', 'models_dev_id', 'auth_header', 'docs_url', 'search_adapters'].includes(k) && prev.metadata[k] === undefined));
+            if (p.key === 'gemini' && prev.base_url === p.base_url && prev.metadata.models_endpoint === `${p.base_url}/models`)
+                additions.models_endpoint = protocol.models_endpoint;
             const engines = [...new Set([...(prev.metadata.search_adapters || []), ...(protocol.search_adapters || [])])];
             if (engines.length !== (prev.metadata.search_adapters || []).length) additions.search_adapters = engines;
             if (Object.keys(additions).length) await registry.upsertProvider({ key: p.key, metadata: { ...prev.metadata, ...additions } }, { actor, origin: prev.origin });

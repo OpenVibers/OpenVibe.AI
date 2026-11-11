@@ -95,6 +95,22 @@ async function listRemote(provider, apiKey, { fetchImpl = globalThis.fetch } = {
     if (!base) throw new ProviderError('the provider has no base URL', { code: 'provider.config' });
     const endpoint = provider.metadata?.models_endpoint || `${base}/models`;
     if (new URL(endpoint).origin !== new URL(base).origin) throw new ProviderError('model list must use the provider origin', { code: 'provider.config' });
+    if (provider.key === 'gemini' || provider.metadata?.api_family === 'google') {
+        const out = [];
+        const tokens = new Set();
+        const url = new URL(endpoint);
+        for (let page = 0; page < 100; page++) {
+            const j = await getJson(url.href, { 'x-goog-api-key': apiKey }, { fetchImpl });
+            if (!Array.isArray(j.models) || j.models.some(m => !m || typeof m.name !== 'string' || !m.name.startsWith('models/')))
+                throw new ProviderError('invalid model list', { code: 'provider.catalog_invalid' });
+            out.push(...j.models.map(remoteModel));
+            if (!j.nextPageToken) return out;
+            if (typeof j.nextPageToken !== 'string' || tokens.has(j.nextPageToken) || page === 99)
+                throw new ProviderError('incomplete model list', { code: 'provider.catalog_invalid' });
+            tokens.add(j.nextPageToken);
+            url.searchParams.set('pageToken', j.nextPageToken);
+        }
+    }
     if (provider.kind === 'anthropic') {
         // Anthropic's Models API pages by after_id; its Anthropic-format look-alikes (DeepSeek, MiniMax) have no list.
         if (!/anthropic\.com/i.test(base) && !provider.metadata?.models_endpoint) return [];
@@ -143,10 +159,14 @@ function remoteModel(m) {
     const params = Array.isArray(m.supported_parameters) ? m.supported_parameters : null;
     const type = m.type === 'language' ? 'chat' : m.type;
     return {
-        id, name: m.name && m.name !== m.id ? String(m.name).replace(/^models\//, '') : (m.display_name || id),
+        id, name: m.displayName || m.display_name || (m.name && m.name !== m.id ? String(m.name).replace(/^models\//, '') : id),
+        ...(typeof m.version === 'string' ? { version: m.version } : {}),
+        ...(Array.isArray(m.supportedGenerationMethods) ? { generationMethods: m.supportedGenerationMethods.filter(x => typeof x === 'string') } : {}),
         hints: {
             contextWindow: m.context_length || m.context_window || m.inputTokenLimit || (m.top_provider && m.top_provider.context_length),
             maxOutput: m.outputTokenLimit || (m.top_provider && m.top_provider.max_completion_tokens),
+            ...(Array.isArray(m.supportedGenerationMethods) ? { type: m.supportedGenerationMethods.includes('embedContent') && !m.supportedGenerationMethods.includes('generateContent') ? 'embedding' : 'chat' } : {}),
+            ...(m.thinking != null ? { reasoning: Boolean(m.thinking) } : {}),
             vision: Array.isArray(arch.input_modalities) ? arch.input_modalities.includes('image') : null,
             tools: params ? params.includes('tools') : null,
             reasoning: params ? params.includes('reasoning') || params.includes('include_reasoning') : null,
@@ -178,6 +198,8 @@ async function sync({ registry, provider, apiKey, fetchImpl = globalThis.fetch, 
         const uncensored = require('./pool-providers').isUncensored(provider, { model_key: m.id, metadata: prev?.metadata || {} });
         const contributor = provider.key === 'meta' && /-contributor$/i.test(m.id);
         const metadata = { tier: d.tier, reasoning: d.reasoning, note: d.note, ...prev?.metadata, synced_at: at, listed: true,
+            ...(m.version ? { version: m.version } : {}),
+            ...(m.generationMethods ? { generation_methods: m.generationMethods } : {}),
             ...(contributor ? { routing_excluded: true, routing_excluded_reason: 'Meta Contributor mode permits training on prompts and is not allowed in OpenVibe routing.' } : {}),
             ...(uncensored ? { uncensored: true, min_age: 18 } : {}),
             ...(extra.source ? { catalogue_enrichment: { source: extra.source, checked_at: extra.checked_at } } : {}) };

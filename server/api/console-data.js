@@ -49,6 +49,7 @@ function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth,
             const hints = vault && vault.hints ? await vault.hints() : new Map();
             const rows = (await Promise.all((await registry.listProviders()).map(ops.providerView))).map((p) => ({
                 ...p, key_present: p.credentials === 'configured', preference_order: p.priority,
+                keys_url: require('../providers/pool-providers').byKey.get(p.key)?.keys_url || null,
                 key_state: p.auth_mode === 'none' ? { source: 'not_required', hint: null, set_at: null }
                     : { source: hints.has(p.key) ? 'stored' : p.credentials === 'configured' ? 'environment' : 'missing',
                         hint: hints.get(p.key)?.hint || (providerSecret(p, env) ? `…${providerSecret(p, env).slice(-4)}` : null),
@@ -168,15 +169,18 @@ function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth,
         await registry.audit(who.actor, 'provider.key_removed', 'provider', provider.key, { trace: who.trace });
         return { ok: true, provider: provider.key };
     }));
-    r.post('/api/v1/admin/console/providers/:key/check', write, wrap(async (req) => {
+    r.post('/api/v1/admin/console/providers/:key/check', json, write, wrap(async (req) => {
         const provider = await registry.getProvider(req.params.key);
         if (!provider) throw new AiError(404, 'ai.not_found', 'no such provider');
+        const keyOverride = (req.body || {}).api_key;
+        if (keyOverride != null && (typeof keyOverride !== 'string' || keyOverride.length < 8 || keyOverride.length > 400))
+            throw new AiError(422, 'ai.invalid', 'the provider key must be 8-400 characters');
         const { checkProvider } = require('../providers/check');
-        const result = await checkProvider(provider, { env, now: clock.now,
+        const result = await checkProvider(provider, { env, now: clock.now, keyOverride,
             fetchImpl: fetchImpl === globalThis.fetch ? require('../providers/guarded-fetch').guardedFetch : fetchImpl });
         // A check does not enable a provider or overwrite settings changed while its request was in flight.
         const current = await registry.getProvider(provider.key);
-        if (current.updated_at === provider.updated_at) await registry.upsertProvider({ key: provider.key, metadata: { ...current.metadata, last_check: result } }, { actor: actor(req), origin: current.origin });
+        if (!keyOverride && current.updated_at === provider.updated_at) await registry.upsertProvider({ key: provider.key, metadata: { ...current.metadata, last_check: result } }, { actor: actor(req), origin: current.origin });
         return { provider: provider.key, ...result };
     }));
     r.post('/api/v1/admin/console/providers/:key/sync', write, wrap(async (req) => {
