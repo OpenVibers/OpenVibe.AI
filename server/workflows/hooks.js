@@ -442,6 +442,23 @@ const POSTPROCESS = {
         const one = (t, n) => String(t == null ? '' : t).replace(/\s+/g, ' ').trim().slice(0, n);
         return { headline: one(j.headline, 100), summary: one(j.summary, 700) };
     },
+    // The day's card: public prose, so the labels and markup are filtered like any other public AI text, and a
+    // highlight survives only when its take_id is one of the takes it was given (never an invented link).
+    'live.rundown.today'(r, input) {
+        const j = r.json || parseJsonLoose(r.text);
+        if (!j || typeof j !== 'object' || Array.isArray(j)) return null;
+        const one = (t, n) => String(t == null ? '' : t).replace(/\s+/g, ' ').trim().slice(0, n);
+        const headline = one(j.headline, 100);
+        const summary = plainProse(j.summary, 700);
+        if (!headline || !summary) return null;
+        const ids = new Set((input && Array.isArray(input.takes) ? input.takes : []).map((x) => Number(x && x.take_id)).filter((n) => Number.isInteger(n) && n > 0));
+        const seen = new Set();
+        const highlights = (Array.isArray(j.highlights) ? j.highlights : []).slice(0, 8)
+            .map((h) => ({ take_id: Number(h && h.take_id), line: plainProse(h && h.line, 240) }))
+            .filter((h) => ids.has(h.take_id) && h.line && !seen.has(h.take_id) && seen.add(h.take_id))
+            .slice(0, 3);
+        return { headline, summary, highlights };
+    },
     'live.clips.confirm'(r) {
         const j = r.json || parseJsonLoose(r.text);
         if (!j || typeof j !== 'object') return null;
