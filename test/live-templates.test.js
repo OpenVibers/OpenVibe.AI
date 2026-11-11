@@ -263,4 +263,52 @@ t.test('The Rundown: an episode keeps chapters that name a real segment once; a 
     for (const k of ['live.rundown.segment', 'live.rundown.episode', 'live.rundown.topic']) assert.ok(live.workflows.find((w) => w.key === k && w.steps[0].template === k), k);
 });
 
+t.test("The Rundown's Today card: the prompt carries the takes and the ids, and only real takes become highlights", () => {
+    const tp = (k) => live.templates.find((x) => x.key === k);
+    const today = tp('live.rundown.today');
+    assert.ok(today, 'the today template exists');
+    assert.strictEqual(today.default_route, 'background.creative');
+    assert.match(today.system_prompt, /warm, concrete and a little funny/);
+    assert.match(today.system_prompt, /No stock words or filler/);
+    assert.match(today.system_prompt, /copied from the input, never invented/);
+    assert.match(today.system_prompt, /never guess a pronoun/);
+    assert.match(today.system_prompt, /Privacy: never write or quote where anyone is/);
+    assert.match(today.system_prompt, /seems to be under 18/);
+    const input = { date: '2026-11-11', takes: [
+        { take_id: 41, streamer: 'goosely', when: '2026-11-11T10:00:00Z', topic: 'Supermarket fridges hacked in France', what: 'They read about hacked fridges.', take: 'Internet fridges are a bad idea.', quote: 'A bad idea.' },
+        { take_id: 42, streamer: 'ann', when: '2026-11-11T12:00:00Z', topic: 'Rust builds', what: 'They fixed a bug live.', take: null, quote: 'It compiles!' },
+    ] };
+    const user = render(today.user_prompt, PREPARE['live.rundown.today'](input).vars);
+    assert.match(user, /^Today is 2026-11-11\. The day's takes \(2\), oldest first/);
+    assert.match(user, /1\. \[take:41\] goosely at 2026-11-11T10:00:00Z on Supermarket fridges hacked in France — what: They read about hacked fridges\. — their take: Internet fridges are a bad idea\. — their words: "A bad idea\."/);
+    assert.match(user, /2\. \[take:42\] ann .*— their words: "It compiles!"/);
+    assert.match(user, /Return JSON only/);
+    const out = POSTPROCESS['live.rundown.today']({ json: {
+        headline: ' Fridges, compilers and one stubborn bug ',
+        summary: '## Summary\n- **The day:** goosely read about hacked fridges and ann fixed a build.\nIt ended with a working compiler.',
+        highlights: [
+            { take_id: 41, line: 'The fridge take that started it all.' },
+            { take_id: 41, line: 'A repeat of the same take.' },
+            { take_id: 999, line: 'Not one of the input takes.' },
+            { take_id: 42, line: '**It compiles!**' },
+            { take_id: 42, line: 'Again.' },
+            { take_id: 'nope', line: 'No id.' },
+        ],
+    } }, input);
+    assert.strictEqual(out.headline, 'Fridges, compilers and one stubborn bug');
+    assert.strictEqual(out.summary, 'The day: goosely read about hacked fridges and ann fixed a build. It ended with a working compiler.');
+    assert.deepStrictEqual(out.highlights, [
+        { take_id: 41, line: 'The fridge take that started it all.' },
+        { take_id: 42, line: 'It compiles!' },
+    ], 'one highlight per real take, in order, at most three');
+    assert.deepStrictEqual(POSTPROCESS['live.rundown.today']({ json: { headline: 'x', summary: 'y' } }, input).highlights, [], 'no highlights is an answer');
+    assert.strictEqual(POSTPROCESS['live.rundown.today']({ json: { summary: 'no headline' } }, input), null);
+    assert.strictEqual(POSTPROCESS['live.rundown.today']({ text: 'not json' }, input), null);
+    assert.strictEqual(POSTPROCESS['live.rundown.today']({ json: { headline: 'Quiet shift', summary: 'No takes were submitted today, so there are no updates.' } }, input), null, 'a card that denies the takes it was given is no card');
+    assert.deepStrictEqual(PREPARE['live.rundown.today']({ date: '2026-11-11', takes: [{ take_id: 41, streamer: 'goosely', what: 'Fridges.' }] }).vars, { date: '2026-11-11', count: 1, takes: '1. [take:41] goosely — what: Fridges.' });
+    const many = { json: { headline: 'h', summary: 's', highlights: [41, 42, 43, 44].map((id) => ({ take_id: id, line: `line ${id}` })) } };
+    assert.strictEqual(POSTPROCESS['live.rundown.today'](many, { takes: [41, 42, 43, 44].map((id) => ({ take_id: id })) }).highlights.length, 3, 'up to three');
+    assert.ok(live.workflows.find((w) => w.key === 'live.rundown.today' && w.steps[0].template === 'live.rundown.today'));
+});
+
 t.run();

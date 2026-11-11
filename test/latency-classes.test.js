@@ -346,7 +346,7 @@ t.test('the price book job writes the blocks it read from the listing', async ()
 
 // ── The workflows that wait ────────────────────────────────────────────────────
 
-const BACKGROUND = ['trade.summarize_market_context', 'live.rundown.topic', 'live.rundown.segment', 'live.rundown.episode',
+const BACKGROUND = ['trade.summarize_market_context', 'live.rundown.today', 'live.rundown.topic', 'live.rundown.segment', 'live.rundown.episode',
     'live.stream.summarize', 'live.stream.describe_frame', 'live.moments.pick', 'live.moments.rank', 'live.moments.verify',
     'live.streamer.overview', 'live.person.overview', 'live.media.overview', 'live.viewers.plan', 'live.viewers.fold',
     'live.hero.slogans', 'live.home.star', 'live.easter_egg', 'live.paste.describe_image', 'live.paste.summarize_text',
