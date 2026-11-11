@@ -38,9 +38,9 @@ const WEIGHTS_FILE = /^[A-Za-z0-9][A-Za-z0-9._ -]{0,180}\.gguf$/;
 const BILLING_OFF = 'Balance billing is not on yet, so an endpoint cannot be paid for. The owner must turn on Balance first.';
 
 function plainGpuReason(reason) {
-    if (reason === 'no Vast.ai or RunPod API key') return 'The owner has not added a GPU provider key (Vast.ai or RunPod) yet, so no endpoint can start.';
+    if (/GPU provider key|Vast\.ai or RunPod API key/.test(String(reason || ''))) return 'The owner has not added a GPU provider key (Vast.ai or RunPod) yet, so no endpoint can start.';
     if (reason === 'no monthly cap') return 'The owner has not set a monthly GPU cap yet, so no endpoint can start.';
-    return 'The GPU provider is not set up yet, so no endpoint can start.';
+    return 'The GPU provider is not set up yet (a GPU provider key and a monthly cap are needed), so no endpoint can start.';
 }
 
 /** A short, plain sentence for why a rent stopped. The status line is a sentence, never a code. */
