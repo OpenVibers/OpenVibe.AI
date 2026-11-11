@@ -22,6 +22,7 @@ const products = require('./products');
 const devblog = require('./devblog');
 const chat = require('./chat');
 const research = require('./research');
+const deepDive = require('./deep-dive');
 const meme = require('./meme');
 const changelog = require('./changelog');
 const pictures = require('./pictures');
@@ -314,7 +315,7 @@ async function seed({ registry, quotas, config, env = process.env, db }) {
         const { key, ...def } = t;
         await registry.seedVersioned('template', key, { description: null, default_route: null, owner: 'ai', visibility: 'internal', metadata: {}, ...def });
     }
-    for (const w of [...live.workflows, ...core.workflows, ...products.workflows, ...devblog.workflows, ...media.workflows, ...chat.workflows, ...space.workflows, ...research.workflows, ...meme.workflows, ...changelog.workflows, ...pictures.workflows]) {
+    for (const w of [...live.workflows, ...core.workflows, ...products.workflows, ...devblog.workflows, ...media.workflows, ...chat.workflows, ...space.workflows, ...research.workflows, ...deepDive.workflows, ...meme.workflows, ...changelog.workflows, ...pictures.workflows]) {
         const { key, ...def } = w;
         await registry.seedVersioned('workflow', key, { description: null, default_route: null, cache_ttl_sec: null, metadata: {}, ...def });
     }

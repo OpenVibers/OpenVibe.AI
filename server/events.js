@@ -149,6 +149,33 @@ async function callRecorded(rec) {
 }
 
 
+/**
+ * ai.deep_dive.updated@1: a deep dive's step changed or it ended (server/deep-dive/). One low-priority event per
+ * step transition and at the end, so OpenVibe.Exchange's page can follow a run and OpenVibe.Design can attach a
+ * finished report without polling. The payload carries ids, the step, the progress and the status; never the
+ * question's answer, a capture or a prompt. No-op while publishing is off.
+ */
+async function deepDiveUpdated({ runId, deepDiveId, status, step, progress, steps, depth, requester, on_behalf_of, url, error = null }) {
+    if (!svc || !dbRef || !runId) return null;
+    const payload = {
+        deep_dive_id: String(deepDiveId || runId), run_id: String(runId),
+        status: status === 'queued' ? 'queued' : ['running', 'choosing', 'succeeded', 'failed', 'cancelled'].includes(status) ? status : 'running',
+        step: step === 'done' ? 'done' : (['plan', 'search', 'choose', 'capture', 'analyse', 'synthesise', 'report'].includes(step) ? step : null),
+        progress: Math.max(0, Math.min(1, Number(progress) || 0)),
+        steps: (steps || []).slice(0, 7).map((s) => ({ key: s.key, status: s.status })),
+        depth: ['quick', 'thorough', 'expert'].includes(depth) ? depth : 'quick',
+        requester: requester && requester.type && requester.id ? { type: requester.type, id: String(requester.id) } : { type: 'service', id: 'ai' },
+        on_behalf_of: on_behalf_of && on_behalf_of.type && on_behalf_of.id ? { type: on_behalf_of.type, id: String(on_behalf_of.id) } : null,
+        url: String(url || `https://openvibe.exchange/deep-dive/${runId}`),
+        error: error && error.code ? { code: String(error.code).slice(0, 80), detail: String(error.detail || '').slice(0, 500) } : null,
+        occurred_at: new Date().toISOString(),
+    };
+    const env = await svc.emit({ event_type: 'ai.deep_dive.updated', actor: { type: 'service', id: 'ai' }, subject: { type: 'run', id: payload.run_id }, visibility: 'internal', priority: status === 'failed' ? 'important' : 'low', payload });
+    queued++;
+    dbRef.afterCommit(() => svc && svc.kick());
+    return env;
+}
+
 async function status() {
     if (!svc) return { enabled: false };
     const s = await svc.status();
@@ -167,6 +194,6 @@ async function stop() {
 }
 function _reset() { if (svc) svc.stop(); svc = null; queued = 0; }
 
-module.exports = { init, runChanged, credentialFailed, callRecorded, callPayload, payloadOf, status, stop, _reset };
+module.exports = { init, runChanged, credentialFailed, callRecorded, deepDiveUpdated, callPayload, payloadOf, status, stop, _reset };
 
 

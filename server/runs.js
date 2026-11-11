@@ -619,7 +619,11 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
         // The tier budgets (server/govern.js, AI_GOVERN_TIERS) hold first, so a run they refuse is not counted by reserve().
         // L36 Y1: a run that may use the person's own key holds neither — their key is free to them, and a $0 balance
         // anywhere must never block it. If it falls back to the network, the usage is recorded after the run.
-        const hold = credentialSubject !== null || projectProvider || selfKeys || !tiers ? null : await tiers.admit(ctx, id);
+        // A deep dive's price is held as the run's estimate (the route computed it from the depth, never the caller).
+        const holdAmount = wf.key === 'design.deep_dive' && body.options && body.options.hold && typeof body.options.hold === 'object'
+            ? { usd: Math.max(0, Math.min(100, Number(body.options.hold.usd) || 0)), tokens: Math.max(0, Math.min(50000000, Number(body.options.hold.tokens) || 0)) }
+            : null;
+        const hold = credentialSubject !== null || projectProvider || selfKeys || !tiers ? null : await tiers.admit(ctx, id, holdAmount);
         let reserved;
         try {
             // BA2/BA3: a batch run reserves its quota when the answer is here, not while it waits.

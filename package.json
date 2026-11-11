@@ -26,13 +26,15 @@
   "repository": "github:OpenVibers/OpenVibe.AI",
   "dependencies": {
     "ajv": "^8.17.1",
+    "axe-core": "^4.10.3",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "iovalkey": "^0.4.0",
     "openvibe-contracts": "https://codeload.github.com/OpenVibers/OpenVibe.Contracts/tar.gz/refs/tags/v0.406.0",
     "openvibe-sdk": "https://codeload.github.com/OpenVibers/OpenVibe.SDK/tar.gz/refs/tags/v0.150.0",
     "openvibe-shared": "https://codeload.github.com/OpenVibers/OpenVibe.Shared/tar.gz/refs/tags/v4.206.0",
-    "pg": "^8.23.0"
+    "pg": "^8.23.0",
+    "playwright-core": "^1.55.0"
   },
   "optionalDependencies": {
     "sharp": "^0.33.5"

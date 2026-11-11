@@ -166,7 +166,7 @@ function batchExec(b, result) {
     };
 }
 
-function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spawnImpl, log = console, research = null, db = null, clock = { now: () => Date.now() }, mediaStore = null }) {
+function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spawnImpl, log = console, research = null, db = null, clock = { now: () => Date.now() }, mediaStore = null, deepDive = null }) {
     pool = require('../effort/pool').wrapPool(pool);
     // Turn attachments use only the host's local speech recognizer. Reading an audio file must never
     // select a paid transcription provider as a side effect of a chat request.
@@ -626,6 +626,22 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
         return { output, exec };
     }
 
+    /**
+     * deep_dive: one durable run (server/deep-dive/) with its own seven-step progress, captures and report. It
+     * reads the run's owner and context, makes its own provider calls on the run's receipt and returns the
+     * ai.deep-dive@1 document; the run's usage and cost are the sum of those calls.
+     */
+    async function deepDiveStep(step, input, wf, run, ctx) {
+        if (!deepDive || typeof deepDive.run !== 'function') throw new AiError(503, 'deep_dive.unavailable', 'the deep dive is not configured on this service');
+        const r = await deepDive.run({ run, input, ctx });
+        const exec = {
+            provider: r.provider || (r.models && r.models.length ? 'mixed' : null), model: r.model || (r.models && r.models.length ? 'deep-dive' : null),
+            usage: r.usage || { input: 0, output: 0, cached: 0 }, cost: Number(r.cost) || 0,
+            synthetic: Boolean(r.synthetic), fallbackUsed: false, explain: null,
+        };
+        return { output: r.output, exec };
+    }
+
     /** A research run's grounding: what it read is the output itself; the gaps are the sources that did not answer. */
     function researchGrounding(output) {
         const gaps = Object.entries((output && output.providers) || {}).filter(([, p]) => p && !p.ok)
@@ -647,7 +663,7 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
         return { output, exec: { ...last.exec, usage, cost, savedUsd }, route: last.route };
     }
 
-    const STEP = { devblog: devblogStep, llm: llmStep, passthrough: passthroughStep, complete: completeStep, messages: messagesStep, transcribe: transcribeStep, embed: embedStep, image: imageStep, speak: speakStep, picture: pictures.step, media_analysis: mediaAnalysis.step, research: researchStep };
+    const STEP = { deep_dive: deepDiveStep, devblog: devblogStep, llm: llmStep, passthrough: passthroughStep, complete: completeStep, messages: messagesStep, transcribe: transcribeStep, embed: embedStep, image: imageStep, speak: speakStep, picture: pictures.step, media_analysis: mediaAnalysis.step, research: researchStep };
 
     /**
      * Run a workflow. ctx: { signal, logRequest, debugRaw, inputHash }

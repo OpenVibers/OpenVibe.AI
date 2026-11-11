@@ -93,7 +93,35 @@ function createMediaStore({ config, env = process.env, fetchImpl = globalThis.fe
         };
     }
 
-    return { configured, publicUrl, put };
+    /**
+     * A private object's signed bytes URL: GET /api/v2/:app/objects/:id/download?format=json answers a short-lived
+     * signed URL (the object stays 404 to everyone without it). AI reads the object as the run's owner when it has
+     * one, and as its own tenant otherwise. The deep dive's screenshots are private, so this is how a vision model
+     * reads them back and how Exchange's report shows a crop.
+     */
+    async function downloadUrl(mediaId, { owner = null, ttl = 300 } = {}) {
+        if (!configured()) throw Object.assign(new Error('OpenVibe.Media is not configured'), { status: 503, code: 'media.unavailable' });
+        if (!/^med_[0-9A-HJKMNP-TV-Z]{26}$/.test(String(mediaId || ''))) throw Object.assign(new Error('not a Media object id'), { status: 422, code: 'media.invalid' });
+        const auth = await tokenClient().authHeaders();
+        const subject = owner && SUBJECT_RE.test(owner) ? { 'X-OV-Subject': owner } : {};
+        const body = await call(`${baseUrl}/api/v2/${encodeURIComponent(app)}/objects/${encodeURIComponent(mediaId)}/download?format=json&ttl=${Math.max(30, Math.min(3600, Number(ttl) || 300))}`, {
+            method: 'GET', headers: { ...auth, ...subject, Accept: 'application/json' },
+        });
+        if (!body.url) throw Object.assign(new Error('Media did not sign the object'), { status: 503, code: 'media.unavailable' });
+        return body.url;
+    }
+
+    /** The object's bytes (maxBytes cap): the bytes are private, the signed URL is the only way in. */
+    async function bytes(mediaId, { owner = null, maxBytes = 20 * 1024 * 1024, signal = null } = {}) {
+        const url = await downloadUrl(mediaId, { owner });
+        const res = await fetchImpl(url, { signal: signal || AbortSignal.timeout(30000) });
+        if (!res.ok) throw Object.assign(new Error(`Media bytes answered ${res.status}`), { status: 503, code: 'media.unavailable' });
+        const buf = Buffer.from(await res.arrayBuffer());
+        if (buf.length > maxBytes) throw Object.assign(new Error('the object is larger than the read cap'), { status: 413, code: 'media.too_large' });
+        return { buffer: buf, mime: res.headers.get('content-type') || 'image/png' };
+    }
+
+    return { configured, publicUrl, put, downloadUrl, bytes };
 }
 
 module.exports = { createMediaStore };
