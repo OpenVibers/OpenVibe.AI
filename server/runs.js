@@ -366,6 +366,17 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
                 presetPolicy = {};
             }
         }
+        // The caller's own data policy (2026-11-10): private means a person's private data, so no offer that
+        // trains on or retains a prompt may answer it; anonymized (or community) marks work that is not
+        // sensitive. The same rule a preset carries, so a caller can be strict without a saved preset.
+        const askedDataPolicy = body.data_policy != null ? body.data_policy
+            : (options && options.data_policy != null ? options.data_policy : null);
+        if (askedDataPolicy != null) {
+            const wanted = String(askedDataPolicy).trim().toLowerCase();
+            if (!['private', 'anonymized', 'community'].includes(wanted)) throw new AiError(422, 'input.invalid', 'data_policy must be private, anonymized or community');
+            presetPolicy = { ...(presetPolicy || {}), data_policy: wanted };
+            presetName = presetName || `caller data policy: ${wanted}`;
+        }
         if (presetPolicy && typeof presetPolicy.community === 'boolean') communityOptIn = presetPolicy.community;
         if (projectProvider) {
             if (!app) throw new AiError(403, 'capability.denied', 'only a developer app names its project\'s own provider');
@@ -445,7 +456,7 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
             ...(communityOptIn ? { communityOptIn: true } : {}),
             ...(pinned ? { routePin: pinned } : {}),
             // The preset's policy, and the name it was named by: the router filters the offers with the policy.
-            ...(preset ? { presetPolicy, presetName } : {}),
+            ...(preset || presetPolicy ? { presetPolicy, presetName } : {}),
             // BA1: the class this run may wait in. The router reads it to pick the tier.
             latencyClass,
             // BA1: a caller that waits (?wait=) gets its answer inside the wait: a Flex attempt may use the wait

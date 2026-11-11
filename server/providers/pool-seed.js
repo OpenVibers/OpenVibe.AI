@@ -39,6 +39,8 @@ function recordOf(p) {
             privacy: p.privacy,
             // The tiers the provider itself sells and at what price (BA1): a Flex tier, a batch API.
             ...(p.tier_rates ? { tier_rates: p.tier_rates } : {}),
+            // The traits beyond price (latency class, concurrency, free allowance, payment, sources).
+            ...(p.traits ? { traits: p.traits } : {}),
             ...(p.uncensored ? { uncensored: true } : {}),
             ...(p.role ? { role: p.role } : {}),
         },
@@ -59,6 +61,11 @@ function modelOf(p, m) {
         refusal_rate: m.refusal_rate == null ? null : m.refusal_rate,
         ...(m.note ? { note: m.note } : {}),
         ...(m.uncensored ? { uncensored: true } : {}),
+        // A per-offer fact: the OpenRouter provider routing it pins, the service tier it runs on, and any
+        // latency classes narrower than the provider's.
+        ...(m.routing ? { routing: m.routing } : {}),
+        ...(m.service_tier ? { service_tier: m.service_tier } : {}),
+        ...(Array.isArray(m.latency_classes) ? { latency_classes: m.latency_classes } : {}),
         data_policy: p.data_policy,
         privacy: p.privacy,
     };
