@@ -1,0 +1,49 @@
+[
+  {
+    "provider_key": "sable",
+    "model_key": "deepseek-v4.1-flash-1017-uncensored",
+    "display_name": "DeepSeek V4.1 Flash 1017 (uncensored)",
+    "type": "chat",
+    "in_per_mtok": 0.15,
+    "cached_per_mtok": 0.01,
+    "out_per_mtok": 0.6,
+    "context_window": 512000,
+    "source": "https://sableapi.com/models",
+    "checked_at": "2026-11-10"
+  },
+  {
+    "provider_key": "inception",
+    "model_key": "mercury-3",
+    "display_name": "Mercury 3",
+    "type": "chat",
+    "in_per_mtok": 0.2,
+    "cached_per_mtok": 0.02,
+    "out_per_mtok": 0.7,
+    "context_window": 1000000,
+    "source": "https://docs.inceptionlabs.ai/get-started/models",
+    "checked_at": "2026-11-10"
+  },
+  {
+    "provider_key": "openrouter",
+    "model_key": "deepseek/deepseek-v4.1-flash-1017",
+    "display_name": "DeepSeek V4.1 Flash 1017 (Particle Flex)",
+    "type": "chat",
+    "in_per_mtok": 0.025,
+    "cached_per_mtok": 0.003,
+    "out_per_mtok": 0.25,
+    "context_window": 1048576,
+    "source": "https://openrouter.ai/api/v1/models/deepseek/deepseek-v4.1-flash-1017/endpoints",
+    "checked_at": "2026-11-10"
+  },
+  {
+    "provider_key": "iteracompute",
+    "model_key": "Auto",
+    "display_name": "Auto (free shared pool)",
+    "type": "chat",
+    "in_per_mtok": 0,
+    "out_per_mtok": 0,
+    "context_window": 131072,
+    "source": "https://iteracompute.com/free/",
+    "checked_at": "2026-11-10"
+  }
+]

@@ -222,6 +222,10 @@ function openaiRouter({ runs, auth, config, registry, presets = null, receipts =
         // The Exchange remake's content policy (`policy: "uncensored"`): an OpenVibe extension, enforced by the router
         // (18+ account, uncensored offers only, the floor, the label). on_behalf_of names the person it is for.
         if (b.policy != null) body = { ...body, policy: b.policy };
+        // The Exchange API's service tier and the caller's data policy (2026-11-10): flex asks for the slower,
+        // cheaper tier; private keeps the prompt off every provider that trains on or retains it.
+        if (b.service_tier != null) body = { ...body, service_tier: b.service_tier };
+        if (b.data_policy != null) body = { ...body, data_policy: b.data_policy };
         if (b.on_behalf_of != null) body = { ...body, on_behalf_of: b.on_behalf_of };
         if (req.principal.kind === 'app') body = { ...body, attribution: appAttribution(req.principal) };
         // A first-party service naming the person it acts for (the runs API's on_behalf_of). Their free allowance

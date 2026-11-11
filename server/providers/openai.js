@@ -28,8 +28,21 @@ const TEXT_OPS = ['chat', 'generate', 'summarize', 'classify', 'extract', 'enric
 
 function isReasoningModel(m) { return /^(gpt-[56]|o\d)/i.test(m || ''); }
 
+/**
+ * The provider routing object of an OpenRouter offer (2026-11-10): only the fields OpenRouter documents,
+ * copied from the model offer's own settings. It lets an offer pin one endpoint exactly (only/order, no
+ * fallback) or rank by price under a cap, with data collection denied and a quantization filter.
+ */
+const ROUTING_KEYS = ['order', 'only', 'ignore', 'allow_fallbacks', 'sort', 'max_price', 'data_collection', 'quantizations', 'zdr', 'require_parameters', 'preferred_min_throughput', 'preferred_max_latency', 'enforce_distillable_text'];
+function providerRouting(routing) {
+    if (!routing || typeof routing !== 'object' || Array.isArray(routing)) return null;
+    const out = {};
+    for (const key of ROUTING_KEYS) if (routing[key] !== undefined && routing[key] !== null) out[key] = routing[key];
+    return Object.keys(out).length ? out : null;
+}
+
 function buildBody(req, jsonMode) {
-    const { model, system, messages, image, json, maxTokens, temperature, cacheKey, baseUrl, serviceTier } = req;
+    const { model, system, messages, image, json, maxTokens, temperature, cacheKey, baseUrl, serviceTier, routing } = req;
     const msgs = [];
     // Stepped down from json_schema: the schema travels in the instructions instead.
     const hint = json && jsonMode !== 'schema' ? schemaInstruction(json) : '';
@@ -56,6 +69,9 @@ function buildBody(req, jsonMode) {
     // The service tier (BA1): a Flex tier is slower and cheaper, and the provider may refuse it. The tier
     // travels in the request; the answer says which tier it really ran on (the pool prices that one).
     if (serviceTier) body.service_tier = String(serviceTier);
+    const provider = providerRouting(routing);
+    if (provider) body.provider = provider;
+    if (routing && routing.service_tier && !body.service_tier) body.service_tier = String(routing.service_tier);
     return effortPolicy.apply(body, req, { kind: 'openai', key: 'openai' });
 }
 
@@ -64,7 +80,7 @@ function buildBody(req, jsonMode) {
  * the caller's own request with the routed model, a reasoning model's allowance, and the Flex tier.
  */
 function buildCompleteBody(req = {}) {
-    const { model, openai = {}, maxTokens, temperature, serviceTier } = req;
+    const { model, openai = {}, maxTokens, temperature, serviceTier, routing } = req;
     const o = openai || {};
     const body = { model, messages: o.messages };
     for (const k of ['tools', 'tool_choice', 'parallel_tool_calls', 'response_format', 'stop', 'seed', 'top_p', 'presence_penalty', 'frequency_penalty']) {
@@ -80,6 +96,9 @@ function buildCompleteBody(req = {}) {
         if (temperature != null) body.temperature = temperature;
     }
     if (serviceTier) body.service_tier = String(serviceTier);
+    const provider = providerRouting(routing);
+    if (provider) body.provider = provider;
+    if (routing && routing.service_tier && !body.service_tier) body.service_tier = String(routing.service_tier);
     return effortPolicy.apply(body, req, { kind: 'openai', key: 'openai' });
 }
 

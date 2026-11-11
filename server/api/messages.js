@@ -236,6 +236,9 @@ function messagesRouter({ runs, auth, config, registry, presets = null, receipts
         if (b.prefer) body = { ...body, prefer: b.prefer };
         // The Exchange remake's content policy (`policy: "uncensored"`), enforced by the router.
         if (b.policy != null) body = { ...body, policy: b.policy };
+        // The Exchange API's service tier and the caller's data policy (2026-11-10).
+        if (b.service_tier != null) body = { ...body, service_tier: b.service_tier };
+        if (b.data_policy != null) body = { ...body, data_policy: b.data_policy };
         if (b.on_behalf_of != null) body = { ...body, on_behalf_of: b.on_behalf_of };
         if (req.principal.kind === 'app') body = { ...body, attribution: appAttribution(req.principal) };
         const own = credentialFor(req);
