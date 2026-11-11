@@ -23,6 +23,7 @@ const { STRATEGIES } = require('openvibe-sdk/compute');
 const { AiError } = require('../util');
 const { classOf, checkpointOf, pickOffer } = require('./classes');
 const { createGpuPolicy } = require('./policy');
+const { createAdapter, KEYED } = require('./adapters');
 const money = require('./money');
 const catalog = require('./catalog');
 const { vastAdapter } = require('./vast');
@@ -93,8 +94,10 @@ function createGpuProvisioner({
     const monthOf = (ms) => new Date(ms).toISOString().slice(0, 7);
     // The owner's per-provider policy, saved through the Exchange owner console (server/gpu/policy.js).
     const gpuPolicy = settings && typeof settings.gpus === 'object' ? createGpuPolicy({ db, settings, clock }) : null;
-    /** The provider keys from the sealed config store. */
-    const PROVIDER_KEYS = Object.freeze(['vast', 'runpod']);
+    /** The provider keys from the sealed config store. The reserved server has none. */
+    const PROVIDER_KEYS = KEYED;
+    const ALL_PROVIDERS = Object.freeze([...KEYED, 'reserved']);
+    let currentPolicies = new Map();
 
     // ── the owner's settings ──────────────────────────────────────────────
 
@@ -116,6 +119,8 @@ function createGpuProvisioner({
         };
         // The newer provider keys live together in the sealed config namespace (server/settings.js).
         for (const name of PROVIDER_KEYS) if (!keys[name] && v.provider_keys && typeof v.provider_keys === 'object') keys[name] = String(v.provider_keys[name] || '');
+        // RunPod Serverless uses the same RunPod key.
+        keys.runpod_serverless = keys.runpod_serverless || keys.runpod;
         const anyKey = PROVIDER_KEYS.some((name) => Boolean(keys[name]));
         let reason = '';
         if (!anyKey) reason = 'no GPU marketplace API key';
@@ -138,20 +143,23 @@ function createGpuProvisioner({
         };
     }
 
-    /** The adapter of a marketplace, or null when its key is not set. */
-    function adapterFor(marketplace, cfg) {
-        const key = cfg.keys && cfg.keys[marketplace];
-        if (!key) return null;
-        if (marketplace === 'runpod') return runpodAdapter({ fetchImpl, key });
-        if (marketplace === 'vast') return vastAdapter({ fetchImpl, key });
-        return null;
+    /** The adapter of a marketplace, or null when it is not usable. */
+    function adapterFor(marketplace, cfg, { allowNoKey = false } = {}) {
+        const policy = currentPolicies.get(marketplace) || null;
+        return createAdapter(marketplace, {
+            fetchImpl,
+            key: (cfg.keys && cfg.keys[marketplace]) || null,
+            options: (policy && policy.options) || {},
+            allowNoKey,
+        });
     }
 
     /** The owner's provider policy by provider key; an empty map means no policy is configured. */
     async function providerPolicies() {
         if (!gpuPolicy) return new Map();
         const read = await gpuPolicy.read();
-        return new Map((read.providers || []).map((p) => [p.key, p]));
+        currentPolicies = new Map((read.providers || []).map((p) => [p.key, p]));
+        return currentPolicies;
     }
 
     /** Live instances of one marketplace, for the owner's replica ceiling. */
@@ -263,7 +271,13 @@ function createGpuProvisioner({
         const job_class = classOf(jobClass);
         const ckpt = checkpointOf(checkpoint);
         const policies = await providerPolicies();
-        const names = PROVIDER_KEYS.filter(name => !rentalOnly || (cfg.keys && cfg.keys[name]));
+        // The reserved server is registered by its endpoint rather than a key, so it joins the search
+        // when the owner has saved one.
+        const reservedReady = Boolean((policies.get('reserved') || {}).options && (policies.get('reserved') || {}).options.endpoint && (policies.get('reserved') || {}).options.monthly_nano);
+        const names = [...PROVIDER_KEYS, 'reserved'].filter((name) => {
+            if (name === 'reserved') return reservedReady;
+            return !rentalOnly || (cfg.keys && cfg.keys[name]);
+        });
         const offers = [];
         const failures = [];
         // The owner's approved supply plan pins the hourly and monthly ceilings per model (server/platform/supply.js).
@@ -291,9 +305,12 @@ function createGpuProvisioner({
                 continue;
             }
             // A quote never needs a key: quote-only mode is how the owner sees prices before adding one.
-            const adapter = name === 'vast'
-                ? vastAdapter({ fetchImpl, key: (cfg.keys && cfg.keys.vast) || null })
-                : (name === 'runpod' ? runpodAdapter({ fetchImpl, key: (cfg.keys && cfg.keys.runpod) || null }) : null);
+            const adapter = createAdapter(name, {
+                fetchImpl,
+                key: (cfg.keys && cfg.keys[name]) || null,
+                options: (policy && policy.options) || {},
+                allowNoKey: true,
+            });
             if (!adapter) continue;
             // Interruptible capacity is asked for only when the job may use it: batch, a checkpoint, and the
             // owner's permission for this provider. The adapter may still return only on-demand offers.
@@ -658,7 +675,7 @@ function createGpuProvisioner({
     async function sweepOrphans(cfg) {
         const t = now();
         let seen = 0;
-        for (const marketplace of ['vast', 'runpod']) {
+        for (const marketplace of ALL_PROVIDERS.filter((name) => typeof (adapterFor(name, cfg) || {}).listInstances === 'function')) {
             const adapter = adapterFor(marketplace, cfg);
             if (!adapter) continue;
             let instances = [];
@@ -791,7 +808,7 @@ function createGpuProvisioner({
             const state = String((info && info.state) || 'unknown').toLowerCase();
             if (DEAD_STATES.includes(state)) {
                 await destroy({ ...row, charged_at: row.charged_at }, 'the instance ' + state);
-                if (!priv) await request(spec.key, 'launch', 'service:ai');
+                if (!priv) await request(spec.key, 'launch', 'service:ai', { jobClass: row.job_class, checkpoint: row.checkpoint });
                 return { changed: true, action: 'died', reason: 'the instance ' + state };
             }
             const endpoint = info && info.endpoint ? String(info.endpoint) : '';
@@ -802,7 +819,7 @@ function createGpuProvisioner({
                     .run(failures, iso(t), iso(t), row.id);
                 if (failures >= HEALTH_FAILURES) {
                     await destroy({ ...row, charged_at: row.charged_at }, 'the endpoint never answered');
-                    if (!priv) await request(spec.key, 'launch', 'service:ai');
+                    if (!priv) await request(spec.key, 'launch', 'service:ai', { jobClass: row.job_class, checkpoint: row.checkpoint });
                     return { changed: true, action: 'died', reason: 'the endpoint never answered' };
                 }
                 return { changed: false, health_failures: failures };
@@ -837,7 +854,7 @@ function createGpuProvisioner({
             // the instance died: a shared offer leaves the pool and a new one is rented; a person's own
             // endpoint stops (they can start it again when they want it).
             await destroy({ ...row, charged_at: row.charged_at }, 'the endpoint stopped answering');
-            if (!priv) await request(spec.key, 'launch', 'service:ai');
+            if (!priv) await request(spec.key, 'launch', 'service:ai', { jobClass: row.job_class, checkpoint: row.checkpoint });
             return { changed: true, action: 'died', reason: 'the endpoint stopped answering' };
         }
         return { changed: false };
@@ -900,6 +917,8 @@ function createGpuProvisioner({
     /** One pass: the owner's requests, the live instances, and the models that are wanted. */
     async function tick({ actor = 'service:ai' } = {}) {
         const cfg = config();
+        // The provider options are read before anything is built from them.
+        await providerPolicies();
         // Recovery and orphan cleanup also run while new rental spending is disabled.
         await sweepOrphans(cfg);
         if (!cfg.enabled) {
@@ -986,7 +1005,8 @@ function createGpuProvisioner({
                 instance: describe(live),
             };
         });
-        const policyState = gpuPolicy ? await gpuPolicy.read() : null;
+        const policyMap = await providerPolicies();
+        const policyState = gpuPolicy ? { global: (await gpuPolicy.read()).global, providers: [...policyMap.values()] } : null;
         return {
             strategy: cfg.strategy,
             dry_run: cfg.dry_run,
@@ -1001,7 +1021,9 @@ function createGpuProvisioner({
             max_runtime_minutes: cfg.max_runtime_minutes,
             warm_window: cfg.warm_window,
             region: cfg.region,
-            marketplaces: Object.fromEntries(PROVIDER_KEYS.map((name) => [name, Boolean(cfg.keys && cfg.keys[name])])),
+            marketplaces: Object.fromEntries([...PROVIDER_KEYS, 'reserved'].map((name) => [name, name === 'reserved'
+                ? Boolean((currentPolicies.get('reserved') || {}).options && (currentPolicies.get('reserved') || {}).options.endpoint)
+                : Boolean(cfg.keys && cfg.keys[name])])),
             class_caps: policyState ? {
                 interactive_cap_nano: policyState.global.interactive_cap_nano,
                 batch_cap_nano: policyState.global.batch_cap_nano,

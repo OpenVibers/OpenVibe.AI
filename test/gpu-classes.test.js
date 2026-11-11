@@ -69,11 +69,12 @@ t.test('a launch records its class and checkpoint, and a batch cap refuses befor
         const row = await h.db.prepare('SELECT job_class, checkpoint, interruptible FROM gpu_instances WHERE id = ?').get(res.instance.id);
         assert.strictEqual(row.job_class, 'batch');
         assert.strictEqual(row.checkpoint, 's3://bucket/job-1/ckpt');
-        assert.strictEqual(row.interruptible, false, 'the recorded on-demand offer is not interruptible');
+        assert.strictEqual(row.interruptible, true, 'a checkpointed batch job bids on interruptible capacity');
         assert.strictEqual((await h.gpus.state()).instances[0].job_class, 'batch');
         const audit = await h.db.prepare("SELECT metadata FROM audit_log WHERE action = 'gpu.placement' ORDER BY id DESC LIMIT 1").get();
         assert.strictEqual(JSON.parse(audit.metadata).job_class, 'batch');
         assert.strictEqual(api.calls.create.length, 1);
+        assert.strictEqual(api.calls.create[0].body.type, 'bid', 'the rental carries the bid');
     } finally { await h.stop(); }
 });
 

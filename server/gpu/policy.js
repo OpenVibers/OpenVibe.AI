@@ -7,6 +7,9 @@ const PROVIDERS = Object.freeze(['vast', 'runpod', 'salad', 'tensordock', 'shade
 const DEFAULTS = Object.freeze({
     enabled: false, order: 50, classes: ['interactive', 'batch'], interruptible_allowed: false,
     max_hourly_nano: null, max_replicas: 1, regions: [], monthly_cap_share_percent: 100,
+    // Provider-specific settings the adapter needs: a Salad organization and project, a RunPod
+    // Serverless template, a reserved server's endpoint and monthly price. All strings.
+    options: {},
 });
 const GLOBAL = Object.freeze({ quote_only: true, interactive_cap_nano: null, batch_cap_nano: null });
 const OWNED = new Set(['svc:exchange']);
@@ -21,7 +24,8 @@ function defaultsFor(provider) {
  * any provider setting makes its stored `enabled` the one that counts.
  */
 function effectiveProvider(provider, saved, hasKey) {
-    const out = { ...defaultsFor(provider), ...(saved || {}) };
+    const base = defaultsFor(provider);
+    const out = { ...base, ...(saved || {}), options: { ...(base.options || {}), ...((saved && saved.options) || {}) } };
     if (!saved) out.enabled = Boolean(hasKey);
     return out;
 }
@@ -57,6 +61,15 @@ function providerInput(body, current, provider) {
         } else if (k === 'regions') {
             if (!Array.isArray(v) || v.length > 20 || v.some(x => typeof x !== 'string' || !/^[A-Za-z0-9_-]{2,32}$/.test(x))) invalid('regions must be region codes');
             out[k] = [...new Set(v.map(x => x.toUpperCase()))];
+        } else if (k === 'options') {
+            if (!v || typeof v !== 'object' || Array.isArray(v)) invalid('options must be an object of strings');
+            const entries = Object.entries(v);
+            if (entries.length > 20) invalid('at most 20 provider options');
+            for (const [name, value] of entries) {
+                if (!/^[a-z][a-z0-9_]{0,40}$/.test(name)) invalid('option names are lowercase words');
+                if (typeof value !== 'string' || value.length > 2048) invalid('option values are strings of at most 2048 characters');
+            }
+            out[k] = Object.fromEntries(entries);
         }
     }
     if (provider === 'salad' && !Object.hasOwn(body, 'max_replicas') && current === DEFAULTS) out.max_replicas = 3;

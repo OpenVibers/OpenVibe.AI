@@ -36,27 +36,28 @@ function option(options, name, fallback = '') {
  *   key      the owner's key from the sealed store
  *   options  the owner's policy options (organization, project, image, template_id, ...)
  */
-function createAdapter(provider, { fetchImpl = globalThis.fetch, key = null, options = {} } = {}) {
+function createAdapter(provider, { fetchImpl = globalThis.fetch, key = null, options = {}, allowNoKey = false } = {}) {
+    if (!allowNoKey && !key && provider !== 'reserved') return null;
     switch (provider) {
         case 'vast':
-            return key ? vastAdapter({ fetchImpl, key }) : null;
+            return vastAdapter({ fetchImpl, key });
         case 'runpod':
-            return key ? runpodAdapter({ fetchImpl, key }) : null;
+            return runpodAdapter({ fetchImpl, key });
         case 'salad':
-            return key ? saladAdapter({ fetchImpl, key, organization: option(options, 'organization'), project: option(options, 'project'), image: option(options, 'image'), replicas: Number(option(options, 'replicas', '3')) || 3 }) : null;
+            return saladAdapter({ fetchImpl, key, organization: option(options, 'organization'), project: option(options, 'project'), image: option(options, 'image'), replicas: Number(option(options, 'replicas', '3')) || 3 });
         case 'salad_queue':
-            return key ? saladQueueAdapter({ fetchImpl, key, organization: option(options, 'organization'), project: option(options, 'project'), queue: option(options, 'queue') }) : null;
+            return saladQueueAdapter({ fetchImpl, key, organization: option(options, 'organization'), project: option(options, 'project'), queue: option(options, 'queue') });
         case 'tensordock':
-            return key ? tensordockAdapter({ fetchImpl, key, image: option(options, 'image'), location: option(options, 'location') }) : null;
+            return tensordockAdapter({ fetchImpl, key, image: option(options, 'image'), location: option(options, 'location') });
         case 'shadeform':
-            return key ? shadeformAdapter({ fetchImpl, key }) : null;
+            return shadeformAdapter({ fetchImpl, key });
         case 'verda':
-            return key ? verdaAdapter({ fetchImpl, key, image: option(options, 'image'), location: option(options, 'location') }) : null;
+            return verdaAdapter({ fetchImpl, key, image: option(options, 'image'), location: option(options, 'location') });
         case 'thunder':
-            return key ? thunderAdapter({ fetchImpl, key, template: option(options, 'template', 'ubuntu-22.04') }) : null;
+            return thunderAdapter({ fetchImpl, key, template: option(options, 'template', 'ubuntu-22.04') });
         case 'runpod_serverless':
             // RunPod Serverless shares the RunPod key.
-            return key ? runpodServerlessAdapter({ fetchImpl, key, templateId: option(options, 'template_id'), pools: option(options, 'pools') ? option(options, 'pools').split(',').map((p) => p.trim()).filter(Boolean) : [], maxWorkers: Number(option(options, 'max_workers', '3')) || 3 }) : null;
+            return runpodServerlessAdapter({ fetchImpl, key, templateId: option(options, 'template_id'), pools: option(options, 'pools') ? option(options, 'pools').split(',').map((p) => p.trim()).filter(Boolean) : [], maxWorkers: Number(option(options, 'max_workers', '3')) || 3 });
         case 'reserved':
             return option(options, 'endpoint') && option(options, 'monthly_nano')
                 ? reservedAdapter({ endpoint: option(options, 'endpoint'), monthlyNano: option(options, 'monthly_nano'), name: option(options, 'name', 'reserved') })
