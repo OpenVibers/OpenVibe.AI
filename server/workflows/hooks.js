@@ -554,7 +554,18 @@ const POSTPROCESS = {
         const overview = j && j.overview ? String(j.overview).slice(0, 2000) : (extractDescription(r.text, 2000) || r.text.slice(0, 2000));
         return { overview, category: normalizeCategory(j && j.category), tags: j && Array.isArray(j.tags) ? j.tags.map(String).slice(0, 6) : [] };
     },
-    'live.streamer.overview'(r) { const overview = plainProse(r.text, 4000); return overview ? { overview } : null; },
+    // The JSON answer (2026-11-11, ask 363: lines that read as a person wrote them): the card's own line and the page's
+    // overview; an answer in plain prose is still taken as the overview alone.
+    'live.streamer.overview'(r) {
+        const j = r.json || parseJsonLoose(r.text);
+        if (j && typeof j.overview === 'string' && j.overview.trim()) {
+            const overview = plainProse(j.overview, 4000);
+            const line = typeof j.line === 'string' ? plainProse(j.line, 140) : '';
+            return overview ? { overview, ...(line ? { line } : {}) } : null;
+        }
+        const overview = plainProse(r.text, 4000);
+        return overview ? { overview } : null;
+    },
     'live.media.overview'(r) { const overview = plainProse(r.text, 2000); return overview ? { overview } : null; },
     'live.stream.recap'(r) {
         const out = r.json || parseJsonLoose(r.text);

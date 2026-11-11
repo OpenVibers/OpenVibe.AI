@@ -68,7 +68,7 @@ const templates = [
         description: 'From ai-analysis.generateStreamerOverview.',
         input_schema: { type: 'object' }, output_schema: { type: 'object' },
         system_prompt: '',
-        user_prompt: 'You are writing the public description of a livestreamer\'s channel. It is shown on their channel page, in search results and on the home page\'s cards, so the first sentence must stand alone as a one-line summary of what they stream. Using only the signals below (aggregated across their streams, VODs and pastes), write 2-4 sentences of plain prose: what they stream (games, topics, activities), what keeps coming back, and the tone of the streams. Start with the streamer\'s name.\n\nRules:\n- Plain text only: no lists, bullets, headings, markdown, labels ("Handle:", "Overview:") or @handles.\n- Never guess at their private life, health or location.\n- No moderation notes, warnings or ratings.\n- Do not invent specifics the signals do not support; when the signals are thin, one or two short sentences are enough.\n\n{{ctx}}',
+        user_prompt: "You are writing the public description of a livestreamer's channel on OpenVibe. People read it on the channel page, in search results and on the home page's cards. Using only the signals below (gathered across their streams, recordings and pastes), reply ONLY with compact JSON: {\"line\":\"...\",\"overview\":\"...\"}\n\n\"line\" is the home page card's one line: what a friend who watches would say about the channel in one breath. One sentence of 40 to 90 characters, present tense, without the streamer's name (the card shows it), about THIS channel: what you actually see and hear, the projects, the running bits, the mood. Start with the thing itself, not with \"Streams\", \"A channel\" or \"Join\". Warm and plain, the way a person talks. The voice, not content to copy: \"Robots, cameras and late-night tinkering, with chat riding along.\" / \"Cozy acoustic sets and requests from a kitchen table.\" / \"Minecraft builds that turn into long talks about everything else.\"\n\n\"overview\" is 2 to 4 sentences of plain prose for the channel page: what they stream, what keeps coming back, and how the streams feel. Start with the streamer's name. Concrete beats general: name the games, tools, places and topics the signals show.\n\nWords that make every channel sound the same, so leave them out: focus, content, engaging, various, a mix of, dive into, showcasing, vibrant, dynamic, journey, immersive, a blend of, and piles of adjectives. A line that would fit a thousand channels is a line to rewrite.\n\nRules:\n- Plain text inside the JSON: no lists, markdown, labels (\"Handle:\", \"Overview:\") or @handles.\n- Never guess at their private life, health or location.\n- No moderation notes, warnings or ratings.\n- Do not invent specifics the signals do not support; when the signals are thin, keep both short and say only what is there.\n\n{{ctx}}",
         default_route: 'background.legacy', owner: 'live',
     },
     {
@@ -342,8 +342,8 @@ const structured = [
             pastes: { type: 'array', maxItems: 50, items: { type: 'object', properties: { title: STR(300), summary: STR(600) } } },
             sources: SOURCES(0, 50),
         }, ['streamer']),
-        output_schema: TEXT_OUT({ overview: STR(4000) }, ['overview']),
-        steps: [{ kind: 'llm', template: 'live.streamer.overview', operation: 'summarize', output: 'text', prepare: 'live.streamer.overview', postprocess: 'live.streamer.overview', params: { max_tokens: 550 } }],
+        output_schema: TEXT_OUT({ overview: STR(4000), line: STR(140) }, ['overview']),
+        steps: [{ kind: 'llm', template: 'live.streamer.overview', operation: 'summarize', output: 'text', prepare: 'live.streamer.overview', postprocess: 'live.streamer.overview', params: { max_tokens: 650 } }],
         cache_mode: 'private',
     },
     {
