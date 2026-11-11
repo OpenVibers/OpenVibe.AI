@@ -31,3 +31,5 @@ t.test('the complete registry reader is public', async () => {
         assert.ok(!r.text.includes('secret_ref'));
     } finally { await h.close(); }
 });
+
+t.run();
