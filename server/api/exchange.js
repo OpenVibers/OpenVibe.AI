@@ -183,6 +183,9 @@ function exchangeRouter({ db, registry, pool, quotas = null, env = process.env, 
         } catch (err) { next(err); }
     });
 
+    r.get('/api/v1/exchange/directory', publicCache(60), wrap(async () =>
+        require('../exchange/directory').directoryModels(registry)));
+
     // Your own endpoint: whether it is on and, when it is off, the plain reason. Public: the Exchange page
     // reads it before anyone signs in, and nothing here is per person.
     // Public, non-personal, read-only previews. Cache each model/strategy for one minute to avoid
