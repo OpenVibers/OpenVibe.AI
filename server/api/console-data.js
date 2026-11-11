@@ -169,7 +169,7 @@ function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth,
         await registry.audit(who.actor, 'provider.key_removed', 'provider', provider.key, { trace: who.trace });
         return { ok: true, provider: provider.key };
     }));
-    r.post('/api/v1/admin/console/providers/:key/check', write, wrap(async (req) => {
+    r.post('/api/v1/admin/console/providers/:key/check', json, write, wrap(async (req) => {
         const provider = await registry.getProvider(req.params.key);
         if (!provider) throw new AiError(404, 'ai.not_found', 'no such provider');
         const keyOverride = (req.body || {}).api_key;
