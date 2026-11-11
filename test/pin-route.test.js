@@ -141,7 +141,8 @@ t.test('an idempotency replay keeps its pin; a different pin under the same key 
 t.test('quotas still apply to a pinned run', async () => {
     const pinner = token('pinner', ['ai.run.create'], { ns: ['ai.*'] });
     const q = await request(h.base, 'POST', '/api/v1/quotas', { tok: admin, body: {
-        scope_type: 'service', scope_id: 'pinner', window: 'minute', max_requests: 1,
+        // Keep both requests in the same quota window even if the test starts at a minute boundary.
+        scope_type: 'service', scope_id: 'pinner', window: 'hour', max_requests: 1,
     } });
     assert.strictEqual(q.status, 201, q.text);
     const body = { prompt: 'quota', route: { provider: 'seam-a', model: 'a-model' }, options: { cache: false } };
