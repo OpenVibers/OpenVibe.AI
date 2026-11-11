@@ -149,6 +149,16 @@ t.test('the check route makes one request and records only its safe result', asy
     assert.ok(!JSON.stringify(stored.metadata).includes(replacement));
 });
 
+t.test('a pasted key can be checked before save without changing the stored credential', async () => {
+    const result = await api('POST', `${path}/check`, { api_key: key });
+    assert.strictEqual(result.status, 200, result.text);
+    assert.strictEqual(result.body.ok, true);
+    assert.strictEqual(authUsed, `Bearer ${key}`);
+    assert.strictEqual(providerSecret(await h.registry.getProvider('keycheck'), h.env), replacement);
+    assert.ok(!result.text.includes(key));
+    assert.ok(!JSON.stringify((await h.registry.getProvider('keycheck')).metadata).includes(key));
+});
+
 t.test('a service without owner capabilities gets 403 for every key operation', async () => {
     const before = requests;
     for (const [method, suffix] of [['POST', 'key'], ['DELETE', 'key'], ['POST', 'check']]) {

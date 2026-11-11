@@ -5,7 +5,7 @@ const { testProviderKey } = require('../owner-inputs');
 const { guardedFetch } = require('./guarded-fetch');
 
 /** One explicit owner check, with no inference, retries, redirects or fallback. Never retain upstream text. */
-async function checkProvider(provider, { env = process.env, fetchImpl = guardedFetch, now = Date.now } = {}) {
+async function checkProvider(provider, { env = process.env, fetchImpl = guardedFetch, now = Date.now, keyOverride = null } = {}) {
     const started = now();
     let calls = 0;
     let httpStatus = null;
@@ -15,7 +15,7 @@ async function checkProvider(provider, { env = process.env, fetchImpl = guardedF
         models_count: models.length, models: models.filter(id => !String(id).includes(key)),
         latency_ms: Math.max(0, now() - started), checked_at: new Date(started).toISOString(),
     });
-    const key = providerSecret(provider, env);
+    const key = keyOverride || providerSecret(provider, env);
     if (provider.auth_mode !== 'none' && !key) return finish(false, 'key_not_set');
     if (!provider.base_url) return finish(false, 'base_url_not_set');
     let origin;
