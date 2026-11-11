@@ -58,7 +58,7 @@ function createMediaStore({ config, env = process.env, fetchImpl = globalThis.fe
      * pictures in (blog, wiki, or AI's own ai); absent, the AI tenant. → { media_id, url, width, height, mime }.
      * metadata keeps where it came from (source_url, license, author) or what made it (model, ai).
      */
-    async function put({ bytes, mime, filename = 'picture', owner = null, app: tenant = null, metadata = {}, timeoutMs = 30000 } = {}) {
+    async function put({ bytes, mime, filename = 'picture', owner = null, app: tenant = null, metadata = {}, visibility = 'public', timeoutMs = 30000 } = {}) {
         if (!configured()) throw Object.assign(new Error('OpenVibe.Media is not configured (OV_MEDIA_INTERNAL_URL and the AI service secret are needed)'), { status: 503, code: 'media.unavailable' });
         if (!Buffer.isBuffer(bytes) || !bytes.length) throw Object.assign(new Error('the picture has no bytes'), { status: 422, code: 'media.empty' });
         const target = tenant && /^[a-z][a-z0-9-]{1,31}$/.test(String(tenant)) ? String(tenant) : app;
@@ -68,7 +68,7 @@ function createMediaStore({ config, env = process.env, fetchImpl = globalThis.fe
         const init = await call(base, {
             method: 'POST', headers: { ...auth, ...subject, 'Content-Type': 'application/json', Accept: 'application/json' },
             body: JSON.stringify({
-                kind: 'asset', visibility: 'public', mime_type: mime, size_bytes: bytes.length,
+                kind: 'asset', visibility, mime_type: mime, size_bytes: bytes.length,
                 filename: String(filename || 'picture').slice(0, 120), content_hash: crypto.createHash('sha256').update(bytes).digest('hex'),
                 metadata,
             }),

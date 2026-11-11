@@ -38,7 +38,7 @@ const { EXACT_ID } = modelCatalog;
 const { resolveRequest } = require('../exchange/presets');
 const { compact, receiptId } = require('../exchange/receipts');
 
-const FIELDS = ['system', 'tools', 'tool_choice', 'stop_sequences', 'temperature', 'top_p', 'top_k', 'metadata', 'files'];
+const FIELDS = ['system', 'tools', 'tool_choice', 'stop_sequences', 'temperature', 'top_p', 'top_k', 'metadata', 'files', 'output_file'];
 const MAX_TOKENS = 64000;
 
 // Anthropic's error types by HTTP status (docs.anthropic.com/en/api/errors).
@@ -291,6 +291,7 @@ function messagesRouter({ runs, auth, config, registry, presets = null, receipts
                 ...(out.usage && out.usage.cache_creation_input_tokens != null ? { cache_creation_input_tokens: out.usage.cache_creation_input_tokens } : {}),
             },
         };
+        if (Array.isArray(out.artifacts) && out.artifacts.length) message.artifacts = out.artifacts;
         if (b.usage?.include === true) Object.assign(message.usage, require('./compat-extra').accounting(run));
         const disclosure = await models.disclosureOf({ registry, config, run });
         const community = (disclosure && disclosure.community) || (run.explain && run.explain.community) || null;
@@ -302,7 +303,8 @@ function messagesRouter({ runs, auth, config, registry, presets = null, receipts
             cost_usd: run.usage.cost_usd, synthetic: Boolean(run.synthetic),
             ...(community ? { community } : {}),
             ...(run.output.label ? { policy: run.output.policy || 'uncensored', label: run.output.label } : {}),
-            privacy: receipt && receipt.privacy ? receipt.privacy.label : null, receipt_id: receipt ? receipt.id : null };
+            privacy: receipt && receipt.privacy ? receipt.privacy.label : null, receipt_id: receipt ? receipt.id : null,
+            ...(out.artifacts?.length ? { artifacts: out.artifacts } : {}) };
         if (run.output.label) {
             message.label = run.output.label;
             message.policy = run.output.policy || 'uncensored';

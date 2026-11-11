@@ -11,6 +11,7 @@
  *   text, markdown, code, CSV and JSON   a text block, cut at MAX_TEXT_CHARS with an honest "(truncated)" line
  *   PDF                                  its text, page by page, through the small extractor below (no dependency)
  *   PNG, JPEG, WebP, GIF                 an image part, when the model can see (vision); otherwise a named note
+ *   audio                                a transcript from the host's local ASR, or an honest unavailable note
  *   ZIP, TAR, TAR.GZ                      bounded text/code/PDF entries with their paths; other entries named as skipped
  *   anything else                        a named note saying it could not be read, never silently dropped
  *
@@ -37,6 +38,7 @@ const CODE_TYPE = /^(text\/[a-z0-9.+-]+|application\/(json|jsonl|xml|javascript|
 const IMAGE_TYPE = /^image\/(png|jpe?g|webp|gif)$/i;
 const PDF_TYPE = /^application\/pdf$/i;
 const ARCHIVE_TYPE = /^(application\/(zip|x-tar|gzip|x-gzip|x-gtar|x-compressed-tar))$/i;
+const AUDIO_TYPE = /^audio\/(mpeg|mp3|mp4|x-m4a|wav|x-wav|wave|ogg|webm|flac|x-flac)$/i;
 
 /** The named virus-scan extension point; null means no scan is configured (and none is pretended). */
 let scanner = null;
@@ -62,6 +64,7 @@ function effectiveType(name, contentType, declared) {
     if ((!type || type === 'application/octet-stream') && extOf(name) === 'pdf') type = 'application/pdf';
     if ((!type || type === 'application/octet-stream') && /\.zip$/i.test(name)) type = 'application/zip';
     if ((!type || type === 'application/octet-stream') && /\.(?:tar|tar\.gz|tgz)$/i.test(name)) type = 'application/x-tar';
+    if ((!type || type === 'application/octet-stream') && /\.(?:mp3|m4a|mp4|wav|ogg|webm|flac)$/i.test(name)) type = ({ mp3: 'audio/mpeg', m4a: 'audio/mp4', mp4: 'audio/mp4', wav: 'audio/wav', ogg: 'audio/ogg', webm: 'audio/webm', flac: 'audio/flac' })[extOf(name)];
     if ((!type || type === 'application/octet-stream') && /^(png|jpe?g|webp|gif)$/.test(extOf(name))) type = `image/${extOf(name).replace('jpg', 'jpeg')}`;
     return type || 'application/octet-stream';
 }
@@ -188,7 +191,7 @@ function referenceOf(file, mediaId, name, mediaType, size, read) {
 }
 
 /** Read one Media-backed file for the model. → { reference, part, note } */
-async function readFile(file, fetcher, { signal, format = 'openai', vision = true, scan = null } = {}) {
+async function readFile(file, fetcher, { signal, format = 'openai', vision = true, scan = null, transcribe = null } = {}) {
     const mediaId = mediaIdOf(file);
     const name = nameOf(file);
     const declaredSize = Number(file && file.size);
@@ -253,6 +256,19 @@ async function readFile(file, fetcher, { signal, format = 'openai', vision = tru
         }
         const reason = 'this model cannot see images, so the picture itself was not passed';
         return { reference: referenceOf(file, mediaId, name, type, size, { method: 'not_readable', reason }), part: null, note: `[Attached image: ${name} (${type}); ${reason}.]` };
+    }
+    if (AUDIO_TYPE.test(type)) {
+        let result = null;
+        if (transcribe) {
+            try { result = await transcribe({ bytes: buffer, media_type: type, name, signal }); }
+            catch (err) { if (signal && signal.aborted) throw err; }
+        }
+        const transcript = result && typeof result.text === 'string' ? capText(result.text.trim()) : '';
+        if (transcript) return { reference: referenceOf(file, mediaId, name, type, size, { method: 'text' }),
+            part: textPart(format, `\n\n[Attached audio transcript: ${name} (${type})]\n${transcript}\n`), note: null };
+        const reason = transcribe ? 'local speech recognition could not read this audio' : 'local speech recognition is unavailable';
+        return { reference: referenceOf(file, mediaId, name, type, size, { method: 'not_readable', reason }), part: null,
+            note: `[Attached audio: ${name} (${type}); ${reason}.]` };
     }
     if (ARCHIVE_TYPE.test(type) || /\.(?:zip|tar|tar\.gz|tgz)$/i.test(name)) {
         const archive = extractArchive(buffer, type, name);
@@ -344,7 +360,7 @@ function userContent(format, content) {
  * Returns a NEW input: the messages gain parts, the file references stay metadata-only (`read` says what
  * happened to each, which is the ai.file@1 shape). No bytes or extracted text are put into `input.files`.
  */
-async function attachFiles(input, fetcher, { signal, format = 'openai', vision = true, scan = null } = {}) {
+async function attachFiles(input, fetcher, { signal, format = 'openai', vision = true, scan = null, transcribe = null } = {}) {
     const files = Array.isArray(input && input.files) ? input.files : [];
     if (!files.length) return input;
     checkLimits(files);
@@ -353,7 +369,7 @@ async function attachFiles(input, fetcher, { signal, format = 'openai', vision =
     let total = 0;
     let hasImage = false;
     for (const file of files) {
-        const read = await readFile(file, fetcher, { signal, format, vision, scan });
+        const read = await readFile(file, fetcher, { signal, format, vision, scan, transcribe });
         total += read.reference.size;
         if (total > MAX_TOTAL_BYTES) throw new AiError(413, 'files.too_large', `attached files may be up to ${MAX_TOTAL_BYTES / 1024 / 1024} MiB together`);
         references.push(read.reference);

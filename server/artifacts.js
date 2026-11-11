@@ -4,14 +4,14 @@
  *
  * A provider can answer with files beside its text: each entry names a Media object it already stored
  * (the reference shape), which is returned as it is. A provider that hands back the bytes themselves
- * (`data`/`b64`) needs a Media store in this service: `store.put({ name, media_type, bytes, subject })`
- * returns the stored ai.file@1. When no store is configured such a file is REFUSED with
- * files.store_unavailable, never dropped and never put in the run output as inline bytes. The store is
- * configured by the operator (a Media tenant AI may write to); nothing here pretends to have one.
+ * (`data`/`b64`) goes to the existing Media uploader, private to the person on the turn.
+ * When Media is unavailable, such a file is refused with files.store_unavailable and is never
+ * put in the run output as inline bytes.
  */
 const { AiError } = require('./util');
 
 const MAX_ARTIFACTS = 10;
+const MAX_ARTIFACT_BYTES = 10 * 1024 * 1024;
 const MEDIA_ID = /^med_[0-9A-HJKMNP-TV-Z]{26}$/;
 
 function storedRef(file) {
@@ -29,10 +29,20 @@ function storedRef(file) {
     };
 }
 
-/** The store a run may write to (config.media.artifactStore with put(), or null). */
-function storeOf(config) {
+/** The Media store for inline output bytes; a generated file belongs to the person on the turn. */
+function storeOf(config, mediaStore = null) {
     const s = config && config.media && config.media.artifactStore;
-    return s && typeof s.put === 'function' ? s : null;
+    if (s && typeof s.put === 'function') return s;
+    if (!mediaStore || typeof mediaStore.put !== 'function' || typeof mediaStore.configured !== 'function' || !mediaStore.configured()) return null;
+    return { put: async ({ name, media_type: mediaType, bytes, subject }) => {
+        if (!subject) throw new AiError(422, 'files.subject_required', 'a generated file needs a person on the turn so Media can keep it private to them');
+        if (bytes.length > MAX_ARTIFACT_BYTES) throw new AiError(413, 'files.too_large', 'a generated file may be up to 10 MiB');
+        const saved = await mediaStore.put({ bytes, mime: mediaType || 'application/octet-stream', filename: name || 'file', owner: subject,
+            visibility: 'private', metadata: { origin: 'ai.turn.artifact' } });
+        const ref = storedRef({ id: saved.media_id, name, media_type: mediaType, size: bytes.length, access: { readers: [subject] } });
+        if (!ref) throw new AiError(502, 'files.store_invalid', 'Media did not return a valid file reference');
+        return ref;
+    } };
 }
 
 /**
@@ -51,10 +61,21 @@ async function collectArtifacts(message, { store = null, subject = null } = {}) 
             : typeof (file && (file.data || file.b64)) === 'string' ? Buffer.from(file.data || file.b64, file.encoding === 'utf8' ? 'utf8' : 'base64')
                 : null;
         if (!bytes) throw new AiError(422, 'files.invalid', `a model returned a file without bytes or a Media reference: ${String((file && file.name) || 'unnamed').slice(0, 80)}`);
+        if (bytes.length > MAX_ARTIFACT_BYTES) throw new AiError(413, 'files.too_large', 'a generated file may be up to 10 MiB');
         if (!store) throw new AiError(503, 'files.store_unavailable', 'a model produced a file but AI has no Media store configured to keep it');
         out.push(await store.put({ name: file.name, media_type: file.media_type || file.type, bytes, subject }));
     }
     return out;
 }
 
-module.exports = { collectArtifacts, storeOf, MAX_ARTIFACTS };
+/** Turn a requested text answer into a private Media file with the same text as the answer. */
+async function collectTextArtifact(text, request, { store = null, subject = null } = {}) {
+    if (!request) return [];
+    const name = String(request.name || '');
+    if (!name || name.length > 255 || /[/\\\u0000-\u001f\u007f]/.test(name)) throw new AiError(422, 'files.name_invalid', 'output_file.name must be a filename without a path');
+    if (!['text/plain', 'text/markdown', 'text/csv', 'application/json'].includes(request.media_type)) throw new AiError(422, 'files.type_invalid', 'output_file.media_type must be a supported text type');
+    if (typeof text !== 'string' || !text.length) throw new AiError(422, 'files.text_missing', 'the model returned no text to save as output_file');
+    return collectArtifacts({ artifacts: [{ name, media_type: request.media_type, data: text, encoding: 'utf8' }] }, { store, subject });
+}
+
+module.exports = { collectArtifacts, collectTextArtifact, storeOf, MAX_ARTIFACTS };

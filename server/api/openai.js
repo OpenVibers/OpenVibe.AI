@@ -52,7 +52,7 @@ const { EXACT_ID } = modelCatalog;
 const { resolveRequest } = require('../exchange/presets');
 const { compact, receiptId } = require('../exchange/receipts');
 
-const FIELDS = ['messages', 'tools', 'tool_choice', 'parallel_tool_calls', 'response_format', 'stop', 'seed', 'top_p', 'presence_penalty', 'frequency_penalty', 'temperature', 'files'];
+const FIELDS = ['messages', 'tools', 'tool_choice', 'parallel_tool_calls', 'response_format', 'stop', 'seed', 'top_p', 'presence_penalty', 'frequency_penalty', 'temperature', 'files', 'output_file'];
 
 // Cloudflare answers a 502 or 504 from the origin with its own HTML page, so an OpenAI client would get no JSON error:
 // an upstream that failed or could not be reached is 503 (OpenAI's own "unavailable, retry"), the body kept. An invalid
@@ -300,6 +300,7 @@ function openaiRouter({ runs, auth, config, registry, presets = null, receipts =
             ...(run.output.label ? { policy: run.output.policy || 'uncensored', label: run.output.label } : {}),
             privacy: receipt && receipt.privacy ? receipt.privacy.label : null,
             receipt_id: receipt ? receipt.id : null,
+            ...(run.output.artifacts?.length ? { artifacts: run.output.artifacts } : {}),
         };
         if (run.output.label) res.setHeader('X-OpenVibe-Content-Policy', run.output.policy || 'uncensored');
         if (!live) res.setHeader('X-OpenVibe-Run-Id', run.id);   // a stream sent it with its headers

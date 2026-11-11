@@ -123,6 +123,26 @@ t.test('unsafe archive paths and overlarge expanded entries are skipped', async 
     }
 });
 
+t.test('audio is transcribed for a text model with local ASR, with an honest note if unavailable', async () => {
+    const bytes = Buffer.from('audio fixture bytes');
+    const fetcher = fetcherOf({ [ID(9)]: { body: bytes, type: 'audio/ogg' } });
+    const input = { messages: [{ role: 'user', content: 'What did I say?' }], files: [{ id: ID(9), name: 'voice.ogg', size: bytes.length }] };
+    let called = 0;
+    const heard = await attachFiles(input, fetcher, { transcribe: async ({ bytes: got, media_type: type }) => {
+        called++;
+        assert.equal(type, 'audio/ogg');
+        assert.deepEqual(got, bytes);
+        return { text: 'A spoken answer.' };
+    } });
+    assert.equal(called, 1);
+    assert.match(heard.messages[0].content[1].text, /Attached audio transcript:[\s\S]*A spoken answer/);
+    assert.equal(heard.files[0].read.method, 'text');
+    assert.ok(!JSON.stringify(heard.files).includes('spoken answer'));
+    const unavailable = await attachFiles(input, fetcher);
+    assert.equal(unavailable.files[0].read.method, 'not_readable');
+    assert.match(unavailable.messages[0].content[1].text, /local speech recognition is unavailable/);
+});
+
 t.test('a text-only model gets an honest note instead of a dropped picture', async () => {
     const fetcher = fetcherOf({ [ID(3)]: png });
     const out = await attachFiles({ messages: [{ role: 'user', content: 'What is this?' }], files: [{ id: ID(3), name: 'shot.png', size: 8 }] }, fetcher, { vision: false });

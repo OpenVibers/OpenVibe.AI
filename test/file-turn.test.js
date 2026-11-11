@@ -7,7 +7,8 @@ const { boot, request, token, suite, seamServer, ALL } = require('./helpers');
 const t = suite('file-turn');
 const ID = 'med_01ARZ3NDEKTSV4RRFFQ69G5FAV';
 const ZIP_ID = 'med_01ARZ3NDEKTSV4RRFFQ69G5FAW';
-let h; let seam; let media; let service;
+const PERSON = 'usr_01ARZ3NDEKTSV4RRFFQ69G5FAV';
+let h; let seam; let media; let service; let uploads;
 
 function codeZip() {
     const name = Buffer.from('src/answer.js');
@@ -41,7 +42,9 @@ t.test('a Media server and a counting OpenAI-shaped provider', async () => {
     await new Promise((r) => media.listen(0, '127.0.0.1', r));
     const mediaUrl = `http://127.0.0.1:${media.address().port}`;
     seam = await seamServer(() => ({ choices: [{ index: 0, message: { role: 'assistant', content: 'It has two rows.' } }], usage: { prompt_tokens: 10, completion_tokens: 5 } }));
-    h = await boot({ env: { AI_STUB_FALLBACK: 'false', OV_MEDIA_URL: mediaUrl, OV_MEDIA_INTERNAL_URL: mediaUrl } });
+    uploads = [];
+    const mediaStore = { configured: () => true, put: async (what) => { uploads.push(what); return { media_id: ZIP_ID }; } };
+    h = await boot({ env: { AI_STUB_FALLBACK: 'false', AI_FREE_PROVIDERS: 'seam', OV_MEDIA_URL: mediaUrl, OV_MEDIA_INTERNAL_URL: mediaUrl }, mediaStore });
     service = token('chat', ALL);
     let r = await request(h.base, 'POST', '/api/v1/providers', { tok: service, body: { key: 'seam', kind: 'openai', base_url: `${seam.url}/v1`, auth_mode: 'none', capabilities: ['chat', 'complete'], default_model: 'm1' } });
     assert.equal(r.status, 201, r.text);
@@ -49,6 +52,44 @@ t.test('a Media server and a counting OpenAI-shaped provider', async () => {
     assert.equal(r.status, 201, r.text);
     r = await request(h.base, 'POST', '/api/v1/routes/default.chat/versions', { tok: service, body: { primary: { provider: 'seam', model: 'm1' }, fallbacks: [] } });
     assert.equal(r.status, 201, r.text);
+});
+
+t.test('POST /v1/chat/completions returns a generated file by private Media reference', async () => {
+    const previous = seam.handler;
+    seam.handler = () => ({ choices: [{ index: 0, message: { role: 'assistant', content: 'Download the result.', artifacts: [
+        { name: 'answer.txt', media_type: 'text/plain', data: Buffer.from('private output bytes').toString('base64') },
+    ] } }], usage: { prompt_tokens: 10, completion_tokens: 5 } });
+    try {
+        const acting = token('chat', ALL, { extra: { on_behalf_of: PERSON } });
+        const r = await request(h.base, 'POST', '/v1/chat/completions', { tok: acting, body: { model: 'openvibe', messages: [{ role: 'user', content: 'Make a text file' }] } });
+        assert.equal(r.status, 200, r.text);
+        assert.equal(uploads.length, 1);
+        assert.equal(uploads[0].visibility, 'private');
+        assert.equal(uploads[0].owner, PERSON);
+        assert.equal(uploads[0].bytes.toString(), 'private output bytes');
+        const files = r.body.choices[0].message.artifacts;
+        assert.equal(files[0].id, ZIP_ID);
+        assert.equal(files[0].role, 'artifact');
+        assert.ok(!r.text.includes('private output bytes'));
+        assert.ok(!r.text.includes(Buffer.from('private output bytes').toString('base64')));
+        const stored = await h.db.prepare('SELECT output FROM runs ORDER BY created_at DESC LIMIT 1').get();
+        assert.ok(!JSON.stringify(stored.output).includes('private output bytes'));
+    } finally { seam.handler = previous; }
+});
+
+t.test('POST /v1/chat/completions saves a normal model answer when output_file is requested', async () => {
+    const before = uploads.length;
+    const acting = token('chat', ALL, { extra: { on_behalf_of: PERSON } });
+    const r = await request(h.base, 'POST', '/v1/chat/completions', { tok: acting, body: {
+        model: 'openvibe', messages: [{ role: 'user', content: 'Write a short text file' }],
+        output_file: { name: 'answer.txt', media_type: 'text/plain' },
+    } });
+    assert.equal(r.status, 200, r.text);
+    assert.equal(uploads.length, before + 1);
+    assert.equal(uploads[before].bytes.toString(), 'It has two rows.');
+    assert.equal(uploads[before].visibility, 'private');
+    assert.equal(r.body.choices[0].message.artifacts[0].id, ZIP_ID);
+    assert.equal(r.body.x_openvibe.artifacts[0].id, ZIP_ID);
 });
 
 t.test('POST /v1/chat/completions reads a ZIP code file into the turn', async () => {
