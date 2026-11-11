@@ -721,7 +721,9 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         const rest = [];
         for (const c of list) {
             const p = await registry.getProvider(c.provider);
-            if (!p) { rest.push(c); continue; }
+            // A provider that is off or has no key is never moved ahead: its free tokens cannot be spent yet.
+            const usable = p && p.status === 'active' && (p.auth_mode === 'none' || credentialNotRequired(p) || Boolean(providerSecret(p, env)));
+            if (!usable) { rest.push(c); continue; }
             if (privateRequest && traits.trainsOrRetains(p)) { rest.push(c); continue; }
             const row = c.model ? await registry.getModel(c.provider, c.model) : null;
             const allowed = traits.latencyAllows(p, row, ctx.latencyClass || 'interactive');

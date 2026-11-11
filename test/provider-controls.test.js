@@ -16,6 +16,7 @@ const { boot, request, token, suite, ALL } = require('./helpers');
 const { createPriceStore } = require('../server/pricebook/store');
 const { proposePriceChanges } = require('../server/pricebook/propose');
 const compute = require('../server/gpu/compute-providers');
+const seed = require('../server/providers/pool-seed');
 
 const t = suite('provider-controls');
 const OWNER = token('owner', ['ai.provider.manage', 'ai.usage.read']);
@@ -117,6 +118,20 @@ t.test('the confirmed readings become pending changes; nothing is applied automa
     assert.ok(pending.some((p) => p.provider_key === 'sable' && p.status === 'pending'), 'pending until the owner decides');
     const live = await h.registry.getModel('sable', 'deepseek-v4.1-flash-1017-uncensored');
     assert.strictEqual(live.cost.in_per_mtok, null, 'the live price is still unchanged');
+});
+
+t.test('a disabled model keeps its price and status but gains the offer routing the catalogue states', async () => {
+    const key = 'deepseek/deepseek-v4.1-flash-1017';
+    const row = await h.registry.getModel('openrouter', key);
+    // The production shape: an OpenRouter catalogue row already exists, off, with OpenRouter's own list price.
+    await h.registry.upsertModel({ ...row, status: 'disabled', cost: { in_per_mtok: 0.006, out_per_mtok: 0.5, source: 'https://openrouter.ai/api/v1/models' },
+        metadata: { ...(row.metadata || {}), routing: undefined, service_tier: undefined } });
+    await seed.seedPoolProviders({ registry: h.registry, actor: 'test' });
+    const after = await h.registry.getModel('openrouter', key);
+    assert.strictEqual(after.status, 'disabled', 'the owner switch stays');
+    assert.strictEqual(after.cost.in_per_mtok, 0.006, 'the live price is not overwritten');
+    assert.deepStrictEqual(after.metadata.routing, { only: ['particle-ai'], allow_fallbacks: false, service_tier: 'flex', data_collection: 'deny' }, 'the offer routing is recorded');
+    assert.strictEqual(after.metadata.service_tier, 'flex');
 });
 
 t.test('the rented capacity records name their prices and the startup credit note', () => {
