@@ -155,7 +155,7 @@ function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth,
     }));
     r.get('/api/v1/admin/console/gpus/:model/quote', read, wrap(async (req) => {
         if (!gpus) throw new AiError(409, 'ai.conflict', 'GPU quotes are off on this host');
-        return await gpus.preview(String(req.params.model), { strategy: req.query.strategy || undefined });
+        return await gpus.preview(String(req.params.model), { strategy: req.query.strategy || undefined, jobClass: req.query.class || undefined, checkpoint: req.query.checkpoint || undefined });
     }));
     // Read the public marketplace pages now instead of waiting for the due tick. It still never rents anything.
     r.post('/api/v1/admin/console/gpus/prices/refresh', write, wrap(async () => {
@@ -286,7 +286,7 @@ function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth,
         if (!gpus) throw new AiError(409, 'ai.conflict', 'GPU controls are off on this host');
         const action = String(req.params.action);
         if (!['launch', 'stop'].includes(action)) throw new AiError(404, 'ai.not_found', 'no such GPU action');
-        await gpus.request(String(req.params.model || ''), action, actor(req));
+        await gpus.request(String(req.params.model || ''), action, actor(req), { jobClass: (req.body || {}).class, checkpoint: (req.body || {}).checkpoint });
         return { ok: true };
     }));
     r.post('/api/v1/admin/console/pricebook/changes/:id', write, wrap(async (req) => {

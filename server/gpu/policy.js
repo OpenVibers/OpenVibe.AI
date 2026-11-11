@@ -11,6 +11,21 @@ const DEFAULTS = Object.freeze({
 const GLOBAL = Object.freeze({ quote_only: true, interactive_cap_nano: null, batch_cap_nano: null });
 const OWNED = new Set(['svc:exchange']);
 
+function defaultsFor(provider) {
+    return { ...DEFAULTS, ...(provider === 'salad' ? { classes: ['batch'], max_replicas: 3 } : {}) };
+}
+
+/**
+ * The policy in force for a provider. Before the owner has saved one, a provider whose key is already
+ * in the vault stays on: adding this table must not silently stop the rentals the owner had. Saving
+ * any provider setting makes its stored `enabled` the one that counts.
+ */
+function effectiveProvider(provider, saved, hasKey) {
+    const out = { ...defaultsFor(provider), ...(saved || {}) };
+    if (!saved) out.enabled = Boolean(hasKey);
+    return out;
+}
+
 function invalid(message) { throw new AiError(422, 'gpu.policy_invalid', message); }
 function nano(value, name) {
     if (value == null || value === '') return null;
@@ -72,18 +87,24 @@ function createGpuPolicy({ db, settings, clock = { now: () => Date.now() } }) {
         const global = { ...GLOBAL, ...(await row('global') || {}), monthly_cap_nano: values.monthly_cap };
         const providers = [];
         for (const key of PROVIDERS) {
-            const policy = { ...DEFAULTS, ...(key === 'salad' ? { classes: ['batch'], max_replicas: 3 } : {}), ...(await row(key) || {}) };
             const marker = summary.secrets && summary.secrets[`${key === 'runpod_serverless' ? 'runpod' : key}.key`];
-            providers.push({ key, ...policy, key_state: key === 'reserved' ? { required: false } : { required: true, present: Boolean(marker), last_four: marker?.hint || null } });
+            const saved = await row(key);
+            const policy = effectiveProvider(key, saved, Boolean(marker));
+            providers.push({ key, ...policy, configured: Boolean(saved), key_state: key === 'reserved' ? { required: false } : { required: true, present: Boolean(marker), last_four: marker?.hint || null } });
         }
         return { global, providers };
     }
     async function save(scope, body, actor, trace = null) {
         if (scope !== 'global' && !PROVIDERS.includes(scope)) invalid('unknown GPU provider');
         if (!body || typeof body !== 'object' || Array.isArray(body)) invalid('settings must be an object');
-        const before = scope === 'global'
-            ? { ...GLOBAL, monthly_cap_nano: settings.gpus.values().monthly_cap, ...(await row('global') || {}) }
-            : { ...DEFAULTS, ...(scope === 'salad' ? { classes: ['batch'], max_replicas: 3 } : {}), ...(await row(scope) || {}) };
+        let before;
+        if (scope === 'global') {
+            before = { ...GLOBAL, monthly_cap_nano: settings.gpus.values().monthly_cap, ...(await row('global') || {}) };
+        } else {
+            const summary = await settings.gpus.store.summary();
+            const marker = summary.secrets && summary.secrets[`${scope === 'runpod_serverless' ? 'runpod' : scope}.key`];
+            before = effectiveProvider(scope, await row(scope), Boolean(marker));
+        }
         const after = scope === 'global' ? globalInput(body, before) : providerInput(body, before, scope);
         const changes = Object.keys(after).filter(k => JSON.stringify(before[k]) !== JSON.stringify(after[k]));
         if (!changes.length) return scope === 'global' ? (await read()).global : (await read()).providers.find(x => x.key === scope);
@@ -117,4 +138,4 @@ function createGpuPolicy({ db, settings, clock = { now: () => Date.now() } }) {
     return { read, save, setKey };
 }
 
-module.exports = { createGpuPolicy, PROVIDERS, DEFAULTS, GLOBAL };
+module.exports = { createGpuPolicy, PROVIDERS, DEFAULTS, GLOBAL, defaultsFor, effectiveProvider };

@@ -19,8 +19,10 @@
  *      deterministic: the same offers in the same order always give the same instance.
  */
 const { randomUUID } = require('node:crypto');
-const { choose, STRATEGIES } = require('openvibe-sdk/compute');
+const { STRATEGIES } = require('openvibe-sdk/compute');
 const { AiError } = require('../util');
+const { classOf, checkpointOf, pickOffer } = require('./classes');
+const { createGpuPolicy } = require('./policy');
 const money = require('./money');
 const catalog = require('./catalog');
 const { vastAdapter } = require('./vast');
@@ -89,6 +91,10 @@ function createGpuProvisioner({
     const now = () => clock.now();
     const iso = (ms) => new Date(ms).toISOString();
     const monthOf = (ms) => new Date(ms).toISOString().slice(0, 7);
+    // The owner's per-provider policy, saved through the Exchange owner console (server/gpu/policy.js).
+    const gpuPolicy = settings && typeof settings.gpus === 'object' ? createGpuPolicy({ db, settings, clock }) : null;
+    /** The provider keys from the sealed config store. */
+    const PROVIDER_KEYS = Object.freeze(['vast', 'runpod']);
 
     // ── the owner's settings ──────────────────────────────────────────────
 
@@ -104,36 +110,54 @@ function createGpuProvisioner({
         let extraHourly = null;
         try { extraHourly = money.nanoCount(v.extra_hourly_nano, 'the hourly storage and network allowance'); } catch {}
         const bounded = v.costs_bounded === true && extraHourly != null && extraHourly >= 0n;
-        const vastKey = String(v.vast_key || '');
-        const runpodKey = String(v.runpod_key || '');
+        const keys = {
+            vast: String(v.vast_key || ''),
+            runpod: String(v.runpod_key || ''),
+        };
+        // The newer provider keys live together in the sealed config namespace (server/settings.js).
+        for (const name of PROVIDER_KEYS) if (!keys[name] && v.provider_keys && typeof v.provider_keys === 'object') keys[name] = String(v.provider_keys[name] || '');
+        const anyKey = PROVIDER_KEYS.some((name) => Boolean(keys[name]));
         let reason = '';
-        if (!vastKey && !runpodKey) reason = 'no Vast.ai or RunPod API key';
+        if (!anyKey) reason = 'no GPU marketplace API key';
         else if (cap == null || cap <= 0n) reason = 'no monthly cap';
         else if (!bounded) reason = 'storage and network costs need an explicit hourly bound';
         return {
             strategy: STRATEGIES.includes(v.strategy) ? v.strategy : 'cheapest',
             dry_run: v.dry_run === true,
-            vast_key: vastKey,
-            runpod_key: runpodKey,
+            keys,
+            vast_key: keys.vast,
+            runpod_key: keys.runpod,
             cap_nano: cap,
             extra_hourly_nano: extraHourly,
             idle_minutes: clampInt(v.idle_minutes, 1, 1440, DEFAULT_IDLE_MINUTES),
             max_runtime_minutes: clampInt(v.max_runtime_minutes, 1, 10080, DEFAULT_MAX_RUNTIME_MINUTES),
             warm_window: String(v.warm_window || '').trim(),
             region: String(v.region || DEFAULT_REGION).trim().toUpperCase() || DEFAULT_REGION,
-            enabled: Boolean(vastKey || runpodKey) && cap != null && cap > 0n && bounded,
+            enabled: anyKey && cap != null && cap > 0n && bounded,
             reason,
         };
     }
 
     /** The adapter of a marketplace, or null when its key is not set. */
     function adapterFor(marketplace, cfg) {
-        if (marketplace === 'runpod') {
-            if (!cfg.runpod_key) return null;
-            return runpodAdapter({ fetchImpl, key: cfg.runpod_key });
-        }
-        if (!cfg.vast_key) return null;
-        return vastAdapter({ fetchImpl, key: cfg.vast_key });
+        const key = cfg.keys && cfg.keys[marketplace];
+        if (!key) return null;
+        if (marketplace === 'runpod') return runpodAdapter({ fetchImpl, key });
+        if (marketplace === 'vast') return vastAdapter({ fetchImpl, key });
+        return null;
+    }
+
+    /** The owner's provider policy by provider key; an empty map means no policy is configured. */
+    async function providerPolicies() {
+        if (!gpuPolicy) return new Map();
+        const read = await gpuPolicy.read();
+        return new Map((read.providers || []).map((p) => [p.key, p]));
+    }
+
+    /** Live instances of one marketplace, for the owner's replica ceiling. */
+    async function liveForMarketplace(marketplace) {
+        const row = await db.prepare("SELECT COUNT(*) AS n FROM gpu_instances WHERE marketplace = ? AND status IN ('starting','running','stopping')").get(String(marketplace));
+        return Number(row && row.n) || 0;
     }
 
     /** Is the moment inside the owner's warm window (UTC)? Then an idle instance stays up. */
@@ -158,16 +182,29 @@ function createGpuProvisioner({
         const cfg = config();
         const ledger = await handle.prepare('SELECT COALESCE(SUM(nano_usd), 0) AS total FROM gpu_spend WHERE month = ?').get(month);
         const settled = toNano(ledger && ledger.total);
+        // What each job class and each marketplace has already cost this month. The join is left so a
+        // spend row whose instance row is gone still counts towards the month.
+        const settledBy = async (column) => {
+            const rows = await handle.prepare(`SELECT COALESCE(i.${column}, 'interactive') AS k, COALESCE(SUM(s.nano_usd), 0) AS total
+                FROM gpu_spend s LEFT JOIN gpu_instances i ON i.id = s.instance_id WHERE s.month = ? GROUP BY COALESCE(i.${column}, 'interactive')`).all(month);
+            return new Map((rows || []).map((r) => [String(r.k), toNano(r.total)]));
+        };
+        const byClass = await settledBy('job_class');
+        const byMarketplace = await settledBy('marketplace');
         const rows = await handle.prepare('SELECT * FROM gpu_instances WHERE status IN (?, ?, ?)').all('starting', 'running', 'stopping');
         let reserved = 0n;
         let running = 0n;
+        const add = (map, key, value) => map.set(key, (map.get(key) || 0n) + value);
         for (const row of rows) {
             const remaining = toNano(row.reserved_nano) > toNano(row.spent_nano) ? toNano(row.reserved_nano) - toNano(row.spent_nano) : 0n;
             const started = toMs(row.started_at);
             const accrued = started == null ? 0n : money.nanoForSeconds(toNano(row.hourly_nano), Math.max(0, now() - Math.max(toMs(row.charged_at) || started, Date.parse(month + '-01T00:00:00Z'))) / 1000);
             running += accrued;
             // Pending deletion may run beyond its reservation. Never make that overspend look like free budget.
-            reserved += remaining > accrued ? remaining : accrued;
+            const committed = remaining > accrued ? remaining : accrued;
+            reserved += committed;
+            add(byClass, String(row.job_class || 'interactive'), committed);
+            add(byMarketplace, String(row.marketplace || ''), committed);
         }
         return {
             month,
@@ -176,6 +213,8 @@ function createGpuProvisioner({
             committed_nano: settled + reserved,
             reserved_nano: reserved,
             settled_nano: settled,
+            by_class: Object.fromEntries(byClass),
+            by_marketplace: Object.fromEntries(byMarketplace),
         };
     }
 
@@ -215,13 +254,16 @@ function createGpuProvisioner({
     }
 
     /** A quote never creates a request, takes a Billing hold or rents anything. */
-    async function preview(modelKey, { strategy = config().strategy, region = config().region, runtimeSpec = null, rentalOnly = false } = {}) {
+    async function preview(modelKey, { strategy = config().strategy, region = config().region, runtimeSpec = null, rentalOnly = false, jobClass = 'interactive', checkpoint = null } = {}) {
         const spec = runtimeSpec || models.find(m => m.key === modelKey) || catalog.find(modelKey);
         if (!spec) throw new AiError(404, 'ai.not_found', 'no such GPU model');
         if (!STRATEGIES.includes(strategy)) throw new AiError(422, 'ai.invalid', 'unknown compute strategy');
         if (strategy === 'own' || strategy === 'private') return { dry_run: true, strategy, selected: null, offers: [], reasons: ['rented marketplace GPUs are not own or OpenVibe machines; use a Link endpoint'] };
         const cfg = config();
-        const names = ['vast', 'runpod'].filter(name => !rentalOnly || cfg[name + '_key']);
+        const job_class = classOf(jobClass);
+        const ckpt = checkpointOf(checkpoint);
+        const policies = await providerPolicies();
+        const names = PROVIDER_KEYS.filter(name => !rentalOnly || (cfg.keys && cfg.keys[name]));
         const offers = [];
         const failures = [];
         // The owner's approved supply plan pins the hourly and monthly ceilings per model (server/platform/supply.js).
@@ -241,27 +283,58 @@ function createGpuProvisioner({
             return true;
         };
         for (const name of names) {
-            const adapter = name === 'vast' ? vastAdapter({ fetchImpl, key: cfg.vast_key || null }) : runpodAdapter({ fetchImpl, key: cfg.runpod_key || null });
+            const policy = policies.get(name) || null;
+            if (policy && policy.configured && policy.enabled === false) { failures.push(name + ': disabled by the owner'); continue; }
+            if (policy && Array.isArray(policy.classes) && !policy.classes.includes(job_class)) { failures.push(name + ': does not serve ' + job_class + ' jobs'); continue; }
+            if (policy && policy.configured && Number.isInteger(policy.max_replicas) && await liveForMarketplace(name) >= policy.max_replicas) {
+                failures.push(name + ': the owner’s replica ceiling is reached');
+                continue;
+            }
+            // A quote never needs a key: quote-only mode is how the owner sees prices before adding one.
+            const adapter = name === 'vast'
+                ? vastAdapter({ fetchImpl, key: (cfg.keys && cfg.keys.vast) || null })
+                : (name === 'runpod' ? runpodAdapter({ fetchImpl, key: (cfg.keys && cfg.keys.runpod) || null }) : null);
+            if (!adapter) continue;
+            // Interruptible capacity is asked for only when the job may use it: batch, a checkpoint, and the
+            // owner's permission for this provider. The adapter may still return only on-demand offers.
+            const interruptible = job_class === 'batch' && Boolean(ckpt) && Boolean(policy && policy.interruptible_allowed);
             try {
                 const found = await adapter.searchOffers({ gpuNames: spec.requirements.gpu_names, vramMb: spec.requirements.vram_mb,
                     diskGb: spec.requirements.disk_gb, numGpus: spec.requirements.num_gpus,
-                    minReliability: spec.requirements.min_reliability, region, maxPricePerHour: 10, limit: 50 });
+                    minReliability: spec.requirements.min_reliability, region, maxPricePerHour: 10, limit: 50, interruptible,
+                    checkpoint: ckpt });
                 // Never trust marketplace-side filters alone.
-                const fitting = found.filter(o => o.gpu_ram_mb >= spec.requirements.vram_mb && o.num_gpus >= spec.requirements.num_gpus
+                let fitting = found.filter(o => o.gpu_ram_mb >= spec.requirements.vram_mb && o.num_gpus >= spec.requirements.num_gpus
                     && o.disk_gb >= spec.requirements.disk_gb && o.reliability >= spec.requirements.min_reliability
                     && Number(o.price_per_hour) > 0 && Number.isFinite(Number(o.price_per_hour))
                     && (!region || String(o.region).toUpperCase() === String(region).toUpperCase()));
+                // The owner's per-provider bounds: an hourly ceiling and a list of allowed regions.
+                if (policy && policy.max_hourly_nano != null) {
+                    const ceiling = Number(policy.max_hourly_nano) / 1e9;
+                    const below = fitting.filter(o => Number(o.price_per_hour) <= ceiling);
+                    if (below.length < fitting.length) failures.push(name + ': offers above the owner’s hourly ceiling were left out');
+                    fitting = below;
+                }
+                if (policy && Array.isArray(policy.regions) && policy.regions.length) {
+                    const wanted = new Set(policy.regions.map(x => String(x).toUpperCase()));
+                    fitting = fitting.filter(o => wanted.has(String(o.region || '').toUpperCase()));
+                }
                 const inside = fitting.filter(withinApproved);
                 if (approved && inside.length < fitting.length) failures.push('offers above the approved supply ceiling were left out');
-                offers.push(...inside);
+                // The class rule is applied here and again by pickOffer, so an adapter can never slip an
+                // interruptible offer into an interactive or checkpoint-less job.
+                const allowed = inside.filter(o => {
+                    const marked = { ...o, interruptible: Boolean(o.interruptible) };
+                    return !marked.interruptible || (job_class === 'batch' && Boolean(ckpt) && Boolean(policy && policy.interruptible_allowed));
+                });
+                offers.push(...allowed);
             } catch { failures.push(name + ': quote API unavailable'); }
         }
-        const candidates = offers.map(o => ({ id: o.marketplace + ':' + o.id, tier: 'partner', health: 'up', region: o.region,
-            hourly: Number(o.price_per_hour), currency: 'USD', free_ram_mb: 2048, free_slots: 1, gpu_mb: o.gpu_ram_mb,
-            latency_ms: o.latency_ms }));
-        const decision = choose({ strategy, region }, candidates, { currency: 'USD' }, { now: now() });
-        const selected = offers.find(o => o.marketplace + ':' + o.id === decision.selected) || null;
-        return { dry_run: true, strategy, selected, offers, reasons: [...decision.reasons, ...(strategy === 'fastest' && !offers.some(o => o.latency_ms != null) ? ['latency unmeasured; choosing by price within the required region'] : []), ...failures], expires_at: iso(now() + 60000) };
+        const decision = pickOffer(offers, { policies, jobClass: job_class, checkpoint: ckpt, strategy });
+        const selected = decision.selected || null;
+        return { dry_run: true, strategy, job_class, checkpoint: ckpt, selected, offers: decision.offers,
+            reasons: [...decision.reasons, ...(strategy === 'fastest' && !offers.some(o => o.latency_ms != null) ? ['latency unmeasured; choosing by price within the required region'] : []), ...failures],
+            expires_at: iso(now() + 60000) };
     }
 
     /** May this provisioner serve the model? The supply tick asks before it queues a launch. */
@@ -270,12 +343,14 @@ function createGpuProvisioner({
     }
 
     /** Ask for a model to start or stop. The reconciler does it; nothing here acts directly. */
-    async function request(modelKey, action, actor = 'service:ai') {
+    async function request(modelKey, action, actor = 'service:ai', { jobClass = 'interactive', checkpoint = null } = {}) {
         if (!supports(modelKey)) throw new AiError(404, 'ai.not_found', 'no such GPU model');
         if (action !== 'launch' && action !== 'stop') throw new AiError(422, 'ai.invalid', 'the action must be launch or stop');
-        await db.prepare('INSERT INTO gpu_requests (model_key, action, at, actor, created_at) VALUES (?, ?, ?, ?, ?)')
-            .run(String(modelKey), action, iso(now()), String(actor || '').slice(0, 200), iso(now()));
-        return { ok: true, model_key: modelKey, action };
+        const job_class = classOf(jobClass);
+        const ckpt = action === 'launch' ? checkpointOf(checkpoint) : null;
+        await db.prepare('INSERT INTO gpu_requests (model_key, action, job_class, checkpoint, at, actor, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+            .run(String(modelKey), action, job_class, ckpt, iso(now()), String(actor || '').slice(0, 200), iso(now()));
+        return { ok: true, model_key: modelKey, action, job_class, checkpoint: ckpt };
     }
 
     /** Is the model wanted? It is wanted when the owner asked for it or when it was used recently. */
@@ -314,16 +389,18 @@ function createGpuProvisioner({
      *   beforeCreate({ offer, hourly, reserved, maxMinutes, marketplace })   the endpoint's Billing hold, if
      *       any, is taken here - before the marketplace is called, so nothing runs that the person cannot pay.
      */
-    async function launchSpec(spec, { actor = 'service:ai', ownEndpointId = null, idleMinutes = null, maxRuntimeMinutes = null, beforeCreate = null, strategy = config().strategy, dryRun = false } = {}) {
+    async function launchSpec(spec, { actor = 'service:ai', ownEndpointId = null, idleMinutes = null, maxRuntimeMinutes = null, beforeCreate = null, strategy = config().strategy, dryRun = false, jobClass = 'interactive', checkpoint = null } = {}) {
         const cfg = config();
+        const job_class = classOf(jobClass);
+        const ckpt = checkpointOf(checkpoint);
         if (cfg.dry_run && ownEndpointId) return { ok: false, code: 'gpu.dry_run', reason: 'GPU rentals are in quote-only mode' };
-        if (dryRun || cfg.dry_run) return { ok: true, ...await preview(spec.key, { strategy, runtimeSpec: spec }) };
+        if (dryRun || cfg.dry_run) return { ok: true, ...await preview(spec.key, { strategy, runtimeSpec: spec, jobClass: job_class, checkpoint: ckpt }) };
         if (!cfg.enabled) return { ok: false, code: 'gpu.off', reason: cfg.reason };
         if (!STRATEGIES.includes(strategy)) throw new AiError(422, 'ai.invalid', 'unknown compute strategy');
         if (strategy === 'private' || strategy === 'own') return { ok: false, code: 'gpu.no_offer', reason: 'this strategy requires an existing Link or OpenVibe machine' };
         const existing = ownEndpointId ? await liveInstanceForEndpoint(ownEndpointId) : await liveInstance(spec.key);
         if (existing) return { ok: true, instance: describe(existing), note: 'already running' };
-        const quote = await preview(spec.key, { strategy, runtimeSpec: spec, rentalOnly: true });
+        const quote = await preview(spec.key, { strategy, runtimeSpec: spec, rentalOnly: true, jobClass: job_class, checkpoint: ckpt });
         const offer = quote.selected;
         if (!offer) return { ok: false, code: 'gpu.no_offer', reason: quote.reasons.join('; ') };
         const marketplace = offer.marketplace;
@@ -352,6 +429,24 @@ function createGpuProvisioner({
         if (sum.committed_nano + reserved > cap) {
             return { ok: false, code: 'gpu.cap', reason: 'the monthly cap leaves no room for ' + spec.display_name };
         }
+        // The owner's per-class ceilings and each provider's share of the month. Both are settled money
+        // plus live reservations, so a reservation is never counted twice or left out.
+        const policyState = gpuPolicy ? await gpuPolicy.read() : null;
+        const classCap = policyState && policyState.global ? policyState.global[job_class + '_cap_nano'] : null;
+        if (classCap != null) {
+            const classCommitted = BigInt((sum.by_class && sum.by_class[job_class]) || 0);
+            if (classCommitted + reserved > BigInt(classCap)) {
+                return { ok: false, code: 'gpu.class_cap', reason: 'the ' + job_class + ' class cap leaves no room for ' + spec.display_name };
+            }
+        }
+        const providerPolicy = policyState ? policyState.providers.find((p) => p.key === marketplace) : null;
+        if (providerPolicy && providerPolicy.configured && providerPolicy.monthly_cap_share_percent < 100) {
+            const shareCap = cap * BigInt(providerPolicy.monthly_cap_share_percent) / 100n;
+            const providerCommitted = BigInt((sum.by_marketplace && sum.by_marketplace[marketplace]) || 0);
+            if (providerCommitted + reserved > shareCap) {
+                return { ok: false, code: 'gpu.provider_cap', reason: 'the owner’s share of the monthly cap for ' + marketplace + ' leaves no room for ' + spec.display_name };
+            }
+        }
 
         // 2b. the payer's hold, for a person's own endpoint: taken before the marketplace is called, so an
         //     instance never runs that the person cannot pay for.
@@ -378,11 +473,11 @@ function createGpuProvisioner({
         await tdb.prepare(`INSERT INTO gpu_instances (id, model_key, provider_key, marketplace, offer_id, remote_id, status, endpoint, month,
                 gpu_name, gpu_ram_mb, num_gpus, disk_gb, reliability, region, price_per_hour, hourly_nano, reserved_nano, spent_nano,
                 max_runtime_minutes, started_at, charged_at, destroy_failures, label, cold_start_ms, health_failures, created_at, updated_at,
-                own_endpoint_id, idle_minutes)
+                own_endpoint_id, idle_minutes, job_class, checkpoint, interruptible)
             VALUES (@id, @model_key, @provider_key, @marketplace, @offer_id, NULL, 'starting', NULL, @month,
                 @gpu_name, @gpu_ram_mb, @num_gpus, @disk_gb, @reliability, @region, @price_per_hour, @hourly_nano, @reserved_nano, 0,
                 @max_runtime_minutes, @started_at, @charged_at, 0, @label, NULL, 0, @created_at, @updated_at,
-                @own_endpoint_id, @idle_minutes)`)
+                @own_endpoint_id, @idle_minutes, @job_class, @checkpoint, @interruptible)`)
             .run({
                 id, model_key: spec.key, provider_key: spec.provider_key, marketplace,
                 offer_id: String(offer.id), month: monthOf(t),
@@ -393,15 +488,16 @@ function createGpuProvisioner({
                 max_runtime_minutes: maxMinutes, started_at: iso(t), charged_at: iso(t), label: id,
                 created_at: iso(t), updated_at: iso(t),
                 own_endpoint_id: ownEndpointId, idle_minutes: idleMinutes == null ? null : clampInt(idleMinutes, 1, 1440, cfg.idle_minutes),
+                job_class, checkpoint: ckpt, interruptible: Boolean(offer.interruptible),
             });
             });
         } catch (err) {
             if (err.code === 'gpu.cap' || err.code === 'gpu.uncertain') return { ok: false, code: err.code, reason: err.message };
             throw err;
         }
-        await audit(actor, 'gpu.placement', 'gpu_instance', id, { strategy, marketplace, offer_id: offer.id, reasons: quote.reasons, base_hourly_nano: baseHourly.toString(), extra_hourly_nano: cfg.extra_hourly_nano.toString(), hourly_nano: hourly.toString() });
+        await audit(actor, 'gpu.placement', 'gpu_instance', id, { strategy, job_class, checkpoint: ckpt, interruptible: Boolean(offer.interruptible), marketplace, offer_id: offer.id, reasons: quote.reasons, base_hourly_nano: baseHourly.toString(), extra_hourly_nano: cfg.extra_hourly_nano.toString(), hourly_nano: hourly.toString() });
         await audit(actor, 'gpu.instance.requested', 'gpu_instance', id, {
-            model: spec.key, marketplace, offer_id: String(offer.id), hourly_nano: hourly.toString(),
+            model: spec.key, marketplace, offer_id: String(offer.id), hourly_nano: hourly.toString(), job_class, checkpoint: ckpt, interruptible: Boolean(offer.interruptible),
             reserved_nano: reserved.toString(), max_runtime_minutes: maxMinutes, label: id,
             ...(ownEndpointId ? { own_endpoint_id: ownEndpointId } : {}),
         });
@@ -414,6 +510,9 @@ function createGpuProvisioner({
                 command: catalog.commandOf(spec),
                 weights_url: catalog.weightsUrl(spec),
                 label: id,
+                job_class,
+                checkpoint: ckpt,
+                interruptible: Boolean(offer.interruptible),
             });
         } catch (err) {
             const reason = 'provision outcome unknown; reservation retained for reconciliation';
@@ -782,6 +881,9 @@ function createGpuProvisioner({
             max_runtime_minutes: row.max_runtime_minutes,
             idle_minutes: row.idle_minutes == null ? null : Number(row.idle_minutes),
             own_endpoint_id: row.own_endpoint_id || null,
+            job_class: row.job_class || 'interactive',
+            checkpoint: row.checkpoint || null,
+            interruptible: Boolean(row.interruptible),
             label: row.label,
             cold_start_ms: row.cold_start_ms == null ? null : String(row.cold_start_ms),
             destroy_failures: Number(row.destroy_failures || 0),
@@ -824,7 +926,7 @@ function createGpuProvisioner({
         for (const req of requests || []) {
             try {
                 if (req.action === 'launch') {
-                    const res = await launch(req.model_key, { actor: req.actor || actor });
+                    const res = await launch(req.model_key, { actor: req.actor || actor, jobClass: req.job_class || 'interactive', checkpoint: req.checkpoint || null });
                     if (!res.ok) {
                         await db.prepare('UPDATE gpu_requests SET done_at = ?, error = ? WHERE id = ?')
                             .run(iso(now()), String(res.reason).slice(0, 300), req.id);
@@ -884,6 +986,7 @@ function createGpuProvisioner({
                 instance: describe(live),
             };
         });
+        const policyState = gpuPolicy ? await gpuPolicy.read() : null;
         return {
             strategy: cfg.strategy,
             dry_run: cfg.dry_run,
@@ -898,7 +1001,12 @@ function createGpuProvisioner({
             max_runtime_minutes: cfg.max_runtime_minutes,
             warm_window: cfg.warm_window,
             region: cfg.region,
-            marketplaces: { vast: Boolean(cfg.vast_key), runpod: Boolean(cfg.runpod_key) },
+            marketplaces: Object.fromEntries(PROVIDER_KEYS.map((name) => [name, Boolean(cfg.keys && cfg.keys[name])])),
+            class_caps: policyState ? {
+                interactive_cap_nano: policyState.global.interactive_cap_nano,
+                batch_cap_nano: policyState.global.batch_cap_nano,
+            } : null,
+            by_class: sum.by_class,
             models: list,
             instances: rows.map(describe),
         };
