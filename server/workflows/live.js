@@ -143,6 +143,15 @@ const templates = [
         default_route: 'background.creative', owner: 'live', metadata: { json_name: 'rundown_topic' },
     },
     {
+        key: 'live.rundown.today', name: "Live: The Rundown's Today card",
+        description: "From rundown/today.js: today's takes (topic, who said it, what, their take, their own line) in; a headline, a 2-4 sentence summary of the day and up to 3 take-linked highlights out.",
+        input_schema: { type: 'object' },
+        output_schema: {"type": "object", "additionalProperties": false, "required": ["headline", "summary", "highlights"], "properties": {"headline": {"type": "string"}, "summary": {"type": "string"}, "highlights": {"type": "array", "maxItems": 3, "items": {"type": "object", "additionalProperties": false, "required": ["take_id", "line"], "properties": {"take_id": {"type": "integer"}, "line": {"type": "string"}}}}}},
+        system_prompt: "You write the top card of THE RUNDOWN, the part of a small, community-run live-streaming site that turns what streamers said today into a story. You get today's takes: each with its take_id, who said it, when, the topic, what they talked about, their opinion, and sometimes a line in their own words. Say what today was about, in a few sentences, the way a friend who watched all of it would tell you. headline: at most 80 characters, specific to today (never \"Today on The Rundown\", \"A day of streams\" or the date alone). summary: two to four sentences, at most 600 characters, naming the streamers and their topics, who said what, where they agreed or clashed, and the strongest moments; warm, concrete and a little funny, never mocking anyone. highlights: up to 3 of the day's strongest moments, each with the exact take_id it comes from (copied from the input, never invented) and one line of at most 160 characters saying why that moment matters. No stock words or filler: never \"ups and downs\", \"highs and lows\", \"emotional rollercoaster\", \"journey\", \"tapestry\", \"delve\", \"unpack\", \"it was a day\", \"what a day\" or the name of the site repeated. Quote only from the quotes given, word for word. Never invent anything that is not in what you are given: no events, numbers, motives, relationships or words. Never accuse anyone of a crime or of wronging someone. Talk about what they said and did, never who they are: no jokes about looks, body, clothing, age, race, religion, sexuality, gender or disability, no sexual content about anyone, no threats, no self-harm jokes. Swearing is fine. Write every name exactly as given, same spelling and capitals, and call people by their name or \"they\": never guess a pronoun (no he, him, his, she, her). Privacy: never write or quote where anyone is, lives or will be (a named place, venue, event, school, town, address or time zone), their school or workplace, family members' names or when they will be somewhere; say \"a theme park\" or \"later\" instead. If someone seems to be under 18 (school, classmates, parents' rules), be kind: no roasting them, nothing about school, and no quotes about where they are. Output only the JSON.",
+        user_prompt: "Today's takes (oldest first; copy take_id exactly):\n{{json payload}}\n\nReturn JSON only: {\"headline\": \"...\", \"summary\": \"...\", \"highlights\": [{\"take_id\": <the exact take_id>, \"line\": \"...\"}]}.",
+        default_route: 'background.creative', owner: 'live', metadata: { json_name: 'rundown_today' },
+    },
+    {
         key: 'live.clips.confirm', name: "Live: is this chat spike clip-worthy",
         description: "From auto-clip-job.js (auto_clip_confirm): scene notes, transcript, sounds and chat around a spike.",
         input_schema: { type: 'object' },
@@ -407,6 +416,23 @@ const structured = [
         input_schema: TEXT_OUT({ topic: STR(120), takes: { type: 'array', minItems: 1, maxItems: 30, items: { type: 'object', required: ['streamer', 'what'], additionalProperties: false, properties: { streamer: STR(80), when: STR(40), what: STR(500), take: { type: ['string', 'null'], maxLength: 300 }, quote: { type: ['string', 'null'], maxLength: 400 } } } } }, ['topic', 'takes']),
         output_schema: {"type": "object", "additionalProperties": false, "required": ["headline", "summary"], "properties": {"headline": {"type": "string"}, "summary": {"type": "string"}}},
         steps: [{ kind: 'llm', template: 'live.rundown.topic', operation: 'generate', output: 'json', prepare: 'live.rundown.topic', postprocess: 'live.rundown.topic', params: { max_tokens: 400, temperature: 1.0, timeout_ms: 30000 } }],
+        cache_mode: 'none',
+    },
+    {
+        key: 'live.rundown.today', name: "The Rundown: today's card", namespace: 'live',
+        description: "rundown/today.js: today's takes in; a headline, the day in a few sentences and up to 3 highlights, each linked to the take it came from.",
+        input_schema: TEXT_OUT({
+            date: STR(20),
+            takes: { type: 'array', minItems: 1, maxItems: 30, items: { type: 'object', required: ['take_id', 'streamer', 'what'], additionalProperties: false, properties: {
+                take_id: { type: 'integer', minimum: 1 }, streamer: STR(80), when: STR(40), topic: { type: ['string', 'null'], maxLength: 120 },
+                what: STR(500), take: { type: ['string', 'null'], maxLength: 300 }, quote: { type: ['string', 'null'], maxLength: 400 },
+            } } },
+        }, ['takes']),
+        output_schema: TEXT_OUT({
+            headline: STR(100), summary: STR(700),
+            highlights: { type: 'array', maxItems: 3, items: { type: 'object', required: ['take_id', 'line'], additionalProperties: false, properties: { take_id: { type: 'integer' }, line: STR(240) } } },
+        }, ['headline', 'summary', 'highlights']),
+        steps: [{ kind: 'llm', template: 'live.rundown.today', operation: 'generate', output: 'json', postprocess: 'live.rundown.today', params: { max_tokens: 600, temperature: 0.9, timeout_ms: 40000 } }],
         cache_mode: 'none',
     },
     {
