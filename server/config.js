@@ -537,12 +537,13 @@ function load(env = process.env) {
 
         // ── Billing (plan T5 lane F): one platform.usage-sample@1 reading per accounted run, posted by
         // server/usage-samples.js to billing.usage.record (POST /api/v1/usage, audience openvibe.billing).
-        // Readings are queued unless USAGE_SAMPLES=off; they are sent while OV_BILLING_INTERNAL_URL is set.
+        // Readings are queued unless USAGE_SAMPLES=off. Production's colocated Billing receives them by
+        // default; OV_BILLING_INTERNAL_URL overrides that address when the services are split.
         // No `capability:` key: AI asks for billing.usage.record (named in usage-samples.js), Billing enforces it,
         // and openvibe-contracts-check reads a `capability: 'x'` literal as one this service enforces.
         billing: {
             enabled: bool(env.USAGE_SAMPLES, true),
-            billingUrl: trimUrl(env.OV_BILLING_INTERNAL_URL),
+            billingUrl: trimUrl(env.OV_BILLING_INTERNAL_URL != null ? env.OV_BILLING_INTERNAL_URL : (isProduction ? 'http://127.0.0.1:4600' : '')),
             audience: 'openvibe.billing',
             intervalMs: Math.max(100, int(env.USAGE_SAMPLES_INTERVAL_MS, 2000)),
         },
