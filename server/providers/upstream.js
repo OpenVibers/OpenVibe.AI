@@ -116,16 +116,24 @@ function serves(upstream, provider, row) {
 }
 
 /**
- * Is the credential this provider needs present right now? No credential for a keyless record (local,
- * whisper), and none needed for a free or pooled-subscription provider. A missing env/vault reference is
- * not configured: its models must not appear as offers.
+ * Is the credential this provider needs present right now, whether or not the provider is switched on? No
+ * credential for a keyless record (local, whisper), and none needed for a free or pooled-subscription provider.
+ * A missing env/vault reference is not present.
  */
-function configured(provider, env = process.env) {
-    if (!provider || provider.status !== 'active') return false;
+function credentialPresent(provider, env = process.env) {
+    if (!provider) return false;
     if (provider.auth_mode === 'none') return true;
     if (provider.billing_profile === 'free') return true;
     if (provider.billing_profile === 'subscription' && !provider.secret_ref) return true;
     try { return Boolean(resolveSecret(provider.secret_ref, env)); } catch (e) { return false; }
 }
 
-module.exports = { upstreamOf, serves, configured, familyOfModel, NAMES };
+/**
+ * Is the credential this provider needs present right now and is the provider on? A missing env/vault
+ * reference is not configured: its models must not appear as offers.
+ */
+function configured(provider, env = process.env) {
+    return Boolean(provider && provider.status === 'active' && credentialPresent(provider, env));
+}
+
+module.exports = { upstreamOf, serves, configured, credentialPresent, familyOfModel, NAMES };

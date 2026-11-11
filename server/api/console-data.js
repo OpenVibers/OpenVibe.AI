@@ -11,10 +11,10 @@ const gpuCatalog = require('../gpu/catalog');
 const { tokenCosts } = require('../gpu/token-cost');
 
 /** Read-only JSON read models for Exchange's owner console. Every query is bounded and the query module redacts runs. */
-function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, gpus = null, gpuMarket = null, abuse = null, priceBook = null, modelSync = null, creditGrants = null, sessionCookies = null, vault = null, settings = null, config = {}, log = console }) {
+function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, gpus = null, gpuMarket = null, supply = null, abuse = null, priceBook = null, modelSync = null, creditGrants = null, sessionCookies = null, vault = null, settings = null, config = {}, log = console }) {
     const r = express.Router();
     const providerOrder = require('../providers/order').createProviderOrder({ registry });
-    const supply = require('../platform/supply').createSupply({ db, registry, clock });
+    const supplyManager = supply || require('../platform/supply').createSupply({ db, registry, clock });
     const ownerConfig = require('../owner-config').createOwnerConfig({ db, registry, clock });
     // The public marketplace readings and the per-token cost they imply, added to both console sections. Data only:
     // Exchange renders it with its existing console classes.
@@ -27,9 +27,13 @@ function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth,
     const read = auth.requireCap(CAPS.usageRead);
     const write = auth.requireCap(CAPS.providerManage);
     const workflowWrite = auth.requireCap(CAPS.workflowManage);
-    const modelView = (m, provider) => ({ ...m, provider: m.provider_key, model: m.model_key, accepted_price: m.cost,
+    // The offer's route and the owner's one action that opens it (server/exchange/offers.js): the same registry
+    // facts the catalog and router read, never a second list of models or prices.
+    const offerRoutes = require('../exchange/offers').createOfferRoutes({ registry, priceBook, env, clock, log });
+    const modelView = (m, provider, pending = 0) => ({ ...m, provider: m.provider_key, model: m.model_key, accepted_price: m.cost,
         content_tier: require('../providers/pool-providers').isUncensored(provider, m) ? 'uncensored' : 'standard',
-        owner_override: m.metadata?.owner_override || null });
+        owner_override: m.metadata?.owner_override || null,
+        route: offerRoutes.routeOf({ provider, model: m, pending, env }) });
     const actor = (req) => {
         const subject = String(req.get('x-ov-subject') || '');
         return /^usr_[0-9A-HJKMNP-TV-Z]{26}$/.test(subject) ? subject : req.principal.sub;
@@ -38,9 +42,17 @@ function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth,
         try { res.set('Cache-Control', 'no-store').json(await fn(req)); }
         catch (err) { log.error(`[console-json] ${req.method} ${req.path} failed (${err && err.code || 'ai.internal'})`); res.status(err.status || 500).json({ error: 'AI admin data is unavailable.', code: err.code || 'ai.internal' }); }
     };
+    // One offer's route, and the owner's one action that opens it: approve its waiting prices (or write the
+    // owner's fixed per-token price), switch the provider and the model on, then answer the route as it stands.
+    r.get('/api/v1/admin/console/models/:provider/:model/route', read, wrap(async (req) => ({ route: await offerRoutes.read(req.params.provider, req.params.model) })));
+    r.post('/api/v1/admin/console/models/:provider/:model/open', write, json, wrap(async (req) => {
+        const body = req.body || {};
+        const price = body.price && typeof body.price === 'object' ? body.price : null;
+        return await offerRoutes.open(req.params.provider, req.params.model, { price, actor: actor(req), trace: req.ov && req.ov.traceId });
+    }));
     r.get('/api/v1/admin/console/:section', read, wrap(async (req) => {
         const section = req.params.section;
-        if (section === 'supply') return { ...await supply.report(), ...await marketPayload() };
+        if (section === 'supply') return { ...await supplyManager.report(), ...await marketPayload() };
         if (section === 'overview') {
             const since = new Date(clock.now() - 86400000).toISOString();
             return { status: await ops.status(), counts24: await q.statusCounts(db, since), failures24: await q.failures(db, since), queue: runs.stats(), cache: await cache.stats() };
@@ -65,12 +77,14 @@ function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth,
             }))) : [];
             const cookies = sessionCookies ? await sessionCookies.list('operator', 'owner') : [];
             const balances = sessionCookies ? await Promise.all(cookies.map((c) => sessionCookies.balance('operator', 'owner', c.id))) : [];
-            return { providers: rows, models: (await registry.listModels()).map(m => modelView(m, rows.find(p => p.key === m.provider_key))), presets: poolProviders.map((p) => ({ key: p.key, display_name: p.display_name, base_url: p.base_url, default_model: p.default_model, provider_access: p.provider_access, uncensored: Boolean(p.uncensored), models: p.models })), credit_estimates: estimates, session_credentials: cookies, session_balances: balances };
+            const pendingBy = await offerRoutes.pendingByModel();
+            return { providers: rows, models: (await registry.listModels()).map(m => modelView(m, rows.find(p => p.key === m.provider_key), offerRoutes.pendingOf(pendingBy, m.provider_key, m.model_key))), presets: poolProviders.map((p) => ({ key: p.key, display_name: p.display_name, base_url: p.base_url, default_model: p.default_model, provider_access: p.provider_access, uncensored: Boolean(p.uncensored), models: p.models })), credit_estimates: estimates, session_credentials: cookies, session_balances: balances };
         }
         if (section === 'models') {
             const provider = typeof req.query.provider === 'string' ? req.query.provider : undefined;
             const providers = await registry.listProviders();
-            return { models: (await registry.listModels({ provider })).map(m => modelView(m, providers.find(p => p.key === m.provider_key))),
+            const pendingBy = await offerRoutes.pendingByModel();
+            return { models: (await registry.listModels({ provider })).map(m => modelView(m, providers.find(p => p.key === m.provider_key), offerRoutes.pendingOf(pendingBy, m.provider_key, m.model_key))),
                 provider: provider || null, sync_log: modelSync ? await modelSync.read(provider) : [] };
         }
         if (section === 'orders') return { orders: await providerOrder.list() };
@@ -137,7 +151,7 @@ function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth,
         return { ...await gpuMarket.refresh(), ...await marketPayload() };
     }));
     r.post('/api/v1/admin/console/supply/quotes', json, write, wrap(async req => ({ recorded: await require('../pricebook/gpus').recordGpuQuotes(db, JSON.stringify(req.body.quotes)), dry_run: true })));
-    r.post('/api/v1/admin/console/supply', json, write, wrap(req => supply.save(req.body || {}, actor(req))));
+    r.post('/api/v1/admin/console/supply', json, write, wrap(req => supplyManager.save(req.body || {}, actor(req))));
     r.post('/api/v1/admin/console/orders/:capability', json, write, wrap(req => providerOrder.save(req.params.capability, req.body, { actor: actor(req), trace: req.traceId })));
     r.post('/api/v1/admin/console/owner-inference/spend-caps', json, write, wrap(async (req) => ({ cap: await ownerConfig.setCap(req.body || {}, { actor: actor(req), trace: req.ov && req.ov.traceId }) })));
     r.post('/api/v1/admin/console/owner-inference/routing', json, write, wrap(async (req) => ({ routing: await ownerConfig.setRouting(req.body || {}, { actor: actor(req), trace: req.ov && req.ov.traceId }) })));

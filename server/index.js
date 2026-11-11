@@ -57,6 +57,10 @@ async function start({ searchFetch = null, config, db: givenDb = null, clock = {
     // API key and a monthly cap in the owner settings (ai.gpus). The reconciler rents, health-checks and
     // scales the instances to zero; it never spends past the cap.
     const gpus = require('./gpu/provisioner').createGpuProvisioner({ db, registry, settings, clock, fetchImpl, env, log });
+    // The owner's GPU supply plans (server/platform/supply.js): fixed per-token prices and the ceilings of the host
+    // they are approved for. Live supply is an explicit per-model switch; its tick places launch requests only,
+    // and the provisioner below still checks the key, the monthly cap and the reservation before it rents.
+    const supply = require('./platform/supply').createSupply({ db, registry, clock, gpus, log });
     // The public GPU marketplace prices (server/gpu/market.js): a due-based public-page reader for the console's
     // supply view. It never signs in or rents; a failed source keeps its last reading, marked stale.
     const gpuMarket = require('./gpu/market').createGpuMarket({ db, config, clock, fetchImpl, log });
@@ -229,7 +233,7 @@ async function start({ searchFetch = null, config, db: givenDb = null, clock = {
         clientSecret: env.OV_OAUTH_CLIENT_SECRET, fetch: fetchImpl,
     }) : null;
     const benchEvents = createBenchEvents({ bench, accountData, accountSend, config, log, fetchImpl, clientSecret: env.OV_OAUTH_CLIENT_SECRET });
-    const app = createApp({ choices, searchFetch, config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, grants, vault, settings, benchEvents, runBudgets, memory, memoryImport, memoryServices, memorySharing, community, endpoints, webhooks, presets, receipts, balance, creditGrants, sessionCookies, gpus, gpuMarket, abuse, priceBook, modelSync, modelDiscovery, ownEndpoints, refusal, willingness, abliterationTax, batches, share });
+    const app = createApp({ choices, searchFetch, config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, grants, vault, settings, benchEvents, runBudgets, memory, memoryImport, memoryServices, memorySharing, community, endpoints, webhooks, presets, receipts, balance, creditGrants, sessionCookies, gpus, gpuMarket, supply, abuse, priceBook, modelSync, modelDiscovery, ownEndpoints, refusal, willingness, abliterationTax, batches, share });
     let jwks = null;
     let keyLoaded = Promise.resolve(null);
     if (!keys.pinned && config.nodeEnv !== 'test') {
@@ -258,7 +262,9 @@ async function start({ searchFetch = null, config, db: givenDb = null, clock = {
     let gpuReconciler = null;
     if (listen && config.nodeEnv !== 'test') {
         gpuReconciler = setInterval(() => {
-            ownEndpoints.tick()
+            // Supply queues a launch request first; the provisioner then fulfils it under the cap in the same minute.
+            supply.tick()
+                .then(() => ownEndpoints.tick())
                 .then(() => gpus.tick())
                 .catch((err) => log.warn('[gpu] the reconciler failed: ' + err.message));
         }, 60 * 1000);
@@ -364,7 +370,7 @@ async function start({ searchFetch = null, config, db: givenDb = null, clock = {
         if (!givenDb) await db.close();
     }
 
-    return { config, db, registry, pool, quotas, tiers, cache, fetcher, engine, runs, keys, keyLoaded, auth, app, server, choices, bench, benchEvents, memory, memoryJobs, memoryServices, memorySharing, priceBook, modelSync, modelDiscovery, refusal, willingness, abliterationTax, batches, batcher, credits: creditsRef, settings, vault, community, endpoints, webhooks, gpus, gpuMarket, abuse, ownEndpoints, close };
+    return { config, db, registry, pool, quotas, tiers, cache, fetcher, engine, runs, keys, keyLoaded, auth, app, server, choices, bench, benchEvents, memory, memoryJobs, memoryServices, memorySharing, priceBook, modelSync, modelDiscovery, refusal, willingness, abliterationTax, batches, batcher, credits: creditsRef, settings, vault, community, endpoints, webhooks, gpus, gpuMarket, supply, abuse, ownEndpoints, close };
 }
 
 if (require.main === module) {

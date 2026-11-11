@@ -136,6 +136,55 @@ const { decide, adapter } = require('../server/platform/supply');
         assert.equal(report.dry_run,true);
         assert.equal(report.price_book.length,1);
         assert.equal(report.reports[0].action,'would_stop');
+
+        // A model with no published resale price still rents when the GPU hour is cheaper than the tokens
+        // would be: before 2026-11-11 decide() answered "use_reseller" even when there was no reseller.
+        const noReseller = decide({ settings, demand: { tokens_in: 1e6, tokens_out: 1e6, reseller_cost_usd: null },
+            quotes: [{ hourly_usd: 0.5, measured_tokens_per_second: 50, vram_mb: 24000, observed_at: new Date().toISOString() }] });
+        assert.equal(noReseller.action, 'would_rent');
+
+        // Live supply is an owner switch behind every owner gate: without the provisioner it cannot be turned on.
+        await assert.rejects(supply.save({ ...settings, enabled: true }, 'owner'), (e) => e.code === 'gpu.owner_gate');
+
+        // Demand for the model, twenty measured requests and a registered GPU provider are what the plan reads.
+        const at = new Date().toISOString();
+        await h.registry.upsertProvider({ key: 'gpu.m', display_name: 'GPU m', kind: 'openai', status: 'active',
+            base_url: 'https://gpu.example/v1', auth_mode: 'none', capabilities: ['chat'], provider_access: 'OWN_DEPLOYMENT',
+            metadata: { gpu: { gpu_name: 'RTX 4090' } } }, { actor: 'test' });
+        await h.registry.upsertModel({ provider_key: 'gpu.m', model_key: 'm', type: 'chat', status: 'active',
+            cost: { in_per_mtok: 1, out_per_mtok: 2, source: 'urn:openvibe:owner-fixed-price', verified_at: at.slice(0, 10) },
+            metadata: { owner_fixed_price: true } }, { actor: 'test' });
+        await h.db.prepare(`INSERT INTO runs (id, workflow_key, workflow_version, status, requester_type, requester_id, input, input_hash,
+            synthetic, provider_key, model_key, tokens_in, tokens_out, cost_usd, created_at)
+            VALUES ('run_supply_demand', 'ai.complete', 1, 'succeeded', 'service', 'svc:test', '{}', 'h', 0, 'gpu.m', 'm', 1000000, 1000000, 3, ?)`)
+            .run(at);
+        for (let i = 0; i < 20; i++) await h.db.prepare(`INSERT INTO requests (operation, provider_key, model_key, status, tokens_out, latency_ms, created_at)
+            VALUES ('chat', 'gpu.m', 'm', 'ok', 100, 1000, ?)`).run(at);
+        const queued = [];
+        const fakeGpus = {
+            config: () => ({ enabled: true, dry_run: false, reason: '', cap_nano: 1000n, monthly_cap: 1 }),
+            request: async (model, action, actor) => {
+                queued.push([model, action, actor]);
+                await h.db.prepare('INSERT INTO gpu_requests (model_key, action, at, actor, created_at) VALUES (?, ?, ?, ?, ?)')
+                    .run(model, action, at, actor, at);
+                return { ok: true, model_key: model, action };
+            },
+        };
+        const live = createSupply({ db: h.db, registry: h.registry, gpus: fakeGpus });
+        const saved = await live.save({ ...settings, enabled: true }, 'owner');
+        assert.equal(saved.enabled, true);
+        assert.equal(saved.dry_run, false);
+        const planned = await live.report();
+        assert.equal(planned.live, true);
+        assert.equal(planned.reports[0].enabled, true);
+        assert.equal(planned.reports[0].action, 'would_rent');
+        assert.equal(planned.reports[0].route.registered, true);
+        assert.equal(planned.reports[0].route.fixed, true);
+        const first = await live.tick();
+        assert.deepEqual(first.queued, ['m']);
+        const second = await live.tick();
+        assert.deepEqual(second.queued, [], 'one pending launch is enough: no request storm');
+        assert.deepEqual(queued, [['m', 'launch', 'service:supply']]);
         await assert.rejects(createSearch().read('https://127.0.0.1'),/IP-literal/);
         console.log(
             'Exchange key isolation, concurrent caps, revocation, search normalization and dry-run gates passed',

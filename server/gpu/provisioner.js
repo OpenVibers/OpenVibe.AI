@@ -224,6 +224,22 @@ function createGpuProvisioner({
         const names = ['vast', 'runpod'].filter(name => !rentalOnly || cfg[name + '_key']);
         const offers = [];
         const failures = [];
+        // The owner's approved supply plan pins the hourly and monthly ceilings per model (server/platform/supply.js).
+        // Enforcing them here, at rent time, is what makes an approved host a bound and not only a comparison: a
+        // live marketplace offer above the ceiling is not selected, however good it looks.
+        const supplyRow = await db.prepare('SELECT settings FROM exchange_supply_settings WHERE model = ?').get(String(modelKey));
+        const approved = supplyRow ? (() => { try { return JSON.parse(supplyRow.settings); } catch { return null; } })() : null;
+        const withinApproved = (o) => {
+            if (!approved) return true;
+            const hourly = Number(o.price_per_hour);
+            const hourlyCeiling = Number(approved.hourly_ceiling_usd);
+            const monthlyCeiling = Number(approved.monthly_ceiling_usd);
+            const vram = Number(approved.required_vram_mb);
+            if (Number.isFinite(hourlyCeiling) && hourly > hourlyCeiling) return false;
+            if (Number.isFinite(monthlyCeiling) && hourly * 24 * 31 > monthlyCeiling) return false;
+            if (Number.isFinite(vram) && vram > 0 && o.gpu_ram_mb < vram) return false;
+            return true;
+        };
         for (const name of names) {
             const adapter = name === 'vast' ? vastAdapter({ fetchImpl, key: cfg.vast_key || null }) : runpodAdapter({ fetchImpl, key: cfg.runpod_key || null });
             try {
@@ -231,10 +247,13 @@ function createGpuProvisioner({
                     diskGb: spec.requirements.disk_gb, numGpus: spec.requirements.num_gpus,
                     minReliability: spec.requirements.min_reliability, region, maxPricePerHour: 10, limit: 50 });
                 // Never trust marketplace-side filters alone.
-                offers.push(...found.filter(o => o.gpu_ram_mb >= spec.requirements.vram_mb && o.num_gpus >= spec.requirements.num_gpus
+                const fitting = found.filter(o => o.gpu_ram_mb >= spec.requirements.vram_mb && o.num_gpus >= spec.requirements.num_gpus
                     && o.disk_gb >= spec.requirements.disk_gb && o.reliability >= spec.requirements.min_reliability
                     && Number(o.price_per_hour) > 0 && Number.isFinite(Number(o.price_per_hour))
-                    && (!region || String(o.region).toUpperCase() === String(region).toUpperCase())));
+                    && (!region || String(o.region).toUpperCase() === String(region).toUpperCase()));
+                const inside = fitting.filter(withinApproved);
+                if (approved && inside.length < fitting.length) failures.push('offers above the approved supply ceiling were left out');
+                offers.push(...inside);
             } catch { failures.push(name + ': quote API unavailable'); }
         }
         const candidates = offers.map(o => ({ id: o.marketplace + ':' + o.id, tier: 'partner', health: 'up', region: o.region,
@@ -245,9 +264,14 @@ function createGpuProvisioner({
         return { dry_run: true, strategy, selected, offers, reasons: [...decision.reasons, ...(strategy === 'fastest' && !offers.some(o => o.latency_ms != null) ? ['latency unmeasured; choosing by price within the required region'] : []), ...failures], expires_at: iso(now() + 60000) };
     }
 
+    /** May this provisioner serve the model? The supply tick asks before it queues a launch. */
+    function supports(modelKey) {
+        return Boolean(catalog.find(modelKey) || models.some((m) => m.key === modelKey));
+    }
+
     /** Ask for a model to start or stop. The reconciler does it; nothing here acts directly. */
     async function request(modelKey, action, actor = 'service:ai') {
-        if (!catalog.find(modelKey) && !models.some((m) => m.key === modelKey)) throw new AiError(404, 'ai.not_found', 'no such GPU model');
+        if (!supports(modelKey)) throw new AiError(404, 'ai.not_found', 'no such GPU model');
         if (action !== 'launch' && action !== 'stop') throw new AiError(422, 'ai.invalid', 'the action must be launch or stop');
         await db.prepare('INSERT INTO gpu_requests (model_key, action, at, actor, created_at) VALUES (?, ?, ?, ?, ?)')
             .run(String(modelKey), action, iso(now()), String(actor || '').slice(0, 200), iso(now()));
@@ -914,6 +938,7 @@ function createGpuProvisioner({
         attachEndpoints,
         launchSpec,
         request,
+        supports,
         config,
         moneySummary,
         sweepOrphans,

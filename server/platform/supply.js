@@ -72,9 +72,9 @@ function decide({ demand, quotes, settings, now = Date.now() }) {
                   ? 'needs_measurement'
                   : !capped
                     ? 'ceiling_required'
-                    : reseller !== null && rental < reseller
-                      ? 'would_rent'
-                      : 'use_reseller',
+                    : reseller != null && rental >= reseller
+                      ? 'use_reseller'
+                      : 'would_rent',
         selected: chosen,
         reseller_cost_usd: reseller,
         rental_cost_usd: rental,
@@ -88,7 +88,23 @@ function decide({ demand, quotes, settings, now = Date.now() }) {
         idle_minutes: settings.idle_minutes,
     };
 }
-function createSupply({ db, registry, clock = { now: () => Date.now() } }) {
+function createSupply({ db, registry, clock = { now: () => Date.now() }, gpus = null, log = console }) {
+    /**
+     * The owner gate of live supply: the provisioner must have the marketplace key, the monthly cap and the
+     * explicit cost bound, and quote-only mode must be off. Without all of them a supply plan can be saved and
+     * priced, but it never asks for a rental.
+     */
+    function gate() {
+        if (!gpus || typeof gpus.config !== 'function') return { ok: false, reason: 'The GPU provisioner is off on this host.' };
+        const cfg = gpus.config();
+        if (!cfg.enabled) return { ok: false, reason: cfg.reason === 'no Vast.ai or RunPod API key'
+            ? 'Add a Vast.ai or RunPod API key first; nothing was changed.'
+            : cfg.reason === 'no monthly cap'
+                ? 'Set a positive monthly GPU cap first; nothing was changed.'
+                : 'Set ai.gpus.extra_hourly_nano and ai.gpus.costs_bounded=true first; nothing was changed.' };
+        if (cfg.dry_run) return { ok: false, reason: 'GPU rentals are in quote-only mode (ai.gpus.dry_run); turn that off first; nothing was changed.' };
+        return { ok: true, cfg };
+    }
     async function save(b, actor) {
         if (
             typeof b.model !== 'string' ||
@@ -110,18 +126,26 @@ function createSupply({ db, registry, clock = { now: () => Date.now() } }) {
                 'ai.invalid',
                 'Model, runtime, prices, ceilings, VRAM and idle timeout are required',
             );
-        const value = Object.fromEntries(
-            [
-                'model',
-                'runtime',
-                'input_per_million',
-                'output_per_million',
-                'hourly_ceiling_usd',
-                'monthly_ceiling_usd',
-                'required_vram_mb',
-                'idle_minutes',
-            ].map((k) => [k, b[k]]),
-        );
+        const enabled = b.enabled === true;
+        if (enabled) {
+            const g = gate();
+            if (!g.ok) throw new AiError(409, 'gpu.owner_gate', g.reason);
+        }
+        const value = {
+            ...Object.fromEntries(
+                [
+                    'model',
+                    'runtime',
+                    'input_per_million',
+                    'output_per_million',
+                    'hourly_ceiling_usd',
+                    'monthly_ceiling_usd',
+                    'required_vram_mb',
+                    'idle_minutes',
+                ].map((k) => [k, b[k]]),
+            ),
+            enabled,
+        };
         await db
             .prepare(
                 'INSERT INTO exchange_supply_settings(model,settings,updated_at,actor) VALUES(?,?,?,?) ON CONFLICT(model) DO UPDATE SET settings=excluded.settings,updated_at=excluded.updated_at,actor=excluded.actor',
@@ -154,7 +178,18 @@ function createSupply({ db, registry, clock = { now: () => Date.now() } }) {
                     },
                     { actor },
                 );
-        return { settings: value, dry_run: true };
+        await registry.audit(actor, enabled ? 'supply.open' : 'supply.save', 'gpu_supply', value.model, {
+            metadata: {
+                enabled,
+                input_per_million: value.input_per_million,
+                output_per_million: value.output_per_million,
+                hourly_ceiling_usd: value.hourly_ceiling_usd,
+                monthly_ceiling_usd: value.monthly_ceiling_usd,
+                required_vram_mb: value.required_vram_mb,
+                idle_minutes: value.idle_minutes,
+            },
+        });
+        return { settings: value, enabled, dry_run: !enabled };
     }
     async function report() {
         const rows = await db
@@ -177,8 +212,14 @@ function createSupply({ db, registry, clock = { now: () => Date.now() } }) {
             )
             .all(since);
         const modelRows = await registry.listModels();
+        const gpuProviders = new Map(providers.filter((p) => String(p.key).startsWith('gpu.')).map((p) => [p.key, p]));
+        const supplyGate = gate();
+        const liveSettings = rows.map((r) => JSON.parse(r.settings)).filter((s) => s.enabled === true);
         return {
-            dry_run: true,
+            // Live supply is the owner's explicit switch plus every owner gate; a plan stays quote-only otherwise.
+            dry_run: !(liveSettings.length && supplyGate.ok),
+            live: Boolean(liveSettings.length && supplyGate.ok),
+            gate: supplyGate,
             price_book: quotes,
             reports: rows.map((r) => {
                 const settings = JSON.parse(r.settings);
@@ -221,7 +262,7 @@ function createSupply({ db, registry, clock = { now: () => Date.now() } }) {
                             1e6,
                     )
                     .filter(Number.isFinite);
-                return decide({
+                const plan = decide({
                     settings,
                     demand: {
                         ...usage,
@@ -232,10 +273,68 @@ function createSupply({ db, registry, clock = { now: () => Date.now() } }) {
                     quotes: observations,
                     now: clock.now(),
                 });
+                // The route the fixed prices would serve: a GPU host registers this model as a normal provider
+                // (server/gpu/provisioner.js), so the registry answer is the truth, not a second list.
+                const registered = modelRows.filter((m) => m.model_key === settings.model && gpuProviders.has(m.provider_key));
+                const row = registered.find((m) => gpuProviders.get(m.provider_key).status === 'active') || registered[0] || null;
+                const owner = row ? gpuProviders.get(row.provider_key) : null;
+                const route = row ? {
+                    registered: true,
+                    provider_key: row.provider_key,
+                    provider_status: owner.status,
+                    model_status: row.status,
+                    fixed: row.metadata?.owner_fixed_price === true,
+                    price: { in: row.cost?.in_per_mtok ?? null, out: row.cost?.out_per_mtok ?? null },
+                    live: owner.status === 'active' && row.status === 'active' && row.cost?.in_per_mtok != null && row.cost?.out_per_mtok != null,
+                } : { registered: false, live: false, reason: 'No GPU host has registered this model yet.' };
+                return {
+                    ...plan,
+                    enabled: settings.enabled === true,
+                    active: settings.enabled === true && supplyGate.ok,
+                    route,
+                };
             }),
             settings: rows.map((r) => JSON.parse(r.settings)),
         };
     }
-    return { save, report };
+
+    /**
+     * The reconciler half of live supply: when the owner enabled a plan and the plan says renting is cheaper
+     * than buying the same tokens, ask the existing GPU reconciler to launch it. It places a request only:
+     * the provisioner checks the key, the monthly cap, the reservation and the owner's approved hourly ceiling
+     * before it rents anything. One pending request and one live instance per model, however often this ticks.
+     */
+    async function tick() {
+        const g = gate();
+        if (!g.ok) return { queued: [], reason: g.reason };
+        const plan = await report();
+        const queued = [];
+        for (const row of plan.reports) {
+            if (!row.enabled || row.action !== 'would_rent' || !row.model) continue;
+            if (typeof gpus.supports === 'function' && !gpus.supports(row.model)) continue;
+            const running = await db.prepare("SELECT 1 FROM gpu_instances WHERE model_key = ? AND status IN ('starting','running','stopping') LIMIT 1").get(row.model);
+            if (running) continue;
+            const waiting = await db.prepare("SELECT 1 FROM gpu_requests WHERE model_key = ? AND action = 'launch' AND done_at IS NULL LIMIT 1").get(row.model);
+            if (waiting) continue;
+            try {
+                await gpus.request(row.model, 'launch', 'service:supply');
+                await registry.audit('service:supply', 'supply.launch_requested', 'gpu_supply', row.model, {
+                    metadata: {
+                        hourly_usd: row.selected?.hourly_usd ?? null,
+                        input_per_million: row.price?.in ?? null,
+                        output_per_million: row.price?.out ?? null,
+                        rental_cost_usd: row.rental_cost_usd ?? null,
+                        reseller_cost_usd: row.reseller_cost_usd ?? null,
+                    },
+                });
+                queued.push(row.model);
+            } catch (err) {
+                log.warn(`[supply] could not request ${row.model}: ${String((err && err.message) || err).slice(0, 200)}`);
+            }
+        }
+        return { queued, checked: plan.reports.length };
+    }
+
+    return { save, report, tick, gate };
 }
 module.exports = { adapter, decide, createSupply };
