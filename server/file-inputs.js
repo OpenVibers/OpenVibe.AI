@@ -11,6 +11,7 @@
  *   text, markdown, code, CSV and JSON   a text block, cut at MAX_TEXT_CHARS with an honest "(truncated)" line
  *   PDF                                  its text, page by page, through the small extractor below (no dependency)
  *   PNG, JPEG, WebP, GIF                 an image part, when the model can see (vision); otherwise a named note
+ *   ZIP, TAR, TAR.GZ                      bounded text/code/PDF entries with their paths; other entries named as skipped
  *   anything else                        a named note saying it could not be read, never silently dropped
  *
  * Limits: MAX_FILES per turn, MAX_FILE_BYTES each and MAX_TOTAL_BYTES together. Per-person, per-window
@@ -23,6 +24,7 @@
  */
 const zlib = require('node:zlib');
 const { AiError } = require('./util');
+const { extractArchive } = require('./archive-inputs');
 
 const MAX_FILES = 10;
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
@@ -34,6 +36,7 @@ const TEXT_EXT = /\.(txt|text|md|markdown|csv|tsv|json|jsonl|log|xml|yaml|yml|to
 const CODE_TYPE = /^(text\/[a-z0-9.+-]+|application\/(json|jsonl|xml|javascript|ecmascript|x-javascript|x-httpd-php|x-sh|x-shellscript|x-python|x-ruby|x-yaml|x-yml|x-toml|x-tex|x-latex|x-c|x-c\+\+|x-java-source|x-php|x-perl|x-rust|x-go|x-typescript|x-www-form-urlencoded))$/i;
 const IMAGE_TYPE = /^image\/(png|jpe?g|webp|gif)$/i;
 const PDF_TYPE = /^application\/pdf$/i;
+const ARCHIVE_TYPE = /^(application\/(zip|x-tar|gzip|x-gzip|x-gtar|x-compressed-tar))$/i;
 
 /** The named virus-scan extension point; null means no scan is configured (and none is pretended). */
 let scanner = null;
@@ -57,6 +60,8 @@ function effectiveType(name, contentType, declared) {
     if (!type || type === 'application/octet-stream' || type === 'binary/octet-stream') type = typeOf(declared);
     if ((!type || type === 'application/octet-stream' || type === 'binary/octet-stream') && TEXT_EXT.test(String(name || ''))) type = 'text/plain';
     if ((!type || type === 'application/octet-stream') && extOf(name) === 'pdf') type = 'application/pdf';
+    if ((!type || type === 'application/octet-stream') && /\.zip$/i.test(name)) type = 'application/zip';
+    if ((!type || type === 'application/octet-stream') && /\.(?:tar|tar\.gz|tgz)$/i.test(name)) type = 'application/x-tar';
     if ((!type || type === 'application/octet-stream') && /^(png|jpe?g|webp|gif)$/.test(extOf(name))) type = `image/${extOf(name).replace('jpg', 'jpeg')}`;
     return type || 'application/octet-stream';
 }
@@ -248,6 +253,23 @@ async function readFile(file, fetcher, { signal, format = 'openai', vision = tru
         }
         const reason = 'this model cannot see images, so the picture itself was not passed';
         return { reference: referenceOf(file, mediaId, name, type, size, { method: 'not_readable', reason }), part: null, note: `[Attached image: ${name} (${type}); ${reason}.]` };
+    }
+    if (ARCHIVE_TYPE.test(type) || /\.(?:zip|tar|tar\.gz|tgz)$/i.test(name)) {
+        const archive = extractArchive(buffer, type, name);
+        const parts = (archive.entries || []).map((entry) => {
+            if (/\.pdf$/i.test(entry.name)) {
+                const pdf = pdfText(entry.bytes);
+                return pdf.pages.length ? `--- ${entry.name} (PDF) ---\n${pdf.pages.join('\n\n')}` : null;
+            }
+            return `--- ${entry.name} ---\n${entry.bytes.toString('utf8').replace(/\u0000/g, '')}`;
+        }).filter(Boolean);
+        if (parts.length) {
+            const skipped = (archive.skipped || 0) + (archive.entries.length - parts.length);
+            const text = capText(`${parts.join('\n\n')}${skipped ? `\n\n(${skipped} archive entries were not read)` : ''}`);
+            return { reference: referenceOf(file, mediaId, name, type, size, { method: 'text' }), part: textPart(format, `\n\n[Attached archive: ${name} (${type})]\n${text}\n`), note: null };
+        }
+        const reason = archive.reason || 'the archive has no readable text, code or PDF entries';
+        return { reference: referenceOf(file, mediaId, name, type, size, { method: 'not_readable', reason }), part: null, note: `[Attached archive: ${name} (${type}); ${reason}.]` };
     }
     if (CODE_TYPE.test(type) || TEXT_EXT.test(name) || /^text\//.test(type)) {
         const text = capText(buffer.toString('utf8').replace(/\u0000/g, ''));
