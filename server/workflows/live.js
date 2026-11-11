@@ -432,7 +432,7 @@ const structured = [
             headline: STR(100), summary: STR(700),
             highlights: { type: 'array', maxItems: 3, items: { type: 'object', required: ['take_id', 'line'], additionalProperties: false, properties: { take_id: { type: 'integer' }, line: STR(240) } } },
         }, ['headline', 'summary', 'highlights']),
-        steps: [{ kind: 'llm', template: 'live.rundown.today', operation: 'generate', output: 'json', prepare: 'live.rundown.today', postprocess: 'live.rundown.today', params: { max_tokens: 600, temperature: 0.9, timeout_ms: 40000 } }],
+        steps: [{ kind: 'llm', template: 'live.rundown.today', operation: 'generate', output: 'json', prepare: 'live.rundown.today', postprocess: 'live.rundown.today', params: { max_tokens: 1600, temperature: 0.9, timeout_ms: 60000 } }],
         cache_mode: 'none',
     },
     {
