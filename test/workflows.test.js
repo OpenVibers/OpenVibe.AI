@@ -84,6 +84,7 @@ EXAMPLES['live.chat.profile'] = { subject_kind: 'relay', name: 'KickFan', platfo
 // Chat runs the same two workflows under its own namespace (plan T3).
 EXAMPLES['chat.global'] = EXAMPLES['live.chat.global'];
 EXAMPLES['chat.profile'] = EXAMPLES['live.chat.profile'];
+EXAMPLES['chat.person-memory'] = { level: 'day', period: '2026-11-10', prior_summary: '', sources_text: '[{"message":"hello chat","timestamp":"2026-11-10 12:00:00","stream_id":1}]' };
 EXAMPLES['live.person.overview'] = { as_streamer: 'Codes rust late at night.', as_chatter: 'Jokes about croutons.' };
 EXAMPLES['live.stream.titles'] = { summaries: ['Fixed a borrow checker bug live', 'Built a robot arm and it waved'] };
 EXAMPLES['live.moments.rank'] = { vods: [{ title: 'Rust night', overview: 'the build finally compiles', views: 30, clips: 2, peak_viewers: 5 }, { title: 'Chill', overview: 'sitting at a desk', views: 3, clips: 0, peak_viewers: 1 }], want: 2 };
