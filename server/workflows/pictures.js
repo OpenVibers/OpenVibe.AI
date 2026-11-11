@@ -229,16 +229,28 @@ function createPictures({ registry, pool, fetcher, config = {}, db = null, clock
         const n = Math.max(1, Math.min(4, Number(input.n) || 1));
         const subject = subjectOf(ctx);
         if (!subject) throw new AiError(401, 'image.sign_in', 'Sign in to make an image');
-        // The owner's switch: until an owner picks an image model for this task, make is off. The default
-        // resolution never falls back to a signed-in model for image.picture's make mode.
-        const picked = plan && plan.image_model ? plan.image_model : null;
+        // A run, saved or per-kind choice takes precedence. The owner's image model is the default
+        // make switch; the built-in openvibe/auto never turns an unconfigured task on by accident.
+        const personalChoice = plan && !['owner', 'builtin'].includes(plan.why) ? plan.choice : null;
+        const picked = personalChoice || (plan && plan.image_model ? plan.image_model : null);
         if (!picked) throw new AiError(503, 'image.make_unconfigured', 'The owner has not picked an image model for the picture task; set image_model in the image.picture task defaults.');
-        const offers = await pricedOffers(picked);
-        const chosen = offers[0];
-        const perImage = chosen.price == null ? (chosen.free ? 0 : null) : chosen.price;
-        if (perImage == null) throw new AiError(402, 'image.price_required', `the image model ${chosen.id} has no per-image price; set metadata.price_per_image_usd on the model before a paid picture can be made`);
-        const estimate = { model: chosen.id, source: 'openvibe', images: n, per_image_usd: perImage, price_usd: perImage * n };
-        if (plan.max_cost_usd != null && estimate.price_usd > plan.max_cost_usd) throw new AiError(402, 'choice.cost_ceiling', `the picture would cost about $${estimate.price_usd} and this task's per-run ceiling is $${plan.max_cost_usd}`);
+        if (picked.source === 'machines') throw new AiError(422, 'image.machine_unavailable', 'Link machines currently answer text only; choose your key or OpenVibe for an image');
+        let chosen = null; let credential = null; let perImage = null;
+        if (picked.source === 'keys') {
+            const [provider, ...parts] = String(picked.model).split('/');
+            const model = parts.join('/');
+            if (provider !== 'openai' || !model) throw new AiError(422, 'image.key_unsupported', 'image.picture supports an OpenAI image key; choose an OpenAI image model');
+            credential = (ctx.selfCredentials || []).find((c) => c.provider === provider && c.subject === subject) || null;
+            if (!credential) throw new AiError(422, 'ai.needs_key', 'add your OpenAI key on Exchange before making this image');
+            chosen = { id: picked.model, model, provider };
+        } else {
+            const offers = await pricedOffers(picked);
+            chosen = offers[0];
+            perImage = chosen.price == null ? (chosen.free ? 0 : null) : chosen.price;
+            if (perImage == null) throw new AiError(402, 'image.price_required', `the image model ${chosen.id} has no per-image price; set metadata.price_per_image_usd on the model before a paid picture can be made`);
+        }
+        const estimate = { model: chosen.id, source: picked.source, images: n, per_image_usd: perImage, price_usd: perImage == null ? null : perImage * n };
+        if (picked.source === 'openvibe' && plan.max_cost_usd != null && estimate.price_usd > plan.max_cost_usd) throw new AiError(402, 'choice.cost_ceiling', `the picture would cost about $${estimate.price_usd} and this task's per-run ceiling is $${plan.max_cost_usd}`);
         const cap = plan.daily_cap == null ? pictureConfig.defaultDailyCap : Number(plan.daily_cap);
         if (Number.isFinite(cap) && cap >= 0) {
             const made = await madeToday(subject);
@@ -248,15 +260,19 @@ function createPictures({ registry, pool, fetcher, config = {}, db = null, clock
             return {
                 output: {
                     mode: 'make', task: 'image.picture', query: null, prompt, dry_run: true, estimate, media: [], count: 0, gaps: [],
-                    note: `Dry run: ${n} image${n === 1 ? '' : 's'} with ${chosen.id} at $${perImage} each, about $${estimate.price_usd}.`,
+                    note: credential ? `Dry run: ${n} image${n === 1 ? '' : 's'} with your OpenAI key (${chosen.id}); the provider's charge is not estimated here.`
+                        : `Dry run: ${n} image${n === 1 ? '' : 's'} with ${chosen.id} at $${perImage} each, about $${estimate.price_usd}.`,
                 },
                 exec: { provider: null, model: chosen.model, usage: { input: 0, output: 0, cached: 0 }, cost: 0, synthetic: false, fallbackUsed: false, explain: null },
             };
         }
-        const route = await ((routeFor || (async () => { throw new AiError(503, 'route.unavailable', 'the image route is not available'); }))('default.image'));
+        const route = credential
+            ? (routeFor ? await routeFor('default.image').catch(() => null) : null) || { key: 'default.image', version: 0, timeout_ms: 180000 }
+            : await ((routeFor || (async () => { throw new AiError(503, 'route.unavailable', 'the image route is not available'); }))('default.image'));
         const req = { prompt, size: input.size || ((config.image && config.image.size) || null), n, timeoutMs: route.timeout_ms || 180000 };
         const exec = await pool.execute(route, 'image', req, {
-            ...ctx, taskChoice: null, exact: { id: chosen.id, offers: [{ provider: chosen.provider, model: chosen.model }] }, imagePriceUsd: perImage,
+            ...ctx, taskChoice: null, ...(credential ? { credential, defaultModel: chosen.model }
+                : { exact: { id: chosen.id, offers: [{ provider: chosen.provider, model: chosen.model }] }, imagePriceUsd: perImage }),
             routeKey: route.key, routeVersion: route.version, promptHash: sha256({ p: prompt, n }),
         });
         const images = ((exec.result && exec.result.images) || []).filter((i) => i && (i.b64 || i.url));
@@ -265,7 +281,7 @@ function createPictures({ registry, pool, fetcher, config = {}, db = null, clock
             ...(exec.explain || {}),
             task_choice: {
                 task: plan.task && plan.task.name ? plan.task.name : 'image.picture',
-                requested: plan.choice, answered: { model: exec.model || chosen.model, source: 'openvibe' },
+                requested: picked, answered: { model: exec.model || chosen.model, source: picked.source },
                 why: plan.why || 'owner', fallback_index: 0,
             },
         };

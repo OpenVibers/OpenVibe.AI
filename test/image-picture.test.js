@@ -108,6 +108,47 @@ t.test('make uploads each picture to Media and labels it made with AI', async ()
     assert.strictEqual(out.exec.explain.task_choice.answered.model, 'image');
 });
 
+t.test('a person can select their own OpenAI image key without the owner make switch', async () => {
+    const { p, calls } = pictures();
+    const personal = plan({ why: 'run', choice: { model: 'openai/gpt-image-1', source: 'keys' }, image_model: null });
+    const key = { provider: 'openai', subject: SUBJECT, providerKey: 'byo:fixture', models: { chat: 'other' } };
+    const ctx = ctxOf({ taskChoice: personal, selfCredentials: [key] });
+    const quote = await p.step({}, { mode: 'make', prompt: 'a goose', dry_run: true }, {}, {}, ctx);
+    assert.deepStrictEqual(quote.output.estimate, { model: 'openai/gpt-image-1', source: 'keys', images: 1, per_image_usd: null, price_usd: null });
+    assert.match(quote.output.note, /provider's charge is not estimated/);
+    assert.strictEqual(calls.executes.length, 0, 'a dry run does not call the personal key');
+    const made = await p.step({}, { mode: 'make', prompt: 'a goose' }, {}, {}, ctx);
+    assert.strictEqual(made.output.count, 1);
+    assert.strictEqual(calls.executes[0].ctx.credential, key);
+    assert.strictEqual(calls.executes[0].ctx.defaultModel, 'gpt-image-1');
+    assert.strictEqual(calls.executes[0].ctx.exact, undefined, 'the personal key is not a network offer');
+    assert.strictEqual(made.exec.explain.task_choice.answered.source, 'keys');
+});
+
+t.test('an unavailable Link image choice is refused instead of silently using the owner model', async () => {
+    const { p, calls } = pictures();
+    const selected = plan({ why: 'saved', choice: { model: 'local/image', source: 'machines', machine: 'any' }, image_model: { model: 'fixture/image', source: 'openvibe' } });
+    await assert.rejects(() => p.step({}, { mode: 'make', prompt: 'a goose' }, {}, {}, ctxOf({ taskChoice: selected })),
+        (e) => e.status === 422 && e.code === 'image.machine_unavailable');
+    assert.strictEqual(calls.executes.length, 0);
+});
+
+t.test('the personal OpenAI credential reaches the image provider path', async () => {
+    const up = await seamServer((_body, req) => req.url.endsWith('/images/generations')
+        ? { data: [{ b64_json: PNG.toString('base64') }] } : { status: 404, body: {} });
+    const h = await boot({ env: { AI_STUB_FALLBACK: 'false' }, credentialFetch: fetch });
+    try {
+        const route = { key: 'default.image', version: 0, timeout_ms: 10000 };
+        const credential = { provider: 'openai', providerKey: 'byo:test:image', owner: 'self', subject: SUBJECT,
+            base_url: `${up.url}/v1`, apiKey: 'test-only', models: { chat: 'gpt-image-1' } };
+        const result = await h.pool.execute(route, 'image', { prompt: 'a goose', n: 1, timeoutMs: 5000 },
+            { credential, defaultModel: 'gpt-image-1', routeKey: route.key, routeVersion: route.version });
+        assert.strictEqual(result.result.images.length, 1);
+        assert.strictEqual(result.explain.openvibe.provider_access, 'CUSTOMER_BYOK');
+        assert.strictEqual(up.calls, 1);
+    } finally { await h.stop(); await up.close(); }
+});
+
 t.test('a paid offer without a per-image price is refused, and the daily cap holds', async () => {
     const unpriced = pictures({ price: null });
     await assert.rejects(() => unpriced.p.step({}, { mode: 'make', prompt: 'x' }, {}, {}, ctxOf({ taskChoice: plan({ image_model: { model: 'fixture/image', source: 'openvibe' } }) })), (e) => e.status === 402 && e.code === 'image.price_required');
