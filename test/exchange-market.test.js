@@ -74,6 +74,7 @@ t.test('unregistered pricebook rows survive and the public route is cached and p
     assert.strictEqual((await request(h.base,'GET','/api/v1/exchange/market?open_weights=bad')).status,422);
     const nginx=fs.readFileSync(path.join(__dirname,'../deploy/nginx/api.openvibe.exchange.conf'),'utf8');
     assert(nginx.includes('location ^~ /api/v1/exchange/'));
+    assert(nginx.includes('location = /v1/search/icons'), 'the Exchange icon search reaches OpenVibe.AI from the public API host');
     let time=100; let reads=0;
     const market=createMarket({db:h.db,registry:{listProviders:async()=>{reads++;return[];},listModels:async()=>[]},catalog:async()=>({models:[]}),clock:{now:()=>time},metadata:{read:async()=>({entries:[],checked_at:null,stale:true})}});
     await Promise.all([market.read({limit:1}),market.read({limit:2})]); assert.strictEqual(reads,1);
