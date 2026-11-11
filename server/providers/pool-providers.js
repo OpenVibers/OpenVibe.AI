@@ -664,13 +664,14 @@ const PROVIDERS = [
             model_key: 'deepseek/deepseek-v4.1-flash-1017',
             display_name: 'DeepSeek V4.1 Flash 1017 (Particle Flex)', family: 'deepseek',
             context_window: 1048576, max_output: 131072,
-            cost: { in_per_mtok: 0.025, cached_per_mtok: 0.003, out_per_mtok: 0.25 },
+            // The confirmed price is a pending price-book change, not a live price: the owner accepts it.
+            cost: { in_per_mtok: null, cached_per_mtok: null, out_per_mtok: null },
             source: 'https://openrouter.ai/api/v1/models/deepseek/deepseek-v4.1-flash-1017/endpoints', checked: '2026-11-10',
             supports: { json: true, tools: true, streaming: true, vision: true },
             quantization: null, refusal_rate: null,
             service_tier: 'flex',
             routing: { only: ['particle-ai'], allow_fallbacks: false, service_tier: 'flex', data_collection: 'deny' },
-            note: 'the Particle AI endpoint at service tier flex ($0.025 in / $0.25 out / $0.003 cached, read from OpenRouter on 2026-11-10); pinning it with no fallback keeps the price honest',
+            note: 'the Particle AI endpoint at service tier flex ($0.025 in / $0.25 out / $0.003 cached, read from OpenRouter on 2026-11-10; pending price-book change); pinning it with no fallback keeps the price honest',
         }],
     },
     ...[
@@ -854,11 +855,12 @@ const PROVIDERS = [
         models: [{
             model_key: 'deepseek-v4.1-flash-1017-uncensored', display_name: 'DeepSeek V4.1 Flash 1017 (uncensored)',
             family: 'deepseek', context_window: 512000,
-            cost: { in_per_mtok: 0.15, cached_per_mtok: 0.01, out_per_mtok: 0.60 },
+            // The confirmed price is a pending price-book change, not a live price: the owner accepts it.
+            cost: { in_per_mtok: null, cached_per_mtok: null, out_per_mtok: null },
             source: 'https://sableapi.com/models', checked: '2026-11-10',
             supports: { json: true, tools: true, streaming: true, vision: true },
             quantization: null, refusal_rate: null, uncensored: true,
-            note: 'refusals removed; 512K context; prepaid balance (crypto accepted); the 18+ floor still runs before it',
+            note: 'refusals removed; 512K context; prepaid balance (crypto accepted); the 18+ floor still runs before it; $0.15 in / $0.60 out / $0.01 cached is a pending price-book change',
         }],
     },
     {
@@ -884,12 +886,34 @@ const PROVIDERS = [
         }),
         models: [{
             model_key: 'mercury-3', display_name: 'Mercury 3', family: 'mercury', context_window: 1000000, max_output: 131072,
-            cost: { in_per_mtok: 0.20, cached_per_mtok: 0.02, out_per_mtok: 0.70 },
+            // The confirmed list price is a pending price-book change, not a live price: the owner accepts it.
+            cost: { in_per_mtok: null, cached_per_mtok: null, out_per_mtok: null },
             source: 'https://docs.inceptionlabs.ai/get-started/models', checked: '2026-11-10',
             supports: { json: true, tools: true, streaming: true, vision: false },
             quantization: null, refusal_rate: null,
-            note: 'launch price is $0.10 in / $0.35 out with $0.01 cached and no published end date; the list price is recorded here so a budget does not assume the discount lasts',
+            note: 'launch price is $0.10 in / $0.35 out with $0.01 cached and no published end date; the $0.20/$0.70 list price is a pending price-book change so a budget does not assume the discount lasts',
         }],
+    },
+    {
+        // The owner's own rented GPU (part 3): an OpenAI-compatible vLLM endpoint on Runpod. The base URL and
+        // the model are the owner's, set on the owner inference page; the key goes in the provider's key slot.
+        // Nothing is rented here, and no price is seeded: the price is the GPU hour, converted to tokens at
+        // the measured throughput when the owner saves the endpoint.
+        key: 'runpod-vllm', keys_url: 'https://console.runpod.io/', display_name: 'Runpod vLLM (my endpoint)',
+        base_url: 'https://api.runpod.ai/v2', default_model: null, timeout_ms: 180000,
+        docs_url: 'https://docs.runpod.io/serverless/vllm/overview', capabilities: ['chat', 'tools'],
+        provider_access: 'OWN_DEPLOYMENT', priority: 30,
+        traits: traits({
+            latency_classes: ['background', 'batch'], payment: 'hourly', compute_provider: 'runpod',
+            source: 'https://www.runpod.io/pricing', checked: '2026-11-10',
+        }),
+        privacy: privacy({
+            label: 'anonymized', terms_url: 'https://docs.runpod.io/',
+            wording: 'the endpoint runs on a rented GPU the owner controls; the host may see memory, so no zero-retention promise is made',
+            checked: '2026-11-10',
+        }),
+        data_policy: policy({ trains: false, retention: null, trust: 'first-party', region: null, retention_note: 'vLLM keeps no prompt log by default; the rented host is the open risk', terms: 'https://docs.runpod.io/', checked: '2026-11-10' }),
+        models: [],
     },
     {
         key: 'dosai', keys_url: 'https://platform.dos.ai', display_name: 'DOS.AI',

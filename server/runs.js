@@ -310,6 +310,13 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
         // (constraints.latency_class); a caller may ask for a SLOWER class with options.latency and never a
         // faster one: a background workflow stays in the background whatever the caller asks for.
         const workflowClass = latency.ofRoute(route);
+        // The Exchange API's service tier (2026-11-10): flex asks for the slower, cheaper tier the router already
+        // knows as the background class. Any other value is refused rather than ignored.
+        const askedTier = body.service_tier == null ? null : String(body.service_tier).trim().toLowerCase();
+        if (askedTier != null && !['auto', 'default', 'standard', 'flex', 'priority'].includes(askedTier)) {
+            throw new AiError(422, 'input.invalid', 'service_tier must be auto, standard or flex');
+        }
+        if (askedTier === 'flex' && options.latency == null) options.latency = 'background';
         const askedLatency = options.latency != null ? options.latency : null;
         const resolvedLatency = latency.resolve(workflowClass, askedLatency);
         if (resolvedLatency.error) throw new AiError(422, 'input.invalid', resolvedLatency.error, { latency_class: workflowClass });

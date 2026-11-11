@@ -40,10 +40,25 @@ function latencyClassesOf(record, model, tier = 'standard') {
     return null;
 }
 
-/** May this offer answer a request of that class? An unknown class is interactive (the safe default). */
-function latencyAllows(record, model, latencyClass = 'interactive', tier = 'standard') {
-    const classes = latencyClassesOf(record, model, tier);
+/**
+ * May this offer answer a request of that class? An unknown class is interactive (the safe default).
+ *
+ * The two owner switches of part 5 are the only way past a provider's own class list:
+ *   allowLimitedInteractive  a background/batch-only provider may answer interactively
+ *   allowFlexInteractive     a Flex offer may answer interactively
+ * Both default false and are read from owner_inference_rules by the pool.
+ */
+function latencyAllows(record, model, latencyClass = 'interactive', tier = 'standard', { allowLimitedInteractive = false, allowFlexInteractive = false } = {}) {
     const asked = CLASSES.includes(latencyClass) ? latencyClass : 'interactive';
+    const m = (model && model.metadata) || null;
+    const flexModel = Boolean(m && String(m.service_tier || '').toLowerCase() === 'flex');
+    if (asked === 'interactive' && flexModel && !allowFlexInteractive) return false;
+    if (allowLimitedInteractive) return true;
+    // The owner allowed the Flex offer in front of a person: only the provider's own classes still apply.
+    const t = traitsOf(record);
+    const classes = flexModel && allowFlexInteractive
+        ? ((t && t.latency_classes) || null)
+        : latencyClassesOf(record, model, tier);
     return !classes || classes.includes(asked);
 }
 

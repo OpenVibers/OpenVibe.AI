@@ -117,6 +117,9 @@ function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth,
                     spend_cap: caps.find((c) => c.provider_key === p.key) || null,
                     spend: spend.find((s) => s.provider_key === p.key) || null })),
                 models: (await registry.listModels()).map((m) => { const p = providers.find((x) => x.key === m.provider_key); return modelView(m, p); }),
+                controls: await ownerConfig.providerState(), rules: await ownerConfig.getRules(),
+                compute: await ownerConfig.compute(),
+                pricebook: { confirmed: await ownerConfig.confirmedPrices() },
                 prices, caps, routing: await ownerConfig.getRouting(), economy: await ownerConfig.getEconomy(),
                 costs_24h: await ownerConfig.costs('24h'), costs_7d: await ownerConfig.costs('7d'), kinds,
             };
@@ -138,6 +141,9 @@ function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth,
     r.post('/api/v1/admin/console/owner-inference/spend-caps', json, write, wrap(async (req) => ({ cap: await ownerConfig.setCap(req.body || {}, { actor: actor(req), trace: req.ov && req.ov.traceId }) })));
     r.post('/api/v1/admin/console/owner-inference/routing', json, write, wrap(async (req) => ({ routing: await ownerConfig.setRouting(req.body || {}, { actor: actor(req), trace: req.ov && req.ov.traceId }) })));
     r.post('/api/v1/admin/console/owner-inference/economy', json, write, wrap(async (req) => ({ economy: await ownerConfig.setEconomy(req.body || {}, { actor: actor(req), trace: req.ov && req.ov.traceId }) })));
+    r.post('/api/v1/admin/console/owner-inference/providers', json, write, wrap(async (req) => ({ provider: await ownerConfig.setProvider(req.body || {}, { actor: actor(req), trace: req.ov && req.ov.traceId }) })));
+    r.post('/api/v1/admin/console/owner-inference/rules', json, write, wrap(async (req) => ({ rules: await ownerConfig.setRules(req.body || {}, { actor: actor(req), trace: req.ov && req.ov.traceId }) })));
+    r.post('/api/v1/admin/console/owner-inference/endpoint', json, write, wrap(async (req) => ({ provider: await ownerConfig.setEndpoint(req.body || {}, { actor: actor(req), trace: req.ov && req.ov.traceId }) })));
     r.post('/api/v1/admin/console/providers/:key/key', json, write, wrap(async (req) => {
         if (!vault || !settings) throw new AiError(503, 'vault.unavailable', 'provider keys cannot be stored on this host');
         const provider = await registry.getProvider(req.params.key);

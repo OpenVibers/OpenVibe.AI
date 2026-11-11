@@ -378,12 +378,16 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
     async function adapter(key) {
         const p = await registry.getProvider(key);
         if (!p) return null;
-        const stamp = `${p.updated_at}|${p.secret_ref}|${providerSecret(p, env) ? 1 : 0}`;
+        // The owner's own endpoint URL (Runpod vLLM) is stored with the controls, never in the catalogue:
+        // the provider record keeps its own origin, and the owner's URL is what the adapter calls.
+        const control = ownerSettings && ownerSettings.controlFor ? await ownerSettings.controlFor(key).catch(() => null) : null;
+        const record = control && control.base_url ? { ...p, base_url: control.base_url } : p;
+        const stamp = `${p.updated_at}|${p.secret_ref}|${providerSecret(p, env) ? 1 : 0}|${control ? control.updated_at : ''}`;
         const hit = await cache.get(key);
-        if (hit && hit.stamp === stamp) return { record: p, adapter: hit.adapter };
-        const a = build(p);
+        if (hit && hit.stamp === stamp) return { record, adapter: hit.adapter };
+        const a = build(record);
         cache.set(key, { stamp, adapter: a });
-        return { record: p, adapter: a };
+        return { record, adapter: a };
     }
 
     // ── Circuit breaker (per provider + model) ─────────────
@@ -710,7 +714,9 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
      * moved ahead for a person's private data when the provider trains on or retains a prompt.
      */
     async function orderFreeAllowance(list, ctx = {}) {
-        const privateRequest = traits.isPrivateRequest(ctx);
+        const rules = ownerSettings ? await ownerSettings.getRules().catch(() => null) : null;
+        if (rules && rules.free_allowance_first === false) return list;
+        const privateRequest = !(rules && rules.private_training === true) && traits.isPrivateRequest(ctx);
         const first = [];
         const rest = [];
         for (const c of list) {
@@ -740,6 +746,15 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
     async function tierFor({ p, model, operation, at }) {
         if (!p) return 'standard';
         if (isLocalModel(p)) return 'local';
+        // The owner's tier choice for this provider (migration 0075) is the first word; a provider that does
+        // not sell Flex keeps the standard tier rather than being asked for a tier it refused.
+        const control = ownerSettings && ownerSettings.controlFor ? await ownerSettings.controlFor(p.key).catch(() => null) : null;
+        if (control && control.tier === 'standard') return 'standard';
+        if (control && control.tier === 'flex' && tiers.TIERED_OPS.has(operation)) {
+            const row = model ? await registry.getModel(p.key, model) : null;
+            if (tiers.multiplierOf(p, 'flex') != null || (row && row.metadata && row.metadata.service_tier === 'flex')) return 'flex';
+            return 'standard';
+        }
         if (tiers.TIERED_OPS.has(operation) && tiers.multiplierOf(p, 'flex') != null) return 'flex';
         if (offPeak && model) {
             const off = await offPeak.priceAt(p.key, model, at);
@@ -913,6 +928,10 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         const accessExcluded = [];
         const traitExcluded = [];
         const latencyClass = latencyClassOf(route, ctx);
+        const rules = ownerSettings ? await ownerSettings.getRules().catch(() => null) : null;
+        const allowLimitedInteractive = Boolean(rules && rules.latency_limited_interactive === true);
+        const allowFlexInteractive = Boolean(rules && rules.flex_interactive === true);
+        const allowPrivateTraining = Boolean(rules && rules.private_training === true);
         // A dynamic policy alias (D3) looks at every active chat/vision model the provider registered, not only its
         // default; the placement and the task router then choose among them. Auto keeps today's one-offer-per-provider.
         const expandModels = Boolean(ctx.aliasPolicy && ctx.aliasPolicy !== 'auto') && !(route.constraints && route.constraints.model);
@@ -935,9 +954,9 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             // A trait keeps the offer out of the call, not out of placement: it stays in the pool with its
             // reason (status down, like a credential-less offer), so explain has one entry per placement offer.
             let traitReason = null;
-            if (!traits.latencyAllows(p, row, latencyClass)) {
+            if (!traits.latencyAllows(p, row, latencyClass, 'standard', { allowLimitedInteractive, allowFlexInteractive })) {
                 traitReason = `latency_class ${latencyClass} not offered (${(traits.latencyClassesOf(p, row) || []).join('/') || 'interactive only'})`;
-            } else if (traits.isPrivateRequest(ctx) && traits.trainsOrRetains(p)) {
+            } else if (!allowPrivateTraining && traits.isPrivateRequest(ctx) && traits.trainsOrRetains(p)) {
                 traitReason = 'private data: the provider trains on or retains prompts';
             } else {
                 const allowance = traits.freeAllowanceOf(p) ? traits.allowanceLeft(p, { used: await allowanceUsed(p.key, p), now: clock.now() }) : null;
@@ -1085,6 +1104,10 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
     async function pinnedCandidates(route, features, ctx = {}) {
         const list = [route.primary, ...(route.fallbacks || [])].filter(c => c && c.provider);
         const explain = { objective: null, reasons: ['pinned route: the primary, then its fallbacks'], selected: null, candidates: [] };
+        const rules = ownerSettings ? await ownerSettings.getRules().catch(() => null) : null;
+        const allowLimitedInteractive = Boolean(rules && rules.latency_limited_interactive === true);
+        const allowFlexInteractive = Boolean(rules && rules.flex_interactive === true);
+        const allowPrivateTraining = Boolean(rules && rules.private_training === true);
         const order = [];
         for (const c of list) {
             const entry = await adapter(c.provider);
@@ -1095,8 +1118,8 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             const access = accessOffered(p);
             const policyOk = p ? await policyAllows(registry, p, modelId, ctx.contentPolicy || 'standard') : false;
             const row = p && modelId ? await registry.getModel(p.key, modelId) : null;
-            const latencyOk = p ? traits.latencyAllows(p, row, (ctx.latencyClass && ['interactive', 'background', 'batch'].includes(ctx.latencyClass)) ? ctx.latencyClass : ((route.constraints && route.constraints.latency_class) || 'interactive')) : false;
-            const privateOk = p ? !(traits.isPrivateRequest(ctx) && traits.trainsOrRetains(p)) : false;
+            const latencyOk = p ? traits.latencyAllows(p, row, (ctx.latencyClass && ['interactive', 'background', 'batch'].includes(ctx.latencyClass)) ? ctx.latencyClass : ((route.constraints && route.constraints.latency_class) || 'interactive'), 'standard', { allowLimitedInteractive, allowFlexInteractive }) : false;
+            const privateOk = p ? !(!allowPrivateTraining && traits.isPrivateRequest(ctx) && traits.trainsOrRetains(p)) : false;
             const excluded = !policyOk ? 'content_policy'
                 : !offered ? (p && billingProfile(p) === 'byok' ? 'byok' : 'free_only')
                 : !access ? `provider_access ${modelCatalog.accessOf(p)}` : !latencyOk ? 'latency_class'
@@ -1868,6 +1891,11 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         // order stays the router's own (the authority keeps critical work); what changes is the tier each
         // candidate runs on, and that is decided per candidate below.
         const latencyClass = latency.isClass(ctx.latencyClass) ? ctx.latencyClass : latency.DEFAULT;
+        // The owner's routing rules (migration 0075): the safe value is the default when no row exists.
+        const inferenceRules = ownerSettings ? await ownerSettings.getRules().catch(() => null) : null;
+        const allowLimitedInteractive = Boolean(inferenceRules && inferenceRules.latency_limited_interactive === true);
+        const allowFlexInteractive = Boolean(inferenceRules && inferenceRules.flex_interactive === true);
+        const allowPrivateTraining = Boolean(inferenceRules && inferenceRules.private_training === true);
         if (latencyClass !== latency.DEFAULT && !exact && !ordered) {
             list = await orderForWaiting(list, { route, operation, req });
             explain.latency_class = latencyClass;
@@ -1886,14 +1914,14 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             // private data it would train on or retain, or a concurrency cap already reached. Each is a
             // skip with its reason, never an error: the next offer answers.
             const traitRow = p && model ? await registry.getModel(p.key, model) : null;
-            if (p && !traits.latencyAllows(p, traitRow, latencyClass)) {
+            if (p && !traits.latencyAllows(p, traitRow, latencyClass, 'standard', { allowLimitedInteractive, allowFlexInteractive })) {
                 statFor(c.provider).skipped++;
                 tried.push({ provider: c.provider, skipped: 'latency_class' });
                 attempts.push({ key: 'openvibe', provider: c.provider, model, why: 'the provider does not serve this latency class', status: 'skipped', error: 'latency_class' });
                 if (ctx.logRequest) ctx.logRequest({ ...base, status: 'skipped', skip_reason: 'latency_class' });
                 continue;
             }
-            if (p && traits.isPrivateRequest(ctx) && traits.trainsOrRetains(p)) {
+            if (p && !allowPrivateTraining && traits.isPrivateRequest(ctx) && traits.trainsOrRetains(p)) {
                 statFor(c.provider).skipped++;
                 tried.push({ provider: c.provider, skipped: 'private_data_training' });
                 attempts.push({ key: 'openvibe', provider: c.provider, model, why: 'the provider trains on or retains prompts', status: 'skipped', error: 'private_data_training' });
