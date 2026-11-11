@@ -9,8 +9,10 @@ async function checkProvider(provider, { env = process.env, fetchImpl = guardedF
     const started = now();
     let calls = 0;
     let httpStatus = null;
+    let models = [];
     const finish = (ok, error = null, method = null) => ({
         ok, error, method, http_status: httpStatus, requests: calls,
+        models_count: models.length, models: models.filter(id => !String(id).includes(key)),
         latency_ms: Math.max(0, now() - started), checked_at: new Date(started).toISOString(),
     });
     const key = providerSecret(provider, env);
@@ -58,7 +60,25 @@ async function checkProvider(provider, { env = process.env, fetchImpl = guardedF
             });
             return finish(true, null, method);
         }
+        if (provider.key === 'gemini' || provider.metadata?.api_family === 'google') {
+            const { listRemote } = require('./catalog');
+            // Google pages its native list; every page uses the bound origin and key header.
+            const remote = await listRemote(provider, key, { fetchImpl: async (url, init) => {
+                const target = new URL(String(url));
+                if (target.origin !== origin || target.protocol !== 'https:' || target.username || target.password || calls >= 100) {
+                    failure = 'endpoint_origin_mismatch'; throw new Error(failure);
+                }
+                calls++;
+                const response = await fetchImpl(url, { ...init, redirect: 'error', signal: AbortSignal.timeout(10000) });
+                httpStatus = response.status;
+                if (!response.ok) failure = `http_${response.status}`;
+                return response;
+            } });
+            models = remote.map(m => m.id);
+            return finish(true, null, method);
+        }
         const result = await testProviderKey(provider, key, { fetchImpl: once });
+        models = result.models || [];
         return finish(result.ok, result.ok ? null : httpStatus >= 200 && httpStatus < 300 ? 'invalid_response' : failure, method);
     } catch {
         return finish(false, failure, method);

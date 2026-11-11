@@ -49,6 +49,7 @@ function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth,
             const hints = vault && vault.hints ? await vault.hints() : new Map();
             const rows = (await Promise.all((await registry.listProviders()).map(ops.providerView))).map((p) => ({
                 ...p, key_present: p.credentials === 'configured', preference_order: p.priority,
+                keys_url: require('../providers/pool-providers').byKey.get(p.key)?.keys_url || null,
                 key_state: p.auth_mode === 'none' ? { source: 'not_required', hint: null, set_at: null }
                     : { source: hints.has(p.key) ? 'stored' : p.credentials === 'configured' ? 'environment' : 'missing',
                         hint: hints.get(p.key)?.hint || (providerSecret(p, env) ? `…${providerSecret(p, env).slice(-4)}` : null),

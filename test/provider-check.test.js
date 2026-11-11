@@ -32,6 +32,30 @@ t.test('a model-list check is one free read at the registered endpoint with late
     assert.strictEqual(result.latency_ms, 25);
 });
 
+t.test('AI Studio check and sync read every native Gemini page with the Google header', async () => {
+    const { listRemote } = require('../server/providers/catalog');
+    const gemini = { key: 'gemini', kind: 'openai', auth_mode: 'bearer', base_url: 'https://generativelanguage.googleapis.com/v1beta/openai',
+        metadata: { api_family: 'google', models_endpoint: 'https://generativelanguage.googleapis.com/v1beta/models' }, secret_ref: 'env:CHECK_KEY' };
+    const seen = [];
+    const fetchImpl = async (url, init) => {
+        seen.push(String(url));
+        assert.strictEqual(init.headers['x-goog-api-key'], key);
+        assert.strictEqual(init.headers.Authorization, undefined);
+        return response(200, seen.length % 2 ? { models: [{ name: 'models/gemini-a', displayName: 'Gemini A', version: 'a-1', inputTokenLimit: 1000, outputTokenLimit: 100, supportedGenerationMethods: ['generateContent'] }], nextPageToken: 'next' }
+            : { models: [{ name: 'models/gemini-b', displayName: 'Gemini B', supportedGenerationMethods: ['generateContent'] }] });
+    };
+    const checked = await checkProvider(gemini, { env, fetchImpl });
+    assert.strictEqual(checked.ok, true);
+    assert.strictEqual(checked.models_count, 2);
+    assert.deepStrictEqual(checked.models, ['gemini-a', 'gemini-b']);
+    assert.strictEqual(checked.requests, 2);
+    seen.length = 0;
+    const remote = await listRemote(gemini, key, { fetchImpl });
+    assert.strictEqual(remote[0].name, 'Gemini A');
+    assert.strictEqual(remote[0].hints.contextWindow, 1000);
+    assert.deepStrictEqual(remote.map(m => m.id), checked.models);
+});
+
 t.test('upstream refusals and thrown errors cannot echo the key; no retries', async () => {
     for (const failure of [401, 429, 500, 'throw']) {
         let calls = 0;
