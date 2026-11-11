@@ -35,7 +35,7 @@ const DOMAIN = {
     fireworks: 'fireworks.ai', groq: 'groq.com', cerebras: 'cerebras.ai', sambanova: 'sambanova.ai',
     baseten: 'baseten.co', hyperbolic: 'hyperbolic.xyz', parasail: 'parasail.io', 'particle-ai': 'particle.ai',
     'inference-net': 'inference.net', 'atlas-cloud': 'atlascloud.ai', avian: 'avian.io',
-    nanogpt: 'nano-gpt.com', infermatic: 'totalgpt.ai', arliai: 'arliai.com', friendli: 'friendli.ai', scaleway: 'scaleway.com',
+    nanogpt: 'nano-gpt.com', infermatic: 'totalgpt.ai', arliai: 'arliai.com', friendli: 'friendli.ai', scaleway: 'scaleway.com', anthropic: 'claude.com',
     iteracompute: 'iteracompute.com', sable: 'sableapi.com', inception: 'inceptionlabs.ai', dosai: 'dos.ai', 'runpod-vllm': 'runpod.io', meta: 'meta.ai',
 };
 const onItsOwnSite = (url, key) => {
