@@ -124,6 +124,20 @@ const PREPARE = {
     'live.viewers.clone'(input) {
         return { vars: { name: input.name, overview: input.overview || '', memory: input.memory || '', samples: (input.samples || []).length ? `- ${input.samples.join('\n- ')}` : '' } };
     },
+    // The Rundown's Today card (Live rundown/today.js): the day's takes as numbered lines, no JSON wrapping, so a
+    // small model cannot answer as though it were given an empty day.
+    'live.rundown.today'(input) {
+        const takes = (Array.isArray(input.takes) ? input.takes : []).map((t, i) => {
+            const bits = [`${i + 1}. [take:${Number(t.take_id)}] ${clean(t.streamer, 80) || 'someone'}`];
+            if (t.when) bits.push(`at ${clean(t.when, 40)}`);
+            if (t.topic) bits.push(`on ${clean(t.topic, 120)}`);
+            bits.push(`— what: ${clean(t.what, 500)}`);
+            if (t.take) bits.push(`— their take: ${clean(t.take, 300)}`);
+            if (t.quote) bits.push(`— their words: "${clean(t.quote, 400)}"`);
+            return bits.join(' ');
+        }).join('\n');
+        return { vars: { date: clean(input.date, 20), count: takes ? takes.split('\n').length : 0, takes: takes || '(none given)' } };
+    },
     // The Rundown (Live rundown/desk.js): transcript lines as "[seconds] text", the known topics one per line.
     'live.rundown.segment'(input) {
         const clean = (t, n) => String(t || '').replace(/\s+/g, ' ').trim().slice(0, n);
@@ -452,6 +466,8 @@ const POSTPROCESS = {
         const summary = plainProse(j.summary, 700);
         if (!headline || !summary) return null;
         const ids = new Set((input && Array.isArray(input.takes) ? input.takes : []).map((x) => Number(x && x.take_id)).filter((n) => Number.isInteger(n) && n > 0));
+        // A card that says there were no takes or nothing was said, when takes were given, is a fabrication: no card.
+        if (ids.size && /\bno takes?\b|\bnothing (?:was|has been) (?:said|submitted|shared)\b|\bno (?:streamer|one) (?:said|submitted|shared)\b/i.test(`${headline} ${summary}`)) return null;
         const seen = new Set();
         const highlights = (Array.isArray(j.highlights) ? j.highlights : []).slice(0, 8)
             .map((h) => ({ take_id: Number(h && h.take_id), line: plainProse(h && h.line, 240) }))

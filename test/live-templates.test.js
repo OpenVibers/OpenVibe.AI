@@ -278,8 +278,10 @@ t.test("The Rundown's Today card: the prompt carries the takes and the ids, and 
         { take_id: 41, streamer: 'goosely', when: '2026-11-11T10:00:00Z', topic: 'Supermarket fridges hacked in France', what: 'They read about hacked fridges.', take: 'Internet fridges are a bad idea.', quote: 'A bad idea.' },
         { take_id: 42, streamer: 'ann', when: '2026-11-11T12:00:00Z', topic: 'Rust builds', what: 'They fixed a bug live.', take: null, quote: 'It compiles!' },
     ] };
-    const user = render(today.user_prompt, { payload: input });
-    assert.ok(user.includes('"take_id":41') && user.includes('"take_id":42'), user);
+    const user = render(today.user_prompt, PREPARE['live.rundown.today'](input).vars);
+    assert.match(user, /^Today is 2026-11-11\. The day's takes \(2\), oldest first/);
+    assert.match(user, /1\. \[take:41\] goosely at 2026-11-11T10:00:00Z on Supermarket fridges hacked in France — what: They read about hacked fridges\. — their take: Internet fridges are a bad idea\. — their words: "A bad idea\."/);
+    assert.match(user, /2\. \[take:42\] ann .*— their words: "It compiles!"/);
     assert.match(user, /Return JSON only/);
     const out = POSTPROCESS['live.rundown.today']({ json: {
         headline: ' Fridges, compilers and one stubborn bug ',
@@ -302,6 +304,8 @@ t.test("The Rundown's Today card: the prompt carries the takes and the ids, and 
     assert.deepStrictEqual(POSTPROCESS['live.rundown.today']({ json: { headline: 'x', summary: 'y' } }, input).highlights, [], 'no highlights is an answer');
     assert.strictEqual(POSTPROCESS['live.rundown.today']({ json: { summary: 'no headline' } }, input), null);
     assert.strictEqual(POSTPROCESS['live.rundown.today']({ text: 'not json' }, input), null);
+    assert.strictEqual(POSTPROCESS['live.rundown.today']({ json: { headline: 'Quiet shift', summary: 'No takes were submitted today, so there are no updates.' } }, input), null, 'a card that denies the takes it was given is no card');
+    assert.deepStrictEqual(PREPARE['live.rundown.today']({ date: '2026-11-11', takes: [{ take_id: 41, streamer: 'goosely', what: 'Fridges.' }] }).vars, { date: '2026-11-11', count: 1, takes: '1. [take:41] goosely — what: Fridges.' });
     const many = { json: { headline: 'h', summary: 's', highlights: [41, 42, 43, 44].map((id) => ({ take_id: id, line: `line ${id}` })) } };
     assert.strictEqual(POSTPROCESS['live.rundown.today'](many, { takes: [41, 42, 43, 44].map((id) => ({ take_id: id })) }).highlights.length, 3, 'up to three');
     assert.ok(live.workflows.find((w) => w.key === 'live.rundown.today' && w.steps[0].template === 'live.rundown.today'));
