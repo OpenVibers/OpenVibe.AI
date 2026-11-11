@@ -14,6 +14,17 @@ const live = require('../server/workflows/live');
 const t = suite('live-templates');
 const tpl = (live.templates || []).find((x) => x.key === 'live.moments.pick');
 
+t.test('Chat person memory has an authorized workflow and an evidence-only prompt', () => {
+    const workflow = live.workflows.find(x => x.key === 'chat.person-memory');
+    const template = live.templates.find(x => x.key === 'chat.person-memory');
+    assert.strictEqual(workflow.namespace, 'chat');
+    assert.strictEqual(workflow.steps[0].params.max_tokens, 450);
+    const prompt = render(template.user_prompt, { level: 'day', period: '2026-11-11', prior_summary: 'A game', sources_text: '[{"message":"hello"}]' });
+    assert.match(prompt, /Sources, with zero-based indexes/);
+    assert.match(template.system_prompt, /Do not infer appearance/);
+    assert.ok(!prompt.includes('{{'));
+});
+
 t.test('the prompt renders as Live rendered it', () => {
     assert.ok(tpl, 'the template exists');
     const prep = PREPARE['live.moments.pick']({ title: 'Rust night', flavor: 'clip', timeline: [{ t: 95, text: 'streamer   jumps up' }], transcript: [{ t: 94, text: 'IT COMPILES' }], sounds: [{ t: 96, label: 'Cheering' }], clipped: [95, 3605], spikes: [96], avoid: [300, 600] });

@@ -602,4 +602,30 @@ const CHAT_OWNED = [['live.chat.global', 'chat.global'], ['live.chat.profile', '
     return { ...w, key, namespace: 'chat', description: `${w.description} Run by OpenVibe.Chat under its own namespace.` };
 });
 
-module.exports = { templates, workflows: [...structured, ...CHAT_OWNED, ...passthrough], KIND_TO_WORKFLOW, ROLES, PASSTHROUGH_INPUT, PASSTHROUGH_OUTPUT };
+// Chat's compacted per-person memory. A day reads messages; a week reads day summaries;
+// a month reads week summaries. The source index lets Chat attach a verified stream time.
+templates.push({
+    key: 'chat.person-memory', name: 'A person in chat, compacted',
+    description: 'Summarize one period of a consenting person\'s chat activity without sensitive traits.',
+    input_schema: { type: 'object' },
+    output_schema: { type: 'object' },
+    system_prompt: 'Summarize only the supplied chat activity. Do not infer appearance, identity, health, politics, religion, sexuality or other sensitive traits. Do not include other people\'s names or usernames. Never invent an event, time or count. Output JSON only.',
+    user_prompt: 'Period: {{level}} beginning {{period}}. Previous summary: {{prior_summary}}. Sources, with zero-based indexes: {{sources_text}}. Return {"summary":"under 400 characters","topics":["up to five topics"],"highlights":[{"index":0,"detail":"notable moment under 180 characters"}],"tone":"how this person writes, under 120 characters","catchphrases":["up to five phrases actually used"]}. Include a highlight only when a source supports it.',
+    default_route: 'live.legacy', owner: 'chat', metadata: { json_name: 'person_memory' },
+});
+const CHAT_PERSON_MEMORY = {
+    key: 'chat.person-memory', name: 'A person in chat, compacted', namespace: 'chat',
+    description: 'Incremental chat memory for a day, week or month; weeks read days and months read weeks.',
+    input_schema: { type: 'object', additionalProperties: false, required: ['level', 'period', 'prior_summary', 'sources_text'], properties: {
+        level: { enum: ['day', 'week', 'month'] }, period: STR(10), prior_summary: STR(500), sources_text: STR(15000),
+    } },
+    output_schema: { type: 'object', additionalProperties: false, required: ['summary', 'topics', 'highlights', 'tone', 'catchphrases'], properties: {
+        summary: STR(500), topics: { type: 'array', maxItems: 5, items: STR(100) },
+        highlights: { type: 'array', maxItems: 5, items: { type: 'object', additionalProperties: false, required: ['index', 'detail'], properties: { index: { type: 'integer', minimum: 0 }, detail: STR(180) } } },
+        tone: STR(120), catchphrases: { type: 'array', maxItems: 5, items: STR(100) },
+    } },
+    steps: [{ kind: 'llm', template: 'chat.person-memory', operation: 'generate', output: 'json', params: { max_tokens: 450, temperature: 0.2 } }],
+    cache_mode: 'none',
+};
+
+module.exports = { templates, workflows: [...structured, ...CHAT_OWNED, CHAT_PERSON_MEMORY, ...passthrough], KIND_TO_WORKFLOW, ROLES, PASSTHROUGH_INPUT, PASSTHROUGH_OUTPUT };
