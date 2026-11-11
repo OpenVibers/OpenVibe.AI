@@ -112,7 +112,10 @@ function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth,
         }
         if (section === 'gpus') return { state: gpus ? await gpus.state() : null, ...await marketPayload() };
         if (section === 'pricebook') return { report: priceBook ? priceBook.last : null, state: priceBook ? await priceBook.state.read() : null,
-            pending: priceBook ? await priceBook.pending(50) : [], recent: priceBook ? await priceBook.changes({ status: 'applied', limit: 50 }) : [] };
+            pending: priceBook ? await priceBook.pending(50) : [], recent: priceBook ? await priceBook.changes({ status: 'applied', limit: 50 }) : [],
+            // The reviewed readings bundled with this release (scripts/pricebook-proposals-*.json), which the owner
+            // loads into the waiting list before deciding them. Nothing here writes a price or creates a model.
+            confirmed: await ownerConfig.confirmedPrices() };
         if (section === 'exchange') return { credits: await q.settleQueue(db, clock.now()), routing: await q.routingEvidence(db) };
         if (section === 'abuse') return { report: abuse ? await abuse.overview() : null };
         if (section === 'glossary') return { providers: await registry.listProviders(), models: await registry.listModels() };
