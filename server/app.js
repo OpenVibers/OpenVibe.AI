@@ -13,6 +13,7 @@ const creations = require('./creations');
 const home = require('./home');
 const openapi = require('./openapi');
 const { adminRouter } = require('./api/admin');
+const { setupRouter } = require('./api/setup');
 const { CAPS } = require('./auth');
 const { createOps } = require('./ops');
 const { consoleRouter } = require('./console');
@@ -24,7 +25,7 @@ const pkg = require('../package.json');
 const { adminRoutes } = require('openvibe-shared/config');
 const ownerInputs = require('./owner-inputs');
 
-function createApp({ choices = null, searchFetch = null, config, db, registry, pool, quotas, cache, runs, auth, keys, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, credentials = null, preferences = null, grants = null, vault = null, settings = null, benchEvents = null, runBudgets = null, memory = null, memoryImport = null, memoryServices = null, memorySharing = null, community = null, endpoints = null, webhooks = null, presets = null, receipts = null, balance = null, creditGrants = null, sessionCookies = null, gpus = null, gpuMarket = null, supply = null, abuse = null, priceBook = null, modelSync = null, modelDiscovery = null, ownEndpoints = null, refusal = null, willingness = null, abliterationTax = null, batches = null, share = null, deepDive = null, mediaStore = null }) {
+function createApp({ choices = null, searchFetch = null, config, db, registry, pool, quotas, cache, runs, auth, keys, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, credentials = null, preferences = null, grants = null, vault = null, settings = null, benchEvents = null, runBudgets = null, memory = null, memoryImport = null, memoryServices = null, memorySharing = null, community = null, endpoints = null, webhooks = null, presets = null, receipts = null, balance = null, creditGrants = null, sessionCookies = null, gpus = null, gpuMarket = null, supply = null, abuse = null, priceBook = null, modelSync = null, modelDiscovery = null, ownEndpoints = null, refusal = null, willingness = null, abliterationTax = null, batches = null, share = null, deepDive = null, mediaStore = null, search = null }) {
     const app = express();
     // /.well-known/agent.json (openvibe-shared/agent-layer, SEO-2): what this site serves, for agents.
     require('openvibe-shared/agent-layer').mount(app, { descriptor: require('./agent-descriptor') });
@@ -285,6 +286,7 @@ function createApp({ choices = null, searchFetch = null, config, db, registry, p
     // Community capacity (design: "Offer to the network"): the public offers Exchange lists and the seller's /sell
     // dashboard, an API for Exchange. Nothing here writes an offer; the offer belongs to Network and the Link owner.
     if (community) app.use('/api/v1', require('./api/community').communityRouter({ community, auth, log }));
+    app.use(setupRouter({ config, db, registry, pool, runs, auth, settings, search, env, clock, log }));
     app.use(adminRouter({ config, db, registry, pool, quotas, cache, runs, auth, settings, ops, log }));
     app.use(require('./api/console-data').consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth, clock, fetchImpl, env, gpus, gpuMarket, supply, abuse, priceBook, modelSync, creditGrants, sessionCookies, vault, settings, config, log }));
     // The operator console moved to OpenVibe.Exchange. Keep the legacy AI paths as permanent redirects;
