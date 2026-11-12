@@ -1104,7 +1104,7 @@ Part of the [OpenVibe network](https://openvibe.network). Built in the open by [
 <!-- versions:start -->
 - openvibe-contracts: v0.410.0
 - openvibe-sdk: v0.152.0
-- openvibe-shared: v4.214.0
+- openvibe-shared: v4.223.0
 <!-- versions:end -->
 
 ### Exchange search engines
