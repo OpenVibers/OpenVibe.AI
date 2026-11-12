@@ -302,6 +302,9 @@ async function seed({ registry, quotas, config, env = process.env, db }) {
     await registry.seedVersioned('route', 'background.vision', backgroundPool(BACKGROUND_TIMEOUT));
     await registry.seedVersioned('route', 'background.director', backgroundPool(BACKGROUND_TIMEOUT));
     await registry.seedVersioned('route', 'background.json', backgroundPool(BACKGROUND_TIMEOUT, { options: { temperature: 0.3 }, max_output_tokens: 2400, response_format: 'json' }));
+    // Media's rotation detector (pics.orientation): a 256 px picture and four possible numbers, so background work
+    // with a small answer. The owner's task default may pin a different model; the detector asks for the cheapest.
+    await registry.seedVersioned('route', 'pics.orientation', { primary: { provider: 'shared', model: null }, fallbacks: [], options: { temperature: 0 }, max_output_tokens: 80, response_format: 'json', timeout_ms: 60000, alias_of: 'background.json' });
     await registry.seedVersioned('route', 'background.creative', backgroundPool(BACKGROUND_TIMEOUT, creativeModel ? { constraints: { objective: 'correctness', latency_class: 'background', model: creativeModel, authority: `shared:${creativeModel}` } } : {}));
     // Chat's AI members (server/workflows/chat.js): conversation text, so an alias of the chat pool.
     // Space's spaces (server/workflows/space.js): the builder writes whole apps, so it gets the creative model and room to

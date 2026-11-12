@@ -261,6 +261,7 @@ function createApp({ choices = null, searchFetch = null, config, db, registry, p
     // Operator actions shared by the admin API and the operator console (one implementation, one audit row).
     const ops = createOps({ db, registry, pool, quotas, cache, runs });
     app.use(runsRouter({ choices, runs, registry, auth, config, log }));
+    app.use(require('./api/orientation').createOrientation({ choices, runs, registry, auth, db, config, log }));
     app.use(actionsRouter({ runs, registry, auth, log }));
     // People's own controls (2026-11-11): one task that turns words into a checked ui.layout@1.
     app.use(require('./api/ui-layout').uiLayoutRouter({ runs, auth, log }));

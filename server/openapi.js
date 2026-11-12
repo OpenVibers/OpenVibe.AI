@@ -343,6 +343,33 @@ route('post', '/runs', {
         ...errors([400, 401, 403, 404, 409, 413, 422, 503]),
     },
 });
+// The picture-orientation detector (pictures, 2026-11-11 part 3): one small picture in, the clockwise turn needed to
+// make it upright. The owner's setting decides whether it runs at all; media enforces the confidence.
+route('post', '/vision/orientation', {
+    operationId: 'detectPictureOrientation', summary: 'Which way is up in one picture: 0, 90, 180 or 270 degrees', tags: ['runs'], security: SERVICE,
+    description: 'ai.run.create. Runs the `pics.orientation` workflow on a 256 px copy (a data URL) or a Media reference. The owner\'s task defaults decide: method off answers `{ method: "off", answered: false }` and spends nothing; the daily picture cap and daily USD budget answer 429 before a model is called. A person may use it for the owner console\'s check; a service needs the `pics.orientation` namespace. The answer carries the run id, the model, the cost and the receipt id.',
+    requestBody: body({ type: 'object', additionalProperties: false, required: ['image'], properties: {
+        image: { type: 'object', additionalProperties: false, minProperties: 1, properties: {
+            data_url: str({ maxLength: 4000000, description: 'a base64 JPEG, PNG or WebP data URL (a 256 px copy)' }),
+            media: { type: 'object', additionalProperties: false, required: ['media_id'], properties: { media_id: str({ pattern: '^med_[0-9A-HJKMNP-TV-Z]{26}$' }) } },
+        } },
+        hint: str({ maxLength: 200 }),
+    } }),
+    responses: {
+        200: json('The answer, or that the detector is off', {
+            type: 'object', required: ['method', 'answered'],
+            properties: {
+                method: { type: 'string', enum: ['off', 'vision'] }, answered: { type: 'boolean' },
+                rotation: { type: ['integer', 'null'], enum: [0, 90, 180, 270, null] }, confidence: { type: ['number', 'null'], minimum: 0, maximum: 1 },
+                model: { type: ['string', 'null'] }, provider: { type: ['string', 'null'] }, cost_usd: { type: ['number', 'null'] },
+                receipt_id: str(), run_id: str(), setting: { type: 'object' }, budget: { type: 'object' },
+            },
+        }),
+        429: { ...problem, headers: { 'Retry-After': { schema: { type: 'integer' } } } },
+        ...errors([401, 403, 422, 502, 503]),
+    },
+});
+
 route('get', '/runs', {
     operationId: 'listRuns', summary: 'The caller\'s runs, newest first', tags: ['runs'], security: SERVICE,
     description: 'ai.run.read (or ai.run.create). `all=1` needs ai.usage.read.',
