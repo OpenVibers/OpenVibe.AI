@@ -186,6 +186,67 @@ function parseTensordock(html) {
     return out;
 }
 
+/** RunPod's Serverless flex rates: the same pricing page, the per-second flex column. */
+function parseRunpodServerless(html) {
+    const out = [];
+    for (const chunk of String(html).split(/class="gpu_table-row"/).slice(1)) {
+        const name = (chunk.match(/class="gpu_name[^"]*">([^<]+)</) || [])[1];
+        if (!name) continue;
+        const target = targetFor(name);
+        if (!target) continue;
+        const flex = (chunk.match(/data-serverless="([\d.]+)"/) || [])[1];
+        const row = reading(target, 'on_demand', flex, {
+            note: 'Serverless flex, billed per second from worker start to stop and scaling to zero; the OpenAI-compatible vLLM endpoint is the same card hour',
+            variant: name.trim(), source: 'https://www.runpod.io/pricing',
+        });
+        if (row) out.push(row);
+    }
+    return out;
+}
+
+/** A plain public price page: the card name followed by its published hourly rate. */
+function parsePlainPrices(html, source, rows) {
+    const text = String(html).replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ')
+        .replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/\s+/g, ' ');
+    const out = [];
+    for (const row of rows) {
+        const normalized = row.name.replace(/ /g, '\\s+');
+        const m = text.match(new RegExp(normalized + row.between + '\\$([\\d.]+)', 'i'));
+        if (!m) continue;
+        const parsed = reading(BY_KEY.get(row.key), row.kind, m[1], {
+            note: row.note, variant: row.name, source,
+        });
+        if (parsed) out.push(parsed);
+    }
+    return out;
+}
+
+/** Verda's public price page: on-demand and, where it lists them, spot rates. */
+function parseVerda(html) {
+    return parsePlainPrices(html, 'https://verda.ai/pricing', [
+        { key: 'h100', name: 'H100', between: '[\\s\\S]{0,120}?on.?demand[\\s\\S]{0,80}?', kind: 'on_demand', note: 'published on-demand rate; spot is listed on the same page and may be evicted without warning' },
+        { key: 'h100', name: 'H100', between: '[\\s\\S]{0,160}?spot[\\s\\S]{0,80}?', kind: 'spot', note: 'published spot rate; Verda may evict it at any time without warning' },
+        { key: 'a100-80gb', name: 'A100 80GB', between: '[\\s\\S]{0,120}?on.?demand[\\s\\S]{0,80}?', kind: 'on_demand', note: 'published on-demand rate' },
+        { key: 'a100-80gb', name: 'A100 80GB', between: '[\\s\\S]{0,160}?spot[\\s\\S]{0,80}?', kind: 'spot', note: 'published spot rate; Verda may evict it at any time without warning' },
+    ]);
+}
+
+/** Thunder Compute's public price page: on-demand, billed per minute. */
+function parseThunder(html) {
+    return parsePlainPrices(html, 'https://www.thundercompute.com/pricing', [
+        { key: 'h100', name: 'H100', between: '[\\s\\S]{0,80}?', kind: 'on_demand', note: 'on-demand, billed per minute' },
+        { key: 'a100-80gb', name: 'A100 80GB', between: '[\\s\\S]{0,80}?', kind: 'on_demand', note: 'on-demand, billed per minute' },
+    ]);
+}
+
+/** Shadeform's public marketplace: the lowest on-demand rate it advertises across its clouds. */
+function parseShadeform(html) {
+    return parsePlainPrices(html, 'https://shadeform.ai/pricing', [
+        { key: 'h100', name: 'H100', between: '[\\s\\S]{0,100}?(?:from|starting at)?[\\s\\S]{0,20}?', kind: 'on_demand', note: 'the lowest on-demand rate advertised across Shadeform\'s clouds; the marketplace adds no fee' },
+        { key: 'a100-80gb', name: 'A100 80GB', between: '[\\s\\S]{0,100}?(?:from|starting at)?[\\s\\S]{0,20}?', kind: 'on_demand', note: 'the lowest on-demand rate advertised across Shadeform\'s clouds; the marketplace adds no fee' },
+    ]);
+}
+
 /** CloudRift's public table: only the cards whose on-demand rate is a number; its H100/H200 say "Upon request". */
 function parseCloudrift(html) {
     const text = String(html).replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ')
@@ -259,6 +320,30 @@ const SOURCES = Object.freeze([
         id: 'cloudrift', label: 'CloudRift', source: 'https://www.cloudrift.ai/pricing',
         async read({ fetchImpl, timeoutMs }) {
             return parseCloudrift(await read(fetchImpl, 'https://www.cloudrift.ai/pricing', { timeoutMs }));
+        },
+    },
+    {
+        id: 'verda', label: 'Verda', source: 'https://verda.ai/pricing',
+        async read({ fetchImpl, timeoutMs }) {
+            return parseVerda(await read(fetchImpl, 'https://verda.ai/pricing', { timeoutMs }));
+        },
+    },
+    {
+        id: 'thunder', label: 'Thunder Compute', source: 'https://www.thundercompute.com/pricing',
+        async read({ fetchImpl, timeoutMs }) {
+            return parseThunder(await read(fetchImpl, 'https://www.thundercompute.com/pricing', { timeoutMs }));
+        },
+    },
+    {
+        id: 'runpod_serverless', label: 'RunPod Serverless', source: 'https://www.runpod.io/pricing',
+        async read({ fetchImpl, timeoutMs }) {
+            return parseRunpodServerless(await read(fetchImpl, 'https://www.runpod.io/pricing', { timeoutMs }));
+        },
+    },
+    {
+        id: 'shadeform', label: 'Shadeform', source: 'https://shadeform.ai/pricing',
+        async read({ fetchImpl, timeoutMs }) {
+            return parseShadeform(await read(fetchImpl, 'https://shadeform.ai/pricing', { timeoutMs }));
         },
     },
 ]);
@@ -435,6 +520,6 @@ function createGpuMarket({ db, config = {}, clock = { now: () => Date.now() }, f
 }
 
 module.exports = {
-    createGpuMarket, parseVast, parseRunpod, parseSalad, parseTensordock, parseCloudrift, targetFor, lowest,
+    createGpuMarket, parseVast, parseRunpod, parseSalad, parseTensordock, parseCloudrift, parseVerda, parseThunder, parseShadeform, parseRunpodServerless, targetFor, lowest,
     TARGETS, SOURCES, SOURCE_BY_ID, HOUR_MS,
 };
