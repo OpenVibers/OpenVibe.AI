@@ -50,7 +50,7 @@ function offer(provider, model, label, price, source, extra = {}) {
  */
 const STEPS = Object.freeze([
     {
-        id: 'chat', name: 'Chat and writing', short: 'Chat', route: 'default.chat', capability: 'chat', operation: 'chat', modelType: 'chat',
+        id: 'chat', name: 'Chat and writing', short: 'Chat', route: 'default.chat', 'capability': 'chat', operation: 'chat', modelType: 'chat',
         what: 'Turns text into an answer, a summary or a draft.',
         uses: 'Every AI answer on the network: chat members, the Rundown\'s writing desk, summaries and site copy.',
         recommended: offer('deepseek', 'deepseek-flash', 'DeepSeek Flash', tokenPrice(0.15, 0.6, 0.003), SOURCES.deepseek,
@@ -61,7 +61,7 @@ const STEPS = Object.freeze([
         ],
     },
     {
-        id: 'vision', name: 'Vision', short: 'Vision', route: 'default.json', capability: 'chat', operation: 'chat', modelType: 'chat',
+        id: 'vision', name: 'Vision', short: 'Vision', route: 'default.json', 'capability': 'chat', operation: 'chat', modelType: 'chat',
         what: 'Reads a picture and answers with what is in it, usually as JSON.',
         uses: 'Food\'s pantry photos and receipts, Pics\' alt text, and Media\'s picture checks.',
         recommended: offer('gemini', 'gemini-2.5-flash', 'Gemini 2.5 Flash', tokenPrice(0.3, 2.5), SOURCES.gemini,
@@ -72,7 +72,7 @@ const STEPS = Object.freeze([
         ],
     },
     {
-        id: 'image', name: 'Images', short: 'Images', route: 'default.image', capability: 'image', operation: 'image', modelType: 'image',
+        id: 'image', name: 'Images', short: 'Images', route: 'default.image', 'capability': 'image', operation: 'image', modelType: 'image',
         what: 'Makes a picture from a description.',
         uses: 'The Rundown\'s episode pictures, Vibe\'s picture button, chat personas\' faces.',
         recommended: offer('openai', 'gpt-image-1', 'OpenAI gpt-image-1', picturePrice(0.04), SOURCES.openaiImages,
@@ -83,7 +83,7 @@ const STEPS = Object.freeze([
         ],
     },
     {
-        id: 'stt', name: 'Speech to text', short: 'Speech in', route: 'live.stt', capability: 'transcribe', operation: 'transcribe', modelType: 'stt',
+        id: 'stt', name: 'Speech to text', short: 'Speech in', route: 'live.stt', 'capability': 'transcribe', operation: 'transcribe', modelType: 'stt',
         what: 'Turns a recording into written words with their times.',
         uses: 'Live\'s stream transcripts, Vibe\'s voice messages, and captions on clips.',
         recommended: offer('whisper', 'whisper.cpp', 'whisper.cpp on this machine', FREE, 'https://github.com/ggerganov/whisper.cpp',
@@ -94,7 +94,7 @@ const STEPS = Object.freeze([
         ],
     },
     {
-        id: 'speech', name: 'Voices', short: 'Voices', route: 'default.speech', capability: 'speak', operation: 'speak', modelType: 'speech',
+        id: 'speech', name: 'Voices', short: 'Voices', route: 'default.speech', 'capability': 'speak', operation: 'speak', modelType: 'speech',
         what: 'Reads text aloud in a natural voice.',
         uses: 'Vibe speaking in Chat and the Dock, and read-aloud across the network.',
         recommended: offer('google-tts', 'gc_neural_chad', 'Google Neural2', charsPrice(16), SOURCES.googleSpeech,
@@ -107,7 +107,7 @@ const STEPS = Object.freeze([
         ],
     },
     {
-        id: 'embedding', name: 'Embeddings', short: 'Embeddings', route: 'default.embedding', capability: 'embed', operation: 'embed', modelType: 'embedding',
+        id: 'embedding', name: 'Embeddings', short: 'Embeddings', route: 'default.embedding', 'capability': 'embed', operation: 'embed', modelType: 'embedding',
         what: 'Turns text into numbers so things can be found by meaning.',
         uses: 'Memory search, wiki and policy matching, and everything that finds an answer by meaning.',
         recommended: offer('openai', 'text-embedding-3-small', 'OpenAI Embedding 3 small', tokenPrice(0.02, 0), SOURCES.openaiEmbed,
@@ -118,7 +118,7 @@ const STEPS = Object.freeze([
         ],
     },
     {
-        id: 'search', name: 'Web search', short: 'Search', route: null, capability: 'web-search', operation: 'search', modelType: null,
+        id: 'search', name: 'Web search', short: 'Search', route: null, 'capability': 'web-search', operation: 'search', modelType: null,
         what: 'Looks up the current web and brings back pages and snippets.',
         uses: 'Deep dives, research answers, and every product that needs today\'s web.',
         recommended: offer('openvibe', 'openvibe', 'OpenVibe Search', FREE, 'https://search.openvibe.network',
@@ -129,7 +129,7 @@ const STEPS = Object.freeze([
         ],
     },
     {
-        id: 'code', name: 'Code agents (plans)', short: 'Code', route: 'space.build', capability: 'chat', operation: 'chat', modelType: 'chat',
+        id: 'code', name: 'Code agents (plans)', short: 'Code', route: 'space.build', 'capability': 'chat', operation: 'chat', modelType: 'chat',
         what: 'Plans work and writes code that follows the plan.',
         uses: 'Codes\' plans, Space\'s app builder, and code agents working through OpenVibe.Run.',
         recommended: offer('deepseek', 'deepseek-chat', 'DeepSeek Chat', tokenPrice(0.26, 0.38), SOURCES.deepseek,

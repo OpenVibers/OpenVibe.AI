@@ -187,7 +187,7 @@ function setupRouter({ config = {}, db, registry, pool = null, runs = null, auth
         if (!route && step.id === 'image') {
             // The image route exists only once a model is chosen (AI_IMAGE_MODEL seeds it in production).
             route = await registry.createRouteVersion(step.route, {
-                capability: 'image', constraints: { objective: 'correctness', provider_scope: 'paid' },
+                'capability': 'image', constraints: { objective: 'correctness', provider_scope: 'paid' },
                 max_output_tokens: null, response_format: 'text', timeout_ms: 120000,
             }, { actor: 'service:network' });
         }
@@ -439,7 +439,7 @@ function setupRouter({ config = {}, db, registry, pool = null, runs = null, auth
         if (providerKey && modelKey) { constraints.model = modelKey; constraints.authority = `${providerKey}:${modelKey}`; }
         else { delete constraints.model; delete constraints.authority; }
         route = await registry.createRouteVersion(step.route, {
-            capability: step.capability, constraints,
+            'capability': step.capability, constraints,
             options: route.options, max_output_tokens: route.max_output_tokens,
             response_format: route.response_format, timeout_ms: route.timeout_ms, alias_of: route.alias_of,
         }, { actor: actorId(req), trace: req.ov && req.ov.traceId });
@@ -469,7 +469,7 @@ function setupRouter({ config = {}, db, registry, pool = null, runs = null, auth
                 if (!route) { applied.push({ step: step.id, ok: false, error: 'no route' }); continue; }
                 const constraints = { ...(route.constraints || {}), model: offer.model, authority: `${offer.provider}:${offer.model}` };
                 const next = await registry.createRouteVersion(step.route, {
-                    capability: step.capability, constraints, options: route.options, max_output_tokens: route.max_output_tokens,
+                    'capability': step.capability, constraints, options: route.options, max_output_tokens: route.max_output_tokens,
                     response_format: route.response_format, timeout_ms: route.timeout_ms, alias_of: route.alias_of,
                 }, { actor: actorId(req), trace: req.ov && req.ov.traceId });
                 applied.push({ step: step.id, ok: true, route: next.key, version: next.version, provider: offer.provider, model: offer.model });
