@@ -17,6 +17,10 @@
  *                       included; Chat runs the tools and sends the results in the next turn, a few turns at most.
  *                       The same passthrough as ai.complete (the prompt is not kept), in Chat's namespace and on its
  *                       route, so Chat's grant and quota apply; with a person's own key it goes to their provider.
+ *
+ *   chat.persona.image  the small avatar for a Vibe conversation's persona (the owner, 2026-11-12). The same image
+ *                       step and route as ai.image (route default.image), in Chat's namespace so Chat's grant can
+ *                       run it; the picture comes back inline (b64) or as a URL, and Chat stores the bytes in Media.
  */
 const core = require('./core');
 
@@ -84,6 +88,21 @@ const workflows = [
         }, ['text']),
         steps: [{ kind: 'transcribe', route: 'live.stt' }],
         cache_mode: 'none', metadata: { seed: true, retain_input: false },
+    },
+    {
+        key: 'chat.persona.image', name: 'Chat: a Vibe persona\'s avatar', namespace: 'chat',
+        description: 'The small avatar for a Vibe conversation\'s persona: the same image step and route as ai.image (default.image), run under Chat\'s own namespace and grant. The picture comes back inline or as a URL; Chat stores it in Media.',
+        input_schema: OBJ({
+            model: STR(256),
+            prompt: STR(1200),
+            size: { type: 'string', pattern: '^[0-9]{3,4}x[0-9]{3,4}$' },
+            n: { type: 'integer', minimum: 1, maximum: 1 },
+            max_cost_usd: { type: ['number', 'string', 'null'] },
+        }, ['prompt']),
+        output_schema: OBJ({ images: { type: 'array', minItems: 1, items: OBJ({ b64: { type: ['string', 'null'] }, url: { type: ['string', 'null'] } }) }, count: { type: 'integer', minimum: 1 } }, ['images', 'count']),
+        // No cache: several MB of base64 per run, and a persona's face is made once for a chat.
+        steps: [{ kind: 'image', route: 'default.image' }], cache_mode: 'none',
+        metadata: { seed: true, retain_input: false },
     },
     {
         key: 'chat.member.turn', name: 'Chat: an AI member\'s turn, with tools', namespace: 'chat',
