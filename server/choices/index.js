@@ -32,6 +32,7 @@ const SEEDS = [
     ['search.web', 'search', 'Find sources on the web.', 'research.gather'],
     ['search.images', 'search', 'Find licensed images.', 'research.gather'],
     ['blog.changelog.tag', 'text', 'Describe and tag a shipped change.', 'blog.changelog.tag'],
+    ['ui.layout.suggest', 'text', 'Turn a person’s words into a layout for one surface.', 'ui.layout.suggest'],
 ];
 
 const MODEL_RE = /^[a-zA-Z0-9._:/@+\-]{1,200}$/;

@@ -626,6 +626,8 @@ const POSTPROCESS = {
 
 // Space's builder keeps its hooks beside its templates (server/workflows/space.js).
 { const space = require('./space'); Object.assign(PREPARE, space.PREPARE); Object.assign(POSTPROCESS, space.POSTPROCESS); }
+// People's own controls (2026-11-11): the layout suggestion's prepare and postprocess live with its template.
+{ const ui = require('./ui-layout'); PREPARE['ui.layout.suggest'] = ui.prepare; POSTPROCESS['ui.layout.suggest'] = ui.postprocess; }
 
 /**
  * What the run cache keys on, for a workflow whose input carries parts that do not change the answer (item 151, C12:
