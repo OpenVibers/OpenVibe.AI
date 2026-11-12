@@ -16,6 +16,17 @@ const app = token('app', ['ai.app.run'], { sub: `app:app_${PRJ.slice(4)}`, actor
 const WEATHER = { type: 'function', function: { name: 'get_weather', description: 'Weather for a city', parameters: { type: 'object', required: ['city'], properties: { city: { type: 'string' } } } } };
 let h;
 const post = (body, tok = service) => request(h.base, 'POST', '/v1/chat/completions', { tok, body });
+const postJson = (path, body, tok = service) => request(h.base, 'POST', path, { tok, body });
+const transcribe = async (fields = {}, file = { name: 'sample.wav', type: 'audio/wav', data: Buffer.from('RIFF....WAVEfmt ') }, tok = service) => {
+    const form = new FormData();
+    for (const [key, value] of Object.entries(fields)) form.append(key, String(value));
+    form.append('file', new Blob([file.data], { type: file.type }), file.name);
+    const res = await fetch(`${h.base}/v1/audio/transcriptions`, { method: 'POST', headers: { Authorization: `Bearer ${tok}` }, body: form });
+    const text = await res.text();
+    let body = null;
+    try { body = text ? JSON.parse(text) : null; } catch { body = null; }
+    return { status: res.status, body, text, headers: res.headers };
+};
 
 // The free allowance (a service acting for a person) would be gated by AI_FREE_PROVIDERS; in tests the
 // deterministic stub is the network's stand-in, so it is the named free-tier source.
@@ -220,6 +231,89 @@ t.test('production\'s shape: an OpenAI-format provider declaring chat (not compl
         await h2.stop();
         await new Promise((r) => upstream.close(r));
     }
+});
+
+t.test('POST /v1/audio/transcriptions: multipart audio through the router, in OpenAI\'s shape', async () => {
+    const r = await transcribe({ model: 'whisper-1', language: 'en', prompt: 'OpenVibe', temperature: '0', response_format: 'json' });
+    assert.strictEqual(r.status, 200, r.text);
+    assert.strictEqual(typeof r.body.text, 'string');
+    assert.ok(r.body.text.length > 0);
+    assert.ok(r.headers.get('x-openvibe-run-id'), 'the run is named in the header');
+    assert.strictEqual(r.body.x_openvibe.run_id, r.headers.get('x-openvibe-run-id'));
+    assert.strictEqual(r.body.x_openvibe.requested_model, 'whisper-1');
+    assert.strictEqual(r.body.x_openvibe.response_format, 'json');
+    const run = await request(h.base, 'GET', `/api/v1/runs/${r.body.x_openvibe.run_id}`, { tok: service });
+    assert.strictEqual(run.body.run.workflow.key, 'ai.transcribe');
+    assert.ok(run.body.run.usage && typeof run.body.run.usage.cost_usd === 'number', 'the run path recorded its usage');
+    assert.ok(!JSON.stringify(run.body.run.input || {}).includes('data:audio'), 'the audio is not kept');
+});
+
+t.test('POST /v1/audio/transcriptions: verbose_json segments and the plain text format', async () => {
+    const v = await transcribe({ model: 'whisper-1', language: 'en', response_format: 'verbose_json' });
+    assert.strictEqual(v.status, 200, v.text);
+    assert.deepStrictEqual([v.body.task, v.body.language], ['transcribe', 'en']);
+    assert.ok(Array.isArray(v.body.segments) && v.body.segments.length > 0);
+    assert.strictEqual(typeof v.body.segments[0].start, 'number');
+    assert.strictEqual(typeof v.body.segments[0].end, 'number');
+    assert.strictEqual(typeof v.body.segments[0].text, 'string');
+    assert.ok(v.body.duration > 0);
+
+    const t = await transcribe({ model: 'whisper-1', language: 'en', response_format: 'text' });
+    assert.strictEqual(t.status, 200, t.text);
+    assert.match(t.headers.get('content-type'), /^text\/plain/);
+    assert.ok(t.text.trim().length > 0);
+    assert.ok(t.headers.get('x-openvibe-run-id'));
+});
+
+t.test('POST /v1/audio/transcriptions: a file that is not audio is refused, and so is an unknown format', async () => {
+    const bad = await transcribe({ model: 'whisper-1' }, { name: 'notes.txt', type: 'text/plain', data: Buffer.from('not audio') });
+    assert.deepStrictEqual([bad.status, bad.body.error.type, bad.body.error.code], [400, 'invalid_request_error', 'input.invalid'], bad.text);
+    const format = await transcribe({ model: 'whisper-1', response_format: 'srt' });
+    assert.deepStrictEqual([format.status, format.body.error.code], [400, 'input.invalid']);
+    const model = await transcribe({});
+    assert.deepStrictEqual([model.status, model.body.error.code], [400, 'input.invalid'], 'model is required as OpenAI requires it');
+});
+
+t.test('POST /v1/moderations: a structured classification in OpenAI\'s shape, labelled as one', async () => {
+    const r = await postJson('/v1/moderations', { model: 'omni-moderation-latest', input: ['a friendly hello', 'I will find where you live'] });
+    assert.strictEqual(r.status, 200, r.text);
+    assert.strictEqual(r.body.results.length, 2);
+    const categories = ['hate', 'hate/threatening', 'harassment', 'harassment/threatening', 'self-harm', 'self-harm/intent', 'self-harm/instructions', 'sexual', 'sexual/minors', 'violence', 'violence/graphic'];
+    for (const result of r.body.results) {
+        assert.strictEqual(typeof result.flagged, 'boolean');
+        for (const key of categories) {
+            assert.strictEqual(typeof result.categories[key], 'boolean', key);
+            assert.strictEqual(typeof result.category_scores[key], 'number', key);
+        }
+    }
+    assert.deepStrictEqual([r.body.x_openvibe.method, r.body.x_openvibe.route], ['structured_model', 'moderation.classify']);
+    assert.match(r.body.x_openvibe.note, /no provider moderation endpoint/);
+    assert.strictEqual(r.body.x_openvibe.run_ids.length, 2);
+    assert.strictEqual(r.body.x_openvibe.classification.length, 2);
+    const first = await request(h.base, 'GET', `/api/v1/runs/${r.body.x_openvibe.run_ids[0]}`, { tok: service });
+    assert.deepStrictEqual([first.body.run.workflow.key, typeof first.body.run.usage.cost_usd], ['ai.moderate', 'number'], 'the run path recorded its usage');
+});
+
+t.test('POST /v1/rerank: Cohere/Jina shape from embeddings cosine similarity, labelled', async () => {
+    const r = await postJson('/v1/rerank', { model: 'rerank-v3.5', query: 'a cat', documents: ['a cat on a mat', 'a dog barking', { text: 'a bird in a tree' }], top_n: 2 });
+    assert.strictEqual(r.status, 200, r.text);
+    assert.strictEqual(r.body.results.length, 2);
+    for (const hit of r.body.results) {
+        assert.ok(Number.isInteger(hit.index) && hit.index >= 0 && hit.index < 3);
+        assert.strictEqual(typeof hit.relevance_score, 'number');
+    }
+    assert.ok(r.body.results[0].relevance_score >= r.body.results[1].relevance_score, 'sorted by score');
+    assert.deepStrictEqual([r.body.meta.method, r.body.x_openvibe.method], ['embeddings_cosine', 'embeddings_cosine']);
+    assert.match(r.body.x_openvibe.note, /cosine similarity/);
+    assert.strictEqual(r.body.x_openvibe.requested_model, 'rerank-v3.5');
+    const run = await request(h.base, 'GET', `/api/v1/runs/${r.body.x_openvibe.run_id}`, { tok: service });
+    assert.deepStrictEqual([run.body.run.workflow.key, typeof run.body.run.usage.tokens_in], ['ai.embed', 'number'], 'the run path recorded its usage');
+
+    const kept = await postJson('/v1/rerank', { query: 'x', documents: [{ text: 'one' }, { text: 'two' }], return_documents: true });
+    assert.strictEqual(kept.status, 200, kept.text);
+    assert.ok(kept.body.results.every((hit) => hit.document && typeof hit.document.text === 'string'), 'documents return when asked');
+    const bad = await postJson('/v1/rerank', { query: 'x', documents: ['one'], top_n: 2 });
+    assert.deepStrictEqual([bad.status, bad.body.error.code], [400, 'input.invalid']);
 });
 
 t.test('close', async () => { await h.stop(); });

@@ -506,7 +506,10 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
         try {
             const startSec = Number(input.start_sec) || 0;
             const offsetSec = input.offset_sec != null ? Number(input.offset_sec) : startSec;
-            const exec = await pool.execute(route, 'transcribe', { filePath: file, language: input.language || 'en', seconds: input.seconds || 0, startSec, offsetSec, lowPower: input.low_power === true, words: input.words === true, timeoutMs: 3600000 }, { ...ctx, routeKey: route.key, routeVersion: route.version, promptHash: null });
+            const exec = await pool.execute(route, 'transcribe', { filePath: file, language: input.language || 'en', seconds: input.seconds || 0, startSec, offsetSec, lowPower: input.low_power === true, words: input.words === true,
+                ...(typeof input.prompt === 'string' && input.prompt ? { prompt: input.prompt } : {}),
+                ...(input.temperature != null ? { temperature: Number(input.temperature) } : {}),
+                timeoutMs: 3600000 }, { ...ctx, routeKey: route.key, routeVersion: route.version, promptHash: null });
             const r = exec.result;
             return { output: { text: r.text || '', language: r.language || input.language || 'en', segments: r.segments || [] }, exec, route };
         } finally {
