@@ -66,6 +66,7 @@ const EXAMPLES = {
     'chat.member.reply': { ai_name: 'Pantry', persona: 'A cheerful cook who keeps it cheap.', room: 'Kim and Lee\'s kitchen', memory: 'Lee is vegetarian.', context: 'Pantry: rice, onions, canned tomatoes, lentils.', context_source: 'OpenVibe.Food household', transcript: 'kim: home late tonight\nlee: same', asked_by: 'kim', message: '@Pantry what can we cook in 20 minutes?' },
     'food.read_pantry_photo': { image: { data_url: PNG }, kind: 'receipt', foods: ['Large Eggs (1 dozen)', 'Whole Milk (1 gallon)'] },
     'pics.describe_image': { image: { data_url: PNG }, title: 'The coast' },
+    'pics.orientation': { image: { data_url: PNG } },
     'chat.member.turn': { messages: [{ role: 'system', content: 'You are Pantry.' }, { role: 'user', content: 'kim: @Pantry roll a die' }], tools: [{ type: 'function', function: { name: 'roll_dice', parameters: { type: 'object', properties: { sides: { type: 'integer' } } } } }] },
     'tools.describe': { tool: 'img.convert', sources: [{ source_type: 'tools.tool', title: 'img.convert descriptor', content: '{"id":"img.convert","inputs":["file","format"]}' }] },
 };
