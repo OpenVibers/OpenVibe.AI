@@ -134,4 +134,11 @@ t.test('cleanup', async () => {
     await h.stop();
 });
 
+t.test('the prompt reads what a part sends or shows, and grants nothing for it (11-12)', async () => {
+    const { templates } = require('../server/workflows/ui-layout');
+    const prompt = templates.find((x) => x.key === 'ui.layout.suggest').system_prompt;
+    assert.ok(/command:/.test(prompt) && /reads:/.test(prompt) && /grant nothing/.test(prompt), 'command and reads are explained, as facts that grant nothing');
+    assert.ok(!/e-stop|emergency stop/i.test(prompt), 'no e-stop: Stop is a plain optional part');
+});
+
 t.run();
