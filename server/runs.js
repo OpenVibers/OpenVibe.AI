@@ -234,7 +234,7 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
      * principal: { sub, subject: {type, id} }
      * Returns { run, created, promise? }.
      */
-    async function create(body, principal, { trace = null, requestId = null, retryOf = null, onDelta = null, onRoute = null, abuse: requestAbuse = null, discount = null, exact = null, costCheck = null, communityOfferId = null, callerWaitMs = 0, advisorInternal = false } = {}) {
+    async function create(body, principal, { trace = null, requestId = null, retryOf = null, onDelta = null, onRoute = null, abuse: requestAbuse = null, discount = null, exact = null, costCheck = null, communityOfferId = null, callerWaitMs = 0, advisorInternal = false, taskParent = null } = {}) {
         if (!body || typeof body !== 'object') throw new AiError(400, 'input.invalid', 'JSON body required');
         const namedTask = choices && body.task ? await choices.task(String(body.task)) : null;
         if (body.task && !namedTask) throw new AiError(404, 'task.not_found', 'unknown task');
@@ -506,6 +506,7 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
                 ...(projectProvider ? { project_provider: projectProvider } : {}), ...(pinned ? { pinned_offer: pinned } : {}),
                 ...(communityOptIn ? { community: true } : {}), ...(prefer ? { prefer } : {}),
                 ...(contentPolicy !== 'standard' ? { policy: contentPolicy } : {}),
+                ...(taskParent ? { task_parent: taskParent } : {}),
                 ...(preset ? { preset: { name: String(preset.name).trim(), scope: preset.scope || 'owner', policy: presetPolicy } } : {}) }), created_at: now,
         };
         base.input = stableStringify(kept.value);
@@ -830,7 +831,7 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
             const failed = outcome === 'failed' ? [...requests].reverse().find(r => r.status === 'error' || r.status === 'timeout') : null;
             const errorClass = failed ? usageRecord.errorClassOf({ failureClass: failed.error_class, code: row.error_code, message: failed.error }) : null;
             const finishedAt = row.finished_at || new Date(clock.now()).toISOString();
-            const taskId = await taskIdOf(row);
+            const taskId = opts.task_parent || await taskIdOf(row);
             const rec = usageRecord.recordOf({
                 system: 'ai', run_id: row.id, subject: subjectOf(row), attribution: attributionOf(row), surface: row.workflow_key || '',
                 provider: payer.provider || provider || null, model: model || null, effort: explain.effort_applied || opts.effort || null,
@@ -1057,9 +1058,12 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
             billingDelta = typeof ctx.onDelta === 'function'
                 ? (d) => {
                     streamed = true;
-                    const delta = d && d.delta;
-                    if (firstDeltaAt === null && (delta?.content || delta?.reasoning_content || delta?.thinking
-                        || delta?.tool_calls?.some((c) => c.function?.arguments))) firstDeltaAt = clock.now();
+                    // OpenAI-shaped deltas carry `delta`; the Messages API's own stream carries `data.delta`.
+                    const delta = d && (d.delta || (d.data && d.data.delta));
+                    const kind = d && (d.event || d.type || (d.data && d.data.type)) || '';
+                    if (firstDeltaAt === null && (delta?.content || delta?.text || delta?.reasoning_content || delta?.thinking
+                        || delta?.tool_calls?.some((c) => c.function?.arguments)
+                        || /content_block_delta|text_delta|input_json_delta/.test(String(kind)))) firstDeltaAt = clock.now();
                     if (credit) credit.observe(d);
                     ctx.onDelta(d);
                 }
@@ -1391,7 +1395,7 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
             ...(row.on_behalf_of ? { on_behalf_of: parseJson(row.on_behalf_of, null) } : {}),
             ...(row.attribution ? { attribution: parseJson(row.attribution, null) } : {}),
             options: { cache: false },
-        }, principal, { trace, advisorInternal: true });
+        }, principal, { trace, advisorInternal: true, taskParent: id });
         const done = await wait(created, config.runs.maxWaitMs);
         if (!done || ['failed', 'cancelled'].includes(done.status)) throw new AiError(502, 'advisor.failed', (done && done.error && done.error.detail) || 'the advisor run did not answer');
         const cut = advisor.words(done.output && done.output.text, maxWords);
