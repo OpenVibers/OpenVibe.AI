@@ -971,6 +971,83 @@ const PROVIDERS = [
         data_policy: policy({ trains: null, retention: null, terms: 'https://docs.dos.ai', checked: '2026-11-10' }),
         models: [],
     },
+    // Altare Inference (2026-11-12, the owner: "a potentially excellent free API to test"): an OpenAI-compatible API for
+    // open models. Free until 2026-12-01 (usage does not count toward the included amount; rate limits still apply), then
+    // Always Free includes $100 of usage a month at list price, recorded in the console as a monthly credit plan
+    // (https://docs.altare.gg/inference/pricing). Keys start alt_inf_ (Team → Inference → API keys). Its published limits
+    // are kept by the router (rate_limits, server/providers/rate-gate.js). UNVERIFIED until the owner reads its terms,
+    // so it serves OpenVibe's own work and stays out of paid managed routes; privacy is unread, so it is anonymized.
+    {
+        key: 'altare',
+        docs_url: 'https://docs.altare.gg/inference',
+        keys_url: 'https://altare.gg/console',
+        display_name: 'Altare Inference',
+        base_url: 'https://inference.altare.global/v1',
+        default_model: 'deepseek-v4.1-flash',
+        timeout_ms: 90000,
+        capabilities: ['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich', 'json', 'tools'],
+        models_public: true,
+        provider_access: 'UNVERIFIED',
+        priority: 25,
+        rate_limits: {
+            rpm: 60, model_rpm: { 'glm-5.3': 30, 'deepseek-v4.1-flash': 30 }, plan: 'Always Free',
+            source: 'https://docs.altare.gg/inference/limits', checked: '2026-11-12',
+            note: 'per team, per minute; Plus 240 and 90 a model, Business 480 and 90',
+        },
+        free_until: '2026-12-01',
+        monthly_included_usd: { amount: 100, from: '2026-12-01', plan: 'Always Free', source: 'https://docs.altare.gg/inference/pricing' },
+        models: [
+            {
+                model_key: 'glm-5.3', display_name: 'GLM-5.3', family: 'glm', context_window: 1048576,
+                cost: { in_per_mtok: 1.4, cached_per_mtok: 0.26, out_per_mtok: 4.4 },
+                source: 'https://inference.altare.global/v1/models', checked: '2026-11-12',
+                supports: { json: true, tools: true, streaming: true, vision: false },
+                quantization: null, refusal_rate: null, note: 'a flagship model: 30 requests a minute of its own on the free plan (gated: true in /v1/models)',
+            },
+            {
+                model_key: 'deepseek-v4.1-flash', display_name: 'DeepSeek V4.1 Flash', family: 'deepseek', context_window: 1048576,
+                cost: { in_per_mtok: 0.3, cached_per_mtok: 0.006, out_per_mtok: 1.2 },
+                source: 'https://inference.altare.global/v1/models', checked: '2026-11-12',
+                supports: { json: true, tools: true, streaming: true, vision: false },
+                quantization: null, refusal_rate: null, note: 'a flagship model: 30 requests a minute of its own on the free plan (gated: true in /v1/models)',
+            },
+            {
+                model_key: 'qwen3.8-27b', display_name: 'Qwen 3.8 27B', family: 'qwen', context_window: 262144,
+                cost: { in_per_mtok: 0.45, cached_per_mtok: 0.05, out_per_mtok: 3.2 },
+                source: 'https://inference.altare.global/v1/models', checked: '2026-11-12',
+                supports: { json: true, tools: true, streaming: true, vision: false },
+                quantization: null, refusal_rate: null,
+            },
+            {
+                model_key: 'gemma-4-26b', display_name: 'Gemma 4 26B', family: 'gemma', context_window: 256000,
+                cost: { in_per_mtok: 0.1, cached_per_mtok: 0.05, out_per_mtok: 0.3 },
+                source: 'https://inference.altare.global/v1/models', checked: '2026-11-12',
+                supports: { json: true, tools: true, streaming: true, vision: false },
+                quantization: null, refusal_rate: null,
+            },
+            {
+                model_key: 'glm-4.7-flash', display_name: 'GLM-4.7 Flash', family: 'glm', context_window: 131072,
+                cost: { in_per_mtok: 0.0605, cached_per_mtok: null, out_per_mtok: 0.4 },
+                source: 'https://inference.altare.global/v1/models', checked: '2026-11-12',
+                supports: { json: true, tools: true, streaming: true, vision: false },
+                quantization: null, refusal_rate: null,
+            },
+            {
+                model_key: 'gpt-oss-120b', display_name: 'gpt-oss 120B', family: 'gpt-oss', context_window: 128000,
+                cost: { in_per_mtok: 0.35, cached_per_mtok: null, out_per_mtok: 0.75 },
+                source: 'https://inference.altare.global/v1/models', checked: '2026-11-12',
+                supports: { json: true, tools: true, streaming: true, vision: false },
+                quantization: null, refusal_rate: null,
+            },
+            {
+                model_key: 'gpt-oss-20b', display_name: 'gpt-oss 20B', family: 'gpt-oss', context_window: 128000,
+                cost: { in_per_mtok: 0.2, cached_per_mtok: null, out_per_mtok: 0.3 },
+                source: 'https://inference.altare.global/v1/models', checked: '2026-11-12',
+                supports: { json: true, tools: true, streaming: true, vision: false },
+                quantization: null, refusal_rate: null,
+            },
+        ],
+    },
 
 ];
 

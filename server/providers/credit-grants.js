@@ -26,6 +26,24 @@ function allocateDetailed(grants, spentUsd, now = Date.now()) {
     }
     return { ...out, grantBalances };
 }
+/**
+ * The billing cycle that holds `now` for a plan that renews on `day` of the month (UTC). A plan that renews on the 31st
+ * renews on the last day of a shorter month. → { start, end } in milliseconds.
+ */
+function cycleOf(day, now) {
+    const at = (y, m) => { const last = new Date(Date.UTC(y, m + 1, 0)).getUTCDate(); return Date.UTC(y, m, Math.min(day, last)); };
+    const d = new Date(now);
+    let y = d.getUTCFullYear(), m = d.getUTCMonth();
+    let start = at(y, m);
+    if (start > now) { m -= 1; if (m < 0) { m = 11; y -= 1; } start = at(y, m); }
+    let ny = y, nm = m + 1;
+    if (nm > 11) { nm = 0; ny += 1; }
+    return { start, end: at(ny, nm) };
+}
+const planGrantKey = (planId, cycleStart) => `plan:${planId}:${new Date(cycleStart).toISOString().slice(0, 10)}`;
+const isPlanGrant = (g) => /^plan:\d+:/.test(String(g && g.applies_to || ''));
+const round2 = (n) => Math.round(n * 100) / 100;
+
 function allocate(grants, spentUsd, now = Date.now()) { const { promotional, purchased } = allocateDetailed(grants, spentUsd, now); return { promotional, purchased }; }
 
 function createCreditGrants({ db, env = process.env, fetchImpl = globalThis.fetch, clock = { now: () => Date.now() } }) {
@@ -38,6 +56,69 @@ function createCreditGrants({ db, env = process.env, fetchImpl = globalThis.fetc
         const result = await db.prepare('INSERT INTO provider_credit_grants (provider_key, kind, amount_usd, as_of, expires_at, applies_to, created_at, received_at, remaining_as_of_usd, remaining_as_of) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id').get(provider_key, kind, Number(amount_usd), as_of, expires_at, applies_to, new Date(clock.now()).toISOString(), received_at, Number(remaining_as_of_usd), remaining_as_of);
         return result;
     }
+    // ── Monthly credits from a plan (2026-11-12): one promotional grant per billing cycle, expiring when it ends ──
+    const listPlans = async (provider = null) => (provider
+        ? db.prepare('SELECT * FROM provider_credit_plans WHERE provider_key = ? ORDER BY id').all(provider)
+        : db.prepare('SELECT * FROM provider_credit_plans ORDER BY provider_key, id').all());
+    async function addPlan(plan) {
+        const p = plan || {};
+        const provider = String(p.provider_key || '').trim();
+        const monthly = Number(p.monthly_usd);
+        const day = Number(p.renews_day);
+        if (!/^[a-z0-9][a-z0-9._-]{0,63}$/.test(provider)) throw new TypeError('a plan names a provider key');
+        if (!String(p.label || '').trim()) throw new TypeError('a plan has a label (what grants it, e.g. "ChatGPT Pro API credits")');
+        if (!Number.isFinite(monthly) || monthly < 0 || monthly > 1000000) throw new TypeError('monthly_usd is a nonnegative amount');
+        if (!Number.isInteger(day) || day < 1 || day > 31) throw new TypeError('renews_day is a day of the month, 1-31');
+        if (!p.starts_on || Number.isNaN(Date.parse(p.starts_on))) throw new TypeError('starts_on is a date');
+        if (p.ends_on && Number.isNaN(Date.parse(p.ends_on))) throw new TypeError('ends_on is a date');
+        const at = new Date(clock.now()).toISOString();
+        const row = await db.prepare(`INSERT INTO provider_credit_plans (provider_key, label, monthly_usd, renews_day, starts_on, ends_on, prorate_first, active, notes, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?) RETURNING id`).get(provider, String(p.label).trim().slice(0, 120), monthly, day,
+            new Date(p.starts_on).toISOString(), p.ends_on ? new Date(p.ends_on).toISOString() : null, p.prorate_first === false ? 0 : 1,
+            p.notes ? String(p.notes).slice(0, 500) : null, at, at);
+        await materialize();
+        return row;
+    }
+    async function setPlanActive(id, active) {
+        const n = (await db.prepare('UPDATE provider_credit_plans SET active = ?, updated_at = ? WHERE id = ?').run(active ? 1 : 0, new Date(clock.now()).toISOString(), Number(id))).changes;
+        if (!active) {
+            // A plan turned off stops granting from now: this cycle's unexpired grant ends today.
+            await db.prepare(`UPDATE provider_credit_grants SET expires_at = ? WHERE applies_to LIKE ? AND (expires_at IS NULL OR expires_at > ?)`)
+                .run(new Date(clock.now()).toISOString(), `plan:${Number(id)}:%`, new Date(clock.now()).toISOString());
+        } else await materialize();
+        return n;
+    }
+    /** Each active plan's grant for the cycle that holds now, once (the first cycle prorated when it starts mid-cycle). */
+    async function materialize(now = clock.now()) {
+        const made = [];
+        for (const p of await listPlans()) {
+            if (!Number(p.active)) continue;
+            const startsAt = Date.parse(p.starts_on);
+            if (!Number.isFinite(startsAt) || startsAt > now) continue;
+            if (p.ends_on && Date.parse(p.ends_on) <= now) continue;
+            const cycle = cycleOf(Number(p.renews_day), now);
+            const applies = planGrantKey(p.id, cycle.start);
+            const have = await db.prepare('SELECT id FROM provider_credit_grants WHERE provider_key = ? AND applies_to = ?').get(p.provider_key, applies);
+            if (have) continue;
+            const begin = Math.max(cycle.start, startsAt);
+            const end = p.ends_on ? Math.min(cycle.end, Date.parse(p.ends_on)) : cycle.end;
+            const full = Number(p.monthly_usd);
+            const amount = Number(p.prorate_first) && begin > cycle.start ? round2(full * (end - begin) / (cycle.end - cycle.start)) : full;
+            made.push(await add({ provider_key: p.provider_key, kind: 'promotional', amount_usd: amount, as_of: new Date(begin).toISOString(),
+                expires_at: new Date(end).toISOString(), applies_to: applies }));
+        }
+        return made;
+    }
+    /** The spend OpenVibe metered for one provider from `sinceMs` on (a plan grant's own cycle). */
+    async function meteredSince(provider, sinceMs) {
+        const r = await db.prepare("SELECT COALESCE(SUM(cost_usd), 0) AS spent FROM requests WHERE provider_key = ? AND status = 'ok' AND created_at >= ?").get(provider, new Date(sinceMs).toISOString());
+        return Number(r && r.spent) || 0;
+    }
+    async function providersWithCredit() {
+        const rows = await db.prepare('SELECT DISTINCT provider_key FROM provider_credit_grants UNION SELECT DISTINCT provider_key FROM provider_credit_plans').all();
+        return [...new Set(['anthropic', 'openai', ...rows.map((r) => r && r.provider_key).filter((k) => typeof k === 'string' && k)])];
+    }
+
     async function preference(provider = 'anthropic') {
         const row = await db.prepare('SELECT use_promotional_first, promotional_floor_usd FROM provider_credit_preferences WHERE provider_key = ?').get(provider);
         return row ? { enabled: Boolean(row.use_promotional_first), floor_usd: Number(row.promotional_floor_usd) } : { enabled: true, floor_usd: 5 };
@@ -103,12 +184,27 @@ function createCreditGrants({ db, env = process.env, fetchImpl = globalThis.fetc
     async function poll() {
         if (running) return running;
         running = (async () => {
-            for (const provider of ['anthropic', 'openai']) {
+            await materialize().catch(() => null);
+            const now = clock.now();
+            for (const provider of await providersWithCredit()) {
                 const grants = await list(provider);
                 if (!grants.length) continue;
-                const spentResult = await spend(provider, grants);
-                const balances = allocateDetailed(grants, spentResult.usd, clock.now());
-                latest.set(provider, { ...balances, grants, preference: await preference(provider), spent_usd: spentResult.usd, source: spentResult.source, at: clock.now() });
+                // A plan's grant only ever pays for its own cycle: its spend is what was metered since it began, so
+                // last month's use never eats this month's credit (and an expired one is simply gone).
+                const planGrants = grants.filter((g) => isPlanGrant(g) && (!g.expires_at || Date.parse(g.expires_at) > now));
+                const plans = [];
+                let absorbed = 0;
+                for (const g of planGrants) {
+                    const used = await meteredSince(provider, Date.parse(g.as_of));
+                    const amount = Math.max(0, Number(g.amount_usd) || 0);
+                    absorbed += Math.min(amount, used);
+                    plans.push({ id: g.id, applies_to: g.applies_to, amount_usd: amount, used_usd: Math.min(amount, used), remaining_usd: Math.max(0, amount - used), expires_at: g.expires_at });
+                }
+                const others = grants.filter((g) => !isPlanGrant(g));
+                const spentResult = others.length ? await spend(provider, others) : { usd: 0, source: "OpenVibe's own metering" };
+                const balances = allocateDetailed(others, Math.max(0, spentResult.usd - absorbed), now);
+                const planLeft = plans.reduce((a, p) => a + p.remaining_usd, 0);
+                latest.set(provider, { ...balances, promotional: balances.promotional + planLeft, plans, grants, preference: await preference(provider), spent_usd: spentResult.usd + absorbed, source: spentResult.source, at: now });
             }
             return values();
         })().finally(() => { running = null; });
@@ -116,7 +212,7 @@ function createCreditGrants({ db, env = process.env, fetchImpl = globalThis.fetc
     }
     function values() { return [...latest.entries()].map(([provider, value]) => ({ provider, ...value })); }
     const lastAdminAtByProvider = new Map();
-    return { add, list, poll, values, preference, setPreference, shouldPrefer };
+    return { add, list, poll, values, preference, setPreference, shouldPrefer, listPlans, addPlan, setPlanActive, materialize };
 }
 
-module.exports = { createCreditGrants, centsToUsd, allocate, allocateDetailed };
+module.exports = { createCreditGrants, centsToUsd, allocate, allocateDetailed, cycleOf, planGrantKey };

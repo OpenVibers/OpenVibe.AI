@@ -25,13 +25,13 @@ t.test('the page state: eight steps, owner only, key pages and spend', async () 
     h = await boot({ env: keys });
     let r = await request(h.base, 'GET', '/api/v1/setup', { tok: owner });
     assert.strictEqual(r.status, 200, r.text);
-    assert.strictEqual(r.body.steps.length, 8, 'one step per job');
-    assert.strictEqual(r.body.summary.total, 8);
+    assert.strictEqual(r.body.steps.length, 9, 'one step per job (Decisions since 11-12)');
+    assert.strictEqual(r.body.summary.total, 9);
     assert.strictEqual(r.body.steps.find((s) => s.id === 'chat').state, 'not_set', 'no chat key yet');
     assert.strictEqual(r.body.steps.find((s) => s.id === 'stt').state, 'ready', 'whisper.cpp on this host needs no key');
     assert.ok(r.body.steps.every((s) => s.key_page || s.id === 'stt' || s.id === 'embedding' || s.id === 'search'), 'a key page for every paid step');
     assert.ok(r.body.steps.find((s) => s.id === 'chat').recommended.price.text.includes('per 1M tokens'), 'price in plain numbers');
-    assert.strictEqual(r.body.defaults.length, 8, 'one defaults row per kind');
+    assert.strictEqual(r.body.defaults.length, 9, 'one defaults row per kind');
     r = await request(h.base, 'GET', '/api/v1/setup', { tok: reader });
     assert.strictEqual(r.status, 200, 'a usage reader may read the page');
     const denied = await request(h.base, 'PUT', '/api/v1/setup/caps/chat', { tok: reader, body: { cap_usd: 1 } });
@@ -106,7 +106,9 @@ t.test('a cap refuses the next run of that kind before it spends', async () => {
 t.test('the recommended set fills every route, including the image route it creates', async () => {
     const r = await request(h.base, 'POST', '/api/v1/setup/recommended', { tok: owner });
     assert.strictEqual(r.status, 200, r.text);
-    assert.strictEqual(r.body.applied.filter((x) => x.ok).length, 7, 'seven routed steps: '+JSON.stringify(r.body.applied));
+    assert.strictEqual(r.body.applied.filter((x) => x.ok).length, 8, 'eight routed steps: '+JSON.stringify(r.body.applied));
+    const decideRoute = await h.registry.getRoute('decide.fallback');
+    assert.strictEqual(decideRoute.constraints.model, 'deepseek-flash', 'the Decisions fallback route gets a chat model, never gemini-decision-1');
     const image = await h.registry.getRoute('default.image');
     assert.ok(image, 'the image route exists after the set');
     assert.strictEqual(image.constraints.model, 'gpt-image-1');

@@ -1076,6 +1076,21 @@ route('post', '/ui/layout/suggest', {
     responses: { 200: json('ui.layout-suggestion@1', uiLayoutSuggestion), ...errors([400, 401, 403, 422, 429, 503]) },
 });
 
+// ── Decisions (2026-11-12): closed-set questions about one input, Google's Decisions API first ─────────────────
+route('post', '/decisions', {
+    operationId: 'decide', summary: 'Answer yes/no, choice and rubric questions about one input in one call', tags: ['decisions'], security: SERVICE,
+    description: 'ai.run.create (or a person\'s own token). Up to 1,000 named questions (noul: the probability of yes; choice: one of 2-255 options; score: a rubric level from 0) about one input (text, or content parts: text, image, audio, video, document by https uri). Google\'s Decisions API (gemini-decision-1) answers when the gemini provider has a key: calibrated, $0.10 per 1M input tokens. Without it the router\'s cheap structured route answers text (up to 100 questions) with estimated probabilities (calibrated: false). prefer: "cheap" asks for the router first.',
+    requestBody: body({
+        type: 'object', required: ['input', 'questions'],
+        properties: {
+            input: { oneOf: [str({ minLength: 1, maxLength: 200000 }), { type: 'array', minItems: 1, maxItems: 50, items: { type: 'object' } }] },
+            questions: { type: 'object', minProperties: 1, maxProperties: 1000, additionalProperties: { type: 'object', required: ['type', 'instructions'], properties: { type: str({ enum: ['noul', 'choice', 'score'] }), instructions: str({ minLength: 1, maxLength: 4000 }), criteria: {} } } },
+            prefer: str({ enum: ['calibrated', 'cheap'] }),
+        },
+    }),
+    responses: { 200: json('The answers', { type: 'object', required: ['answers', 'calibrated', 'receipt'], properties: { answers: { type: 'object' }, calibrated: { type: 'boolean' }, receipt: { type: 'object' } } }), ...errors([400, 401, 403, 422, 503]) },
+});
+
 // ── Routing presets and receipts (the Exchange, 2026-11-06) ───────────────────────────────────
 route('get', '/presets', {
     operationId: 'listPresets', summary: 'The routing presets this caller may name', tags: ['presets'], security: SERVICE_OR_APP,

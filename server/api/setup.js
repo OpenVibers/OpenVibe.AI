@@ -124,7 +124,10 @@ function scrub(text, secret) {
     return s.length > 400 ? `${s.slice(0, 399)}…` : s;
 }
 
-function setupRouter({ config = {}, db, registry, pool = null, runs = null, auth, settings = null, search = null, env = process.env, clock = { now: () => Date.now() }, log = console }) {
+/** Google's Decisions API model: answered directly by POST /api/v1/decisions, never a route's chat model. */
+const isDecisionModel = (m) => String(m || '') === 'gemini-decision-1';
+
+function setupRouter({ config = {}, db, registry, pool = null, runs = null, auth, settings = null, search = null, env = process.env, clock = { now: () => Date.now() }, log = console, fetchImpl = globalThis.fetch }) {
     const r = express.Router();
     const read = auth.requireCap(CAPS.providerManage, CAPS.usageRead);
     const write = auth.requireCap(CAPS.providerManage);
@@ -245,7 +248,9 @@ function setupRouter({ config = {}, db, registry, pool = null, runs = null, auth
         }
 
         let state = 'not_set';
-        if (step.id === 'search') state = searchState.ready ? 'ready' : failing ? 'failing' : 'not_set';
+        // Decisions are ready with a Gemini key (the Decisions API) or with a working fallback offer on decide.fallback.
+        if (step.id === 'decide' && configured(providers.get('gemini'))) state = 'ready';
+        else if (step.id === 'search') state = searchState.ready ? 'ready' : failing ? 'failing' : 'not_set';
         else if (failing) state = 'failing';
         else if (route && !route.disabled && readyOffer) state = 'ready';
         else if (route && !route.disabled && routedOffers.length) state = 'not_set';
@@ -338,6 +343,21 @@ function setupRouter({ config = {}, db, registry, pool = null, runs = null, auth
             };
         }
 
+        // Gemini Decision 1 is Google's Decisions API, not a chat model: one tiny yes/no question to it directly.
+        if (step.id === 'decide' && providerKey === 'gemini') {
+            if (!secret) throw new AiError(409, 'setup.no_key', 'save the Gemini key first');
+            const started = clock.now();
+            const res = await fetchImpl('https://generativelanguage.googleapis.com/v1beta/decisions', {
+                method: 'POST', redirect: 'error', signal: AbortSignal.timeout(20000),
+                headers: { 'x-goog-api-key': secret, 'content-type': 'application/json', accept: 'application/json' },
+                body: JSON.stringify({ model: 'gemini-decision-1', input: 'The OpenVibe AI setup sends this sentence to check that decisions work.', questions: { is_check: { type: 'noul', instructions: 'Is this a setup check?' } } }),
+            }).catch((err) => { throw new AiError(502, 'setup.test_failed', scrub(String(err && err.message || err), secret)); });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || !data.answers) throw new AiError(502, 'setup.test_failed', scrub(`Google answered ${res.status}: ${(data.error && data.error.message) || 'no answers'}`, secret));
+            const tokens = Number(data.usage && data.usage.total_input_tokens) || 0;
+            return { ok: true, step: step.id, route: null, provider: 'gemini', model: 'gemini-decision-1',
+                answer: { text: `P(yes) = ${data.answers.is_check && data.answers.is_check.noul}` }, cost_usd: money(tokens / 1e6 * 0.1), latency_ms: clock.now() - started };
+        }
         const route = await routeFor(step);
         if (!route) throw new AiError(503, 'route.unavailable', `there is no route for ${step.name} yet`);
         if (!pool) throw new AiError(503, 'route.unavailable', 'routing is not available on this service');
@@ -406,7 +426,8 @@ function setupRouter({ config = {}, db, registry, pool = null, runs = null, auth
             if (provider.auth_mode !== 'none' && !providerSecret(provider, env)) throw new AiError(409, 'setup.key_missing', `paste the ${provider.display_name || provider.key} key first`);
         }
         const modelKey = step.id === 'search' ? null : String(b.model || step.recommended.model);
-        if (step.id !== 'search') await ensureModel(step, providerKey, modelKey);
+        // The Decisions API is tested directly; it never becomes a chat model row the router could pick.
+        if (step.id !== 'search' && !isDecisionModel(modelKey)) await ensureModel(step, providerKey, modelKey);
         return await runTest(step, { providerKey, modelKey, req });
     }));
 
@@ -427,6 +448,7 @@ function setupRouter({ config = {}, db, registry, pool = null, runs = null, auth
         const b = body(req);
         const providerKey = b.provider == null ? null : String(b.provider);
         const modelKey = b.model == null ? null : String(b.model);
+        if (isDecisionModel(modelKey)) throw new AiError(422, 'setup.not_a_route_model', 'Gemini Decision 1 is the Decisions API: it needs only the Gemini key, and the route keeps a chat model for text without it');
         let route = await routeFor(step);
         if (!route) throw new AiError(503, 'route.unavailable', `there is no route for ${step.name} yet`);
         if (providerKey) {
@@ -462,7 +484,7 @@ function setupRouter({ config = {}, db, registry, pool = null, runs = null, auth
         const applied = [];
         for (const step of STEPS) {
             if (!step.route) continue;
-            const offer = step.recommended;
+            const offer = step.routeOffer || step.recommended;
             try {
                 await ensureModel(step, offer.provider, offer.model);
                 const route = await routeFor(step);

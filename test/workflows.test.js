@@ -103,6 +103,7 @@ EXAMPLES['space.app.ask'] = { space: 'Pirate helper', instructions: 'Talk like a
 EXAMPLES['live.home.star'] = { recent_stars: ['bob'], previous_star: 'bob', candidates: [{ username: 'ann', name: 'Ann', language: 'en', last_14d: { sessions: 5, hours: 12 } }] };
 // People's own controls (2026-11-11): the fake surface is deliberately small; the stub's answer is
 // refused by the layout validator, which is still a schema-valid suggestion and exercises that path.
+EXAMPLES['decide.fallback'] = { input: 'Could the menu remember my last tab?', questions: { is_question: { type: 'noul', instructions: 'Is it a question?' }, kind: { type: 'choice', instructions: 'What is it?', criteria: { bug: 'Something is broken.', idea: 'A wish.' } } } };
 EXAMPLES['ui.layout.suggest'] = {
     catalog: {
         id: 'bot.controls', version: 1, name: 'Robot controls', devices: ['phone'],
