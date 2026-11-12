@@ -262,6 +262,9 @@ function createApp({ choices = null, searchFetch = null, config, db, registry, p
     // Operator actions shared by the admin API and the operator console (one implementation, one audit row).
     const ops = createOps({ db, registry, pool, quotas, cache, runs });
     app.use(runsRouter({ choices, runs, registry, auth, config, log }));
+    // The one front door for AI calls made outside AI (ai.call-report@1, ai.usage.report): AI prices, dedupes
+    // and publishes each as ai.call.recorded@1, so every product's calls land in the same meter.
+    app.use(require('./api/usage-calls').usageCallsRouter({ db, pool, config, auth, clock, log }));
     // Deep dives (workflow design.deep_dive): the Exchange feature's API and the Design integration's.
     app.use(require('./api/deep-dives').deepDivesRouter({ config, runs, auth, deepDive, store: deepDive && deepDive.store, capture: deepDive && deepDive.capture, mediaStore, log }));
     app.use(require('./api/orientation').createOrientation({ choices, runs, registry, auth, db, config, log }));

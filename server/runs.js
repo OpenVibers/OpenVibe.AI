@@ -540,7 +540,7 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
                     await events.runChanged(await getRow(id));
                 });
                 // A cache hit is still a run: its record says so (no tokens, no money).
-                await publishUsage({ row: await getRow(id), outcome: 'cached' });
+                await publishUsage({ row: await getRow(id), outcome: 'cached', streamed: false, workflow: wf });
                 // A reused answer carries a receipt too: the offer that produced it, and the fact that no
                 // provider was called for this one.
                 const cachedRow = await getRow(id);
@@ -769,6 +769,38 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
     }
 
     /**
+     * Where the model ran, for the meter's `place` (ai.call.recorded@1 1.1.0): a person's own machine, a
+     * signed-in plan, a community machine or endpoint, OpenVibe's own host (the local model), else a provider.
+     */
+    async function placeOf({ payer = null, provider = null, explain = null } = {}) {
+        if (payer && payer.paid_by === 'own_machine') return 'machine';
+        if (payer && payer.paid_by === 'plan') return 'plan';
+        if (/^community[:-]/.test(String(provider || '')) || (explain && explain.community)) return 'community';
+        if (provider) {
+            const p = await registry.getProvider(provider).catch(() => null);
+            if (p && p.metadata && p.metadata.local) return 'host';
+            return 'provider';
+        }
+        return null;
+    }
+
+    /** The attempts that failed before the one that answered (or, when none answered, all the failed ones). */
+    function fallbacksOf(requests) {
+        const answered = requests.findIndex(r => r.status === 'ok');
+        const before = answered >= 0 ? requests.slice(0, answered) : requests;
+        return before.filter(r => r.status === 'error' || r.status === 'timeout').length;
+    }
+
+    /** The parent run when an advice call asked for this one (run_advisor_uses), else the run itself. */
+    async function taskIdOf(row) {
+        try {
+            const parent = await db.prepare('SELECT run_id FROM run_advisor_uses WHERE advice_run_id = ? ORDER BY created_at DESC LIMIT 1').get(row.id);
+            if (parent && parent.run_id) return parent.run_id;
+        } catch { /* an older database without advisor uses: the run is its own task */ }
+        return row.id;
+    }
+
+    /**
      * The record of a run (plan L40): the tokens (the cache read and the cache write counted apart), the money and
      * who paid. It is published as one ai.call.recorded@1 event; OpenVibe.Report keeps the ledger. The record never
      * carries the prompt or the answer.
@@ -776,9 +808,10 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
      * It answers the money it computed, so the receipt of the same run (server/exchange/receipts.js) carries the
      * same numbers and never a second, different price.
      */
-    async function publishUsage({ row, outcome, usage = {}, provider = null, model = null, attempts = 0, latencyMs = null, ttftMs = null }) {
+    async function publishUsage({ row, outcome, usage = {}, provider = null, model = null, attempts = 0, latencyMs = null, ttftMs = null, streamed = false, firstDeltaAt = null, workflow = null }) {
         try {
             const opts = parseJson(row.options, {});
+            const explain = parseJson(row.explain, {}) || {};
             const payer = await payerOf({ row, providerKey: provider, opts });
             const tokens = {
                 input: Math.max(0, (usage.input || 0) - (usage.cached || 0) - (usage.cache_write || 0)),
@@ -788,9 +821,19 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
             const cards = provider ? await pool.rateCardsFor(provider, model) : null;
             const prices = usageRecord.pricesOf(cards);
             const money = usageRecord.moneyOf({ prices, tokens, paidBy: payer.paid_by, feeRate: (config.usage && config.usage.feeRate) || 0 });
+            // The attempt log is where the operation, the failed attempts and the error class come from. A run
+            // served from the cache has no attempts; its workflow still names the operation.
+            const requests = await db.prepare('SELECT operation, status, error_class, error FROM requests WHERE run_id = ? ORDER BY seq').all(row.id).catch(() => []);
+            const answered = requests.find(r => r.status === 'ok');
+            const lastAttempt = [...requests].reverse().find(r => r.status !== 'skipped');
+            const operation = usageRecord.operationOf({ workflowKey: row.workflow_key, workflow, operation: (answered || lastAttempt || {}).operation || null });
+            const failed = outcome === 'failed' ? [...requests].reverse().find(r => r.status === 'error' || r.status === 'timeout') : null;
+            const errorClass = failed ? usageRecord.errorClassOf({ failureClass: failed.error_class, code: row.error_code, message: failed.error }) : null;
+            const finishedAt = row.finished_at || new Date(clock.now()).toISOString();
+            const taskId = await taskIdOf(row);
             const rec = usageRecord.recordOf({
                 system: 'ai', run_id: row.id, subject: subjectOf(row), attribution: attributionOf(row), surface: row.workflow_key || '',
-                provider: payer.provider || provider || null, model: model || null, effort: parseJson(row.explain, {})?.effort_applied || opts.effort || null,
+                provider: payer.provider || provider || null, model: model || null, effort: explain.effort_applied || opts.effort || null,
                 paid_by: payer.paid_by, paid_by_detail: payer.detail,
                 input: tokens.input, output: tokens.output, reasoning: tokens.reasoning, cache_read: tokens.cache_read,
                 cache_write: tokens.cache_write, cache_write_ttl: usage.cache_write_ttl || null,
@@ -798,7 +841,18 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
                 list_cost_usd: money.list_cost_usd, charged_usd: money.charged_usd, fee_usd: money.fee_usd, cache_saved_usd: money.cache_saved_usd,
                 price_source: prices.source, price_date: prices.date,
                 latency_ms: latencyMs, ttft_ms: ttftMs, attempts, outcome,
-                at: row.finished_at || new Date(clock.now()).toISOString(),
+                // ai.call.recorded@1 1.1.0 (ai-metrics.md): what ran, how fast, for which task, where, and what failed.
+                operation, streamed: outcome === 'cached' ? false : Boolean(streamed),
+                tps: usageRecord.tpsOf({ output: tokens.output, streamed, firstDeltaAt, finishedAt }),
+                queue_ms: outcome === 'cached' ? null : require('./exchange/timing').durationMs(row.created_at, row.started_at),
+                task: opts.task_choice && opts.task_choice.task ? opts.task_choice.task.name : (row.workflow_key || null),
+                task_id: taskId,
+                harness: 'openvibe',
+                place: await placeOf({ payer, provider: payer.provider || provider, explain }),
+                error_class: errorClass,
+                fallbacks: fallbacksOf(requests),
+                cache_hit: outcome === 'cached',
+                at: finishedAt,
             });
             // The event (ai.call.recorded) is queued in its own transaction, like every other event here.
             await db.tx(async () => { await events.callRecorded(rec); });
@@ -986,6 +1040,7 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
         let credit = null;
         let billingDelta = null;
         let firstDeltaAt = null;
+        let streamed = false;
         let onRoute = null;
         try {
             // AI Exchange F: hold prepaid Balance before the first managed provider call (AI_CREDITS, off by
@@ -1001,6 +1056,7 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
             }
             billingDelta = typeof ctx.onDelta === 'function'
                 ? (d) => {
+                    streamed = true;
                     const delta = d && d.delta;
                     if (firstDeltaAt === null && (delta?.content || delta?.reasoning_content || delta?.thinking
                         || delta?.tool_calls?.some((c) => c.function?.arguments))) firstDeltaAt = clock.now();
@@ -1127,7 +1183,7 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
             const finishedRun = await getRow(id);
             const timing = { latencyMs: require('./exchange/timing').durationMs(finishedRun.started_at, finishedRun.finished_at),
                 ttftMs: firstDeltaAt === null ? null : Math.max(0, firstDeltaAt - startedAt) };
-            const published = await publishUsage({ row: finishedRun, outcome: 'succeeded', usage: r.usage, provider: r.provider, model: r.model, attempts, ...timing });
+            const published = await publishUsage({ row: finishedRun, outcome: 'succeeded', usage: r.usage, provider: r.provider, model: r.model, attempts, streamed, firstDeltaAt, workflow: wf, ...timing });
             // The receipt of the answer (server/exchange/receipts.js): the offer, the price, the tokens, the cache,
             // the latency, why the router chose it, the fallbacks it would have used, the payer and the privacy label.
             await writeReceipt({
@@ -1193,7 +1249,8 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
             // A run that broke still spent: its record says what it cost and who paid (L40).
             await publishUsage({ row: await getRow(id), outcome: cancelled ? 'cancelled' : 'failed',
                 usage: { input: Number(spent.ti) || 0, output: Number(spent.tout) || 0, cached: Number(spent.tc) || 0 },
-                provider: logged.length ? logged[logged.length - 1].provider_key : null, model: null, attempts });
+                provider: logged.length ? logged[logged.length - 1].provider_key : null, model: null, attempts,
+                streamed, firstDeltaAt, workflow: wf });
             // Account the spent tokens/cost as before, but always roll up the finished attempts (the failed
             // ones included) into provider_stats_daily/placement_state: a run that answered nothing still
             // tells the router a provider was unhealthy.

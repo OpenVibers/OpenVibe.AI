@@ -31,6 +31,9 @@ const CAPS = Object.freeze({
     workflowManage: 'ai.workflow.manage',
     providerManage: 'ai.provider.manage',
     usageRead: 'ai.usage.read',
+    // A product reports the AI calls it made without AI (Contracts 0.421.0, ai.call-report@1): AI prices,
+    // dedupes and publishes each as ai.call.recorded@1, so one meter covers every AI call on the network.
+    usageReport: 'ai.usage.report',
     credentialManage: 'ai.credential.manage',
     quotaAttributionManage: 'ai.quota.attribution.manage',
     appRun: 'ai.app.run',

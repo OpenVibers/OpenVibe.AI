@@ -65,14 +65,16 @@ owns publication truth: Wiki, Blog, News, Live, … decide what to publish.
 - OpenVibe.Media (recordings `media.analyze` reads, over allow-listed https URLs or signed URLs)
 - provider APIs configured by the operator (OpenAI-compatible, OpenAI Responses, Anthropic, the HTTP seam), whisper.cpp
   and the local model server `openvibe-llm.service` on this host
-- `openvibe-contracts` v0.252.0, `openvibe-sdk` v0.82.0 (service tokens, events outbox, redact),
+- `openvibe-contracts` v0.421.0, `openvibe-sdk` v0.82.0 (service tokens, events outbox, redact),
   `openvibe-shared` v4.109.2, pinned by release tarball
 
 ## Capabilities
 
 Implemented here (the service manifest's `capabilities`, audience `openvibe.ai`; routes under
 [API](#api)): `ai.run.create`, `ai.run.read`, `ai.workflow.manage`, `ai.provider.manage`,
-`ai.usage.read`, `ai.credential.manage` (`/api/v1/credentials/:subject[/:provider]`),
+`ai.usage.read`, `ai.usage.report` (`POST /api/v1/usage/calls`: another product reports the AI calls it made
+without AI, `ai.call-report@1`, and AI prices, dedupes and publishes each as `ai.call.recorded@1`),
+`ai.credential.manage` (`/api/v1/credentials/:subject[/:provider]`),
 `ai.quota.attribution.manage` (per-streamer quotas), `ai.memory.read` and `ai.memory.write` (Memory M2a,
 `/api/v1/memory/*`), `ai.me.read` and `ai.me.manage` ("Your AI", `/api/v1/me/*`: a person's own keys and
 routing preferences; only the person's own token or AI-site session) and `ai.app.run` (developer apps, ADR-014; public,
@@ -145,6 +147,7 @@ idempotent replay):
 | `POST /api/v1/{templates,workflows,routes}/:key/versions`, `…/versions/:v/status` | `ai.workflow.manage` |
 | `POST/PATCH /api/v1/providers…`, `…/disable\|enable\|reset`, `POST/PATCH /api/v1/models…`, `POST /api/v1/quotas`, `DELETE /api/v1/cache` | `ai.provider.manage` |
 | `GET /api/v1/status\|usage\|quotas\|requests\|audit\|cache\|providers\|models` | `ai.usage.read` |
+| `POST /api/v1/usage/calls` — up to 100 calls a product made outside AI (`ai.call-report@1`, 202 `{ accepted, duplicates, rejected }`) | `ai.usage.report` |
 | `GET /api/v1/usage/series?days=N` (N 1–90) — aggregate demand per UTC day and model: requests, successes and the four token totals, never a caller id or text (`AI_USAGE_SERIES=on`) | `ai.usage.read` |
 | `GET /api/health`, `GET /api/ready`, `GET /release.json` | public |
 | `GET /metrics` | direct loopback callers only (a request carrying X-Forwarded-For gets 404) |
@@ -1102,7 +1105,7 @@ ai.openvibe.network notice from OpenVibe.Sites.
 Part of the [OpenVibe network](https://openvibe.network). Built in the open by [OpenVibers](https://github.com/OpenVibers).
 
 <!-- versions:start -->
-- openvibe-contracts: v0.416.0
+- openvibe-contracts: v0.421.0
 - openvibe-sdk: v0.152.0
 - openvibe-shared: v4.229.0
 <!-- versions:end -->

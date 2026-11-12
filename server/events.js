@@ -125,6 +125,14 @@ function callPayload(rec) {
         price_source: rec.price_source, price_date: rec.price_date || null,
         latency_ms: rec.latency_ms, ttft_ms: rec.ttft_ms, attempts: rec.attempts, outcome: rec.outcome,
         run_id: rec.run_id || null, turn_id: rec.turn_id || null, at: rec.at,
+        // ai.call.recorded@1 1.1.0 (ai-metrics.md): what, how fast, for which task, where and what went wrong.
+        operation: rec.operation || null, streamed: rec.streamed == null ? null : Boolean(rec.streamed),
+        tps: rec.tps == null ? null : Number(rec.tps), queue_ms: rec.queue_ms == null ? null : Number(rec.queue_ms),
+        task: rec.task || null, task_id: rec.task_id || null, task_ms: rec.task_ms == null ? null : Number(rec.task_ms),
+        harness: rec.harness || null, place: rec.place || null, error_class: rec.error_class || null,
+        fallbacks: rec.fallbacks == null ? null : Number(rec.fallbacks),
+        cache_hit: rec.cache_hit == null ? null : Boolean(rec.cache_hit),
+        tool_calls: rec.tool_calls == null ? null : Number(rec.tool_calls), region: rec.region || null,
     };
 }
 
