@@ -69,6 +69,7 @@ const EXAMPLES = {
     'pics.describe_image': { image: { data_url: PNG }, title: 'The coast' },
     'pics.orientation': { image: { data_url: PNG } },
     'chat.member.turn': { messages: [{ role: 'system', content: 'You are Pantry.' }, { role: 'user', content: 'kim: @Pantry roll a die' }], tools: [{ type: 'function', function: { name: 'roll_dice', parameters: { type: 'object', properties: { sides: { type: 'integer' } } } } }] },
+    'chat.persona.image': { prompt: 'A small square avatar for a chat called Keyboard Scout about mechanical keyboards: one bold keyboard, flat vector, no text.', size: '256x256', n: 1 },
     'tools.describe': { tool: 'img.convert', sources: [{ source_type: 'tools.tool', title: 'img.convert descriptor', content: '{"id":"img.convert","inputs":["file","format"]}' }] },
 };
 for (const k of new Set(Object.values(KIND_TO_WORKFLOW).concat('live.complete'))) EXAMPLES[k] = PASS;
@@ -136,7 +137,7 @@ t.test('boot seeds every required workflow key', async () => {
     h = await boot({ env: { OV_MEDIA_INTERNAL_URL: mediaBase, AI_IMAGE_MODEL: 'gpt-image-1' } });
     const keys = (await h.registry.listWorkflows()).map(w => w.key);
     for (const k of ['content.wiki', 'wiki.generate_space', 'wiki.generate_page', 'blog.draft_post', 'blog.write_digest', 'blog.write_satire', 'news.summarize_story', 'news.compare_perspectives', 'reviews.summarize_entity', 'deals.enrich_deal',
-        'coupons.extract_coupon', 'trade.summarize_market_context', 'codes.generate_docs', 'games.generate_lore', 'moderation.classify', 'tools.describe', 'food.suggest_recipes', 'food.read_pantry_photo', 'pics.describe_image', 'rent.screen_listing', 'chat.member.reply', 'chat.member.turn', 'chat.vibe.listen',
+        'coupons.extract_coupon', 'trade.summarize_market_context', 'codes.generate_docs', 'games.generate_lore', 'moderation.classify', 'tools.describe', 'food.suggest_recipes', 'food.read_pantry_photo', 'pics.describe_image', 'rent.screen_listing', 'chat.member.reply', 'chat.member.turn', 'chat.vibe.listen', 'chat.persona.image',
         'live.translate', 'live.stream.describe_frame', 'live.stream.summarize', 'live.viewers.reply', 'live.chat.insight', 'live.hero.slogans', 'live.stream.recap', 'network.site_copy']) {
         assert.ok(keys.includes(k), `missing ${k}`);
     }
