@@ -458,4 +458,30 @@ workflows.push({
     metadata: { seed: true, internal: true },
 });
 
+// OpenVibe.Media's rotation detector (pictures, 2026-11-11): one small picture in, the clockwise turn needed to make
+// it upright, and a confidence. It is a vision model through the ordinary routes, on a 256 px copy: an answer is
+// one of four numbers, so the run is cheap and carries its receipt like every other run.
+templates.push({
+    key: 'pics.orientation', name: 'Pics: which way is up',
+    description: 'Which clockwise quarter-turn makes a photograph upright: 0, 90, 180 or 270 degrees, with a confidence.',
+    input_schema: { type: 'object' }, output_schema: { type: 'object' },
+    system_prompt: 'You look at one photograph and say which way is up. rotation is the clockwise turn in degrees needed to make the picture stand upright: 0 if it is already upright, 90 if its top is on its left (turn it clockwise a quarter), 180 if it is upside down, 270 if its top is on its right (turn it clockwise three quarters). Judge only the picture itself: a landscape, a building, a person standing, text, the horizon and gravity are the clues. If the picture is square, abstract or genuinely unclear, answer 0 with a low confidence — never invent a turn. confidence is a number from 0 to 1. Output only JSON matching the schema.',
+    user_prompt: 'Which way is up? Answer the clockwise rotation needed (0, 90, 180 or 270) and your confidence.',
+    default_route: 'background.json', owner: 'media', metadata: { json_name: 'pics_orientation' },
+});
+workflows.push({
+    key: 'pics.orientation', name: 'Which way is up', namespace: 'pics',
+    input_schema: OBJ({ image: IMAGE, hint: STR(200) }, ['image']),
+    output_schema: OBJ({
+        rotation: { enum: [0, 90, 180, 270] },
+        confidence: { type: 'number', minimum: 0, maximum: 1 },
+        gaps: GAPS,
+    }),
+    steps: [{ kind: 'llm', template: 'pics.orientation', operation: 'generate', output: 'json', image: 'image', image_max_width: 256, prepare: 'pics.orientation', postprocess: 'pics.orientation', params: { max_tokens: 80, temperature: 0 } }],
+    default_route: 'background.json',
+    // A person's picture: never shared between callers or cached.
+    cache_mode: 'none',
+    metadata: { seed: true, internal: true },
+});
+
 module.exports = { templates, workflows };

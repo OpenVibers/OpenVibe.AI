@@ -364,6 +364,9 @@ const PREPARE = {
     'pics.describe_image'(input) {
         return { vars: { title: clean(input.title, 120) || '' } };
     },
+    'pics.orientation'(input) {
+        return { vars: { hint: clean(input.hint, 200) || '' } };
+    },
     'food.read_pantry_photo'(input) {
         const foods = (Array.isArray(input.foods) ? input.foods : []).slice(0, 80);
         return { vars: { kind: input.kind === 'receipt' ? 'grocery receipt' : 'cupboard, fridge or shelf', foods_block: foods.map((f, i) => `${i}: ${clean(f, 120)}`).join('\n') } };
@@ -396,6 +399,21 @@ const PREPARE = {
 };
 
 const POSTPROCESS = {
+    // The orientation answer is one of four numbers and a confidence; a model that says "90 degrees" or "high"
+    // is read, one that answers anything else makes the run fail rather than turn a picture.
+    'pics.orientation'(r) {
+        const j = r.json || parseJsonLoose(r.text);
+        if (!j || typeof j !== 'object' || Array.isArray(j)) return null;
+        const raw = j.rotation != null ? j.rotation : (j.degrees != null ? j.degrees : (j.quarter_turns != null ? Number(j.quarter_turns) * 90 : NaN));
+        const n = Number(String(raw).replace(/[^0-9.+-]/g, ''));
+        if (!Number.isFinite(n)) return null;
+        const quarter = Math.round(n / 90);
+        if (Math.abs(n - quarter * 90) > 5) return null;
+        const rotation = ((quarter % 4) + 4) % 4 * 90;
+        const conf = { high: 0.9, medium: 0.6, low: 0.3 }[String(j.confidence || '').toLowerCase()] ?? Number(j.confidence);
+        if (!Number.isFinite(conf)) return null;
+        return { rotation, confidence: Math.max(0, Math.min(1, conf)), gaps: [] };
+    },
     'live.viewers.plan'(r) {
         const p = r.json || parseJsonLoose(r.text) || { skip: true, lines: [] };
         const str = (v) => (v == null ? null : String(v));

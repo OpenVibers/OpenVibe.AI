@@ -27,6 +27,7 @@ const SEEDS = [
     ['wiki.article.images', 'search', 'Find licensed pictures for a wiki article.', 'research.gather'],
     ['image.picture', 'image', 'Find a licensed picture or make one, stored in Media.', 'image.picture'],
     ['design.icon', 'code', 'Draw an original SVG icon.', 'ai.chat'],
+    ['pics.orientation', 'vision', 'Which way is up in a photograph: 0, 90, 180 or 270 degrees, with a confidence.', 'pics.orientation'],
     ['chat.reply', 'text', 'Answer a chat message.', 'ai.complete'],
     ['image.generate', 'image', 'Make an image from a description.', 'ai.image'],
     ['search.web', 'search', 'Find sources on the web.', 'research.gather'],
@@ -65,7 +66,7 @@ function choice(value) {
 function defaultValue(value) {
     const keys = value && typeof value === 'object' && !Array.isArray(value) ? Object.keys(value) : [];
     if (!value || typeof value !== 'object' || Array.isArray(value)
-        || keys.some((k) => !['signed_out', 'signed_in', 'fallbacks', 'image_model', 'search_engines', 'max_cost_usd', 'daily_cap', 'guest_find', 'effort'].includes(k))
+        || keys.some((k) => !['signed_out', 'signed_in', 'fallbacks', 'image_model', 'search_engines', 'max_cost_usd', 'daily_cap', 'guest_find', 'effort', 'method', 'confidence', 'budget_usd_per_day'].includes(k))
         || (value.fallbacks != null && !Array.isArray(value.fallbacks))) {
         throw new AiError(422, 'defaults.invalid', 'invalid task defaults');
     }
@@ -82,6 +83,12 @@ function defaultValue(value) {
         // null for no cap) and whether a guest with no person may use find.
         daily_cap: value.daily_cap == null ? null : value.daily_cap,
         guest_find: value.guest_find === true,
+        // The picture-orientation detector (pictures/2026-11-11): off until the owner turns it on, the confidence a
+        // turn must reach, and a daily budget in USD beside the picture count. The keys stay absent from every other
+        // task's defaults, so a value round-trips exactly as it was saved.
+        ...(value.method !== undefined ? { method: value.method } : {}),
+        ...(value.confidence !== undefined ? { confidence: value.confidence } : {}),
+        ...(value.budget_usd_per_day !== undefined ? { budget_usd_per_day: value.budget_usd_per_day } : {}),
     };
     const all = [out.signed_out, out.signed_in, ...out.fallbacks, ...(out.image_model ? [out.image_model] : [])];
     if (all.some((c) => c.source !== 'openvibe')) throw new AiError(422, 'defaults.invalid', 'the owner’s defaults use OpenVibe supply');
@@ -97,6 +104,14 @@ function defaultValue(value) {
     }
     if (out.daily_cap !== null && (!Number.isInteger(out.daily_cap) || out.daily_cap < 0 || out.daily_cap > 1000)) {
         throw new AiError(422, 'defaults.invalid', 'daily_cap must be a whole number of pictures from 0 to 1000, or null');
+    }
+    if (out.method !== undefined && !['off', 'vision'].includes(out.method)) throw new AiError(422, 'defaults.invalid', 'method must be off or vision');
+    if (out.confidence !== undefined && (typeof out.confidence !== 'number' || !Number.isFinite(out.confidence) || out.confidence < 0 || out.confidence > 1)) {
+        throw new AiError(422, 'defaults.invalid', 'confidence must be a number from 0 to 1');
+    }
+    if (out.budget_usd_per_day !== undefined && out.budget_usd_per_day !== null
+        && (typeof out.budget_usd_per_day !== 'number' || !Number.isFinite(out.budget_usd_per_day) || out.budget_usd_per_day < 0 || out.budget_usd_per_day > MAX_COST_USD)) {
+        throw new AiError(422, 'defaults.invalid', `budget_usd_per_day must be 0–${MAX_COST_USD} or null`);
     }
     return out;
 }
@@ -129,6 +144,11 @@ function createChoices({ db, registry, preferences, credentials, machines, catal
         const pictureEngines = [{ engine: 'commons', enabled: true }, { engine: 'openverse', enabled: true }];
         await db.prepare('INSERT INTO ai_task_defaults (task, value, updated_by, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT (task) DO NOTHING')
             .run('image.picture', JSON.stringify({ signed_out: built('openvibe/auto'), signed_in: built('openvibe/auto'), fallbacks: [], image_model: null, search_engines: pictureEngines, max_cost_usd: null, daily_cap: 24, guest_find: false }), 'seed', iso(clock.now()));
+        // OpenVibe.Media's rotation detector (pictures/2026-11-11): off until the owner turns it on. The model is
+        // OpenVibe's own router (the cheapest capable vision model, the detector asks for the cheapest preset), and
+        // the cap and daily budget bound what a site may spend before a receipt is written.
+        await db.prepare('INSERT INTO ai_task_defaults (task, value, updated_by, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT (task) DO NOTHING')
+            .run('pics.orientation', JSON.stringify({ signed_out: built('openvibe/auto'), signed_in: built('openvibe/auto'), fallbacks: [], image_model: null, search_engines: [], max_cost_usd: 0.05, daily_cap: 50, budget_usd_per_day: 0.25, method: 'off', confidence: 0.8 }), 'seed', iso(clock.now()));
     }
 
     async function register(body, service) {
@@ -164,7 +184,17 @@ function createChoices({ db, registry, preferences, credentials, machines, catal
         for (const row of body.defaults) {
             const t = await task(row.task);
             if (!t) throw new AiError(404, 'task.not_found', 'unknown task');
-            const value = defaultValue(row.value);
+            // The generic defaults page does not draw the orientation detector's own fields; a save from it keeps the
+            // method, confidence and daily bounds it cannot show, rather than turning the detector off in silence.
+            let incoming = row.value;
+            if (row.task === 'pics.orientation') {
+                const prev = await db.prepare('SELECT value FROM ai_task_defaults WHERE task = ?').get(row.task);
+                const old = prev ? JSON.parse(prev.value) : null;
+                if (old && incoming && typeof incoming === 'object') for (const key of ['method', 'confidence', 'daily_cap', 'budget_usd_per_day']) {
+                    if (incoming[key] === undefined && old[key] !== undefined) incoming = { ...incoming, [key]: old[key] };
+                }
+            }
+            const value = defaultValue(incoming);
             for (const c of [value.signed_out, value.signed_in, ...value.fallbacks]) checkSearchChoice(t.kind, c);
             list.push([row.task, value]);
         }
@@ -225,6 +255,10 @@ function createChoices({ db, registry, preferences, credentials, machines, catal
             image_model: owner && owner.image_model ? owner.image_model : null,
             daily_cap: owner && owner.daily_cap != null ? owner.daily_cap : null,
             guest_find: Boolean(owner && owner.guest_find),
+            // The orientation detector's own controls, read by server/api/orientation.js.
+            method: owner && owner.method ? owner.method : 'off',
+            confidence: owner && owner.confidence != null ? owner.confidence : 0.8,
+            budget_usd_per_day: owner && owner.budget_usd_per_day != null ? owner.budget_usd_per_day : null,
         };
     }
 
