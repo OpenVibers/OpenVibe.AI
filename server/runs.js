@@ -126,7 +126,7 @@ function routePinRequest(value, principal, wf, internal = false) {
     return { provider, model };
 }
 
-function createRuns({ choices = null, db, registry, engine, cache, quotas, config, clock = { now: () => Date.now() }, log = console, userModules = null, credentials = null, preferences: personPreferences = null, tiers = null, projectSecrets = null, pool = null, runBudgets = null, credits = null, community = null, presets = null, receipts = null, abuse = null, webhooks = null, batchWaiting = null, batch = null, ownerConfig = null }) {
+function createRuns({ choices = null, db, registry, engine, cache, quotas, config, clock = { now: () => Date.now() }, log = console, userModules = null, credentials = null, preferences: personPreferences = null, tiers = null, projectSecrets = null, pool = null, runBudgets = null, credits = null, community = null, presets = null, receipts = null, abuse = null, webhooks = null, batchWaiting = null, batch = null, ownerConfig = null, caps = null }) {
     // The owner's economy switches (server/owner-config.js). An unconfigured kind keeps its old
     // behaviour (ECONOMY_DEFAULTS), so this only ever turns a way of paying less off.
     const economyConfig = ownerConfig || (() => { try { return require('./owner-config').createOwnerConfig({ db, registry, clock }); } catch { return null; } })();
@@ -305,6 +305,9 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
                 throw new AiError(422, 'input.invalid', `route ${shown} is not offered for ${operation} to this caller; GET /api/v1/routes?operation=${operation} lists the offers`);
             }
         }
+        // The Setup page's monthly cap for this task kind: checked before any cache, quota or provider
+        // call, so a cap refuses the run before it can spend. 0 is no cap.
+        if (caps && route && route.key) await caps.check({ db, routeKey: route.key, now: clock.now() });
         const options = body.options && typeof body.options === 'object' ? body.options : {};
         // BA1: the latency class of this run. The workflow's own class is the route it uses
         // (constraints.latency_class); a caller may ask for a SLOWER class with options.latency and never a

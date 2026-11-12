@@ -23,6 +23,7 @@ const { createRunBudgets } = require('./run-budgets');
 const { createFreeAllowance } = require('./free-allowance');
 const { createTiers } = require('./govern');
 const { createRuns } = require('./runs');
+const taskKindCaps = require('./setup/caps');
 const { seed } = require('./workflows/seed');
 const { createAuth, createNetworkKeys } = require('./auth');
 const { jwksClient } = require('openvibe-sdk/auth');
@@ -184,7 +185,7 @@ async function start({ searchFetch = null, config, db: givenDb = null, clock = {
     // BA3: the runs and the batcher need each other (a batch-class run is created first, then queued), so
     // the runs hold this facade and the batcher fills it in below, before any request can arrive.
     const batchRef = {};
-    const runs = createRuns({ choices, db, registry, engine, cache, quotas, config, clock, log, userModules, credentials, preferences, tiers, projectSecrets, pool, runBudgets, credits: creditsRef, community, presets, receipts, abuse, webhooks, batch: batchRef, ownerConfig,
+    const runs = createRuns({ choices, db, registry, engine, cache, quotas, config, clock, log, userModules, credentials, preferences, tiers, projectSecrets, pool, runBudgets, credits: creditsRef, community, presets, receipts, abuse, webhooks, batch: batchRef, ownerConfig, caps: taskKindCaps,
         // BA2: a run that waits for a provider's batch answer is not interrupted by a restart: it stays
         // queued until the batcher finishes it (the provider is still working on it).
         batchWaiting: async (runId) => {
@@ -244,7 +245,7 @@ async function start({ searchFetch = null, config, db: givenDb = null, clock = {
         clientSecret: env.OV_OAUTH_CLIENT_SECRET, fetch: fetchImpl,
     }) : null;
     const benchEvents = createBenchEvents({ bench, accountData, accountSend, config, log, fetchImpl, clientSecret: env.OV_OAUTH_CLIENT_SECRET });
-    const app = createApp({ choices, searchFetch, config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, grants, vault, settings, benchEvents, runBudgets, memory, memoryImport, memoryServices, memorySharing, community, endpoints, webhooks, presets, receipts, balance, creditGrants, sessionCookies, gpus, gpuMarket, supply, abuse, priceBook, modelSync, modelDiscovery, ownEndpoints, refusal, willingness, abliterationTax, batches, share, deepDive, mediaStore });
+    const app = createApp({ choices, searchFetch, config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, grants, vault, settings, benchEvents, runBudgets, memory, memoryImport, memoryServices, memorySharing, community, endpoints, webhooks, presets, receipts, balance, creditGrants, sessionCookies, gpus, gpuMarket, supply, abuse, priceBook, modelSync, modelDiscovery, ownEndpoints, refusal, willingness, abliterationTax, batches, share, deepDive, mediaStore, search });
     let jwks = null;
     let keyLoaded = Promise.resolve(null);
     if (!keys.pinned && config.nodeEnv !== 'test') {
