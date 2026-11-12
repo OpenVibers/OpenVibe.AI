@@ -35,7 +35,7 @@ const { AiError } = require('../util');
 const { hasCap } = require('../auth');
 const { retailRate } = require('../providers/model-catalog');
 const { toCard } = require('./batcher');
-const { batchCapacity, chargeOf } = require('./capacity');
+const { batchCapacity, chargeOf, meetsDeadline, totalCost, routeReason } = require('./capacity');
 const { retailChargeNano } = require('../credits');
 
 const DEFAULT_MAX_ITEMS = 1000;
@@ -282,9 +282,9 @@ function createBatchService({ db, runs, registry = null, community = null, price
     }
 
     /** Give the claim back, so another worker (or this one, later) may take the item. */
-    async function release(item, status = 'waiting') {
-        await db.prepare('UPDATE batch_items SET status = ?, claimed_until = NULL, claimed_by = NULL, updated_at = ? WHERE batch_id = ? AND idx = ?')
-            .run(status, iso(), item.batch_id, item.idx);
+    async function release(item, status = 'waiting', waitingReason = null) {
+        await db.prepare('UPDATE batch_items SET status = ?, waiting_reason = ?, claimed_until = NULL, claimed_by = NULL, updated_at = ? WHERE batch_id = ? AND idx = ?')
+            .run(status, waitingReason == null ? null : String(waitingReason).slice(0, 300), iso(), item.batch_id, item.idx);
     }
 
     /** What the network absorbed today (the loss budget is per UTC day). */
@@ -362,7 +362,7 @@ function createBatchService({ db, runs, registry = null, community = null, price
      * Put one prompt of the batch on the provider's own batch API. The run is created at once (the customer
      * sees it) and waits for the answer; the batcher settles it when the provider answers.
      */
-    async function enqueueNative(batch, item, route, charge, model) {
+    async function enqueueNative(batch, item, route, charge, model, reason = null) {
         try {
             const principal = principalFor(batch);
             const check = settleCheck({ item, route, charge, batch });
@@ -386,9 +386,9 @@ function createBatchService({ db, runs, registry = null, community = null, price
                 charge,
                 servicePaid: principal.kind === 'service',
             });
-            await db.prepare(`UPDATE batch_items SET status = 'running', run_id = ?, route_provider = ?, route_model = ?, claimed_until = NULL, claimed_by = NULL, updated_at = ?
+            await db.prepare(`UPDATE batch_items SET status = 'running', run_id = ?, route_provider = ?, route_model = ?, route_reason = ?, claimed_until = NULL, claimed_by = NULL, updated_at = ?
                 WHERE batch_id = ? AND idx = ?`)
-                .run(queued.runId || null, route.provider, route.model, iso(), batch.id, item.idx);
+                .run(queued.runId || null, route.provider, route.model, reason, iso(), batch.id, item.idx);
             return { ok: true };
         } catch (err) {
             log.warn('[batch] an item could not be queued for the provider\'s batch API: ' + String((err && err.message) || err));
@@ -404,7 +404,7 @@ function createBatchService({ db, runs, registry = null, community = null, price
     }
 
     /** Run one prompt of the batch: an ordinary run, billed with the half-price card. */
-    async function runItem(batch, item, route, charge, regular = false) {
+    async function runItem(batch, item, route, charge, regular = false, reason = null) {
         const principal = principalFor(batch);
         const body = { workflow: 'ai.complete', input: { messages: [{ role: 'user', content: item.prompt }] } };
         if (batch.owner_type === 'user') body.on_behalf_of = { type: 'user', id: batch.owner_id };
@@ -444,10 +444,11 @@ function createBatchService({ db, runs, registry = null, community = null, price
             return { ok: false, code: 'batch.cost_exceeded' };
         }
         const answer = textOf(run);
-        await db.prepare(`UPDATE batch_items SET status = 'succeeded', run_id = ?, answer = ?, capacity = ?, route_provider = ?, route_model = ?,
-            claimed_until = NULL, claimed_by = NULL, updated_at = ? WHERE batch_id = ? AND idx = ?`)
+        await db.prepare(`UPDATE batch_items SET status = 'succeeded', run_id = ?, answer = ?, capacity = ?, route_provider = ?, route_model = ?, route_reason = ?,
+            waiting_reason = NULL, claimed_until = NULL, claimed_by = NULL, updated_at = ? WHERE batch_id = ? AND idx = ?`)
             .run(run.id || null, answer, regular ? 'regular' : (route ? route.source : 'low-cost'),
-                route ? route.provider : null, route ? route.model : null, iso(), batch.id, item.idx);
+                route ? route.provider : null, route ? route.model : null,
+                regular ? 'the deadline passed and the owner\'s loss budget covered ordinary capacity' : reason, iso(), batch.id, item.idx);
         return { ok: true, run };
     }
 
@@ -486,27 +487,33 @@ function createBatchService({ db, runs, registry = null, community = null, price
             const capacity = model && charge
                 ? await batchCapacity(model, clock.now(), { registry, community, priceBook })
                 : { charge, routes: [] };
-            const routes = (capacity.routes || []).slice().sort((a, b) => {
-                const ai = BigInt(a.cost && a.cost.input != null ? a.cost.input : '0');
-                const bi = BigInt(b.cost && b.cost.input != null ? b.cost.input : '0');
+            // A route must meet the customer's latest finish time: a provider batch that promises 24
+            // hours is not a route for a one-hour deadline. The cheapest of the rest wins.
+            const routes = (capacity.routes || []).filter((r) => meetsDeadline(r, item.deadline_at, clock.now())).sort((a, b) => {
+                const ai = totalCost(a);
+                const bi = totalCost(b);
                 return ai < bi ? -1 : ai > bi ? 1 : 0;
             });
             if (routes.length) {
                 const route = routes[0];
+                const reason = routeReason(route);
                 // (d) A provider's own batch API: the item waits for the provider's answer instead of being
                 // answered now. The batcher writes the answer onto the run and the run finishes as usual.
                 if (route.source === 'native-batch' && batcher) {
-                    const res = await enqueueNative(batch, item, route, capacity.charge, model);
+                    const res = await enqueueNative(batch, item, route, capacity.charge, model, reason);
                     return { batch: batch.id, item: item.idx, route: route.source, queued: res.ok, error: res.code };
                 }
-                const res = await runItem(batch, item, route, capacity.charge);
+                const res = await runItem(batch, item, route, capacity.charge, false, reason);
                 if (res.ok) await finishBatch(batch);
                 else await release(item, 'waiting');
                 return { batch: batch.id, item: item.idx, route: route.source, ok: res.ok };
             }
             if (!deadlinePassed) {
                 // No low-cost capacity yet: the item waits, and the customer is charged nothing.
-                await release(item, 'waiting');
+                const tooLong = (capacity.routes || []).find((r) => !meetsDeadline(r, item.deadline_at, clock.now()));
+                await release(item, 'waiting', tooLong
+                    ? `${tooLong.provider} batch API promises ${tooLong.window || '24h'}, after this batch's deadline`
+                    : 'waiting for a route inside the customer\'s deadline; nothing has been charged');
                 return { batch: batch.id, item: item.idx, waiting: true };
             }
             // The deadline passed with no eligible capacity: the loss budget may pay for ordinary capacity.
