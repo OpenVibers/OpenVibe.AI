@@ -14,4 +14,8 @@ assert.match(conf, /location ~\* \^\/metrics\(\/\|\$\) \{ return 404; \}/, '/met
 const reports = /location = \/release-metrics \{([\s\S]*?)\n    \}/.exec(conf);
 assert.ok(reports && /limit_except POST \{ deny all; \}/.test(reports[1]) && /proxy_pass http:\/\/127\.0\.0\.1:4700;/.test(reports[1]), 'open tabs\' release reports (POST /release-metrics) reach the app');
 assert.ok(conf.indexOf('location = /release-metrics') < conf.lastIndexOf('    location / {'), 'before the GET-only catch-all');
-console.log('vhost catch-all: GET/HEAD reach the app (favicon, 404 page); other methods refused; /metrics refused; POST /release-metrics passes');
+// 2026-11-12: Decisions is a public API (Exchange's /decisions page names it), so it passes like the direct operations.
+const apps = /location ~ \^\/api\/v1\/\(([a-z|]+)\)\$ \{([\s\S]*?)\n    \}/.exec(conf);
+assert.ok(apps && apps[1].split('|').includes('decisions'), 'POST /api/v1/decisions reaches the app');
+assert.ok(/limit_except POST \{ deny all; \}/.test(apps[2]) && /limit_req zone=ovai_apps/.test(apps[2]), 'POST only, rate limited like the other operations');
+console.log('vhost catch-all: GET/HEAD reach the app (favicon, 404 page); other methods refused; /metrics refused; POST /release-metrics passes; POST /api/v1/decisions passes');
