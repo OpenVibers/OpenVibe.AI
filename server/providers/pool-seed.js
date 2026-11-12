@@ -35,6 +35,8 @@ function recordOf(p) {
             auth_header: p.auth_header || null, docs_url: p.docs_url || null,
             search_adapters: p.search_adapters || [],
             data_policy: p.data_policy,
+            // A provider's published request limits, kept by the router (server/providers/rate-gate.js).
+            rate_limits: p.rate_limits || null,
             // The privacy label of the provider: `private` only where its own terms say it keeps nothing and trains on
             // nothing, `anonymized` for everyone else. The wording and the page it was read from travel with it.
             privacy: p.privacy,

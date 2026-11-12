@@ -14,6 +14,9 @@
 const { keyPage } = require('../owner-inputs');
 
 const CHECKED = '2026-11-12';
+// Altare Inference is free until 2026-12-01 (usage does not count toward the included amount; rate limits apply), then
+// Always Free includes $100 of usage a month (https://docs.altare.gg/inference/pricing): an offer worth trying first.
+const ALTARE_NOTE = 'Free until December 1, then $100 of usage a month on Altare\'s free plan (60 requests a minute; 30 for its flagship models). Record the $100 as a monthly credit on Exchange → Console → Providers.';
 const SOURCES = Object.freeze({
     deepseek: 'https://api-docs.deepseek.com/quick_start/pricing',
     gemini: 'https://ai.google.dev/gemini-api/docs/pricing',
@@ -25,6 +28,8 @@ const SOURCES = Object.freeze({
     brave: 'https://brave.com/search/api/',
     tavily: 'https://www.tavily.com/pricing',
     serper: 'https://serper.dev/pricing',
+    altare: 'https://inference.altare.global/v1/models',
+    geminiDecision: 'https://blog.google/innovation-and-ai/technology/developers-tools/gemini-decisions-api/',
 });
 
 /** A price in the page's plain words; `unit` is what the number is per. */
@@ -56,6 +61,7 @@ const STEPS = Object.freeze([
         recommended: offer('deepseek', 'deepseek-flash', 'DeepSeek Flash', tokenPrice(0.15, 0.6, 0.003), SOURCES.deepseek,
             { why: 'cheapest that looks good', note: 'The price is DeepSeek\'s off-peak list price; daytime is higher.' }),
         alternatives: [
+            offer('altare', 'deepseek-v4.1-flash', 'DeepSeek V4.1 Flash on Altare', tokenPrice(0.3, 1.2, 0.006), SOURCES.altare, { why: 'free until December 1', note: ALTARE_NOTE }),
             offer('deepseek', 'deepseek-chat', 'DeepSeek Chat', tokenPrice(0.26, 0.38), SOURCES.deepseek),
             offer('openai', 'gpt-5-mini', 'GPT-5 mini', tokenPrice(0.25, 2), SOURCES.openaiImages),
         ],
@@ -135,8 +141,23 @@ const STEPS = Object.freeze([
         recommended: offer('deepseek', 'deepseek-chat', 'DeepSeek Chat', tokenPrice(0.26, 0.38), SOURCES.deepseek,
             { why: 'cheapest that looks good' }),
         alternatives: [
+            offer('altare', 'glm-5.3', 'GLM-5.3 on Altare', tokenPrice(1.4, 4.4, 0.26), SOURCES.altare, { why: 'free until December 1', note: ALTARE_NOTE }),
             offer('openai', 'gpt-5-mini', 'GPT-5 mini', tokenPrice(0.25, 2), SOURCES.openaiImages),
             offer('anthropic', 'claude-opus-5-5', 'Claude Opus 5.5', tokenPrice(4, 20, 0.2), 'https://platform.claude.com/docs/en/models/opus-5-5/overview'),
+        ],
+    },
+    {
+        id: 'decide', name: 'Decisions (routing and checks)', short: 'Decisions', route: 'decide.fallback', 'capability': 'chat', operation: 'chat', modelType: 'chat',
+        what: 'Answers yes/no, one-of-a-list and rubric questions about a text or a picture, with how sure it is.',
+        uses: 'POST /api/v1/decisions: routing a request to the right model, moderation checks, grading and tool choice, without a full model writing an answer.',
+        recommended: offer('gemini', 'gemini-decision-1', 'Gemini Decision 1', { kind: 'tokens', in_per_mtok: 0.1, out_per_mtok: 0, cached_per_mtok: null, unit: '1M tokens', text: '$0.10 per 1M input tokens, nothing for output' }, SOURCES.geminiDecision,
+            { why: 'calibrated and fast', note: 'Google\'s Decisions API answers in one pass, with calibrated probabilities. It has a free tier, which may use what it reads to improve Google\'s products: test with public or synthetic data. Without a Gemini key, the cheap structured route below answers text instead, uncalibrated.' }),
+        // The fallback route's own model: Gemini Decision 1 is Google's Decisions API, not a chat model, so it never sits
+        // on decide.fallback; the route gets the cheap structured model and the Decisions API needs only the Gemini key.
+        routeOffer: offer('deepseek', 'deepseek-flash', 'DeepSeek Flash', tokenPrice(0.15, 0.6, 0.003), SOURCES.deepseek),
+        alternatives: [
+            offer('altare', 'gemma-4-26b', 'Gemma 4 26B on Altare', tokenPrice(0.1, 0.3, 0.05), SOURCES.altare, { why: 'free until December 1', note: ALTARE_NOTE }),
+            offer('deepseek', 'deepseek-flash', 'DeepSeek Flash', tokenPrice(0.15, 0.6, 0.003), SOURCES.deepseek),
         ],
     },
 ]);
@@ -146,7 +167,7 @@ const BY_ID = new Map(STEPS.map((s) => [s.id, s]));
 /** What each kind is called in the defaults table, in the page's words. */
 const KIND_LABELS = Object.freeze({
     chat: 'Chat and writing', vision: 'Vision', image: 'Images', stt: 'Speech to text',
-    speech: 'Voices', embedding: 'Embeddings', search: 'Web search', code: 'Code agents (plans)',
+    speech: 'Voices', embedding: 'Embeddings', search: 'Web search', code: 'Code agents (plans)', decide: 'Decisions',
 });
 
 function stepById(id) {

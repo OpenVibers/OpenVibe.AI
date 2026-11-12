@@ -36,7 +36,7 @@ const DOMAIN = {
     baseten: 'baseten.co', hyperbolic: 'hyperbolic.xyz', parasail: 'parasail.io', 'particle-ai': 'particle.ai',
     'inference-net': 'inference.net', 'atlas-cloud': 'atlascloud.ai', avian: 'avian.io',
     nanogpt: 'nano-gpt.com', infermatic: 'totalgpt.ai', arliai: 'arliai.com', friendli: 'friendli.ai', scaleway: 'scaleway.com', anthropic: 'claude.com',
-    iteracompute: 'iteracompute.com', sable: 'sableapi.com', inception: 'inceptionlabs.ai', dosai: 'dos.ai', 'runpod-vllm': 'runpod.io', meta: 'meta.ai',
+    iteracompute: 'iteracompute.com', sable: 'sableapi.com', inception: 'inceptionlabs.ai', dosai: 'dos.ai', 'runpod-vllm': 'runpod.io', meta: 'meta.ai', altare: 'altare.global',
 };
 const onItsOwnSite = (url, key) => {
     const host = new URL(url).hostname;
@@ -50,7 +50,7 @@ t.test('provider presets are OpenAI-compatible, with a base URL, a timeout, an a
     assert.deepStrictEqual(pool.PROVIDERS.slice(0, 23).map((p) => p.key),
         ['qwen', 'kimi', 'glm', 'minimax', 'deepinfra', 'novita', 'featherless', 'refuseless', 'abliteration', 'openrouter', 'venice', 'abliteratedmodels', 'uplinkswitch', 'chutes', 'siliconflow', 'nebius', 'together', 'fireworks', 'groq', 'cerebras', 'sambanova', 'baseten', 'hyperbolic']);
     assert.deepStrictEqual(pool.PROVIDER_KEYS, pool.PROVIDERS.map((p) => p.key));
-    assert.strictEqual(new Set(pool.PROVIDER_KEYS).size, 55);
+    assert.strictEqual(new Set(pool.PROVIDER_KEYS).size, 56);
     assert.strictEqual(pool.byKey.get('meta').base_url, 'https://api.meta.ai/v1');
     assert.strictEqual(pool.byKey.get('perplexity').kind, 'responses');
     assert.strictEqual(require('../server/console/presets').credentialProvider('groq').model, 'openai/gpt-oss-20b', 'existing personal-key default is preserved');

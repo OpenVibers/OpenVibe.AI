@@ -233,6 +233,7 @@ function withoutPromptCache(req) {
 }
 
 function createProviderPool({ db, registry, config, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, credentialFetch = null, machineModels = null, community = null, bench = null, variantEvidence = null, adultStatus = null, offPeak = null, creditGrants = null, ownerNotify = null, ownerConfig = null }) {
+    const rateGate = require('./rate-gate').createRateGate({ now: () => clock.now() });
     // A person's own machine as their model (credential provider node, server/machines.js).
     const machines = machineModels || require('../machines').createMachineModels({ config, env, fetchImpl });
     const cache = new Map();          // key -> { stamp, adapter }
@@ -1304,6 +1305,8 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         if (row && row.status !== 'active') return 'model_disabled';
         if (p.auth_mode !== 'none' && !credentialNotRequired(p) && !providerSecret(p, env)) return 'no_credentials';
         if (features.some(f => !a.supports(f))) return 'unsupported';
+        // Its published limit for this minute is used up (Altare's 60 a minute, 30 for each flagship): the next offer.
+        if (rateGate.full(p, model)) return 'rate_limited';
         const h = await health(p.key, model, { stamp: stampFor(p) });
         if (h.state === 'open') {
             if (h.failure_class === 'balance' || h.exhausted_at) return 'exhausted';
@@ -2022,6 +2025,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             // L36 Y7: the fallback chain stops after three providers.
             if (attemptsMade >= maxAttempts) break;
             attemptsMade += 1;
+            rateGate.take(p, model);
             // Claim the local slot and the provider's concurrency slot synchronously, before any await, so two
             // requests cannot both pass the check.
             if (local) localActive++;

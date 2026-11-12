@@ -268,6 +268,9 @@ function createApp({ choices = null, searchFetch = null, config, db, registry, p
     app.use(actionsRouter({ runs, registry, auth, log }));
     // People's own controls (2026-11-11): one task that turns words into a checked ui.layout@1.
     app.use(require('./api/ui-layout').uiLayoutRouter({ runs, auth, log }));
+    // Decisions (2026-11-12): closed-set questions about one input, Google's Decisions API first, the router's cheap
+    // structured route without it (server/api/decisions.js).
+    app.use(require('./api/decisions').decisionsRouter({ runs, auth, db, registry, env, fetchImpl, log }));
     app.use(require('./api/compat-extra').compatExtra({ runs, auth, config, log }));
     // The OpenAI-compatible endpoint (POST /v1/chat/completions, GET /v1/models): runs of ai.complete.
     app.use(require('./api/routing-preview').routingPreview({ auth, registry, log }));
@@ -286,7 +289,7 @@ function createApp({ choices = null, searchFetch = null, config, db, registry, p
     // Community capacity (design: "Offer to the network"): the public offers Exchange lists and the seller's /sell
     // dashboard, an API for Exchange. Nothing here writes an offer; the offer belongs to Network and the Link owner.
     if (community) app.use('/api/v1', require('./api/community').communityRouter({ community, auth, log }));
-    app.use(setupRouter({ config, db, registry, pool, runs, auth, settings, search, env, clock, log }));
+    app.use(setupRouter({ config, db, registry, pool, runs, auth, settings, search, env, clock, log, fetchImpl }));
     app.use(adminRouter({ config, db, registry, pool, quotas, cache, runs, auth, settings, ops, log }));
     app.use(require('./api/console-data').consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth, clock, fetchImpl, env, gpus, gpuMarket, supply, abuse, priceBook, modelSync, creditGrants, sessionCookies, vault, settings, config, log }));
     // The operator console moved to OpenVibe.Exchange. Keep the legacy AI paths as permanent redirects;

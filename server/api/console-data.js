@@ -11,6 +11,13 @@ const gpuCatalog = require('../gpu/catalog');
 const { tokenCosts } = require('../gpu/token-cost');
 
 /** Read-only JSON read models for Exchange's owner console. Every query is bounded and the query module redacts runs. */
+/** A provider key a credit record may name: Anthropic, OpenAI or any catalogued or registered provider (a lowercase key). */
+function creditProviderOf(value) {
+    const key = String(value || '').trim().toLowerCase();
+    if (!/^[a-z0-9][a-z0-9._-]{0,63}$/.test(key)) throw new AiError(422, 'ai.invalid', 'name a provider key, such as openai, anthropic or altare');
+    return key;
+}
+
 function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, gpus = null, gpuMarket = null, supply = null, abuse = null, priceBook = null, modelSync = null, creditGrants = null, sessionCookies = null, vault = null, settings = null, config = {}, log = console }) {
     const r = express.Router();
     const providerOrder = require('../providers/order').createProviderOrder({ registry });
@@ -80,9 +87,14 @@ function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth,
                 uncensored: Boolean(p.metadata && p.metadata.uncensored),
             }));
             const poolProviders = require('../providers/pool-providers').PROVIDERS;
-            const estimates = creditGrants ? await Promise.all(['anthropic', 'openai'].map(async (provider) => ({
+            // Every provider with credit on record (prepaid, promotional, or a plan's monthly grant), Anthropic and OpenAI always.
+            const creditPlans = creditGrants && creditGrants.listPlans ? await creditGrants.listPlans() : [];
+            const creditProviders = [...new Set(['anthropic', 'openai', ...creditPlans.map((p) => p.provider_key), ...(creditGrants ? creditGrants.values().map((v) => v.provider) : [])])];
+            const estimates = creditGrants ? await Promise.all(creditProviders.map(async (provider) => ({
                 provider, grants: await creditGrants.list(provider), estimate: creditGrants.values().find((x) => x.provider === provider) || null,
                 preference: await creditGrants.preference(provider),
+                plans: creditPlans.filter((p) => p.provider_key === provider).map((p) => ({ id: Number(p.id), label: p.label, monthly_usd: Number(p.monthly_usd), renews_day: Number(p.renews_day),
+                    starts_on: p.starts_on, ends_on: p.ends_on || null, active: Boolean(Number(p.active)), notes: p.notes || null })),
             }))) : [];
             const cookies = sessionCookies ? await sessionCookies.list('operator', 'owner') : [];
             const balances = sessionCookies ? await Promise.all(cookies.map((c) => sessionCookies.balance('operator', 'owner', c.id))) : [];
@@ -258,7 +270,7 @@ function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth,
     r.post('/api/v1/admin/console/provider-credits', json, write, wrap(async (req) => {
         if (!creditGrants) throw new AiError(503, 'ai.unavailable', 'provider credit records are not configured');
         const b = req.body || {};
-        const provider = ['anthropic', 'openai'].includes(String(b.provider)) ? String(b.provider) : 'anthropic';
+        const provider = creditProviderOf(b.provider);
         const grant = await creditGrants.add({ provider_key: provider, kind: String(b.kind || 'promotional'), amount_usd: Number(b.amount_usd),
             as_of: String(b.as_of || ''), received_at: String(b.received_at || b.as_of || ''),
             remaining_as_of_usd: b.remaining_as_of_usd == null ? Number(b.amount_usd) : Number(b.remaining_as_of_usd),
@@ -267,10 +279,33 @@ function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth,
             applies_to: String(b.applies_to || '').slice(0, 200) || null });
         return { grant };
     }));
+    // Monthly credits that come with a subscription or a plan (ChatGPT Pro's API credits, an Anthropic allowance, Altare's
+    // free $100 a month): one promotional grant per billing cycle, spent first, gone when the cycle ends.
+    r.post('/api/v1/admin/console/provider-credit-plans', json, write, wrap(async (req) => {
+        if (!creditGrants || !creditGrants.addPlan) throw new AiError(503, 'ai.unavailable', 'provider credit plans are not configured');
+        const b = req.body || {};
+        try {
+            const plan = await creditGrants.addPlan({ provider_key: creditProviderOf(b.provider), label: b.label, monthly_usd: Number(b.monthly_usd), renews_day: Number(b.renews_day),
+                starts_on: String(b.starts_on || ''), ends_on: b.ends_on ? String(b.ends_on) : null, prorate_first: b.prorate_first !== false && b.prorate_first !== 'off', notes: b.notes || null });
+            await creditGrants.poll().catch(() => null);
+            return { plan };
+        } catch (err) {
+            if (err instanceof TypeError) throw new AiError(422, 'ai.invalid', err.message);
+            throw err;
+        }
+    }));
+    r.post('/api/v1/admin/console/provider-credit-plans/:id', json, write, wrap(async (req) => {
+        if (!creditGrants || !creditGrants.setPlanActive) throw new AiError(503, 'ai.unavailable', 'provider credit plans are not configured');
+        if (!/^\d{1,12}$/.test(String(req.params.id))) throw new AiError(422, 'ai.invalid', 'a plan id is a number');
+        const changed = await creditGrants.setPlanActive(Number(req.params.id), (req.body || {}).active === true || (req.body || {}).active === 'on');
+        if (!changed) throw new AiError(404, 'ai.not_found', 'no such plan');
+        await creditGrants.poll().catch(() => null);
+        return { ok: true };
+    }));
     r.post('/api/v1/admin/console/provider-credit-preference', json, write, wrap(async (req) => {
         if (!creditGrants) throw new AiError(503, 'ai.unavailable', 'provider credit preferences are not configured');
         const b = req.body || {};
-        const provider = ['anthropic', 'openai'].includes(String(b.provider)) ? String(b.provider) : 'anthropic';
+        const provider = creditProviderOf(b.provider);
         return { preference: await creditGrants.setPreference({ provider_key: provider, enabled: b.enabled === true, floor_usd: Number(b.floor_usd) }) };
     }));
     r.post('/api/v1/admin/console/provider-session-credentials', json, write, wrap(async (req) => {
