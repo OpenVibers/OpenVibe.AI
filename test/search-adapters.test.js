@@ -49,7 +49,7 @@ const json = value => new Response(JSON.stringify(value), { status: 200 });
         const card = (await search.engines()).find(e => e.id === a.id);
         assert.equal(card.price_per_1000, a.price_per_1000);
         assert.equal(card.source, a.source);
-        assert.equal(card.checked_on, ['meta', 'serper-images'].includes(a.id) ? '2026-11-10' : '2026-11-09');
+        assert.equal(card.checked_on, a.id === 'openvibe' ? '2026-11-12' : ['meta', 'serper-images'].includes(a.id) ? '2026-11-10' : '2026-11-09');
         if (a.byok) {
             assert.equal((await createSearch({ env: {} }).engines()).find(e => e.id === a.id).available, false);
             await assert.rejects(createSearch({ env: {}, fetchImpl: () => assert.fail('unconfigured engine called') }).search(kind, { q: 'x', engine: a.id }));

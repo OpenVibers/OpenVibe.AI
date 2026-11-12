@@ -2,15 +2,20 @@
   "response": {
     "results": [
       {
+        "owner": "wiki",
+        "type": "article",
+        "id": "art_01",
+        "visibility": "public",
         "title": "Lantern",
-        "url": "https://example.org/article",
-        "description": "A new lantern",
+        "summary": "A new lantern",
+        "canonical_url": "https://example.org/article",
         "published_at": "2026-11-08T12:00:00Z"
       }
-    ]
+    ],
+    "next_cursor": null
   },
   "request": {
-    "host": "openvibe.search",
+    "host": "search.openvibe.network",
     "path": "/api/v1/search",
     "method": "GET"
   },
