@@ -125,7 +125,7 @@ const FREE_TIERS = {
         limits: { rpm: 30, rpd: 1000, tpm: 8000, tpd: 200000 },
         card_required: false,
         trains_on_free: null,
-        wording: 'By default, Groq does not retain customer data for inference requests. (No statement that prompts are or are not used for training was found on the pages read.)',
+        wording: 'By default, Groq does not retain customer data for inference requests.',
         source: 'https://console.groq.com/docs/rate-limits',
         checked: '2026-11-12',
     },
