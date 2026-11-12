@@ -50,11 +50,21 @@ t.test('off costs nothing, vision answers a turn and carries a receipt; caps ref
     assert.ok(r.body.run_id);
     assert.strictEqual(seer.calls, 1);
 
+    // The Exchange owner's Try it forwards the person's Network session: that token is accepted here, a non-owner's
+    // is not (the detector's budget is the network's).
+    const ownerNet = token('person', [], { aud: 'openvibe.network', actorType: 'user', sub: subject, extra: { subject_id: subject, role: 'owner' } });
+    r = await request(h.base, 'POST', '/api/v1/vision/orientation', { tok: ownerNet, body: { image: { data_url: 'data:image/jpeg;base64,aGk=' } } });
+    assert.strictEqual(r.status, 200, r.text);
+    assert.strictEqual(r.body.answered, true);
+    const plainNet = token('person', [], { aud: 'openvibe.network', actorType: 'user', sub: subject, extra: { subject_id: subject, role: 'user' } });
+    r = await request(h.base, 'POST', '/api/v1/vision/orientation', { tok: plainNet, body: { image: { data_url: 'data:image/jpeg;base64,aGk=' } } });
+    assert.deepStrictEqual([r.status, r.body.code], [403, 'role.admin_required']);
+
     // The console reads the same setting, today's spend and the try's receipt.
     r = await request(h.base, 'GET', '/api/v1/admin/orientation', { tok: token('ops', ALL) });
     assert.strictEqual(r.status, 200, r.text);
     assert.strictEqual(r.body.setting.method, 'vision');
-    assert.strictEqual(r.body.today.runs, 1);
+    assert.strictEqual(r.body.today.runs, 2);
     assert.strictEqual(r.body.recent[0].rotation, 90);
     assert.match(r.body.recent[0].receipt_id, /^rcpt_/);
 
@@ -63,7 +73,7 @@ t.test('off costs nothing, vision answers a turn and carries a receipt; caps ref
     assert.strictEqual(r.status, 200, r.text);
     r = await request(h.base, 'POST', '/api/v1/vision/orientation', { tok: svc, body: { image: { data_url: 'data:image/jpeg;base64,aGk=' } } });
     assert.deepStrictEqual([r.status, r.body.code], [429, 'orientation.daily_cap']);
-    assert.strictEqual(seer.calls, 1);
+    assert.strictEqual(seer.calls, 2);
 
     // A budget already spent refuses too.
     await request(h.base, 'PUT', '/api/v1/admin/task-defaults', { tok: admin, body: { defaults: [{ task: 'pics.orientation', value: value({ budget_usd_per_day: 0 }) }] } });

@@ -12,9 +12,13 @@
  * today's count or cost would pass the owner's bounds.
  */
 const express = require('express');
+const { verifyUserToken } = require('openvibe-sdk/auth');
 const { AiError, sendError } = require('../util');
-const { CAPS, namespaceAllowed } = require('../auth');
+const { CAPS, namespaceAllowed, bearer } = require('../auth');
 const { receiptId } = require('../exchange/receipts');
+
+const PERSON_SUBJECT = /^usr_[0-9A-HJKMNP-TV-Z]{26}$/;
+const PRINCIPAL = /^(svc|app|mod|node):/;
 
 const DAY = 24 * 60 * 60 * 1000;
 const MAX_IMAGE = 2 * 1024 * 1024;
@@ -40,8 +44,43 @@ function settingOf(d) {
 function createOrientation({ choices, runs, registry = null, auth, db, config = {}, clock = { now: () => Date.now() }, log = console }) {
     if (!auth) throw new TypeError('createOrientation: auth is required');
     const r = express.Router();
-    // A service (Media, MediaHub) or a person (the Exchange owner's Try it) may run a detection.
-    const guard = auth.appOrCap('ai.app.run', CAPS.runCreate);
+    // A service (Media) runs with its own token; the Exchange owner's Try it forwards the person's Network session,
+    // which AI's own person routes already accept from Exchange for audience openvibe.network. A person here must be
+    // owner/admin: the detector's budget is the network's, so a stranger does not spend it.
+    const serviceGuard = auth.requireCap(CAPS.runCreate);
+    async function personGuard(req, res, next) {
+        const token = bearer(req);
+        let claims;
+        try {
+            claims = await verifyUserToken(token, {
+                ...(config.networkPublicKey ? { publicKey: config.networkPublicKey } : { jwks: config.networkJwksUrl }),
+                issuer: config.issuer, audience: ['openvibe.network', 'openvibe.ai'], now: clock.now(), log,
+            });
+        } catch (err) {
+            return sendError(res, new AiError(401, 'token.invalid', 'a person or service token is required'), req.ov, log);
+        }
+        if (!claims || PRINCIPAL.test(String(claims.sub || '')) || ['service', 'app', 'mod', 'node'].includes(claims.actor_type)) {
+            return sendError(res, new AiError(403, 'capability.denied', 'a person token is required on this route'), req.ov, log);
+        }
+        if (!['owner', 'admin'].includes(String(claims.role || ''))) {
+            return sendError(res, new AiError(403, 'role.admin_required', 'the orientation detector is the owner\'s'), req.ov, log);
+        }
+        const subject = PERSON_SUBJECT.test(String(claims.subject_id || '')) ? claims.subject_id
+            : PERSON_SUBJECT.test(String(claims.sub || '')) ? claims.sub : null;
+        if (!subject) return sendError(res, new AiError(401, 'token.invalid', 'the person token has no user subject'), req.ov, log);
+        req.principal = { kind: 'user', sub: claims.sub, subject: { type: 'user', id: subject }, claims };
+        return next();
+    }
+    function guard(req, res, next) {
+        const token = bearer(req);
+        if (!token) return serviceGuard(req, res, next);
+        return Promise.resolve().then(async () => {
+            let service = null;
+            try { service = await auth.verify(token); } catch { service = null; }
+            if (service && service.ok) return serviceGuard(req, res, next);
+            return personGuard(req, res, next);
+        }).catch((err) => sendError(res, err, req.ov, log));
+    }
 
     const json = (fn) => async (req, res) => {
         try { res.set('Cache-Control', 'no-store').json(await fn(req)); }
