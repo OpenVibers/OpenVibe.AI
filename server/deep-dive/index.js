@@ -108,6 +108,50 @@ function createDeepDive({ config = {}, db, clock = { now: () => Date.now() }, lo
         return [{ claim: oneLine(item.claim || 'observed on the site', 600), source_id: site.source_id, capture_id: cap ? cap.id : null, crop_id: cap && cap.crops && cap.crops[0] ? cap.crops[0].id : null, url: site.url, read_at: cap ? cap.captured_at : iso(clock.now()) }];
     }
 
+    /**
+     * A synthesis that does not depend on the model: used when the synthesis call fails (a truncated JSON answer,
+     * a provider refusal) so a run that already read real sites still reports what it found, with a gap naming the
+     * missing step. It is assembled from the per-site analyses and the rules register only; nothing is invented.
+     */
+    function fallbackSynthesis({ analysis, capturesBySite, rules, question, tokens }) {
+        const sites = analysis.map((a) => ({ source_id: a.source_id, url: a.url }));
+        const ev = (a, claim) => {
+            const cap = (capturesBySite.get(a.source_id) || [])[0];
+            return [{ claim: oneLine(claim, 600), source_id: a.source_id, capture_id: cap ? cap.id : null, crop_id: cap && cap.crops && cap.crops[0] ? cap.crops[0].id : null, url: a.url, read_at: cap ? cap.captured_at : iso(clock.now()) }];
+        };
+        const strengths = new Map();
+        const weaknesses = [];
+        for (const a of analysis) {
+            for (const x of a.strengths || []) strengths.set(x, [...(strengths.get(x) || []), a]);
+            for (const x of a.weaknesses || []) weaknesses.push({ a, text: x });
+        }
+        const patterns = [...strengths.entries()].slice(0, 10).map(([name, list]) => ({ name: oneLine(name, 160), what: `Seen on ${list.length} of ${analysis.length} sites in this run.`, sites: list.map((a) => a.source_id), usage_count: list.length, evidence: list.slice(0, 2).flatMap((a) => ev(a, name)) }));
+        if (!patterns.length) patterns.push({ name: 'What the sites are', what: analysis.map((a) => a.summary).filter(Boolean).slice(0, 3).join(' ').slice(0, 1200), sites: sites.map((x) => x.source_id).slice(0, 30), usage_count: sites.length, evidence: analysis.slice(0, 2).flatMap((a) => ev(a, a.summary)) });
+        const best = analysis.slice().sort((a, b) => (b.strengths || []).length - (a.strengths || []).length)[0] || null;
+        const recs = weaknesses.slice(0, 6).map((w, i) => ({
+            id: `rec_${i + 1}`, what: `Avoid: ${oneLine(w.text, 500)}`, why: `Seen on ${w.a.url}; the site analysis says it fails there.`,
+            rule: { id: null, status: 'none', text: '' }, evidence: ev(w.a, w.text),
+        }));
+        if (!recs.length && best) recs.push({ id: 'rec_1', what: `The best version is ${best.url}: keep what it does well.`, why: 'It has the most strengths among the sites read.', rule: { id: null, status: 'none', text: '' }, evidence: ev(best, best.summary) });
+        return {
+            patterns,
+            comparison: { columns: ['Site', 'Summary', 'Good', 'Fails'], rows: analysis.slice(0, 30).map((a) => [a.url, oneLine(a.summary, 600), (a.strengths || []).join('; ').slice(0, 800), (a.weaknesses || []).join('; ').slice(0, 800)]) },
+            best: best ? { source_id: best.source_id, what: best.summary, evidence: ev(best, best.summary) } : { source_id: null, what: '', evidence: [] },
+            mistakes: weaknesses.slice(0, 12).map((w) => ({ what: w.text, evidence: ev(w.a, w.text) })),
+            gap: `A gap in this run: the synthesis model did not answer, so this is assembled from the site analyses. ${oneLine(question, 200)} was not compared by a model.`,
+            reference_tokens: {
+                palettes: tokens.map((t) => ({ source_id: t.source_id, colours: t.palettes })).filter((x) => x.colours.length).slice(0, 30),
+                type_scales: tokens.map((t) => ({ source_id: t.source_id, families: t.families, sizes: t.sizes })).filter((x) => x.families.length || x.sizes.length).slice(0, 30),
+                spacing: tokens.map((t) => ({ source_id: t.source_id, steps: t.spacing })).filter((x) => x.steps.length).slice(0, 30),
+            },
+            do: [...strengths.keys()].slice(0, 12).map((x) => oneLine(x, 600)),
+            dont: weaknesses.slice(0, 12).map((w) => oneLine(w.text, 600)),
+            accessibility: analysis.map((a) => a.accessibility).filter(Boolean).slice(0, 8),
+            speed: analysis.map((a) => a.speed).filter(Boolean).slice(0, 8),
+            recommendations: recs,
+        };
+    }
+
     /** Run one deep dive for one run row. Returns { output, usage, cost, models } for the workflow step. */
     async function run({ run, input, ctx = {} }) {
         const question = oneLine(input.question, 500);
@@ -336,13 +380,24 @@ function createDeepDive({ config = {}, db, clock = { now: () => Date.now() }, lo
                     spacing: (dom.spacing || []).slice(0, 8).map((x) => x.value),
                 };
             });
-            const synthCall = await llm.call({ routeKey: 'default.json', ...prompts.synthesisPrompt({ question, depth, analyses: analysis, sources: allSources, rules: gathered.rules || [], components: gathered.components || [], tokens }), schema: SYNTHESIS_OUTPUT, schemaName: 'deep_dive_synthesis', maxTokens: Math.min(3500, maxOut), signal: ctx.signal, ctx });
-            addCall('synthesise', synthCall);
-            const s = synthCall.json || {};
+            // The synthesis is the longest answer: a bigger budget than the other steps, on the background JSON
+            // route (it may wait for the cheapest correct model). If the model still truncates or refuses, the
+            // report is assembled from the site analyses and names the missing synthesis as a gap.
+            let s = null;
+            try {
+                const synthCall = await llm.call({ routeKey: cfg.synthesisRoute || 'background.json', ...prompts.synthesisPrompt({ question, depth, analyses: analysis, sources: allSources, rules: gathered.rules || [], components: gathered.components || [], tokens }), schema: SYNTHESIS_OUTPUT, schemaName: 'deep_dive_synthesis', maxTokens: Math.min(5000, Math.max(4000, maxOut)), signal: ctx.signal, ctx });
+                addCall('synthesise', synthCall);
+                s = synthCall.json || null;
+            } catch (err) {
+                if (err && err.code === 'run.cancelled') throw err;
+                warnings.push(`synthesis: ${String((err && err.message) || err).slice(0, 240)}`);
+                gaps.push('The synthesis model did not answer; the synthesis was assembled from the site analyses.');
+                s = fallbackSynthesis({ analysis, capturesBySite, rules: gathered.rules || [], question, tokens });
+            }
             const sitesForEvidence = analysis.map((a) => ({ source_id: a.source_id, url: a.url }));
             const ruleIds = new Set((gathered.rules || []).map((r) => r.id));
-            const mapEvidence = (list) => (Array.isArray(list) ? list : []).flatMap((e) => evidenceOf(e, sitesForEvidence, capturesBySite)).slice(0, 20);
-            const bestSite = sitesForEvidence[(Number(s.best && s.best.site) || 1) - 1] || sitesForEvidence[0];
+            const mapEvidence = (list) => (Array.isArray(list) ? list : []).flatMap((e) => (e && e.source_id && e.url ? [e] : evidenceOf(e, sitesForEvidence, capturesBySite))).slice(0, 20);
+            const bestSite = (s.best && s.best.source_id ? sitesForEvidence.find((x) => x.source_id === s.best.source_id) : sitesForEvidence[(Number(s.best && s.best.site) || 1) - 1]) || sitesForEvidence[0];
             const synthesis = {
                 patterns: (s.patterns || []).slice(0, 40).map((p) => ({
                     name: oneLine(p.name, 160), what: oneLine(p.what, 1200),
@@ -354,9 +409,9 @@ function createDeepDive({ config = {}, db, clock = { now: () => Date.now() }, lo
                 mistakes: (s.mistakes || []).slice(0, 20).map((m) => ({ what: oneLine(m.what, 1200), evidence: mapEvidence(m.evidence) })),
                 gap: oneLine(s.gap, 2000),
                 reference_tokens: {
-                    palettes: (s.reference_tokens && s.reference_tokens.palettes || []).map((p) => ({ source_id: (sitesForEvidence[(Number(p.site) || 1) - 1] || {}).source_id, colours: (p.colours || []).slice(0, 16) })).filter((p) => p.source_id).slice(0, 30),
-                    type_scales: (s.reference_tokens && s.reference_tokens.type_scales || []).map((p) => ({ source_id: (sitesForEvidence[(Number(p.site) || 1) - 1] || {}).source_id, families: (p.families || []).slice(0, 8), sizes: (p.sizes || []).slice(0, 16) })).filter((p) => p.source_id).slice(0, 30),
-                    spacing: (s.reference_tokens && s.reference_tokens.spacing || []).map((p) => ({ source_id: (sitesForEvidence[(Number(p.site) || 1) - 1] || {}).source_id, steps: (p.steps || []).slice(0, 16) })).filter((p) => p.source_id).slice(0, 30),
+                    palettes: (s.reference_tokens && s.reference_tokens.palettes || []).map((p) => ({ source_id: p.source_id || (sitesForEvidence[(Number(p.site) || 1) - 1] || {}).source_id, colours: (p.colours || []).slice(0, 16) })).filter((p) => p.source_id).slice(0, 30),
+                    type_scales: (s.reference_tokens && s.reference_tokens.type_scales || []).map((p) => ({ source_id: p.source_id || (sitesForEvidence[(Number(p.site) || 1) - 1] || {}).source_id, families: (p.families || []).slice(0, 8), sizes: (p.sizes || []).slice(0, 16) })).filter((p) => p.source_id).slice(0, 30),
+                    spacing: (s.reference_tokens && s.reference_tokens.spacing || []).map((p) => ({ source_id: p.source_id || (sitesForEvidence[(Number(p.site) || 1) - 1] || {}).source_id, steps: (p.steps || []).slice(0, 16) })).filter((p) => p.source_id).slice(0, 30),
                 },
                 do: (s.do || []).slice(0, 20).map((x) => oneLine(x, 600)),
                 dont: (s.dont || []).slice(0, 20).map((x) => oneLine(x, 600)),

@@ -389,6 +389,8 @@ function load(env = process.env) {
             maxSources: { quick: 40, thorough: 80, expert: 140 },
             analyseViewports: { quick: 1, thorough: 1, expert: 2 },
             maxOutputTokens: Math.max(400, Math.min(8000, int(env.AI_DEEP_DIVE_MAX_OUTPUT_TOKENS, 3000))),
+            // The longest answer: the background JSON route may wait for the cheapest correct model.
+            synthesisRoute: String(env.AI_DEEP_DIVE_SYNTHESIS_ROUTE || 'background.json').trim(),
         },
         // The capture worker (server/capture/): headless Chrome through playwright-core, one browser at a time.
         // AI_CAPTURE_URL points at the worker's loopback unit; unset runs the same capture in this process (tests).
