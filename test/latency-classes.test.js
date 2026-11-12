@@ -351,7 +351,7 @@ const BACKGROUND = ['trade.summarize_market_context', 'live.rundown.today', 'liv
     'live.streamer.overview', 'live.person.overview', 'live.media.overview', 'live.viewers.plan', 'live.viewers.fold',
     'live.hero.slogans', 'live.home.star', 'live.easter_egg', 'live.paste.describe_image', 'live.paste.summarize_text',
     'blog.draft_post', 'blog.write_digest', 'blog.write_satire', 'news.summarize_story', 'food.suggest_recipes',
-    'media.analyze', 'pics.describe_image'];
+    'media.analyze', 'pics.describe_image', 'pics.orientation'];
 const INTERACTIVE = ['chat.global', 'chat.member.reply', 'chat.member.turn', 'chat.profile', 'ai.chat', 'ai.complete',
     'ai.generate', 'live.translate', 'live.viewers.reply', 'live.stream.titles', 'live.stream.recap', 'live.clips.confirm',
     'games.generate_lore', 'space.app.ask', 'space.app.build', 'wiki.generate_page', 'news.compare_perspectives'];

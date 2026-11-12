@@ -67,6 +67,7 @@ const EXAMPLES = {
     'chat.member.reply': { ai_name: 'Pantry', persona: 'A cheerful cook who keeps it cheap.', room: 'Kim and Lee\'s kitchen', memory: 'Lee is vegetarian.', context: 'Pantry: rice, onions, canned tomatoes, lentils.', context_source: 'OpenVibe.Food household', transcript: 'kim: home late tonight\nlee: same', asked_by: 'kim', message: '@Pantry what can we cook in 20 minutes?' },
     'food.read_pantry_photo': { image: { data_url: PNG }, kind: 'receipt', foods: ['Large Eggs (1 dozen)', 'Whole Milk (1 gallon)'] },
     'pics.describe_image': { image: { data_url: PNG }, title: 'The coast' },
+    'pics.orientation': { image: { data_url: PNG } },
     'chat.member.turn': { messages: [{ role: 'system', content: 'You are Pantry.' }, { role: 'user', content: 'kim: @Pantry roll a die' }], tools: [{ type: 'function', function: { name: 'roll_dice', parameters: { type: 'object', properties: { sides: { type: 'integer' } } } } }] },
     'tools.describe': { tool: 'img.convert', sources: [{ source_type: 'tools.tool', title: 'img.convert descriptor', content: '{"id":"img.convert","inputs":["file","format"]}' }] },
 };
@@ -99,6 +100,22 @@ EXAMPLES['live.easter_egg'] = { vibe: 'croutons' };
 EXAMPLES['space.app.build'] = { prompt: 'A guestbook where people sign in and leave a one-line note', name: 'Guestbook', current: [{ path: 'index.html', content: '<!doctype html><title>Guestbook</title><script src="/_openvibe/sdk.js"></script>' }] };
 EXAMPLES['space.app.ask'] = { space: 'Pirate helper', instructions: 'Talk like a pirate.', transcript: 'visitor: hi\nai: Ahoy!', message: 'What is a good name for a parrot?' };
 EXAMPLES['live.home.star'] = { recent_stars: ['bob'], previous_star: 'bob', candidates: [{ username: 'ann', name: 'Ann', language: 'en', last_14d: { sessions: 5, hours: 12 } }] };
+// People's own controls (2026-11-11): the fake surface is deliberately small; the stub's answer is
+// refused by the layout validator, which is still a schema-valid suggestion and exercises that path.
+EXAMPLES['ui.layout.suggest'] = {
+    catalog: {
+        id: 'bot.controls', version: 1, name: 'Robot controls', devices: ['phone'],
+        grid: { columns: { phone: 4, tablet: 8, computer: 12 }, cell_px: { phone: 44, tablet: 44, computer: 44 } },
+        theme_tokens: ['danger', 'surface'],
+        parts: [
+            { id: 'stop', name: 'Stop', kind: 'button', required: true, pressed: true, min: { w: 2, h: 2, px: 64 }, styles: { tints: ['danger'], shapes: ['round'] }, bindings: { keys: ['Space'], gamepad: ['south'] } },
+            { id: 'stick', name: 'Drive stick', kind: 'stick', required: false, pressed: true, min: { w: 2, h: 2 }, styles: { tints: ['surface'], shapes: ['round'] }, bindings: { keys: ['W', 'A', 'S', 'D'], gamepad: ['left-stick'] }, never_covers: ['stop'] },
+        ],
+    },
+    layout: null,
+    words: 'put Stop on the left and make it huge',
+    device: 'phone',
+};
 EXAMPLES['live.moments.verify'] = { title: 'Rust night', clip_title: 'It Compiles At Last', clip_desc: 'The streamer jumps up cheering when the build passes.', t: 95, timeline: [{ t: 95, text: 'streamer jumps up cheering' }], transcript: [{ t: 94, text: 'IT COMPILES' }], sounds: [{ t: 96, label: 'Cheering' }], chat: { peak: 22, avg: 3, people: 7 } };
 EXAMPLES['live.moments.pick'] = { title: 'Rust night', flavor: 'clip', timeline: [{ t: 12, text: 'the build fails' }, { t: 95, text: 'streamer jumps up cheering' }], transcript: [{ t: 94, text: 'IT COMPILES' }], sounds: [{ t: 96, label: 'Cheering' }], clipped: [95], spikes: [96], avoid: [300] };
 

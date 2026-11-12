@@ -263,7 +263,10 @@ function createApp({ choices = null, searchFetch = null, config, db, registry, p
     app.use(runsRouter({ choices, runs, registry, auth, config, log }));
     // Deep dives (workflow design.deep_dive): the Exchange feature's API and the Design integration's.
     app.use(require('./api/deep-dives').deepDivesRouter({ config, runs, auth, deepDive, store: deepDive && deepDive.store, capture: deepDive && deepDive.capture, mediaStore, log }));
+    app.use(require('./api/orientation').createOrientation({ choices, runs, registry, auth, db, config, log }));
     app.use(actionsRouter({ runs, registry, auth, log }));
+    // People's own controls (2026-11-11): one task that turns words into a checked ui.layout@1.
+    app.use(require('./api/ui-layout').uiLayoutRouter({ runs, auth, log }));
     app.use(require('./api/compat-extra').compatExtra({ runs, auth, config, log }));
     // The OpenAI-compatible endpoint (POST /v1/chat/completions, GET /v1/models): runs of ai.complete.
     app.use(require('./api/routing-preview').routingPreview({ auth, registry, log }));

@@ -61,6 +61,18 @@ const PROVIDERS = Object.freeze({
         limits: { maxItems: 10000, maxBytes: 100 * 1024 * 1024, oneModelPerFile: true },
         source: 'https://platform.kimi.ai/docs/guide/use-batch-api.md',
     },
+    // Together's Batch API: the same file-and-batch shape as OpenAI's, half the list price, answered
+    // within 24 hours (Together's own pricing page calls it an introductory 50% discount).
+    together: {
+        adapter: 'openai-compatible',
+        label: 'Together Batch API',
+        discount: 0.5,
+        window: '24h',
+        enabled: false,
+        when_configured: true,
+        limits: { maxItems: 50000, maxBytes: 200 * 1024 * 1024, oneModelPerFile: true },
+        source: 'https://docs.together.ai/docs/batch',
+    },
     // DeepInfra's OpenAI-compatible Batch API: 20% cheaper than real time, answered within 24 hours.
     deepinfra: {
         adapter: 'openai-compatible',

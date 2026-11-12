@@ -343,6 +343,33 @@ route('post', '/runs', {
         ...errors([400, 401, 403, 404, 409, 413, 422, 503]),
     },
 });
+// The picture-orientation detector (pictures, 2026-11-11 part 3): one small picture in, the clockwise turn needed to
+// make it upright. The owner's setting decides whether it runs at all; media enforces the confidence.
+route('post', '/vision/orientation', {
+    operationId: 'detectPictureOrientation', summary: 'Which way is up in one picture: 0, 90, 180 or 270 degrees', tags: ['runs'], security: SERVICE,
+    description: 'ai.run.create. Runs the `pics.orientation` workflow on a 256 px copy (a data URL) or a Media reference. The owner\'s task defaults decide: method off answers `{ method: "off", answered: false }` and spends nothing; the daily picture cap and daily USD budget answer 429 before a model is called. A person may use it for the owner console\'s check; a service needs the `pics.orientation` namespace. The answer carries the run id, the model, the cost and the receipt id.',
+    requestBody: body({ type: 'object', additionalProperties: false, required: ['image'], properties: {
+        image: { type: 'object', additionalProperties: false, minProperties: 1, properties: {
+            data_url: str({ maxLength: 4000000, description: 'a base64 JPEG, PNG or WebP data URL (a 256 px copy)' }),
+            media: { type: 'object', additionalProperties: false, required: ['media_id'], properties: { media_id: str({ pattern: '^med_[0-9A-HJKMNP-TV-Z]{26}$' }) } },
+        } },
+        hint: str({ maxLength: 200 }),
+    } }),
+    responses: {
+        200: json('The answer, or that the detector is off', {
+            type: 'object', required: ['method', 'answered'],
+            properties: {
+                method: { type: 'string', enum: ['off', 'vision'] }, answered: { type: 'boolean' },
+                rotation: { type: ['integer', 'null'], enum: [0, 90, 180, 270, null] }, confidence: { type: ['number', 'null'], minimum: 0, maximum: 1 },
+                model: { type: ['string', 'null'] }, provider: { type: ['string', 'null'] }, cost_usd: { type: ['number', 'null'] },
+                receipt_id: str(), run_id: str(), setting: { type: 'object' }, budget: { type: 'object' },
+            },
+        }),
+        429: { ...problem, headers: { 'Retry-After': { schema: { type: 'integer' } } } },
+        ...errors([401, 403, 422, 502, 503]),
+    },
+});
+
 route('get', '/runs', {
     operationId: 'listRuns', summary: 'The caller\'s runs, newest first', tags: ['runs'], security: SERVICE,
     description: 'ai.run.read (or ai.run.create). `all=1` needs ai.usage.read.',
@@ -1001,6 +1028,52 @@ route('get', '/actions', {
     description: 'ai.actions.read: a service token names one usr_ subject and gets only the runs whose on_behalf_of is that person — queued and running, then done and failed from the last 30 days, at most 50.',
     parameters: [query('subject', str({ pattern: '^usr_[0-9A-HJKMNP-TV-Z]{26}$' }), 'Required')],
     responses: { 200: json('common.action-list-result@1', { type: 'object', required: ['items'], properties: { items: arrayOf(ref('ActionItem')) } }), ...errors([400, 401, 403, 429]) },
+});
+
+// ── People's own controls (2026-11-11) ───────────────────────────────────────────────────────
+const layoutPart = {
+    type: 'object', additionalProperties: false, required: ['id', 'visible', 'place', 'style', 'bindings'],
+    properties: {
+        id: str({ maxLength: 40 }), visible: { type: 'boolean' },
+        place: { type: 'object', description: 'x, y, w, h in grid cells, or dock + order + w + h for an overlay' },
+        style: { type: 'object', properties: { tint: str({ description: 'a theme token, never a colour' }), shape: str({ enum: ['round', 'pill', 'square'] }), opacity: { type: 'number', minimum: 0.4, maximum: 1 }, label: { type: 'boolean' } } },
+        bindings: { type: 'object', properties: { keys: arrayOf(str()), gamepad: arrayOf(str()) } },
+    },
+};
+const uiLayout = {
+    type: 'object', additionalProperties: false,
+    required: ['surface', 'surface_version', 'device', 'name', 'author', 'sharing', 'parts'],
+    properties: {
+        id: str({ pattern: '^lay_[0-9A-HJKMNP-TV-Z]{26}$' }), revision: integer({ minimum: 1 }), active: { type: 'boolean' },
+        surface: str({ maxLength: 80 }), surface_version: integer({ minimum: 1 }), device: str({ enum: ['phone', 'tablet', 'computer'] }),
+        name: str({ maxLength: 80 }), author: { type: 'object', properties: { name: str({ maxLength: 80 }), subject: ref('SubjectRef') } },
+        sharing: str({ enum: ['private', 'link', 'gallery'] }), parts: arrayOf(layoutPart), updated_at: str({ format: 'date-time' }),
+    },
+};
+const uiLayoutSuggestion = {
+    type: 'object', additionalProperties: false, required: ['ok', 'layout', 'summary', 'reasons'],
+    properties: {
+        ok: { type: 'boolean' },
+        layout: { oneOf: [uiLayout, { type: 'null' }] },
+        summary: str({ maxLength: 300 }),
+        reasons: arrayOf(str({ maxLength: 300 })),
+        receipt: { type: 'object', required: ['model'], properties: { model: str(), provider: str(), route: str(), run_id: str(), cost_usd: { type: 'number', minimum: 0 } } },
+    },
+};
+route('post', '/ui/layout/suggest', {
+    operationId: 'suggestUiLayout', summary: 'Turn words into a checked arrangement of one surface', tags: ['ui'], security: SERVICE,
+    description: 'ai.layout.suggest: a first-party service sends a ui.surface@1 catalog, the ui.layout@1 shown now (or null), the person\'s words (1-500 characters) and the device class. Answers ui.layout-suggestion@1: a layout openvibe-sdk/ui-layout accepted, with a one-sentence summary and reasons, or ok false with the validator\'s plain reasons. If the first answer is refused, the task makes ONE more run with those reasons, then says honestly that it could not. The layout is never applied; the caller previews it. X-OV-Subject names the person the run belongs to, so their own AI limits, preferences and cache scope apply.',
+    parameters: [{ name: 'X-OV-Subject', in: 'header', required: false, schema: str({ pattern: '^usr_[0-9A-HJKMNP-TV-Z]{26}$' }), description: 'The person the arrangement is for' }],
+    requestBody: body({
+        type: 'object', additionalProperties: false, required: ['catalog', 'layout', 'words', 'device'],
+        properties: {
+            catalog: { type: 'object', description: 'ui.surface@1: id, version, devices, grid, theme_tokens and parts' },
+            layout: { oneOf: [uiLayout, { type: 'null' }] },
+            words: str({ minLength: 1, maxLength: 500 }),
+            device: str({ enum: ['phone', 'tablet', 'computer'] }),
+        },
+    }),
+    responses: { 200: json('ui.layout-suggestion@1', uiLayoutSuggestion), ...errors([400, 401, 403, 422, 429, 503]) },
 });
 
 // ── Routing presets and receipts (the Exchange, 2026-11-06) ───────────────────────────────────

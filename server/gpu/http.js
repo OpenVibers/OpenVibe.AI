@@ -5,10 +5,10 @@
  */
 const { AiError } = require('../util');
 
-async function apiJson(fetchImpl, url, { method = 'GET', body = null, key = null, label = 'the marketplace', allowMissing = false } = {}) {
-    const headers = { Accept: 'application/json' };
+async function apiJson(fetchImpl, url, { method = 'GET', body = null, key = null, label = 'the marketplace', allowMissing = false, headers: extra = null, keyHeader = 'Authorization', keyPrefix = 'Bearer ' } = {}) {
+    const headers = { Accept: 'application/json', ...(extra || {}) };
     if (body != null) headers['Content-Type'] = 'application/json';
-    if (key) headers.Authorization = 'Bearer ' + key;
+    if (key) headers[keyHeader] = keyPrefix + key;
     let res;
     try {
         res = await fetchImpl(url, { method, headers, redirect: 'error', signal: AbortSignal.timeout(15000), body: body != null ? JSON.stringify(body) : undefined });
