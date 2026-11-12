@@ -14,4 +14,4 @@ jobs:
       test: 'eval "$(node_modules/openvibe-sdk/scripts/test-services.sh up)" && npm test && npm run test:pg'
   # Secret scan (gitleaks) and dependency audit, shared by every OpenVibers repo (Track Q).
   security:
-    uses: OpenVibers/OpenVibe.Shared/.github/workflows/security.yml@15b927b7d9fe35fe64ee4b7f3b4792b46ebdbddb
+    uses: OpenVibers/OpenVibe.Shared/.github/workflows/security.yml@8a353d9e7557bfeed2b43deb51271171f8e48fc6
