@@ -361,12 +361,14 @@ function createApp({ choices = null, searchFetch = null, config, db, registry, p
         res.type('text/plain').send(`User-agent: *\nAllow: /llms.txt\nAllow: /api/v1/creations\nAllow: /api/v1/creations.md\nDisallow: /\nDisallow: /runs\nDisallow: /console\nDisallow: /auth/\nDisallow: /api/\n\n# The human site is OpenVibe.Exchange; the API stays here.\nSitemap: ${EXCHANGE}/sitemap.xml\n`);
     });
 
-    // A browser asking for a page that is not here goes to the Exchange home: the human site moved, and a
-    // stale link should land on the product, not a 404. An API or session path still answers as it did.
+    // A browser asking for a page that is not here goes to the same path on Exchange: the human site moved, so a
+    // stale link lands on the page of that name, and a page that never existed is Exchange's honest 404 (11-12: sending
+    // every miss to the home was a soft 404 the release browser check failed on). An API or session path still answers
+    // as it did.
     const MACHINE_PATH = /^\/(?:api|v1|internal|metrics|shared|release\.json|release-metrics|auth|console|runs|favicon\.ico|robots\.txt)(?:\/|$)/;
     app.use((req, res) => {
         if (req.method === 'GET' && !MACHINE_PATH.test(req.path) && req.accepts(['application/json', 'text/html']) === 'text/html') {
-            return res.redirect(301, `${EXCHANGE}/`);
+            return res.redirect(301, `${EXCHANGE}${req.originalUrl.startsWith('/') ? req.originalUrl : '/'}`);
         }
         return http.sendProblem(res, 404, 'ai.not_found', { detail: `no route ${req.method} ${req.path}`, ctx: req.ov });
     });

@@ -1,7 +1,7 @@
 'use strict';
 // The public pages of ai.openvibe.services moved to openvibe.exchange on 2026-11-07. This origin keeps the API,
 // a run's receipt and the operator console; every human page answers 301 on an exact map (an unknown human path
-// goes to the Exchange home), and no API path is ever redirected. The text/plain API index for curl stays.
+// goes to the same path on Exchange), and no API path is ever redirected. The text/plain API index for curl stays.
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
@@ -69,9 +69,10 @@ t.test('/llms.txt stays on AI and carries the creation catalogue', async () => {
     assert.ok(r.text.includes('Write a blog post'), 'lists a live creation');
 });
 
-t.test('an unknown human page goes to the Exchange home; an unknown API path stays a problem document', async () => {
-    await moved('/prices-and-latency', '/');
-    await moved('/some-old-post', '/');
+t.test('an unknown human page goes to the same path on Exchange (its page, or its honest 404); an unknown API path stays a problem document', async () => {
+    await moved('/prices-and-latency', '/prices-and-latency');
+    await moved('/some-old-post?ref=x', '/some-old-post?ref=x');
+    await moved('/__ovcheck-404', '/__ovcheck-404');
     for (const p of ['/api/nope', '/v1/nope', '/api/v1/nope']) {
         const r = await request(h.base, 'GET', p, { headers: { Accept: BROWSER }, redirect: 'manual' });
         assert.strictEqual(r.status, 404, p);
