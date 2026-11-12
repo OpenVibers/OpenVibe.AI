@@ -36,7 +36,9 @@ function vastAdapter({ fetchImpl = globalThis.fetch, key = null, baseUrl = BASE_
 
         async searchOffers(req) {
             const body = {
-                type: 'ondemand',
+                // An interruptible job bids: type "bid" returns the hosts' minimum bids, and the
+                // create call offers that price. On-demand ("ondemand") is the default.
+                type: req.interruptible ? 'bid' : 'ondemand',
                 verified: { eq: true },
                 rentable: { eq: true },
                 gpu_name: { in: req.gpuNames },
@@ -57,9 +59,12 @@ function vastAdapter({ fetchImpl = globalThis.fetch, key = null, baseUrl = BASE_
                 gpu_ram_mb: Number(o.gpu_ram) || 0,
                 num_gpus: Number(o.num_gpus) || 1,
                 disk_gb: Number(o.disk_space) || 0,
-                price_per_hour: String(o.dph_total == null ? '0' : o.dph_total),
+                // A bid's price is what the host asks as a floor; the bid we place is that price.
+                price_per_hour: String(o.min_bid != null ? o.min_bid : (o.dph_total == null ? '0' : o.dph_total)),
+                bid_price: req.interruptible ? String(o.min_bid != null ? o.min_bid : (o.dph_total == null ? '0' : o.dph_total)) : null,
                 reliability: Number(o.reliability) || 0,
                 region: String(o.geolocation || ''),
+                interruptible: Boolean(req.interruptible),
             }));
         },
 
@@ -105,6 +110,12 @@ function vastAdapter({ fetchImpl = globalThis.fetch, key = null, baseUrl = BASE_
                 // when no live row of ours owns it.
                 label: String(opts.label || ('openvibe-' + spec.key)),
             };
+            // An interruptible rental carries its bid price. It may be paused when outbid; the job
+            // resumes from its checkpoint on another offer (the provisioner requeues it).
+            if (opts.interruptible || offer.interruptible) {
+                body.type = 'bid';
+                body.price = String(offer.bid_price || offer.price_per_hour || '0');
+            }
             const out = await apiJson(fetchImpl, baseUrl + '/api/v0/asks/' + offer.id + '/', { method: 'PUT', body, ...auth, label: 'Vast.ai' });
             if (!out || out.success === false) {
                 const err = new Error('Vast.ai did not rent the offer');
@@ -125,9 +136,13 @@ function vastAdapter({ fetchImpl = globalThis.fetch, key = null, baseUrl = BASE_
             if (out && out.missing) return { remote_id: remoteId, state: 'deleted', deleted: true, endpoint: '' };
             const instance = out && out.instances ? out.instances : out;
             const status = String((instance && (instance.actual_status || instance.status)) || 'unknown');
+            const message = String((instance && (instance.status_msg || instance.status_message)) || '');
+            // The outbid case: Vast stops an interruptible rental when a higher bid takes the host.
+            const outbid = /outbid|bid (is |was )?(too )?low|preempt/i.test(message) || /preempt/i.test(status);
             return {
                 remote_id: remoteId,
-                state: status,
+                state: outbid ? 'preempted' : status,
+                outbid,
                 endpoint: endpointOf(instance, (opts_port(instance))),
                 raw: out,
             };
