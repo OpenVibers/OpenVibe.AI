@@ -26,7 +26,8 @@ function createMediaStore({ config, env = process.env, fetchImpl = globalThis.fe
         client = createServiceTokenClient({
             tokenUrl: `${String(config.networkInternalUrl).replace(/\/+$/, '')}/oauth/token`,
             clientId: env.OV_OAUTH_CLIENT_ID || 'ai', clientSecret: secret,
-            audience: 'openvibe.media', scope: 'media.object.upload', fetch: fetchImpl,
+            // Upload for a picture or a deep dive's screenshot; read for the signed URL a private object needs.
+            audience: 'openvibe.media', scope: 'media.object.upload media.object.read', fetch: fetchImpl,
         });
         return client;
     };

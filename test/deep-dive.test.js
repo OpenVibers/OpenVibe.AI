@@ -197,4 +197,23 @@ async function waitFor(h, id, tok, wanted, tries = 120) {
         assert.strictEqual(slow.calls.length, calls, 'cancelling stopped every later capture');
         process.stdout.write('deep dive: cancel stops the next capture and model call\n');
     } finally { await h2.close(); }
+
+    // ── A synthesis model that does not answer still leaves a report, assembled from the analyses ──
+    const f3 = fixtures();
+    const h3 = await boot({ env: env({ AI_DEEP_DIVE_SYNTHESIS_ROUTE: 'no.such.route' }), research: f3.research, search: f3.search, capture: fakeCapture(), deepDiveFetch: f3.sourceFetch });
+    try {
+        const exchange = token('exchange', ['ai.run.create'], { sub: 'svc:exchange', ns: ['ai.complete'] });
+        const r = await request(h3.base, 'POST', '/api/v1/deep-dives', { tok: exchange, body: { question: 'a stream overlay deck', depth: 'quick', on_behalf_of: { type: 'user', id: USER } } });
+        assert.strictEqual(r.status, 202);
+        const id = r.body.deep_dive.id;
+        const done = await waitFor(h3, id, exchange, ['succeeded', 'failed', 'cancelled']);
+        assert.strictEqual(done.status, 'succeeded', JSON.stringify(done.error));
+        const full = await request(h3.base, 'GET', `/api/v1/deep-dives/${id}`, { tok: exchange });
+        const report = full.body.deep_dive.report;
+        assert.ok(report, 'a report exists even when the synthesis model does not answer');
+        assert.ok(report.gaps.some((g) => /The synthesis model did not answer/.test(g)), 'the gap names the missing synthesis');
+        assert.ok(report.synthesis.patterns.length >= 1 && report.recommendations.length >= 1, 'the synthesis was assembled from the site analyses');
+        assert.ok(report.synthesis.patterns[0].evidence.length >= 1, 'the assembled synthesis still cites its evidence');
+        process.stdout.write('deep dive: a failed synthesis still reports from the analyses, with a gap\n');
+    } finally { await h3.close(); }
 })().catch((e) => { process.stderr.write(String(e && e.stack || e) + '\n'); process.exit(1); });

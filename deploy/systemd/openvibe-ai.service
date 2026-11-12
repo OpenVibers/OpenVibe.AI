@@ -31,8 +31,8 @@ ProtectHome=read-only
 StateDirectory=openvibe-ai
 # media.analyze's work directory under StateDirectory (writable; the code tree is read-only).
 Environment=AI_MEDIA_ANALYSIS_DIR=/var/lib/openvibe-ai/media-tmp
-# Deep dives' screenshots are taken by the capture worker (openvibe-ai-capture.service, 127.0.0.1:4710).
-Environment=AI_CAPTURE_URL=http://127.0.0.1:4710
+# Deep dives' screenshots are taken by the capture worker (openvibe-ai-capture.service, 127.0.0.1:4711).
+Environment=AI_CAPTURE_URL=http://127.0.0.1:4711
 # Media's internal origin (its unit's port 4100): screenshots and the deep dive's private shots are Media objects.
 Environment=OV_MEDIA_INTERNAL_URL=http://127.0.0.1:4100
 
