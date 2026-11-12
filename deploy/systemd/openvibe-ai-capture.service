@@ -1,0 +1,39 @@
+[Unit]
+Description=OpenVibe.AI capture worker — headless Chrome for deep dives (one browser at a time, server/capture/)
+# The API calls this unit on 127.0.0.1:4710 (AI_CAPTURE_URL in openvibe-ai.service). It has its own unit so a page
+# that eats memory is killed by MemoryMax without taking the API down: the host has about 5 GB of free memory and
+# never starts a second browser. AI_DRILL/LIVE_DRILL turns it off in code (POST /capture answers 503 capture.drill).
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/openvibe.ai
+EnvironmentFile=/etc/openvibe/ai.env
+Environment=NODE_ENV=production
+Environment=AI_CAPTURE_HOST=127.0.0.1
+Environment=AI_CAPTURE_PORT=4710
+Environment=AI_CAPTURE_CHROME=/usr/bin/google-chrome
+Environment=OV_MEDIA_INTERNAL_URL=http://127.0.0.1:4100
+# Chrome writes its profile and its caches under HOME; the code tree stays read-only.
+Environment=HOME=/var/lib/openvibe-ai-capture
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/env node /opt/openvibe.ai/server/capture/worker.js
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=20
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+StateDirectory=openvibe-ai-capture
+# The browser is the whole point of this process and the reason for the cap: one page budget at a time.
+MemoryMax=1500M
+# A hung browser is killed with the unit rather than left to grow.
+CPUQuota=200%
+
+[Install]
+WantedBy=multi-user.target

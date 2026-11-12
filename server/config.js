@@ -366,6 +366,44 @@ function load(env = process.env) {
         // Aggregate demand for Host's inference planner (GET /api/v1/usage/series): off by default;
         // the capability gate (ai.usage.read) is still required when it is on.
         usageSeries: { enabled: bool(env.AI_USAGE_SERIES, false) },
+
+        // ── Deep dive (the owner's 11-11 design research; server/deep-dive/ and server/capture/) ──
+        // A durable run (workflow design.deep_dive) that searches every source, captures candidate sites in headless
+        // Chrome (the capture worker, server/capture/worker.js), reads the shots with a vision model and writes an
+        // ai.deep-dive@1 report. The prices are estimates shown before the run and held on the tier budgets; the
+        // real cost is on the run's receipt. AI_DRILL/LIVE_DRILL turns capture off, so a restore drill touches no site.
+        deepDive: {
+            enabled: bool(env.AI_DEEP_DIVE, !bool(env.AI_DRILL, false) && !bool(env.LIVE_DRILL, false)),
+            priceUsd: {
+                quick: Math.max(0, float(env.AI_DEEP_DIVE_PRICE_QUICK, 0.2)),
+                thorough: Math.max(0, float(env.AI_DEEP_DIVE_PRICE_THOROUGH, 0.5)),
+                expert: Math.max(0, float(env.AI_DEEP_DIVE_PRICE_EXPERT, 1.2)),
+            },
+            // How long Thorough and Expert wait after choosing for a person to add or drop sites (Quick goes on).
+            chooseWaitSec: Math.max(0, Math.min(3600, int(env.AI_DEEP_DIVE_CHOOSE_WAIT_SEC, 300))),
+            // The design rules register and component registry the synthesis checks every recommendation against.
+            designUrl: trimUrl(env.AI_DESIGN_URL || 'https://openvibe.design'),
+            rulesTimeoutMs: Math.max(1000, Math.min(30000, int(env.AI_DEEP_DIVE_RULES_TIMEOUT_MS, 8000))),
+            // How many sites each depth captures and reads.
+            maxSites: { quick: 6, thorough: 15, expert: 30 },
+            maxSources: { quick: 40, thorough: 80, expert: 140 },
+            analyseViewports: { quick: 1, thorough: 1, expert: 2 },
+            maxOutputTokens: Math.max(400, Math.min(8000, int(env.AI_DEEP_DIVE_MAX_OUTPUT_TOKENS, 3000))),
+        },
+        // The capture worker (server/capture/): headless Chrome through playwright-core, one browser at a time.
+        // AI_CAPTURE_URL points at the worker's loopback unit; unset runs the same capture in this process (tests).
+        capture: {
+            url: trimUrl(env.AI_CAPTURE_URL || ''),
+            chrome: env.AI_CAPTURE_CHROME || '/usr/bin/google-chrome',
+            timeoutMs: Math.max(5000, Math.min(600000, int(env.AI_CAPTURE_TIMEOUT_MS, 300000))),
+            pageBudgetMs: Math.max(5000, Math.min(120000, int(env.AI_CAPTURE_PAGE_BUDGET_MS, 45000))),
+            hostDelayMs: Math.max(0, Math.min(60000, int(env.AI_CAPTURE_HOST_DELAY_MS, 3000))),
+            maxPerOwner: Math.max(1, Math.min(20, int(env.AI_CAPTURE_QUEUE_PER_OWNER, 3))),
+            cacheDays: Math.max(0, Math.min(30, int(env.AI_CAPTURE_CACHE_DAYS, 7))),
+            maxHeight: Math.max(1000, Math.min(16000, int(env.AI_CAPTURE_MAX_HEIGHT, 12000))),
+            // A cap on sites one run may capture (a mis-typed depth cannot spend past the price it held).
+            maxCaptures: Math.max(1, Math.min(30, int(env.AI_CAPTURE_MAX_SITES, 30))),
+        },
         // Compiled JSON Schema validators (server/schemas.js): an LRU shared by every caller, some of
         // whose schemas are caller-supplied, so it is bounded by count and by total schema size.
         schemaCache: {

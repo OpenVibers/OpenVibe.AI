@@ -361,7 +361,7 @@ function createRegistry(db, { clock = { now: () => Date.now() }, env = process.e
         schemas.assertSchema(w.output_schema, 'output_schema');
         if (!Array.isArray(w.steps) || !w.steps.length) throw new AiError(422, 'ai.invalid', 'workflow needs at least one step');
         for (const s of w.steps) {
-            if (!s || !['llm', 'passthrough', 'complete', 'messages', 'transcribe', 'embed', 'image', 'speak', 'picture', 'media_analysis', 'research', 'devblog'].includes(s.kind)) throw new AiError(422, 'ai.invalid', 'step kind must be llm, passthrough, complete, messages, transcribe, embed, image, speak, picture, media_analysis or research');
+            if (!s || !['llm', 'passthrough', 'complete', 'messages', 'transcribe', 'embed', 'image', 'speak', 'picture', 'media_analysis', 'research', 'devblog', 'deep_dive'].includes(s.kind)) throw new AiError(422, 'ai.invalid', 'step kind must be llm, passthrough, complete, messages, transcribe, embed, image, speak, picture, media_analysis, research or deep_dive');
             if ((s.kind === 'llm' || (s.kind === 'media_analysis' && s.template)) && !(s.template && await latestAny('templates', s.template))) throw new AiError(422, 'ai.invalid', `step references unknown template ${s.template}`);
         }
         if (!['none', 'private', 'service'].includes(w.cache_mode)) throw new AiError(422, 'ai.invalid', 'cache_mode must be none, private or service');

@@ -90,7 +90,10 @@ function createTiers({ config, valkey = null, clock = { now: () => Date.now() },
      * Hold the run's estimate on every budget, or refuse it. Returns the hold ({ ids: { unit: [id] } }) to settle
      * or release, or null when an all-free run was admitted without Valkey.
      */
-    async function admit(ctx, runId) {
+    async function admit(ctx, runId, amount = null) {
+        const held = amount && typeof amount === 'object'
+            ? { 'ai-token': Math.max(0, Math.min(50000000, Number(amount.tokens) || 0)), 'ai-usd': Math.max(0, Math.min(100, Number(amount.usd) || 0)) }
+            : g.hold;
         const project = `${ctx.requesterType}:${ctx.requesterId}`;
         const subject = subjectOf(ctx) || project;
         const budgets = [{ scope: 'subject', subject, project, tier: tierOf(subject, project) }, { scope: 'project', subject: '*', project, tier: tierOf(project) }];
@@ -98,7 +101,7 @@ function createTiers({ config, valkey = null, clock = { now: () => Date.now() },
         try {
             for (const b of budgets) {
                 for (const unit of UNITS) {
-                    const r = await timeout(gov.reserve({ subject: b.subject, project: b.project, tier: b.tier, unit, amount: g.hold[unit], key: `ai:${runId}:hold` }), g.timeoutMs);
+                    const r = await timeout(gov.reserve({ subject: b.subject, project: b.project, tier: b.tier, unit, amount: held[unit], key: `ai:${runId}:hold` }), g.timeoutMs);
                     if (!r.ok) {
                         await release(hold);
                         throw new AiError(429, 'govern.exceeded', `the ${b.tier} tier allows ${r.limit} ${unit} per ${r.window} for this ${b.scope}`, {

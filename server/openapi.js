@@ -455,6 +455,67 @@ route('post', '/research', {
     responses: { 201: json('Finished', ref('RunResponse')), 202: json('Still running', ref('RunResponse')), 200: json('Replay', ref('RunResponse')), ...errors() },
 });
 
+// ── Deep dives (workflow design.deep_dive; server/deep-dive/) ─────────────────────────────
+const deepDive = { type: 'object', additionalProperties: true, required: ['id', 'run_id', 'status', 'depth'], properties: {
+    id: str({ pattern: '^run_' }), run_id: str({ pattern: '^run_' }), status: str({ enum: ['queued', 'running', 'choosing', 'succeeded', 'failed', 'cancelled'] }),
+    step: nullable('string'), progress: { type: 'number', minimum: 0, maximum: 1 }, steps: arrayOf({ type: 'object', additionalProperties: true }),
+    question: str(), depth: str({ enum: ['quick', 'thorough', 'expert'] }), site_limit: integer(), price_usd: { type: 'number' },
+    candidates: arrayOf({ type: 'object', additionalProperties: true }), captures: arrayOf({ type: 'object', additionalProperties: true }),
+    report: nullable('object'), gaps: arrayOf(str()), error: nullable('object'), owner: nullable('object'),
+} };
+route('get', '/deep-dives/depths', {
+    operationId: 'deepDiveDepths', summary: 'The three depths, their site counts, minutes and price', tags: ['deep-dives'], security: [],
+    description: 'Public: what a deep dive costs before anyone signs in. The price is the run estimate held on the tier budgets, not a charge.',
+    responses: { 200: json('The depths', { type: 'object', required: ['depths'], properties: { depths: arrayOf({ type: 'object', required: ['key', 'sites', 'price_usd'], properties: { key: str({ enum: ['quick', 'thorough', 'expert'] }), label: str(), sites: integer(), minutes: integer(), price_usd: { type: 'number' }, analysis: str() } }), capture: nullable('object') } }), ...errors([429]) },
+});
+route('post', '/deep-dives', {
+    operationId: 'startDeepDive', summary: 'Start a deep dive (workflow design.deep_dive)', tags: ['deep-dives'], security: SERVICE,
+    description: 'ai.run.create. The price is computed from the depth and held; a person is on_behalf_of. The run makes its progress on GET /deep-dives/{id}/state and writes ai.deep-dive@1.',
+    requestBody: body({ type: 'object', required: ['question', 'depth'], properties: {
+        question: str({ minLength: 1, maxLength: 500 }), depth: str({ enum: ['quick', 'thorough', 'expert'] }),
+        sites: arrayOf(str({ format: 'uri' })), on_behalf_of: ref('SubjectRef'), idempotency_key: str({ minLength: 8, maxLength: 128 }),
+        target: { type: 'object' }, attribution: { type: 'object' },
+    } }),
+    responses: { 202: json('Accepted', { type: 'object', required: ['deep_dive'], properties: { deep_dive: deepDive, price_usd: { type: 'number' }, held_usd: { type: 'number' } } }), ...errors() },
+});
+route('get', '/deep-dives', {
+    operationId: 'listDeepDives', summary: "The caller's deep dives, newest first", tags: ['deep-dives'], security: SERVICE,
+    description: 'ai.run.read (or ai.run.create). Each item is the deep dive state, with its report when it has one.',
+    parameters: [query('limit', integer({ minimum: 1, maximum: 100 }))],
+    responses: { 200: json('The deep dives', { type: 'object', required: ['deep_dives'], properties: { deep_dives: arrayOf(deepDive) } }), ...errors() },
+});
+route('get', '/deep-dives/{id}', {
+    operationId: 'getDeepDive', summary: 'A deep dive: its state and, when it ended, the ai.deep-dive@1 report', tags: ['deep-dives'], security: SERVICE,
+    description: 'ai.run.read (or ai.run.create). Only the requester or the person on_behalf_of may read it; anyone else gets 404.',
+    parameters: [path('id', str({ pattern: '^run_' }))],
+    responses: { 200: json('The deep dive', { type: 'object', required: ['deep_dive'], properties: { deep_dive: deepDive } }), ...errors() },
+});
+route('get', '/deep-dives/{id}/state', {
+    operationId: 'getDeepDiveState', summary: 'Live step progress, candidates and status', tags: ['deep-dives'], security: SERVICE,
+    description: 'ai.run.read (or ai.run.create). Small enough to poll: steps, candidates, captures (ids only) and the error.',
+    parameters: [path('id', str({ pattern: '^run_' }))],
+    responses: { 200: json('The state', { type: 'object', required: ['deep_dive'], properties: { deep_dive: deepDive } }), ...errors() },
+});
+route('post', '/deep-dives/{id}/sites', {
+    operationId: 'setDeepDiveSites', summary: 'Add or drop sites before Capture, or start it', tags: ['deep-dives'], security: SERVICE,
+    description: 'ai.run.create. Allowed while the deep dive is choosing sites (Quick goes on by itself). Any call records the person\'s decision, so Capture starts.',
+    parameters: [path('id', str({ pattern: '^run_' }))],
+    requestBody: body({ type: 'object', properties: { add: arrayOf(str({ format: 'uri' })), drop: arrayOf(str()), start: { type: 'boolean' } } }),
+    responses: { 200: json('Updated', { type: 'object', required: ['deep_dive'], properties: { deep_dive: deepDive } }), ...errors() },
+});
+route('post', '/deep-dives/{id}/cancel', {
+    operationId: 'cancelDeepDive', summary: 'Cancel a deep dive; no later capture or model call starts', tags: ['deep-dives'], security: SERVICE,
+    description: 'ai.run.create. Cancels the underlying run.',
+    parameters: [path('id', str({ pattern: '^run_' }))],
+    responses: { 200: json('Cancelled', { type: 'object', required: ['deep_dive'], properties: { deep_dive: deepDive } }), ...errors() },
+});
+route('get', '/deep-dives/{id}/shots/{shot}', {
+    operationId: 'getDeepDiveShot', summary: 'One private screenshot or crop, as the owner', tags: ['deep-dives'], security: SERVICE,
+    description: 'ai.run.read (or ai.run.create). The bytes come from Media; the response is private and no-store. 503 when Media is not configured on this service.',
+    parameters: [path('id', str({ pattern: '^run_' })), path('shot', str({ pattern: '^(cap|crop)_' }))],
+    responses: { 200: { description: 'The image', content: { 'image/png': { schema: { type: 'string', format: 'binary' } } } }, ...errors([404, 503]) },
+});
+
 // ── The budget of a run token (Codes C3) ────────────────────────────────────────────────────
 route('put', '/run-budgets/{jti}', {
     operationId: 'putRunBudget', summary: "Register the budget of a run token", tags: ['runs'], security: SERVICE,
