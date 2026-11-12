@@ -16,6 +16,7 @@ function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth,
     const providerOrder = require('../providers/order').createProviderOrder({ registry });
     const supplyManager = supply || require('../platform/supply').createSupply({ db, registry, clock });
     const ownerConfig = require('../owner-config').createOwnerConfig({ db, registry, clock });
+    const gpuPolicy = settings?.gpus ? require('../gpu/policy').createGpuPolicy({ db, settings, clock }) : null;
     // The public marketplace readings and the per-token cost they imply, added to both console sections. Data only:
     // Exchange renders it with its existing console classes.
     const marketPayload = async () => {
@@ -38,6 +39,13 @@ function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth,
         const subject = String(req.get('x-ov-subject') || '');
         return /^usr_[0-9A-HJKMNP-TV-Z]{26}$/.test(subject) ? subject : req.principal.sub;
     };
+    // Exchange verifies the person's Network role before proxying this owner action. Only its service
+    // principal may cross this boundary, and it must name the owner whose audit row receives the change.
+    const gpuOwner = (req, res, next) => {
+        if (req.principal?.sub !== 'svc:exchange' || req.get('x-ov-role') !== 'owner' || !/^usr_[0-9A-HJKMNP-TV-Z]{26}$/.test(String(req.get('x-ov-subject') || '')))
+            return res.status(403).json({ code: 'gpu.owner_only', error: 'Only the owner may change GPU supply settings.' });
+        return next();
+    };
     const wrap = (fn) => async (req, res) => {
         try { res.set('Cache-Control', 'no-store').json(await fn(req)); }
         catch (err) { log.error(`[console-json] ${req.method} ${req.path} failed (${err && err.code || 'ai.internal'})`); res.status(err.status || 500).json({ error: 'AI admin data is unavailable.', code: err.code || 'ai.internal' }); }
@@ -52,6 +60,7 @@ function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth,
     }));
     r.get('/api/v1/admin/console/:section', read, wrap(async (req) => {
         const section = req.params.section;
+        if (section === 'gpu-policy') return gpuPolicy ? gpuPolicy.read() : { global: null, providers: [] };
         if (section === 'supply') return { ...await supplyManager.report(), ...await marketPayload() };
         if (section === 'overview') {
             const since = new Date(clock.now() - 86400000).toISOString();
@@ -146,7 +155,7 @@ function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth,
     }));
     r.get('/api/v1/admin/console/gpus/:model/quote', read, wrap(async (req) => {
         if (!gpus) throw new AiError(409, 'ai.conflict', 'GPU quotes are off on this host');
-        return await gpus.preview(String(req.params.model), { strategy: req.query.strategy || undefined });
+        return await gpus.preview(String(req.params.model), { strategy: req.query.strategy || undefined, jobClass: req.query.class || undefined, checkpoint: req.query.checkpoint || undefined });
     }));
     // Read the public marketplace pages now instead of waiting for the due tick. It still never rents anything.
     r.post('/api/v1/admin/console/gpus/prices/refresh', write, wrap(async () => {
@@ -155,6 +164,14 @@ function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth,
     }));
     r.post('/api/v1/admin/console/supply/quotes', json, write, wrap(async req => ({ recorded: await require('../pricebook/gpus').recordGpuQuotes(db, JSON.stringify(req.body.quotes)), dry_run: true })));
     r.post('/api/v1/admin/console/supply', json, write, wrap(req => supplyManager.save(req.body || {}, actor(req))));
+    r.post('/api/v1/admin/console/gpu-policy/:scope', json, write, gpuOwner, wrap(req => {
+        if (!gpuPolicy) throw new AiError(503, 'gpu.unavailable', 'GPU supply settings are unavailable');
+        return gpuPolicy.save(req.params.scope, req.body || {}, actor(req), req.ov?.traceId);
+    }));
+    r.post('/api/v1/admin/console/gpu-policy/:scope/key', json, write, gpuOwner, wrap(req => {
+        if (!gpuPolicy) throw new AiError(503, 'gpu.unavailable', 'GPU supply settings are unavailable');
+        return gpuPolicy.setKey(req.params.scope, req.body?.api_key, actor(req), req.ov?.traceId);
+    }));
     r.post('/api/v1/admin/console/orders/:capability', json, write, wrap(req => providerOrder.save(req.params.capability, req.body, { actor: actor(req), trace: req.traceId })));
     r.post('/api/v1/admin/console/owner-inference/spend-caps', json, write, wrap(async (req) => ({ cap: await ownerConfig.setCap(req.body || {}, { actor: actor(req), trace: req.ov && req.ov.traceId }) })));
     r.post('/api/v1/admin/console/owner-inference/routing', json, write, wrap(async (req) => ({ routing: await ownerConfig.setRouting(req.body || {}, { actor: actor(req), trace: req.ov && req.ov.traceId }) })));
@@ -269,7 +286,7 @@ function consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth,
         if (!gpus) throw new AiError(409, 'ai.conflict', 'GPU controls are off on this host');
         const action = String(req.params.action);
         if (!['launch', 'stop'].includes(action)) throw new AiError(404, 'ai.not_found', 'no such GPU action');
-        await gpus.request(String(req.params.model || ''), action, actor(req));
+        await gpus.request(String(req.params.model || ''), action, actor(req), { jobClass: (req.body || {}).class, checkpoint: (req.body || {}).checkpoint });
         return { ok: true };
     }));
     r.post('/api/v1/admin/console/pricebook/changes/:id', write, wrap(async (req) => {

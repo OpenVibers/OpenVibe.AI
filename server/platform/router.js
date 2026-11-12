@@ -68,6 +68,9 @@ function platform({ db, auth, clock, log, searchFetch, credentials, registry, en
         ({ engines: await search.engines() })),
     );
     const allow = auth.appOrCap(CAPS.appRun, CAPS.runCreate);
+    // The icon reference search takes one more first-party service capability: exchange.search.icons,
+    // held by OpenVibe.Design. It opens only this route and never web, image or fetch search.
+    const allowIcons = auth.appOrCap(CAPS.appRun, CAPS.runCreate, CAPS.exchangeSearchIcons);
     const searchWindows = new Map();
     const searchLimit = (req, res, next) => {
         const id = req.principal?.subject?.id || req.principal?.sub;
@@ -85,13 +88,45 @@ function platform({ db, auth, clock, log, searchFetch, credentials, registry, en
         searchWindows.set(id, entry);
         next();
     };
-    for (const kind of ['web', 'images', 'icons'])
+    // A service calling with exchange.search.icons alone (Design) gets its own minute bucket and its own
+    // limit, separate from people and from services that hold ai.run.create.
+    const iconService = (req) =>
+        Array.isArray(req.principal?.cap) &&
+        req.principal.cap.includes(CAPS.exchangeSearchIcons) &&
+        !req.principal.cap.includes(CAPS.appRun) &&
+        !req.principal.cap.includes(CAPS.runCreate);
+    const iconWindows = new Map();
+    const iconRpm = Math.max(1, Number(env.AI_EXCHANGE_ICONS_RPM) || 60);
+    const iconLimit = (req, res, next) => {
+        if (!iconService(req)) return searchLimit(req, res, next);
+        const id = req.principal?.sub || 'unknown';
+        const now = clock.now();
+        for (const [key, value] of iconWindows)
+            if (value.until <= now) iconWindows.delete(key);
+        const entry = iconWindows.get(id) || { until: now + 60000, count: 0 };
+        if (entry.count >= iconRpm) {
+            res.locals.searchCharge = 0;
+            return res
+                .status(429)
+                .json({ error: 'Icon search limit reached; try again in a minute' });
+        }
+        entry.count++;
+        iconWindows.set(id, entry);
+        next();
+    };
+    for (const kind of ['web', 'images'])
         r.post(
             '/v1/search' + (kind === 'web' ? '' : '/' + kind),
             allow,
             searchLimit,
             wrap(async (req) => search.search(kind, req.body || {}, searchContext(req))),
         );
+    r.post(
+        '/v1/search/icons',
+        allowIcons,
+        iconLimit,
+        wrap(async (req) => search.search('icons', req.body || {}, searchContext(req))),
+    );
     r.post(
         '/v1/fetch',
         allow,

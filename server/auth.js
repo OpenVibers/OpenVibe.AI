@@ -38,6 +38,8 @@ const CAPS = Object.freeze({
     actionsRead: 'ai.actions.read',
     // D11: Network's admin proxy, acting for the owner, manages ai.exchange and ai.provider_keys (Contracts 0.288.0).
     configManage: 'ai.config.manage',
+    // The Exchange platform API's icon reference search, held by OpenVibe.Design alone (Contracts 0.407.0).
+    exchangeSearchIcons: 'exchange.search.icons',
 });
 
 // A person's own Network token (audience openvibe.ai): the same checks server/me.js applies, so a person may run

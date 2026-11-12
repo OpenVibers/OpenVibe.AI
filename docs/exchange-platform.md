@@ -8,7 +8,9 @@ The API host is `https://api.openvibe.exchange` (OpenVibe.AI). Exchange is the h
 - `GET /api/v1/exchange/key-usage`: private key/model/day usage, at most 1,000 grouped rows.
 - `/api/v1/exchange/deployments` aliases the existing private `/api/v1/own-endpoints` APIs and owner gates.
 - `POST /v1/search`, `/v1/search/images`, `/v1/search/icons`: `{q, engine?: "auto", limit?: 10}`.
-  Receipts contain engine, cost in USD and elapsed milliseconds. Openverse, Commons and Iconify need no key;
+  Receipts contain engine, cost in USD and elapsed milliseconds. `/v1/search/icons` also accepts a
+  first-party service token holding `exchange.search.icons` (OpenVibe.Design); it reaches only that
+  route, has its own minute quota and needs no Exchange key. Openverse, Commons and Iconify need no key;
   SearXNG requires `EXCHANGE_SEARXNG_URL` on an HTTPS host with JSON search enabled. OpenVibe Search uses its public index.
   Paid engines are not enabled. Unsupported filters return an error rather than silently broadening a licence search.
 - `POST /v1/fetch {url}` uses guarded HTTPS egress with pinned public DNS, no redirects, an 8 MB transfer cap and a
