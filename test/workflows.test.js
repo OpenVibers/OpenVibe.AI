@@ -49,6 +49,7 @@ const EXAMPLES = {
     'wiki.generate_page': { title: 'WAL mode', topic: 'SQLite', pages: ['SQLite', 'WAL mode', 'Journal'], images: [{ title: 'WAL diagram', description: 'How WAL writes' }], sources: SRC(3) },
     'research.gather': { query: 'SQLite', max_images: 4 },
     'design.deep_dive': { question: 'a phone-first robot control panel', depth: 'quick' },
+    'video.analyze': { url: '__MEDIA__/fixture.mp4', depth: 'quick' },
     'blog.draft_post': { topic: 'Why we self-host', sources: SRC(1) },
     'blog.write_digest': { desk: 'News digest', about: 'Government and space agency announcements', period: '14 October 2026', sources: SRC(3) },
     'blog.write_satire': { topic: 'Is it safe to let your air fryer vote?', angle: 'a consumer safety explainer' },
@@ -136,8 +137,9 @@ t.test('boot seeds every required workflow key', async () => {
     const mediaBase = `http://127.0.0.1:${media.address().port}`;
     EXAMPLES['live.media.transcribe'].media_url = `${mediaBase}/v/1`;
     EXAMPLES['media.analyze'].media_url = `${mediaBase}/fixture.mp4`;
+    EXAMPLES['video.analyze'].url = `${mediaBase}/fixture.mp4`;
     // AI_IMAGE_MODEL seeds default.image, so ai.image runs end to end on the stub's PNG like every other workflow.
-    h = await boot({ env: { OV_MEDIA_INTERNAL_URL: mediaBase, AI_IMAGE_MODEL: 'gpt-image-1' } });
+    h = await boot({ env: { OV_MEDIA_INTERNAL_URL: mediaBase, AI_IMAGE_MODEL: 'gpt-image-1', AI_VIDEO_ANALYSIS_DIR: require('path').join(require('os').tmpdir(), 'ov-ai-video-workflows'), AI_VIDEO_ANALYSIS_DISK_RESERVE_BYTES: '0' } });
     const keys = (await h.registry.listWorkflows()).map(w => w.key);
     for (const k of ['content.wiki', 'wiki.generate_space', 'wiki.generate_page', 'blog.draft_post', 'blog.write_digest', 'blog.write_satire', 'news.summarize_story', 'news.compare_perspectives', 'reviews.summarize_entity', 'deals.enrich_deal',
         'coupons.extract_coupon', 'trade.summarize_market_context', 'codes.generate_docs', 'games.generate_lore', 'moderation.classify', 'tools.describe', 'food.suggest_recipes', 'food.read_pantry_photo', 'pics.describe_image', 'rent.screen_listing', 'chat.member.reply', 'chat.member.turn', 'chat.vibe.listen', 'chat.persona.image',
@@ -172,7 +174,8 @@ t.test('every workflow has compiling, versioned input and output schemas and an 
 
 t.test('every workflow runs end to end on the stub and returns schema-valid output', async () => {
     for (const w of await h.registry.listWorkflows()) {
-        if (w.key === 'media.analyze' && !HAS_FFMPEG) { console.log('workflow media.analyze end to end: skipped (no ffprobe)'); continue; }
+        // Both of these need ffprobe on the host; without it the run cannot read a video at all.
+        if ((w.key === 'media.analyze' || w.key === 'video.analyze') && !HAS_FFMPEG) { console.log('workflow ' + w.key + ' end to end: skipped (no ffprobe)'); continue; }
         // A deep dive captures real sites: its own test brings a fake capture, search, research and registers.
         if (w.key === 'design.deep_dive') { console.log('workflow design.deep_dive end to end: covered by test/deep-dive.test.js (no live capture)'); continue; }
         // image.picture reads Commons/Openverse and writes Media: its own test brings a fake researcher and store.

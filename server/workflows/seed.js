@@ -23,6 +23,7 @@ const devblog = require('./devblog');
 const chat = require('./chat');
 const research = require('./research');
 const deepDive = require('./deep-dive');
+const video = require('./video');
 const meme = require('./meme');
 const changelog = require('./changelog');
 const pictures = require('./pictures');
@@ -339,7 +340,7 @@ async function seed({ registry, quotas, config, env = process.env, db }) {
         const { key, ...def } = t;
         await registry.seedVersioned('template', key, { description: null, default_route: null, owner: 'ai', visibility: 'internal', metadata: {}, ...def });
     }
-    for (const w of [...live.workflows, ...core.workflows, ...products.workflows, ...devblog.workflows, ...media.workflows, ...chat.workflows, ...space.workflows, ...research.workflows, ...deepDive.workflows, ...meme.workflows, ...changelog.workflows, ...pictures.workflows, ...uiLayout.workflows, ...decide.workflows]) {
+    for (const w of [...live.workflows, ...core.workflows, ...products.workflows, ...devblog.workflows, ...media.workflows, ...chat.workflows, ...space.workflows, ...research.workflows, ...deepDive.workflows, ...video.workflows, ...meme.workflows, ...changelog.workflows, ...pictures.workflows, ...uiLayout.workflows, ...decide.workflows]) {
         const { key, ...def } = w;
         await registry.seedVersioned('workflow', key, { description: null, default_route: null, cache_ttl_sec: null, metadata: {}, ...def });
     }

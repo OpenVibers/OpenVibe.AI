@@ -38,6 +38,8 @@ const privacy = require('./exchange/privacy');
 const TERMINAL = new Set(['succeeded', 'failed', 'cancelled', 'cached']);
 const QUEUE_RETRY_AFTER_S = 5;
 const newRunId = () => `run_${ids.ulid()}`;
+// The runs whose price the API route computes and the run holds on the tier budgets: a deep dive and a video analysis.
+const PRICED_RUNS = new Set(['design.deep_dive', 'video.analyze']);
 
 /**
  * BA3: how long a batch-class run may wait for a provider's own batch API, in hours (1 to 72). The
@@ -624,7 +626,7 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
         // L36 Y1: a run that may use the person's own key holds neither — their key is free to them, and a $0 balance
         // anywhere must never block it. If it falls back to the network, the usage is recorded after the run.
         // A deep dive's price is held as the run's estimate (the route computed it from the depth, never the caller).
-        const holdAmount = wf.key === 'design.deep_dive' && body.options && body.options.hold && typeof body.options.hold === 'object'
+        const holdAmount = PRICED_RUNS.has(wf.key) && body.options && body.options.hold && typeof body.options.hold === 'object'
             ? { usd: Math.max(0, Math.min(100, Number(body.options.hold.usd) || 0)), tokens: Math.max(0, Math.min(50000000, Number(body.options.hold.tokens) || 0)) }
             : null;
         const hold = credentialSubject !== null || projectProvider || selfKeys || !tiers ? null : await tiers.admit(ctx, id, holdAmount);

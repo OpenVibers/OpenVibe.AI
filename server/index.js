@@ -33,7 +33,7 @@ const { AiError } = require('./util');
 const { gracefulStop, telemetry } = require('openvibe-sdk/service');
 const { createPgTelemetrySink, startTelemetryRetention } = require('openvibe-sdk/telemetry');
 
-async function start({ searchFetch = null, config, db: givenDb = null, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, listen = true, credentialFetch = null, valkey = null, research = null, search: givenSearch = null, capture: givenCapture = null, deepDive: givenDeepDive = null, deepDiveFetch = null, machineModels = null, variantEvidence = null, community: givenCommunity = null, communityEndpoints: givenEndpoints = null, webhooks: givenWebhooks = null, abuse: givenAbuse = null, memoryTransport = null, memoryLookup = null, ownerNotify = null, mediaStore: givenMediaStore = null } = {}) {
+async function start({ searchFetch = null, config, db: givenDb = null, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, listen = true, credentialFetch = null, valkey = null, research = null, search: givenSearch = null, capture: givenCapture = null, deepDive: givenDeepDive = null, deepDiveFetch = null, machineModels = null, variantEvidence = null, community: givenCommunity = null, communityEndpoints: givenEndpoints = null, webhooks: givenWebhooks = null, abuse: givenAbuse = null, memoryTransport = null, memoryLookup = null, ownerNotify = null, mediaStore: givenMediaStore = null, videoAnalysis: givenVideoAnalysis = null, spawnImpl = null } = {}) {
     config = config || load(env);
     schemas.configure(config.schemaCache);
     // PostgreSQL (ADR-035): opened and migrated here unless the caller (a test) hands in a migrated handle.
@@ -134,7 +134,10 @@ async function start({ searchFetch = null, config, db: givenDb = null, clock = {
     const localCapture = givenCapture || require('./capture').createCapture({ config, env, log, upload: (o) => mediaStore.put({ ...o, visibility: 'private' }) });
     const captureClient = givenCapture || require('./capture/client').createCaptureClient({ config, env, fetchImpl, log, local: localCapture });
     const deepDive = givenDeepDive || require('./deep-dive').createDeepDive({ config, db, clock, log, registry, pool, research: researcher, search, capture: captureClient, mediaStore, fetcher, sourceFetch: deepDiveFetch });
-    const engine = createEngine({ registry, pool, fetcher, quotas, config, log, db, clock, mediaStore, research: researcher, deepDive });
+    // The video analysis (workflow video.analyze): ffprobe and ffmpeg on this host, the speech and vision routes,
+    // and one model that writes the chapters, the summary and the named things with their times.
+    const videoAnalysis = givenVideoAnalysis || require('./video-analysis').createVideoAnalysis({ config, db, clock, log, registry, pool, mediaStore, fetcher, spawnImpl, fetchImpl });
+    const engine = createEngine({ registry, pool, fetcher, quotas, config, log, db, clock, mediaStore, research: researcher, deepDive, videoAnalysis });
     // ai.run.* to OpenVibe.Events through the outbox (server/events.js); before recovery, so its failures are announced.
     require('./events').init(db, { log });
     // platform.usage-sample@1 readings to OpenVibe.Billing through their own outbox (server/usage-samples.js).
@@ -253,7 +256,7 @@ async function start({ searchFetch = null, config, db: givenDb = null, clock = {
         clientSecret: env.OV_OAUTH_CLIENT_SECRET, fetch: fetchImpl,
     }) : null;
     const benchEvents = createBenchEvents({ bench, accountData, accountSend, config, log, fetchImpl, clientSecret: env.OV_OAUTH_CLIENT_SECRET });
-    const app = createApp({ choices, searchFetch, config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, grants, vault, settings, benchEvents, runBudgets, memory, memoryImport, memoryServices, memorySharing, community, endpoints, webhooks, presets, receipts, balance, creditGrants, sessionCookies, gpus, gpuMarket, supply, abuse, priceBook, modelSync, modelDiscovery, ownEndpoints, refusal, willingness, abliterationTax, batches, share, deepDive, mediaStore, search });
+    const app = createApp({ choices, searchFetch, config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, grants, vault, settings, benchEvents, runBudgets, memory, memoryImport, memoryServices, memorySharing, community, endpoints, webhooks, presets, receipts, balance, creditGrants, sessionCookies, gpus, gpuMarket, supply, abuse, priceBook, modelSync, modelDiscovery, ownEndpoints, refusal, willingness, abliterationTax, batches, share, deepDive, videoAnalysis, mediaStore, search });
     let jwks = null;
     let keyLoaded = Promise.resolve(null);
     if (!keys.pinned && config.nodeEnv !== 'test') {

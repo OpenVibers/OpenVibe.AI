@@ -166,7 +166,7 @@ function batchExec(b, result) {
     };
 }
 
-function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spawnImpl, log = console, research = null, db = null, clock = { now: () => Date.now() }, mediaStore = null, deepDive = null }) {
+function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spawnImpl, log = console, research = null, db = null, clock = { now: () => Date.now() }, mediaStore = null, deepDive = null, videoAnalysis = null }) {
     pool = require('../effort/pool').wrapPool(pool);
     // Turn attachments use only the host's local speech recognizer. Reading an audio file must never
     // select a paid transcription provider as a side effect of a chat request.
@@ -645,6 +645,22 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
         return { output: r.output, exec };
     }
 
+    /**
+     * video_analyze: one durable run (server/video-analysis/) with its own seven-step progress, its keyframes and
+     * its report. It reads the video OpenVibe.Media lets this requester read, makes its own provider calls on the
+     * run's receipt and returns the ai.video-analysis@1 document; the run's usage and cost are the sum of those calls.
+     */
+    async function videoAnalyzeStep(step, input, wf, run, ctx) {
+        if (!videoAnalysis || typeof videoAnalysis.run !== 'function') throw new AiError(503, 'video_analysis.unavailable', 'the video analysis is not configured on this service');
+        const r = await videoAnalysis.run({ run, input, ctx });
+        const exec = {
+            provider: r.provider || (r.models && r.models.length ? 'mixed' : null), model: r.model || (r.models && r.models.length ? 'video-analysis' : null),
+            usage: r.usage || { input: 0, output: 0, cached: 0 }, cost: Number(r.cost) || 0,
+            synthetic: Boolean(r.synthetic), fallbackUsed: false, explain: null,
+        };
+        return { output: r.output, exec };
+    }
+
     /** A research run's grounding: what it read is the output itself; the gaps are the sources that did not answer. */
     function researchGrounding(output) {
         const gaps = Object.entries((output && output.providers) || {}).filter(([, p]) => p && !p.ok)
@@ -666,7 +682,7 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
         return { output, exec: { ...last.exec, usage, cost, savedUsd }, route: last.route };
     }
 
-    const STEP = { deep_dive: deepDiveStep, devblog: devblogStep, llm: llmStep, passthrough: passthroughStep, complete: completeStep, messages: messagesStep, transcribe: transcribeStep, embed: embedStep, image: imageStep, speak: speakStep, picture: pictures.step, media_analysis: mediaAnalysis.step, research: researchStep };
+    const STEP = { deep_dive: deepDiveStep, video_analyze: videoAnalyzeStep, devblog: devblogStep, llm: llmStep, passthrough: passthroughStep, complete: completeStep, messages: messagesStep, transcribe: transcribeStep, embed: embedStep, image: imageStep, speak: speakStep, picture: pictures.step, media_analysis: mediaAnalysis.step, research: researchStep };
 
     /**
      * Run a workflow. ctx: { signal, logRequest, debugRaw, inputHash }

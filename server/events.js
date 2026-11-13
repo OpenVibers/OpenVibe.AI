@@ -184,6 +184,27 @@ async function deepDiveUpdated({ runId, deepDiveId, status, step, progress, step
     return env;
 }
 
+async function videoAnalysisUpdated({ runId, analysisId, status, step, progress, steps, depth, requester, on_behalf_of, url, error = null }) {
+    if (!svc || !dbRef || !runId) return null;
+    const payload = {
+        video_analysis_id: String(analysisId || runId), run_id: String(runId),
+        status: ['queued', 'running', 'succeeded', 'failed', 'cancelled'].includes(status) ? status : 'running',
+        step: step === 'done' ? 'done' : (['probe', 'keyframes', 'transcript', 'describe', 'analyse', 'explicit', 'report'].includes(step) ? step : null),
+        progress: Math.max(0, Math.min(1, Number(progress) || 0)),
+        steps: (steps || []).slice(0, 7).map((s) => ({ key: s.key, status: s.status })),
+        depth: ['quick', 'standard', 'deep'].includes(depth) ? depth : 'standard',
+        requester: requester && requester.type && requester.id ? { type: requester.type, id: String(requester.id) } : { type: 'service', id: 'ai' },
+        on_behalf_of: on_behalf_of && on_behalf_of.type && on_behalf_of.id ? { type: on_behalf_of.type, id: String(on_behalf_of.id) } : null,
+        url: String(url || 'https://openvibe.exchange/video-analysis/' + runId),
+        error: error && error.code ? { code: String(error.code).slice(0, 80), detail: String(error.detail || '').slice(0, 500) } : null,
+        occurred_at: new Date().toISOString(),
+    };
+    const env = await svc.emit({ event_type: 'ai.video_analysis.updated', actor: { type: 'service', id: 'ai' }, subject: { type: 'run', id: payload.run_id }, visibility: 'internal', priority: status === 'failed' ? 'important' : 'low', payload });
+    queued++;
+    dbRef.afterCommit(() => svc && svc.kick());
+    return env;
+}
+
 async function status() {
     if (!svc) return { enabled: false };
     const s = await svc.status();
@@ -202,6 +223,6 @@ async function stop() {
 }
 function _reset() { if (svc) svc.stop(); svc = null; queued = 0; }
 
-module.exports = { init, runChanged, credentialFailed, callRecorded, deepDiveUpdated, callPayload, payloadOf, status, stop, _reset };
+module.exports = { init, runChanged, credentialFailed, callRecorded, deepDiveUpdated, videoAnalysisUpdated, callPayload, payloadOf, status, stop, _reset };
 
 
