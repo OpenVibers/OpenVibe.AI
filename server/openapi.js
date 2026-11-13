@@ -1091,6 +1091,14 @@ route('post', '/decisions', {
     responses: { 200: json('The answers', { type: 'object', required: ['answers', 'calibrated', 'receipt'], properties: { answers: { type: 'object' }, calibrated: { type: 'boolean' }, receipt: { type: 'object' } } }), ...errors([400, 401, 403, 422, 503]) },
 });
 
+route('post', '/route-decisions/{id}/outcome', {
+    operationId: 'reportRouteDecisionOutcome', summary: 'Say how an Auto answer that Decisions routed went', tags: ['decisions'], security: SERVICE,
+    description: 'ai.run.create (or a person\'s own token). Plan 16d: an openvibe/auto answer that asked Decisions carries explain.route_decision.id (rdc_…). A product that knows how the answer went (a test passed, the person voted) reports it here, and the weekly fit of that task kind\'s threshold counts it. Only the person or service the decision answered may report it; any other caller gets 404, the same as a missing one.',
+    parameters: [path('id', str({ pattern: '^rdc_[0-9a-f]{24}$' }))],
+    requestBody: body({ type: 'object', required: ['good'], properties: { good: { type: 'boolean' } } }),
+    responses: { 200: json('The outcome', { type: 'object', required: ['id', 'outcome'], properties: { id: str(), outcome: str({ enum: ['good', 'bad'] }) } }), ...errors([401, 403, 404, 422]) },
+});
+
 // ── Routing presets and receipts (the Exchange, 2026-11-06) ───────────────────────────────────
 route('get', '/presets', {
     operationId: 'listPresets', summary: 'The routing presets this caller may name', tags: ['presets'], security: SERVICE_OR_APP,
