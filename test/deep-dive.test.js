@@ -84,6 +84,20 @@ async function waitFor(h, id, tok, wanted, tries = 120) {
     return last;
 }
 
+// The deep dive marks itself succeeded inside the workflow, and the run engine stores the run's output just after the
+// handler returns: a run read in between has no output yet (CI, 11-13: "Cannot read properties of null (reading
+// 'schema')"). The run's own record is read once the run itself has finished.
+async function waitForRun(h, id, tok, tries = 120) {
+    let last = null;
+    for (let i = 0; i < tries; i++) {
+        last = await request(h.base, 'GET', `/api/v1/runs/${id}`, { tok });
+        const run = last.body && last.body.run;
+        if (run && ['succeeded', 'failed', 'cancelled'].includes(run.status) && run.output) return last;
+        await new Promise((r2) => setTimeout(r2, 100));
+    }
+    return last;
+}
+
 (async () => {
     // ── The price, before anyone signs in ──
     const f = fixtures();
@@ -138,7 +152,7 @@ async function waitFor(h, id, tok, wanted, tries = 120) {
         assert.deepStrictEqual(report.gaps.length >= 0, true);
 
         // The run's own output is the same document, and the run receipt has the captures beside the model calls.
-        r = await request(h.base, 'GET', `/api/v1/runs/${id}`, { tok: exchange });
+        r = await waitForRun(h, id, exchange);
         assert.strictEqual(r.status, 200);
         assert.strictEqual(r.body.run.output.schema, 'ai.deep-dive@1');
         assert.ok(r.body.requests.some((x) => x.operation === 'capture'), 'the receipt lists captures');
