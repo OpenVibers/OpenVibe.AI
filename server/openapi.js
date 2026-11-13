@@ -455,6 +455,60 @@ route('post', '/research', {
     responses: { 201: json('Finished', ref('RunResponse')), 202: json('Still running', ref('RunResponse')), 200: json('Replay', ref('RunResponse')), ...errors() },
 });
 
+// ── Video analyses (workflow video.analyze; server/video-analysis/) ─────────────────────────
+const videoAnalysis = { type: 'object', additionalProperties: true, required: ['id', 'run_id', 'status', 'depth'], properties: {
+    id: str({ pattern: '^run_' }), run_id: str({ pattern: '^run_' }), status: str({ enum: ['queued', 'running', 'succeeded', 'failed', 'cancelled'] }),
+    step: nullable('string'), progress: { type: 'number', minimum: 0, maximum: 1 }, steps: arrayOf({ type: 'object', additionalProperties: true }),
+    depth: str({ enum: ['quick', 'standard', 'deep'] }), media_id: nullable('string'), input: { type: 'object', additionalProperties: true },
+    frames: arrayOf({ type: 'object', additionalProperties: true }), report: nullable('object'), gaps: arrayOf(str()), error: nullable('object'), owner: nullable('object'),
+} };
+route('get', '/video-analyses/pricing', {
+    operationId: 'videoAnalysisPricing', summary: 'The three depths, their frame caps and their price per minute of video', tags: ['video-analyses'], security: [],
+    description: 'Public: what a video analysis costs before anyone signs in. The price is the run estimate held on the tier budgets, not a charge.',
+    responses: { 200: json('The depths', { type: 'object', required: ['workflow', 'depths'], properties: {
+        workflow: str(), schema: str(), currency: str(),
+        depths: arrayOf({ type: 'object', required: ['key', 'frames', 'price_usd_per_minute'], properties: {
+            key: str({ enum: ['quick', 'standard', 'deep'] }), label: str(), frames: integer(), price_usd_per_minute: { type: 'number' },
+            price_usd_min: { type: 'number' }, frame_every_sec: integer(), transcript_window_sec: integer(),
+        } }),
+    } }), ...errors([429]) },
+});
+route('post', '/video-analyses', {
+    operationId: 'startVideoAnalysis', summary: 'Start a video analysis (workflow video.analyze)', tags: ['video-analyses'], security: SERVICE,
+    description: 'ai.run.create. The video is a Media object, a Media attachment or a Media URL: OpenVibe.Media decides who may read it, and any other URL is refused. The price is computed from the depth and the length the caller names, and held; a person is on_behalf_of. The run makes its progress on GET /video-analyses/{id}/state and writes ai.video-analysis@1.',
+    requestBody: body({ type: 'object', required: ['depth'], properties: {
+        media_id: str({ pattern: '^med_[0-9A-HJKMNP-TV-Z]{26}$' }), attachment_id: str(), url: str({ format: 'uri' }),
+        depth: str({ enum: ['quick', 'standard', 'deep'] }), ask: str({ maxLength: 500 }), language: str({ pattern: '^(auto|[a-z]{2})$' }),
+        duration_s: integer({ minimum: 0 }), on_behalf_of: ref('SubjectRef'), idempotency_key: str({ minLength: 8, maxLength: 128 }),
+        target: { type: 'object' }, attribution: { type: 'object' },
+    } }),
+    responses: { 202: json('Accepted', { type: 'object', required: ['video_analysis'], properties: { video_analysis: videoAnalysis, price_usd: { type: 'number' }, held_usd: { type: 'number' } } }), ...errors() },
+});
+route('get', '/video-analyses', {
+    operationId: 'listVideoAnalyses', summary: "The caller's video analyses, newest first", tags: ['video-analyses'], security: SERVICE,
+    description: 'ai.run.read (or ai.run.create). Each item is the analysis state, with its report when it has one.',
+    parameters: [query('limit', integer({ minimum: 1, maximum: 100 }))],
+    responses: { 200: json('The video analyses', { type: 'object', required: ['video_analyses'], properties: { video_analyses: arrayOf(videoAnalysis) } }), ...errors() },
+});
+route('get', '/video-analyses/{id}', {
+    operationId: 'getVideoAnalysis', summary: 'A video analysis: its state and, when it ended, the ai.video-analysis@1 report', tags: ['video-analyses'], security: SERVICE,
+    description: 'ai.run.read (or ai.run.create). Only the requester or the person on_behalf_of may read it; anyone else gets 404.',
+    parameters: [path('id', str({ pattern: '^run_' }))],
+    responses: { 200: json('The video analysis', { type: 'object', required: ['video_analysis'], properties: { video_analysis: videoAnalysis } }), ...errors() },
+});
+route('get', '/video-analyses/{id}/state', {
+    operationId: 'getVideoAnalysisState', summary: 'Live step progress, the frames and the status', tags: ['video-analyses'], security: SERVICE,
+    description: 'ai.run.read (or ai.run.create). Small enough to poll: the steps, the frames, the gaps and the error.',
+    parameters: [path('id', str({ pattern: '^run_' }))],
+    responses: { 200: json('The state', { type: 'object', required: ['video_analysis'], properties: { video_analysis: videoAnalysis } }), ...errors() },
+});
+route('get', '/video-analyses/{id}/frames/{frame}', {
+    operationId: 'getVideoAnalysisFrame', summary: 'One keyframe of a video analysis, as the owner', tags: ['video-analyses'], security: SERVICE,
+    description: 'ai.run.read (or ai.run.create). The frame is a private Media object; it is served to the requester alone.',
+    parameters: [path('id', str({ pattern: '^run_' })), path('frame', integer({ minimum: 0 }))],
+    responses: { 200: { description: 'The JPEG', content: { 'image/jpeg': { schema: { type: 'string', format: 'binary' } } } }, ...errors() },
+});
+
 // ── Deep dives (workflow design.deep_dive; server/deep-dive/) ─────────────────────────────
 const deepDive = { type: 'object', additionalProperties: true, required: ['id', 'run_id', 'status', 'depth'], properties: {
     id: str({ pattern: '^run_' }), run_id: str({ pattern: '^run_' }), status: str({ enum: ['queued', 'running', 'choosing', 'succeeded', 'failed', 'cancelled'] }),

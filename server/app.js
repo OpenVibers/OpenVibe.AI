@@ -25,7 +25,7 @@ const pkg = require('../package.json');
 const { adminRoutes } = require('openvibe-shared/config');
 const ownerInputs = require('./owner-inputs');
 
-function createApp({ choices = null, searchFetch = null, config, db, registry, pool, quotas, cache, runs, auth, keys, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, credentials = null, preferences = null, grants = null, vault = null, settings = null, benchEvents = null, runBudgets = null, memory = null, memoryImport = null, memoryServices = null, memorySharing = null, community = null, endpoints = null, webhooks = null, presets = null, receipts = null, balance = null, creditGrants = null, sessionCookies = null, gpus = null, gpuMarket = null, supply = null, abuse = null, priceBook = null, modelSync = null, modelDiscovery = null, ownEndpoints = null, refusal = null, willingness = null, abliterationTax = null, batches = null, share = null, deepDive = null, mediaStore = null, search = null }) {
+function createApp({ choices = null, searchFetch = null, config, db, registry, pool, quotas, cache, runs, auth, keys, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, credentials = null, preferences = null, grants = null, vault = null, settings = null, benchEvents = null, runBudgets = null, memory = null, memoryImport = null, memoryServices = null, memorySharing = null, community = null, endpoints = null, webhooks = null, presets = null, receipts = null, balance = null, creditGrants = null, sessionCookies = null, gpus = null, gpuMarket = null, supply = null, abuse = null, priceBook = null, modelSync = null, modelDiscovery = null, ownEndpoints = null, refusal = null, willingness = null, abliterationTax = null, batches = null, share = null, deepDive = null, videoAnalysis = null, mediaStore = null, search = null }) {
     const app = express();
     // /.well-known/agent.json (openvibe-shared/agent-layer, SEO-2): what this site serves, for agents.
     require('openvibe-shared/agent-layer').mount(app, { descriptor: require('./agent-descriptor') });
@@ -267,6 +267,8 @@ function createApp({ choices = null, searchFetch = null, config, db, registry, p
     app.use(require('./api/usage-calls').usageCallsRouter({ db, pool, config, auth, clock, log }));
     // Deep dives (workflow design.deep_dive): the Exchange feature's API and the Design integration's.
     app.use(require('./api/deep-dives').deepDivesRouter({ config, runs, auth, deepDive, store: deepDive && deepDive.store, capture: deepDive && deepDive.capture, mediaStore, log }));
+    // Video analyses (workflow video.analyze): OpenVibe.Video's page, and anyone who may read the video.
+    app.use(require('./api/video-analyses').videoAnalysesRouter({ config, runs, auth, videoAnalysis, store: videoAnalysis && videoAnalysis.store, mediaStore, log }));
     app.use(require('./api/orientation').createOrientation({ choices, runs, registry, auth, db, config, log }));
     app.use(actionsRouter({ runs, registry, auth, log }));
     // People's own controls (2026-11-11): one task that turns words into a checked ui.layout@1.

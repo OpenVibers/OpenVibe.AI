@@ -319,6 +319,49 @@ function load(env = process.env) {
             ffmpeg: env.FFMPEG_BIN || 'ffmpeg',
             ffprobe: env.FFPROBE_BIN || 'ffprobe',
         },
+        // The video analysis (workflow video.analyze): ffprobe and ffmpeg on this host, the speech route
+        // for what was said, the vision route for what is shown, and one model that writes the chapters, the
+        // summary, the named things with their times, the tags and the answer.
+        videoAnalysis: {
+            enabled: bool(env.AI_VIDEO_ANALYSIS, true),
+            // On disk under the service's data directory, not os.tmpdir(): a tmpfs /tmp is memory.
+            workDir: env.AI_VIDEO_ANALYSIS_DIR || 'data/video-tmp',
+            maxBytes: int(env.AI_VIDEO_ANALYSIS_MAX_BYTES, 1024 * 1024 * 1024),
+            reserveBytes: int(env.AI_VIDEO_ANALYSIS_DISK_RESERVE_BYTES, 2 * 1024 * 1024 * 1024),
+            fetchTimeoutMs: int(env.AI_VIDEO_ANALYSIS_FETCH_TIMEOUT_MS, 20 * 60000),
+            ffmpeg: env.FFMPEG_BIN || 'ffmpeg',
+            ffprobe: env.FFPROBE_BIN || 'ffprobe',
+            // The scene threshold (ffmpeg's scene score) and how often a frame is taken whatever the cuts.
+            sceneThreshold: float(env.AI_VIDEO_ANALYSIS_SCENE_THRESHOLD, 0.3),
+            frameEverySec: int(env.AI_VIDEO_ANALYSIS_FRAME_EVERY_SEC, 30),
+            frameWidth: int(env.AI_VIDEO_ANALYSIS_FRAME_WIDTH, 640),
+            // How many frames each depth reads: 12 (quick), 32 (standard), 96 (deep).
+            frameCaps: {
+                quick: int(env.AI_VIDEO_ANALYSIS_FRAMES_QUICK, 12),
+                standard: int(env.AI_VIDEO_ANALYSIS_FRAMES_STANDARD, 32),
+                deep: int(env.AI_VIDEO_ANALYSIS_FRAMES_DEEP, 96),
+            },
+            // Speech-to-text in windows of ten minutes: one call stays well inside the provider's timeout.
+            sttWindowSec: int(env.AI_VIDEO_ANALYSIS_STT_WINDOW_SEC, 600),
+            sttRoute: String(env.AI_VIDEO_ANALYSIS_STT_ROUTE || 'live.stt').trim(),
+            describeRoute: String(env.AI_VIDEO_ANALYSIS_DESCRIBE_ROUTE || 'background.vision').trim(),
+            analyseRoute: String(env.AI_VIDEO_ANALYSIS_ANALYSE_ROUTE || 'background.json').trim(),
+            maxOutputTokens: int(env.AI_VIDEO_ANALYSIS_MAX_OUTPUT_TOKENS, 3000),
+            // A video longer than this is read only as far as it goes; the run says so.
+            maxMinutes: int(env.AI_VIDEO_ANALYSIS_MAX_MINUTES, 180),
+            // The price: per minute of video, with a floor per depth. Exchange lists the same numbers.
+            pricePerMinute: {
+                quick: float(env.AI_VIDEO_ANALYSIS_PRICE_QUICK, 0.02),
+                standard: float(env.AI_VIDEO_ANALYSIS_PRICE_STANDARD, 0.06),
+                deep: float(env.AI_VIDEO_ANALYSIS_PRICE_DEEP, 0.2),
+            },
+            priceMinUsd: {
+                quick: float(env.AI_VIDEO_ANALYSIS_PRICE_MIN_QUICK, 0.05),
+                standard: float(env.AI_VIDEO_ANALYSIS_PRICE_MIN_STANDARD, 0.2),
+                deep: float(env.AI_VIDEO_ANALYSIS_PRICE_MIN_DEEP, 0.6),
+            },
+            priceMaxUsd: float(env.AI_VIDEO_ANALYSIS_PRICE_MAX, 60),
+        },
         // Let routes fall back to the deterministic stub when every real provider fails.
         // Off in production: synthetic output must never stand in for a real answer there.
         stubFallback: bool(env.AI_STUB_FALLBACK, !isProduction),
