@@ -26,21 +26,22 @@ const { ProviderError, insufficientBalance, retryable } = require('../server/pro
 
 const t = suite('ai-provider-adapters');
 
-/** The provider's own domain: a price or a policy may only be read from the provider's own pages. */
+/** The provider's own domain: a price or a policy may only be read from the provider's own pages. `|` joins its domains. */
 const DOMAIN = {
     qwen: 'alibabacloud.com', kimi: 'kimi.ai', glm: 'z.ai', minimax: 'minimax.io', deepinfra: 'deepinfra.com',
     novita: 'novita.ai', featherless: 'featherless.ai', refuseless: 'refuseless.com', abliteration: 'abliteration.ai',
     openrouter: 'openrouter.ai', venice: 'venice.ai', abliteratedmodels: 'abliteratedmodels.cc', uplinkswitch: 'uplinkswitch.ai',
     chutes: 'chutes.ai', siliconflow: 'siliconflow.com', nebius: 'nebius.com', together: 'together.ai',
     fireworks: 'fireworks.ai', groq: 'groq.com', cerebras: 'cerebras.ai', sambanova: 'sambanova.ai',
-    baseten: 'baseten.co', hyperbolic: 'hyperbolic.xyz', parasail: 'parasail.io', 'particle-ai': 'particle.ai',
+    baseten: 'baseten.co', hyperbolic: 'hyperbolic.xyz|hyperbolic.ai', parasail: 'parasail.io', 'particle-ai': 'particle.ai',
     'inference-net': 'inference.net', 'atlas-cloud': 'atlascloud.ai', avian: 'avian.io',
     nanogpt: 'nano-gpt.com', infermatic: 'totalgpt.ai', arliai: 'arliai.com', friendli: 'friendli.ai', scaleway: 'scaleway.com', anthropic: 'claude.com',
+    mistral: 'mistral.ai', cohere: 'cohere.com', gemini: 'google.dev',
     iteracompute: 'iteracompute.com', sable: 'sableapi.com', inception: 'inceptionlabs.ai', dosai: 'dos.ai', 'runpod-vllm': 'runpod.io', meta: 'meta.ai', altare: 'altare.global',
 };
 const onItsOwnSite = (url, key) => {
     const host = new URL(url).hostname;
-    return host === DOMAIN[key] || host.endsWith(`.${DOMAIN[key]}`);
+    return DOMAIN[key].split('|').some((domain) => host === domain || host.endsWith(`.${domain}`));
 };
 const noop = { get: async () => undefined, run: async () => ({}), all: async () => [] };
 const iso = (n) => new Date(n).toISOString();
@@ -127,6 +128,17 @@ t.test('every price comes from the provider\'s own page, with the day it was rea
     assert.strictEqual(pool.isUncensored(pool.byKey.get('featherless'), { model_key: 'some/Model-32B-abliterated' }), true);
 });
 
+t.test('every free tier states availability, its own page and the day it was read', () => {
+    const free = pool.PROVIDERS.filter((p) => p.free_tier);
+    assert.strictEqual(free.length, 12, 'the twelve providers read on 2026-11-12 carry their free tier');
+    for (const p of free) {
+        assert.strictEqual(typeof p.free_tier.available, 'boolean', `${p.key} free tier availability`);
+        assert.ok(p.free_tier.source && onItsOwnSite(p.free_tier.source, p.key), `${p.key} free tier page is its own`);
+        assert.strictEqual(p.free_tier.checked, '2026-11-12', `${p.key} free tier checked`);
+    }
+    assert.strictEqual(pool.byKey.get('groq').free_tier.limits.rpm, 30, 'Groq free plan is 30 RPM');
+});
+
 t.test('the seed writes the privacy label, the quantization and the refusal rate into the registry', async () => {
     const saved = new Map();
     const models = new Map();
@@ -143,6 +155,8 @@ t.test('the seed writes the privacy label, the quantization and the refusal rate
     assert.strictEqual(saved.get('abliteration').secret_ref, 'vault:abliteration');
     assert.strictEqual(saved.get('deepinfra').metadata.privacy.label, 'private');
     assert.strictEqual(saved.get('qwen').metadata.privacy.label, 'anonymized');
+    assert.strictEqual(saved.get('groq').metadata.free_tier.checked, '2026-11-12');
+    assert.strictEqual(saved.get('groq').metadata.free_tier.limits.rpm, 30);
     assert.strictEqual(models.get('refuseless/deepseek-v4.1-flash-abliterated').metadata.refusal_rate, null);
     assert.strictEqual(models.get('refuseless/deepseek-v4.1-flash-abliterated').metadata.quantization, null);
     assert.strictEqual(models.get('refuseless/deepseek-v4.1-flash-abliterated').cost.in_per_mtok, null);

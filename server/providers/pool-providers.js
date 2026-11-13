@@ -29,6 +29,9 @@
  *   data_policy               what the provider says it does with a prompt, in the facts the house reads (retention,
  *                              trains, region, trust) with the terms page and the day it was checked. A fact the
  *                              provider did not state is null, never a guess.
+ *   free_tier                 what the provider gives away without a paid plan, under the published request/token
+ *                              limits, whether a card is required, whether free prompts are trained on (in the
+ *                              provider's own words), and the page and day it was read (2026-11-12).
  *   provider_access           the commercial gate (docs/provider-matrix.md, 2026-11-03): only OWN_DEPLOYMENT and
  *                              AUTHORIZED_WHOLESALE may serve managed paid routes. UNVERIFIED and RESTRICTED offers
  *                              stay out of the managed pool while the model catalogue is on; the owner raises a
@@ -108,6 +111,135 @@ const traits = (o) => ({
     source: o.source || null,
     checked: o.checked || NEW_CHECKED,
 });
+
+/**
+ * What each provider gives away without a paid plan, read from the provider's own pages on 2026-11-12. The limits are
+ * the published numbers, null where the provider prints none; `card_required` and `trains_on_free` are null when the
+ * page does not say. `wording` is the provider's own sentence about training, and `source` is the page the free-tier
+ * facts came from. A fact nobody published is null, never a guess.
+ */
+const FREE_TIERS = {
+    groq: {
+        available: true,
+        summary: 'GroqCloud Free plan: the listed production/preview chat models are usable at no charge within per-model free-plan limits; no card is required for the free plan.',
+        limits: { rpm: 30, rpd: 1000, tpm: 8000, tpd: 200000 },
+        card_required: false,
+        trains_on_free: null,
+        wording: 'By default, Groq does not retain customer data for inference requests.',
+        source: 'https://console.groq.com/docs/rate-limits',
+        checked: '2026-11-12',
+    },
+    cerebras: {
+        available: true,
+        summary: 'No permanently free tier. A one-time $5 promotional credit is granted after adding a verified payment method; it expires 30 days after activation. API/Playground pause when it expires or is exhausted. The rate-limits page (5 RPM) and the gpt-oss-120b model page (30 RPM) conflict; the lower 5 RPM is kept.',
+        limits: { rpm: 5, rpd: null, tpm: 30000, tpd: 1000000 },
+        card_required: true,
+        trains_on_free: false,
+        wording: 'For clarity, the foregoing does not grant Cerebras the right to use Service Content for the purpose of training or fine-tuning models.',
+        source: 'https://inference-docs.cerebras.ai/support/rate-limits',
+        checked: '2026-11-12',
+    },
+    sambanova: {
+        available: true,
+        summary: 'SambaCloud Free Tier applies when no payment method is linked to the account. Free-tier calls are allowed at 20 RPM, 20 requests/day and 200K tokens/day per model.',
+        limits: { rpm: 20, rpd: 20, tpm: null, tpd: 200000 },
+        card_required: false,
+        trains_on_free: null,
+        wording: null,
+        source: 'https://docs.sambanova.ai/docs/en/models/rate-limits.md',
+        checked: '2026-11-12',
+    },
+    together: {
+        available: false,
+        summary: 'No free trial and no free credits. Access requires a minimum $15 credit purchase (fully prepaid); one serverless model, Prism-ML/Ternary-Bonsai-27B, is priced Free/Free.',
+        limits: { rpm: null, rpd: null, tpm: null, tpd: null },
+        card_required: true,
+        trains_on_free: false,
+        wording: 'Data that we collect, including your Personal Data, will not be used to train the Company\'s models without your explicit opt-in and consent.',
+        source: 'https://docs.together.ai/docs/billing-credits.md',
+        checked: '2026-11-12',
+    },
+    fireworks: {
+        available: true,
+        summary: 'A one-time $1 starter credit on the prepaid account. No free inference model is listed; when the credit is exhausted, usage pauses and the account is suspended until a payment method is added.',
+        limits: { rpm: null, rpd: null, tpm: null, tpd: null },
+        card_required: false,
+        trains_on_free: false,
+        wording: 'We do not use your prompts, training data, or API inputs to train or improve our AI models without your explicit opt-in.',
+        source: 'https://docs.fireworks.ai/faq-new/billing-pricing/what-happens-when-i-finish-my-1-dollar-credit.md',
+        checked: '2026-11-12',
+    },
+    hyperbolic: {
+        available: true,
+        summary: 'Personal Free Tier accounts can use inference after verifying a phone number; verification adds a $1 credit. Pro is optional. Requests use the credit balance (must be above zero).',
+        limits: { rpm: 300, rpd: null, tpm: null, tpd: null },
+        card_required: false,
+        trains_on_free: false,
+        wording: 'Hyperbolic does not use any of your User Content, including Inputs or Outputs, to train any generative artificial intelligence models.',
+        source: 'https://hyperbolic.ai/docs/faq/inference-models.md',
+        checked: '2026-11-12',
+    },
+    nebius: {
+        available: false,
+        summary: 'No free tier. Creating a Token Factory billing account is mandatory and requires a bank card; only promo codes add free credits.',
+        limits: { rpm: null, rpd: null, tpm: null, tpd: null },
+        card_required: true,
+        trains_on_free: null,
+        wording: null,
+        source: 'https://docs.tokenfactory.nebius.com/other-capabilities/billing-new.md',
+        checked: '2026-11-12',
+    },
+    chutes: {
+        available: false,
+        summary: 'No free tier: \'We do not offer a free tier at this time. Top up your account in the app to get started.\'',
+        limits: { rpm: null, rpd: null, tpm: null, tpd: null },
+        card_required: true,
+        trains_on_free: null,
+        wording: null,
+        source: 'https://chutes.ai/pricing',
+        checked: '2026-11-12',
+    },
+    mistral: {
+        available: true,
+        summary: 'Free mode (the default) has the lowest API limits and is intended for evaluation/prototyping; pay-as-you-go unlocks Tier 1 and above.',
+        limits: { rpm: null, rpd: null, tpm: null, tpd: null },
+        card_required: null,
+        trains_on_free: true,
+        wording: 'In certain cases, your input and output data (such as conversations, documents, and other user-provided content) may be included in Mistral\'s model training programs. ... You may opt out of data training for Mistral Studio and related API services ... Under the Anonymous improvement data section, disable the toggle to prevent API calls and related data from being used to improve Mistral\'s services.',
+        source: 'https://docs.mistral.ai/inference/pricing.md',
+        checked: '2026-11-12',
+    },
+    openrouter: {
+        available: true,
+        summary: 'Free model variants (IDs ending :free) are available at $0; the Free Models Router (openrouter/free) picks one automatically.',
+        limits: { rpm: 20, rpd: 50, tpm: null, tpd: null },
+        card_required: false,
+        trains_on_free: null,
+        wording: 'Each provider on OpenRouter has its own data handling policies ... you can set whether you would like to allow routing to providers that may train on your data ... There are separate settings for paid and free models ... Wherever possible, OpenRouter works with providers to ensure that prompts will not be trained on, but there are exceptions.',
+        source: 'https://openrouter.ai/docs/api-reference/limits',
+        checked: '2026-11-12',
+    },
+    cohere: {
+        available: true,
+        summary: 'Trial API keys are free, issued automatically with an account, limited to 1,000 API calls/month at 20 requests/minute; not permitted for production or commercial use. Command A+ and North Mini Code are listed as Free.',
+        limits: { rpm: 20, rpd: null, tpm: null, tpd: null },
+        card_required: false,
+        trains_on_free: null,
+        wording: 'YOU GRANT US A NONEXCLUSIVE, WORLDWIDE, ROYALTY-FREE, IRREVOCABLE, SUBLICENSABLE, AND FULLY PAID-UP RIGHT TO ... USE ... CUSTOMER DATA ... TO: ... (III) IMPROVE AND ENHANCE THE COHERE SOLUTION AND OUR OTHER OFFERINGS ... INCLUDING BY SHARING API DATA AND FINETUNING DATA WITH THIRD PARTIES WHO MAY USE THE FINETUNING DATA AND API DATA TO PROVIDE SERVICES TO COHERE AND FOR OTHER PURPOSES PERMITTED UNDER THEIR TERMS AND CONDITIONS.',
+        source: 'https://docs.cohere.com/docs/rate-limits',
+        checked: '2026-11-12',
+    },
+    gemini: {
+        available: true,
+        summary: 'Free tier gives free input and output tokens on supported models (gemini-3.8-flash, gemini-3.6-flash, gemini-3.5-flash-lite were free on the pricing page). Gemini 4 Carbon/Argon/Hydrogen are not available on the Free tier.',
+        limits: { rpm: null, rpd: null, tpm: null, tpd: null },
+        card_required: false,
+        trains_on_free: true,
+        wording: 'For unpaid quota on Gemini API, Google uses the content you submit to the Services and any generated responses to provide, improve, and develop Google products and services and machine learning technologies ... To help with quality and improve our products, human reviewers may read, annotate, and process your API input and output.',
+        source: 'https://ai.google.dev/gemini-api/docs/pricing',
+        checked: '2026-11-12',
+    },
+};
 
 const PROVIDERS = [
     {
@@ -645,6 +777,7 @@ const PROVIDERS = [
         provider_access: 'UNVERIFIED',
         priority: 90,
         role: 'fallback',
+        free_tier: FREE_TIERS.openrouter,
         privacy: privacy({
             label: 'anonymized',
             terms_url: 'https://openrouter.ai/terms',
@@ -694,6 +827,7 @@ const PROVIDERS = [
             key, display_name, base_url, docs_url, keys_url, credential_default_model, models_dev_id, default_model: model_key, timeout_ms: 60000,
             capabilities: ['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich', 'json', 'tools'],
             provider_access, priority: 40, ...(uncensored ? { uncensored: true } : {}),
+            ...(FREE_TIERS[key] ? { free_tier: FREE_TIERS[key] } : {}),
             privacy: privacy({ label: privateTier ? 'private' : 'anonymized', terms_url: privateTier ? source : null,
                 wording: privateTier ? 'Venice states prompts and generations are never stored or logged, and are not used to train future models for this model.' : 'Retention and training commitments were not confirmed on the provider page; unknown.' }),
             data_policy: policy({ trains: privateTier ? false : null, retention: privateTier ? 'none' : null,
@@ -756,13 +890,16 @@ const PROVIDERS = [
         docs_url: 'https://platform.openai.com/docs/api-reference/models/list', capabilities: ['chat', 'vision', 'tools', 'image', 'video', 'speech', 'transcribe', 'embed'] },
     { key: 'gemini', models_dev_id: 'google', keys_url: 'https://aistudio.google.com/apikey', display_name: 'Google AI Studio (Gemini API)', base_url: 'https://generativelanguage.googleapis.com/v1beta/openai',
         models_endpoint: 'https://generativelanguage.googleapis.com/v1beta/models',
-        api_family: 'google', docs_url: 'https://ai.google.dev/gemini-api/docs/openai', capabilities: ['chat', 'vision', 'tools', 'embed'] },
+        api_family: 'google', docs_url: 'https://ai.google.dev/gemini-api/docs/openai', capabilities: ['chat', 'vision', 'tools', 'embed'],
+        free_tier: FREE_TIERS.gemini },
     { key: 'xai', keys_url: 'https://console.x.ai/', display_name: 'xAI', base_url: 'https://api.x.ai/v1',
         docs_url: 'https://docs.x.ai/docs/api-reference', capabilities: ['chat', 'vision', 'tools', 'image', 'video'] },
     { key: 'mistral', keys_url: 'https://console.mistral.ai/api-keys', display_name: 'Mistral', base_url: 'https://api.mistral.ai/v1',
-        docs_url: 'https://docs.mistral.ai/api', capabilities: ['chat', 'vision', 'tools', 'embed', 'transcribe'] },
+        docs_url: 'https://docs.mistral.ai/api', capabilities: ['chat', 'vision', 'tools', 'embed', 'transcribe'],
+        free_tier: FREE_TIERS.mistral },
     { key: 'cohere', display_name: 'Cohere', base_url: 'https://api.cohere.com/compatibility/v1', models_endpoint: 'https://api.cohere.com/v1/models',
-        docs_url: 'https://docs.cohere.com/docs/compatibility-api', capabilities: ['chat', 'tools', 'embed', 'rerank'] },
+        docs_url: 'https://docs.cohere.com/docs/compatibility-api', capabilities: ['chat', 'tools', 'embed', 'rerank'],
+        free_tier: FREE_TIERS.cohere },
     { key: 'perplexity', display_name: 'Perplexity', kind: 'responses', base_url: 'https://api.perplexity.ai/v1',
         docs_url: 'https://docs.perplexity.ai/docs/agent-api/openai-compatibility', capabilities: ['chat', 'web-search'], search_adapters: ['perplexity'] },
     { key: 'brave', display_name: 'Brave Search', kind: 'http', base_url: 'https://api.search.brave.com/res/v1',
