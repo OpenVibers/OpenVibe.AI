@@ -6,6 +6,12 @@ module.exports = {
     freshness: [],
     hosts: ['api.iconify.design'],
     kinds: ['icons'],
+    upstreams: ['iconify'],
+    filters: {
+        license: 'local', commercial: 'unsupported', format: 'local', set: 'native',
+        style: 'local', size: 'unsupported', orientation: 'unsupported', color: 'unsupported',
+        after: 'unsupported', type: 'unsupported', safe_search: 'unsupported',
+    },
     async search(b, { fetchImpl }) {
         const get = requestFor(this.hosts, fetchImpl);
         const out = await get(
@@ -25,7 +31,7 @@ module.exports = {
             'https://api.iconify.design/collections?prefixes=' +
                 prefixes.join(','),
         );
-        return (out.icons || []).slice(0, b.limit).map((name) => {
+        return (out.icons || []).slice(0, b.limit).map((name, i) => {
             const [set, icon] = name.split(':');
             const c = info[set] || {};
             return {
@@ -46,6 +52,8 @@ module.exports = {
                       ? 'solid'
                       : 'unknown',
                 published: null,
+                upstream: 'iconify',
+                upstream_rank: i + 1,
             };
         });
     },

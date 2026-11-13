@@ -24,7 +24,10 @@ function guardedFetch(input, init = {}) {
         if (url.protocol !== 'https:') return reject(refuse('only https endpoints are called with a person\'s own key'));
         if (url.username || url.password) return reject(refuse('credentials in URLs are not allowed'));
         if (net.isIP(url.hostname.replace(/^\[|\]$/g, ''))) return reject(refuse('IP-literal hosts are not called'));
-        if (typeof init.body !== 'string' && init.body != null) return reject(refuse('only JSON bodies are sent with a person\'s own key'));
+        // JSON strings are the common case; TinEye's reverse-image upload is the one multipart Buffer
+        // (built by its adapter) and stays HTTPS + public-address checked like every other call.
+        if (init.body != null && typeof init.body !== 'string' && !Buffer.isBuffer(init.body) && !(init.body instanceof Uint8Array))
+            return reject(refuse('only JSON or binary bodies are sent with a person\'s own key'));
         const headers = { ...(init.headers || {}) };
         if (init.body != null) headers['Content-Length'] = Buffer.byteLength(init.body);
         const req = https.request(url, { method: init.method || 'GET', headers, lookup: safeLookup });

@@ -1,0 +1,21 @@
+{
+  "response": {
+    "image_results": [
+      {
+        "position": 1,
+        "title": "Cat - Wikipedia",
+        "link": "https://example.org/article",
+        "snippet": "The cat is a domestic species of small carnivorous mammal."
+      }
+    ]
+  },
+  "request": {
+    "host": "serpapi.com",
+    "path": "/search.json",
+    "method": "GET"
+  },
+  "expected": {
+    "title": "Cat - Wikipedia",
+    "cost": 0.025
+  }
+}

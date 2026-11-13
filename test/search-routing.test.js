@@ -64,7 +64,9 @@ const bob = 'usr_01JAB2C3D4E5F6G7H8J9K0MNPY';
     const refusedReader = createSearch({ env: { SEARCH_DEEPSEEK_KEY: 'shared' }, targetGuard: async () => { throw new Error('private target'); }, fetchImpl: () => assert.fail('private target called') });
     await assert.rejects(refusedReader.read({ engine: 'deepseek', url: 'https://private.example' }), e => e[CHARGE] === 0);
     const unknownLicense = createSearch({ env: { SEARCH_BRAVE_IMAGES_KEY: 'fixture-key' }, fetchImpl: async () => json(sample('brave-images')) });
-    assert.equal((await unknownLicense.search('images', { engine: 'brave-images', q: 'cat', commercial: true })).results.length, 0);
+    await assert.rejects(unknownLicense.search('images', { engine: 'brave-images', q: 'cat', commercial: true }),
+        e => e.status === 422 && /commercial/.test(e.message));
+    assert.equal((await unknownLicense.search('images', { engine: 'brave-images', q: 'cat' })).results.length, 1);
     let targetChecks = 0;
     const reader = createSearch({ env: {}, credentials: { searchForRun: async (_s, engine) => engine === 'jina' ? { apiKey: 'own-jina' } : null }, targetGuard: async () => { targetChecks++; }, fetchImpl: async () => json(require('./fixtures/search/jina-fetch.json')) });
     const read = await reader.read({ url: 'https://example.org/article' }, { subject: alice });

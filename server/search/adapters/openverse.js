@@ -6,6 +6,11 @@ module.exports = {
     freshness: [],
     hosts: ['api.openverse.org'],
     kinds: ['images'],
+    upstreams: ['openverse'],
+    filters: {
+        license: 'native', commercial: 'native', format: 'native', orientation: 'native',
+        size: 'native', color: 'unsupported', after: 'local', type: 'native', safe_search: 'unsupported',
+    },
     async search(b, { fetchImpl }) {
         const get = requestFor(this.hosts, fetchImpl);
         const q = new URLSearchParams({
@@ -32,7 +37,7 @@ module.exports = {
         if (b.type === 'photo') q.set('category', 'photograph');
         if (b.type === 'illustration') q.set('category', 'illustration');
         const out = await get('https://api.openverse.org/v1/images/?' + q);
-        return (out.results || []).map((r) => ({
+        return (out.results || []).map((r, i) => ({
             title: r.title,
             url: r.url,
             thumbnail: r.thumbnail,
@@ -47,6 +52,8 @@ module.exports = {
             type: r.category === 'photograph' ? 'photo' : r.category || null,
             indexed_on: r.indexed_on || null,
             published: null,
+            upstream: 'openverse',
+            upstream_rank: i + 1,
         }));
     },
 };

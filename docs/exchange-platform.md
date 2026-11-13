@@ -7,8 +7,11 @@ The API host is `https://api.openvibe.exchange` (OpenVibe.AI). Exchange is the h
 - `DELETE /api/v1/exchange/keys/:id`: revoke only a key owned by the signed-in person.
 - `GET /api/v1/exchange/key-usage`: private key/model/day usage, at most 1,000 grouped rows.
 - `/api/v1/exchange/deployments` aliases the existing private `/api/v1/own-endpoints` APIs and owner gates.
-- `POST /v1/search`, `/v1/search/images`, `/v1/search/icons`: `{q, engine?: "auto", limit?: 10}`.
-  Receipts contain engine, cost in USD and elapsed milliseconds. `/v1/search/icons` also accepts a
+- `POST /v1/search`, `/v1/search/images`, `/v1/search/icons`, `/v1/search/reverse-image`: `{q, engine?: "auto", limit?: 10}`;
+  reverse image instead takes `image_url` or a base64 `image` and an explicit `tineye` or `serpapi-reverse` engine.
+  Receipts contain engine, cost in USD and elapsed milliseconds; results keep `rank` and `upstream_rank`.
+  `POST /v1/search/images/unsplash/download {download_location}` records Unsplash's required event once per person and
+  photo. `/v1/search/images/pixabay/:id` is Pixabay's short-lived image proxy. `/v1/search/icons` also accepts a
   first-party service token holding `exchange.search.icons` (OpenVibe.Design); it reaches only that
   route, has its own minute quota and needs no Exchange key. Openverse, Commons and Iconify need no key;
   SearXNG requires `EXCHANGE_SEARXNG_URL` on an HTTPS host with JSON search enabled. OpenVibe Search uses its public index.

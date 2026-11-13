@@ -9,9 +9,10 @@ const { rankImages } = require('./image-rank');
 const adapters = ['openverse', 'commons', 'searxng', 'openvibe', 'iconify',
     'deepseek', 'brave', 'exa', 'tavily', 'serper', 'serpapi', 'jina',
     'openvibe-egress', 'perplexity', 'kagi', 'google', 'unsplash', 'pexels', 'pixabay', 'brave-images',
-    'meta', 'serper-images']
+    'meta', 'serper-images', 'serpapi-images', 'searchapi-images', 'serpapi-reverse', 'tineye']
     .map(n => require('./adapters/' + n));
 const CHARGE = Symbol('search Exchange charge');
+const FILTER_KEYS = ['license', 'commercial', 'format', 'orientation', 'size', 'color', 'after', 'type', 'style', 'set', 'safe_search'];
 const invalid = (message) => new AiError(422, 'ai.invalid', message);
 const safeUrl = (s) => {
     try {
@@ -23,6 +24,16 @@ const credentialId = a => a.credential_id || a.id;
 const dimension = n => Number.isInteger(n) && n > 0 ? n : null;
 function inputFor(kind, b) {
     if (!b || typeof b !== 'object' || Array.isArray(b)) throw invalid('A JSON object is required');
+    if (kind === 'reverse_image') {
+        const imageUrl = typeof b.image_url === 'string' && b.image_url.startsWith('https://') && b.image_url.length <= 8192 && safeUrl(b.image_url);
+        const upload = typeof b.image === 'string' && /^data:image\/(?:png|jpe?g|gif|bmp|tiff|webp);base64,[A-Za-z0-9+/=\s]+$/i.test(b.image);
+        if (!imageUrl && !upload) throw invalid('image_url or a base64 image is required');
+        if (b.image && b.image.length > 8 * 1024 * 1024) throw invalid('image is too large; the limit is 5 MB after decoding');
+        if (b.engine != null && typeof b.engine !== 'string') throw invalid('engine must be a string');
+        if (b.limit != null && (!Number.isInteger(b.limit) || b.limit < 1 || b.limit > 50)) throw invalid('limit must be 1–50');
+        if (b.max_cost_usd != null && (!Number.isFinite(b.max_cost_usd) || b.max_cost_usd < 0)) throw invalid('max_cost_usd must be nonnegative');
+        return { ...b, limit: b.limit || 10 };
+    }
     if (kind !== 'fetch' && (typeof b.q !== 'string' || !b.q.trim() || b.q.length > 500)) throw invalid('q must contain 1–500 characters');
     if (kind === 'fetch' && (!safeUrl(b.url) || !String(b.url).startsWith('https://') || b.url.length > 8192)) throw invalid('An HTTPS URL is required');
     if (kind === 'fetch' && net.isIP(new URL(b.url).hostname.replace(/^\[|\]$/g, ''))) throw invalid('IP-literal hosts are not called');
@@ -37,35 +48,66 @@ function inputFor(kind, b) {
     if (b.after && (!/^\d{4}-\d{2}-\d{2}$/.test(b.after) || !Number.isFinite(Date.parse(b.after)))) throw invalid('after must be a date in YYYY-MM-DD');
     if (b.safe_search != null && b.safe_search !== 'strict') throw invalid('safe_search must be strict');
     if (b.size && !['small', 'medium', 'large'].includes(b.size)) throw invalid('size must be small, medium or large');
+    if (b.upstream && !['google', 'bing', 'yandex'].includes(b.upstream)) throw invalid('upstream must be google, bing or yandex');
     return { ...b, q: kind === 'fetch' ? undefined : b.q.trim(), limit: b.limit || 10 };
 }
 function normalize(rows, engine, kind, b) {
-    let out = rows.filter(r => safeUrl(r.url)).map(r => ({
-        ...r, title: String(r.title || ''), url: safeUrl(r.url), engine,
-        snippet: String(r.snippet || ''), published: r.published == null ? null : String(r.published),
-        ...(kind === 'web' ? {} : {
-            thumbnail: safeUrl(r.thumbnail), source_page: safeUrl(r.source_page), license_url: safeUrl(r.license_url),
-            author_url: safeUrl(r.author_url), download_location: safeUrl(r.download_location),
-            width: dimension(r.width), height: dimension(r.height),
-            license: r.license == null ? null : String(r.license), author: r.author == null ? null : String(r.author),
-            attribution: r.attribution == null ? null : String(r.attribution),
-        }),
-    }));
+    const imageKind = kind !== 'web';
+    let out = rows
+        .map((r, i) => ({
+            ...r,
+            upstream_rank: Number.isInteger(r.upstream_rank) && r.upstream_rank > 0 ? r.upstream_rank : Number.isInteger(r.position) && r.position > 0 ? r.position : i + 1,
+            title: String(r.title || ''), url: safeUrl(r.url), engine,
+            snippet: String(r.snippet || ''), published: r.published == null ? null : String(r.published),
+            ...(imageKind ? {
+                thumbnail: safeUrl(r.thumbnail), source_page: safeUrl(r.source_page), license_url: safeUrl(r.license_url),
+                author_url: safeUrl(r.author_url), download_location: safeUrl(r.download_location),
+                width: dimension(r.width), height: dimension(r.height),
+                license: r.license == null ? null : String(r.license), author: r.author == null ? null : String(r.author),
+                attribution: r.attribution == null ? null : String(r.attribution),
+            } : {}),
+        }))
+        .filter(r => r.url);
     const licenseId = v => String(v || '').toLowerCase().replace(/^cc[ -]/, '').replace(/[ -]\d+(?:\.\d+)*$/, '');
-    if (b.license) out = out.filter(r => licenseId(r.license) === licenseId(b.license));
-    if (b.commercial) out = out.filter(r => ['cc0', 'pdm', 'by', 'by-sa', 'unsplash', 'pexels', 'pixabay'].includes(licenseId(r.license)));
-    if (b.format) out = out.filter(r => r.format === b.format || new URL(r.url).pathname.toLowerCase().endsWith('.' + b.format));
-    if (b.orientation) out = out.filter(r => r.width && r.height && (b.orientation === 'square' ? r.width === r.height : b.orientation === 'portrait' ? r.height > r.width : r.width > r.height));
-    if (b.size) out = out.filter(r => r.width && r.height && (b.size === 'small' ? Math.max(r.width, r.height) < 800 : b.size === 'medium' ? Math.max(r.width, r.height) >= 800 && Math.max(r.width, r.height) < 2000 : Math.max(r.width, r.height) >= 2000));
-    if (b.style && b.style !== 'any') out = out.filter(r => r.style === b.style);
-    if (b.after) out = out.filter(r => (r.published || r.indexed_on) && Date.parse(r.published || r.indexed_on) >= Date.parse(b.after));
-    if (b.type === 'vector') out = out.filter(r => r.format === 'svg' || new URL(r.url).pathname.toLowerCase().endsWith('.svg'));
-    if (b.type === 'photo') out = out.filter(r => ['unsplash', 'pexels', 'pixabay'].includes(engine) || r.type === 'photo');
-    if (b.type === 'illustration') out = out.filter(r => r.type === 'illustration');
-    return kind === 'images' ? rankImages(out, b.limit) : out.slice(0, b.limit);
+    // Local filters are applied only to image/icon result shapes; a requested filter the adapter cannot
+    // honour was already refused or skipped in prepare(), never silently dropped here.
+    if (kind === 'images') {
+        if (b.license) out = out.filter(r => licenseId(r.license) === licenseId(b.license));
+        if (b.commercial) out = out.filter(r => ['cc0', 'pdm', 'by', 'by-sa', 'unsplash', 'pexels', 'pixabay'].includes(licenseId(r.license)));
+        if (b.format) out = out.filter(r => r.format === b.format || new URL(r.url).pathname.toLowerCase().endsWith('.' + b.format));
+        if (b.orientation) out = out.filter(r => r.width && r.height && (b.orientation === 'square' ? r.width === r.height : b.orientation === 'portrait' ? r.height > r.width : r.width > r.height));
+        if (b.size) out = out.filter(r => r.width && r.height && (b.size === 'small' ? Math.max(r.width, r.height) < 800 : b.size === 'medium' ? Math.max(r.width, r.height) >= 800 && Math.max(r.width, r.height) < 2000 : Math.max(r.width, r.height) >= 2000));
+        if (b.after) out = out.filter(r => (r.published || r.indexed_on) && Date.parse(r.published || r.indexed_on) >= Date.parse(b.after));
+        if (b.type === 'vector') out = out.filter(r => r.format === 'svg' || new URL(r.url).pathname.toLowerCase().endsWith('.svg'));
+        if (b.type === 'photo') out = out.filter(r => ['unsplash', 'pexels', 'pixabay'].includes(engine) || r.type === 'photo');
+        if (b.type === 'illustration') out = out.filter(r => r.type === 'illustration');
+    }
+    if (kind === 'icons') {
+        if (b.style && b.style !== 'any') out = out.filter(r => r.style === b.style);
+        if (b.format) out = out.filter(r => r.format === b.format || new URL(r.url).pathname.toLowerCase().endsWith('.' + b.format));
+        if (b.license) out = out.filter(r => licenseId(r.license) === licenseId(b.license));
+        if (b.commercial) out = out.filter(r => ['cc0', 'pdm', 'by', 'by-sa'].includes(licenseId(r.license)));
+    }
+    const limited = kind === 'images' ? rankImages(out, b.limit) : out.slice(0, b.limit);
+    return limited.map((r, i) => ({ ...r, rank: i + 1 }));
 }
-function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () => Date.now(), credentials = null, registry = null, targetGuard = publicTarget } = {}) {
+function createMemoryEvents() {
+    const seen = new Set();
+    const key = (scope, provider, id) => `${scope}\u0000${provider}\u0000${id}`;
+    return {
+        async once(scope, provider, id) {
+            const k = key(scope, provider, id);
+            if (seen.has(k)) return { created: false };
+            seen.add(k);
+            if (seen.size > 5000) seen.delete(seen.values().next().value);
+            return { created: true };
+        },
+        async release(scope, provider, id) { seen.delete(key(scope, provider, id)); },
+    };
+}
+function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () => Date.now(), credentials = null, registry = null, targetGuard = publicTarget, events = null, publicBase = process.env.AI_PUBLIC_URL || 'https://ai.openvibe.services' } = {}) {
     const health = new Map();
+    const assetEvents = events || createMemoryEvents();
     const providerFor = (a, providers) => providers.find(p => p.metadata?.search_adapters?.includes(a.id));
     function binding(a, providers) {
         const provider = providerFor(a, providers);
@@ -78,6 +120,32 @@ function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () =>
         if (managed && (!provider || provider.status !== 'active')) return { provider, managed, key, env: settings, configured, available: false };
         return { provider, managed, key, env: settings, configured, available: configured };
     }
+    function filtersFor(a) {
+        const base = a.kinds.includes('web')
+            ? { freshness: a.freshness && a.freshness.length ? 'native' : 'unsupported', safe_search: 'unsupported' }
+            : {};
+        return { ...base, ...(a.filters || {}) };
+    }
+    function unsupportedFor(a, kind, b) {
+        const filters = filtersFor(a);
+        const out = [];
+        for (const key of FILTER_KEYS) {
+            if (b[key] == null || b[key] === '' || b[key] === false) continue;
+            if (key === 'type' && b.type === 'icon') continue;
+            if (kind === 'web' && key !== 'safe_search') continue;
+            if (kind === 'icons' && !['license', 'commercial', 'format', 'set', 'style'].includes(key)) continue;
+            if (kind === 'reverse_image') continue;
+            if (filters[key] !== 'native' && filters[key] !== 'local') out.push(key);
+        }
+        if (kind === 'images' && b.type) {
+            const allowed = b.type === 'photo' ? ['unsplash', 'pexels', 'pixabay', 'openverse']
+                : b.type === 'illustration' ? ['openverse'] : b.type === 'vector' ? ['openverse', 'commons'] : [];
+            if (!allowed.includes(a.id)) out.push('type');
+        }
+        if (b.upstream && !(a.upstreams || []).includes(b.upstream)) out.push('upstream');
+        if (kind === 'reverse_image' && b.image && !a.uploads) out.push('image upload');
+        return [...new Set(out)];
+    }
     async function engines() {
         const providers = registry ? await registry.listProviders() : [];
         return adapters.map(a => {
@@ -85,25 +153,33 @@ function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () =>
             return { id: a.id, kinds: a.kinds, price_per_1000: a.price_per_1000,
                 byok: a.byok, available: state.available, freshness: a.freshness, healthy: (health.get(a.id) || 0) <= now(),
                 provider: state.provider?.key || null, manual_only: a.manual_only === true,
-                source: a.source, checked_on: a.checked_on, pricing_note: a.pricing_note || null };
+                source: a.source, checked_on: a.checked_on, pricing_note: a.pricing_note || null,
+                included_allowance: a.included_allowance || null, onboarding: a.onboarding || null,
+                upstreams: a.upstreams || (a.upstream ? [a.upstream] : []),
+                uploads: a.uploads === true, filters: filtersFor(a) };
         });
     }
     async function prepare(kind, body, { subject = null } = {}) {
         const b = inputFor(kind, body);
         if (b.type === 'icon') kind = 'icons';
+        if (kind === 'reverse_image' && (!b.engine || b.engine === 'auto'))
+            throw new AiError(422, 'search.invalid', 'Choose an engine for a reverse image search');
         for (const [k, until] of health) if (until <= now()) health.delete(k);
         const candidates = [];
+        const skippedForFilters = new Set();
         const providers = registry ? await registry.listProviders() : [];
         for (const a of adapters) {
             if (a.manual_only && (!b.engine || b.engine === 'auto')) continue;
             if (!a.kinds.includes(kind) || b.engine && b.engine !== 'auto' && b.engine !== a.id ||
                 b.freshness && !a.freshness.includes(b.freshness) || (a.requires || []).some(k => !env[k])) continue;
-            if (kind === 'images' && b.color && a.id !== 'unsplash') continue;
-            if (kind === 'images' && b.after && !['unsplash', 'openverse'].includes(a.id)) continue;
-            if (kind === 'images' && b.type === 'photo' && !['unsplash', 'pexels', 'pixabay', 'openverse'].includes(a.id)) continue;
-            if (kind === 'images' && b.type === 'illustration' && a.id !== 'openverse') continue;
-            if (kind === 'images' && b.type === 'vector' && !['openverse', 'commons'].includes(a.id)) continue;
             if (kind !== 'fetch' && a.max_query && [...b.q].length + (b.freshness ? 17 : 0) > a.max_query) continue;
+            const unsupported = unsupportedFor(a, kind, b);
+            if (unsupported.length) {
+                if (b.engine && b.engine !== 'auto' && b.engine === a.id)
+                    throw new AiError(422, 'search.unsupported', `${a.id} cannot honour ${unsupported.join(', ')}; choose an engine that supports it`);
+                skippedForFilters.add(a.id);
+                continue;
+            }
             const own = a.byok && subject && credentials ? await credentials.searchForRun(subject, credentialId(a)) : null;
             const state = binding(a, providers);
             const ceiling = a.ceiling ? a.ceiling(b) : a.price_per_1000 / 1000;
@@ -129,7 +205,17 @@ function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () =>
         const price = c => c.a.estimate ? c.a.estimate(b) : c.a.price_per_1000 == null ? c.ceiling : c.a.price_per_1000 / 1000;
         selected.sort((a, b) => price(a) - price(b));
         const runnable = selected.filter(c => !c.skipReason);
-        if (!runnable.length) throw new AiError(503, 'search.unavailable', 'No configured engine serves this request within its price and freshness limits');
+        if (!runnable.length) {
+            const requested = FILTER_KEYS.filter(k => b[k] != null && b[k] !== '' && b[k] !== false && !(k === 'type' && b.type === 'icon'));
+            if (skippedForFilters.size)
+                throw new AiError(422, 'search.unsupported', `No configured engine can honour the requested filters (${[...new Set(requested)].join(', ') || 'engine limitation'})`);
+            if (b.engine && b.engine !== 'auto' && !selected.length) {
+                const explicit = adapters.find(a => a.id === b.engine);
+                if (!explicit || !explicit.kinds.includes(kind))
+                    throw new AiError(422, 'search.unsupported', 'This engine does not serve this search');
+            }
+            throw new AiError(503, 'search.unavailable', 'No configured engine serves this request within its price and freshness limits');
+        }
         return { kind, b, candidates: selected, ceiling: Math.min(b.max_cost_usd ?? Infinity, runnable.reduce((n, c) => n + (c.own ? 0 : c.ceiling), 0)) };
     }
     const receipt = (engine, cost, start, attempts) => ({ engine, cost_usd: cost, time_ms: Math.max(0, now() - start), ...(attempts ? { attempts } : {}) });
@@ -165,9 +251,11 @@ function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () =>
                     c.key = providerSecret(current, env) || (c.a.key_env && env[c.a.key_env]);
                     if (c.a.key_env && !c.key) { attempts.push(attempt(c, 'skipped', attemptStart, 0, 'no_credentials')); continue; }
                 }
-                const options = { fetchImpl: boundFetch, key: c.key, env: c.env, now };
+                const options = { fetchImpl: boundFetch, key: c.key, env: c.env, now, publicBase };
                 attempted = true;
-                const raw = plan.kind === 'fetch' ? await c.a.read(plan.b, options) : await c.a.search(plan.b, options);
+                const raw = plan.kind === 'fetch' ? await c.a.read(plan.b, options)
+                    : plan.kind === 'reverse_image' ? await c.a.reverse(plan.b, options)
+                    : await c.a.search(plan.b, options);
                 const cost = raw.cost ?? c.a.price_per_1000 / 1000;
                 if (!Number.isFinite(cost) || cost < 0) throw new Error('Invalid engine cost');
                 const out = plan.kind === 'fetch'
@@ -198,6 +286,38 @@ function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () =>
         const b = typeof body === 'string' ? { url: body } : body;
         return execute(context.plan || await prepare('fetch', b, context), context.budget);
     }
-    return { engines, search, read, prepare };
+    /**
+     * Unsplash's required download event: one call when a person chooses or imports a picture. The claim
+     * (subject + download_location) is idempotent, so a double click or a retried request does not count twice.
+     */
+    async function trackDownload(body, { subject = null } = {}) {
+        const location = body && body.download_location;
+        if (typeof location !== 'string') throw invalid('download_location is required');
+        const url = safeUrl(location);
+        if (!url || !String(url).startsWith('https://api.unsplash.com/photos/') || !/^\/photos\/[^/]+\/download\/?$/.test(new URL(url).pathname))
+            throw invalid('download_location must be an Unsplash photo download endpoint');
+        const a = adapters.find(x => x.id === 'unsplash');
+        const providers = registry ? await registry.listProviders() : [];
+        const state = binding(a, providers);
+        const own = subject && credentials ? await credentials.searchForRun(subject, credentialId(a)) : null;
+        const key = own?.apiKey || state.key;
+        if (!key) throw new AiError(503, 'search.unavailable', 'Unsplash needs a key to record a download');
+        const scope = subject || 'shared';
+        const eventKey = createHash('sha256').update(url).digest('hex');
+        const claim = await assetEvents.once(scope, a.id, eventKey);
+        if (!claim.created) return { tracked: true, already: true };
+        try {
+            await a.trackDownload({ download_location: url }, { fetchImpl, key });
+        } catch (error) {
+            await assetEvents.release(scope, a.id, eventKey).catch(() => {});
+            throw error;
+        }
+        return { tracked: true, already: false };
+    }
+    async function pixabayImage(id) {
+        const a = adapters.find(x => x.id === 'pixabay');
+        return a.image(id, { fetchImpl });
+    }
+    return { engines, search, read, prepare, trackDownload, pixabayImage };
 }
 module.exports = { createSearch, adapters, credentialId, CHARGE };

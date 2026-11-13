@@ -7,6 +7,11 @@ module.exports = {
     freshness: [],
     hosts: ['commons.wikimedia.org'],
     kinds: ['images'],
+    upstreams: ['commons'],
+    filters: {
+        license: 'local', commercial: 'local', format: 'native', orientation: 'local',
+        size: 'local', color: 'unsupported', after: 'unsupported', type: 'local', safe_search: 'unsupported',
+    },
     async search(b, { fetchImpl }) {
         const get = requestFor(this.hosts, fetchImpl);
         const q = new URLSearchParams({
@@ -47,6 +52,8 @@ module.exports = {
                             ? 'svg'
                             : i.mime?.split('/')[1],
                     published: null,
+                    upstream: 'commons',
+                    upstream_rank: null,
                 },
             ];
         });
