@@ -42,6 +42,12 @@ const { createGeminiProvider } = require('./gemini');
 const { createHttpSeamProvider } = require('./http');
 const { createWhisperProvider } = require('./whisper');
 const { createSpeechProvider } = require('./speech');
+const { createFalProvider } = require('./fal');
+const { createBflProvider } = require('./bfl');
+const { createRecraftProvider } = require('./recraft');
+const { createIdeogramProvider } = require('./ideogram');
+const { createDeepgramProvider } = require('./deepgram');
+const { createVoyageProvider } = require('./voyage');
 const rates = require('./rate-cards');
 const tiers = require('./tiers');
 const traits = require('./traits');
@@ -372,7 +378,14 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             case 'http': return createHttpSeamProvider(p, { apiKey, fetchImpl });
             case 'whisper': return createWhisperProvider(p, { config });
             case 'google-tts':
-            case 'polly': return createSpeechProvider(p, { apiKey, fetchImpl, env });
+            case 'polly':
+            case 'elevenlabs': return createSpeechProvider(p, { apiKey, fetchImpl, env });
+            case 'fal': return createFalProvider(p, { apiKey, fetchImpl });
+            case 'bfl': return createBflProvider(p, { apiKey, fetchImpl });
+            case 'recraft': return createRecraftProvider(p, { apiKey, fetchImpl });
+            case 'ideogram': return createIdeogramProvider(p, { apiKey, fetchImpl });
+            case 'deepgram': return createDeepgramProvider(p, { apiKey, fetchImpl });
+            case 'voyage': return createVoyageProvider(p, { apiKey, fetchImpl });
             default: throw new Error(`unknown provider kind ${p.kind}`);
         }
     }

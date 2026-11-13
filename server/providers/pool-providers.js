@@ -1131,12 +1131,15 @@ const PROVIDERS = [
         data_policy: policy({ trains: null, retention: null, terms: 'https://docs.dos.ai', checked: '2026-11-10' }),
         models: [],
     },
-    // Altare Inference (2026-11-12, the owner: "a potentially excellent free API to test"): an OpenAI-compatible API for
-    // open models. Free until 2026-12-01 (usage does not count toward the included amount; rate limits still apply), then
-    // Always Free includes $100 of usage a month at list price, recorded in the console as a monthly credit plan
-    // (https://docs.altare.gg/inference/pricing). Keys start alt_inf_ (Team → Inference → API keys). Its published limits
-    // are kept by the router (rate_limits, server/providers/rate-gate.js). UNVERIFIED until the owner reads its terms,
-    // so it serves OpenVibe's own work and stays out of paid managed routes; privacy is unread, so it is anonymized.
+    // Altare Inference: an OpenAI-compatible API for open models. Its free inference is gone (read 2026-11-13,
+    // https://docs.altare.gg/inference/pricing): the Always Free console plan now carries no Token Plan and no plan
+    // credit, and the $10 a month Starter is a Token Plan for interactive coding only, which its fair-use terms
+    // forbid for bots, scheduled jobs, CI, other pipelines, reselling or sharing outside the team. The only way in is
+    // prepaid API credit ($5 to $1,000 at a time, never expires) spent at list price, so no free allowance is
+    // recorded here and Altare is not recommended in the guided setup (server/setup/catalog.js). Keys start alt_inf_
+    // (Team → Inference → API keys). Its published limits are kept by the router (rate_limits,
+    // server/providers/rate-gate.js). UNVERIFIED until the owner reads its terms, so it serves OpenVibe's own work
+    // and stays out of paid managed routes; privacy is unread, so it is anonymized.
     {
         key: 'altare',
         docs_url: 'https://docs.altare.gg/inference',
@@ -1154,8 +1157,6 @@ const PROVIDERS = [
             source: 'https://docs.altare.gg/inference/limits', checked: '2026-11-12',
             note: 'per team, per minute; Plus 240 and 90 a model, Business 480 and 90',
         },
-        free_until: '2026-12-01',
-        monthly_included_usd: { amount: 100, from: '2026-12-01', plan: 'Always Free', source: 'https://docs.altare.gg/inference/pricing' },
         models: [
             {
                 model_key: 'glm-5.3', display_name: 'GLM-5.3', family: 'glm', context_window: 1048576,
@@ -1207,6 +1208,56 @@ const PROVIDERS = [
                 quantization: null, refusal_rate: null,
             },
         ],
+    },
+
+    // ── The researched providers of 2026-11-13 (the guided setup's Images, Voices, Speech in and
+    // Embeddings steps). Each one is off until the owner puts its key in ai.provider_keys. Their
+    // prices were read on their own pages on 2026-11-13 and live in the setup catalogue
+    // (server/setup/catalog.js), which is where the guided setup shows them; these records carry the
+    // facts the pool needs: the endpoint, the capability, the access mode and what the provider says
+    // it does with a prompt. UNVERIFIED until the owner reads the terms, so they serve the network's
+    // own work and stay out of paid managed routes.
+    {
+        key: 'fal', display_name: 'fal.ai', kind: 'fal', base_url: 'https://fal.run',
+        keys_url: 'https://fal.ai/dashboard/keys', docs_url: 'https://fal.ai/models/fal-ai/flux/schnell',
+        models_endpoint: null, capabilities: ['image'], timeout_ms: 120000, provider_access: 'UNVERIFIED',
+        privacy: privacy({ label: 'anonymized', wording: 'the model page read on 2026-11-13 says commercial usage rights are included; the retention and training terms were not read', checked: '2026-11-13' }),
+        data_policy: policy({ trains: null, retention: null, checked: '2026-11-13' }),
+    },
+    {
+        key: 'bfl', display_name: 'Black Forest Labs (FLUX)', kind: 'bfl', base_url: 'https://api.bfl.ai',
+        keys_url: 'https://dashboard.bfl.ai', docs_url: 'https://docs.bfl.ai/flux_3/flux3_image_generate',
+        models_endpoint: null, capabilities: ['image'], timeout_ms: 120000, provider_access: 'UNVERIFIED',
+        privacy: privacy({ label: 'anonymized', wording: 'the pricing page read on 2026-11-13 publishes the list price only; the retention and training terms were not read', checked: '2026-11-13' }),
+        data_policy: policy({ trains: null, retention: null, checked: '2026-11-13' }),
+    },
+    {
+        key: 'recraft', display_name: 'Recraft', kind: 'recraft', base_url: 'https://external.api.recraft.ai/v1',
+        keys_url: 'https://www.recraft.ai/app/api/api-keys', docs_url: 'https://www.recraft.ai/docs/api-reference',
+        models_endpoint: null, capabilities: ['image'], timeout_ms: 60000, provider_access: 'UNVERIFIED',
+        privacy: privacy({ label: 'anonymized', wording: 'the model page read on 2026-11-13 prices the models and says a vector picture is editable SVG; the retention and training terms were not read', checked: '2026-11-13' }),
+        data_policy: policy({ trains: null, retention: null, checked: '2026-11-13' }),
+    },
+    {
+        key: 'ideogram', display_name: 'Ideogram', kind: 'ideogram', base_url: 'https://api.ideogram.ai',
+        keys_url: 'https://developer.ideogram.ai/', docs_url: 'https://developer.ideogram.ai/v2/ideogram-api/api-overview',
+        models_endpoint: null, capabilities: ['image'], timeout_ms: 120000, provider_access: 'UNVERIFIED',
+        privacy: privacy({ label: 'anonymized', terms_url: 'https://ideogram.ai/legal/api-tos', wording: 'the API setup page read on 2026-11-13 says the API is prepaid by credit and that the developer API agreement applies; the retention and training terms were not read', checked: '2026-11-13' }),
+        data_policy: policy({ trains: null, retention: null, terms: 'https://ideogram.ai/legal/api-tos', checked: '2026-11-13' }),
+    },
+    {
+        key: 'deepgram', display_name: 'Deepgram', kind: 'deepgram', base_url: 'https://api.deepgram.com',
+        keys_url: 'https://console.deepgram.com/', docs_url: 'https://developers.deepgram.com/docs/pre-recorded-audio',
+        models_endpoint: null, capabilities: ['transcribe'], timeout_ms: 120000, provider_access: 'UNVERIFIED',
+        privacy: privacy({ label: 'anonymized', wording: 'the pricing page read on 2026-11-13 publishes the prices and the $200 of free credit; the retention and training terms were not read', checked: '2026-11-13' }),
+        data_policy: policy({ trains: null, retention: null, checked: '2026-11-13' }),
+    },
+    {
+        key: 'voyage', display_name: 'Voyage AI', kind: 'voyage', base_url: 'https://api.voyageai.com',
+        keys_url: 'https://dashboard.voyageai.com/api-keys', docs_url: 'https://docs.voyageai.com/docs/pricing',
+        models_endpoint: null, capabilities: ['embed', 'rerank'], timeout_ms: 60000, provider_access: 'UNVERIFIED',
+        privacy: privacy({ label: 'anonymized', wording: 'the pricing page read on 2026-11-13 publishes the prices and the free tokens; the retention and training terms were not read', checked: '2026-11-13' }),
+        data_policy: policy({ trains: null, retention: null, checked: '2026-11-13' }),
     },
 
 ];

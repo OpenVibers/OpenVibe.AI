@@ -26,6 +26,8 @@ const { AiError, sendError, providerSecret } = require('../util');
 const { STEPS, stepById, offersOf, keyPageOf } = require('../setup/catalog');
 
 const MONTH_MS = 30 * 24 * 3600 * 1000;
+/** The voice each speech provider's own test speaks with: one of that provider's own voices. */
+const TEST_VOICE = Object.freeze({ polly: 'pl_joanna_neural', 'google-tts': 'gc_neural_chad', elevenlabs: 'eleven_voice' });
 const MAX_KEY = 400;
 const money = (n) => Math.round((Number(n) || 0) * 1e6) / 1e6;
 
@@ -82,6 +84,12 @@ function viewOffer(step, offer, { providers, models, configured, recommended = f
         keyless: Boolean(offer.keyless),
         configured: Boolean(configured),
         key_page: offer.key_page || keyPageOf(provider),
+        // What else this provider can do: SVG and icons for the icon studio, reranking for a search
+        // that has too many candidates. A flag is a fact about the provider, never a promise the
+        // network cannot keep today.
+        svg: Boolean(offer.svg),
+        icons: Boolean(offer.icons),
+        rerank: Boolean(offer.rerank),
     };
 }
 
@@ -379,9 +387,9 @@ function setupRouter({ config = {}, db, registry, pool = null, runs = null, auth
                     model: modelKey, prompt: 'A small blue square on a plain white background, flat icon.', n: 1, size: '1024x1024',
                 }, { contentPolicy: 'standard', ...(Number.isFinite(perImage) && perImage >= 0 ? { imagePriceUsd: perImage } : {}) });
             } else if (step.operation === 'embed') {
-                out = await pool.execute(testRoute, 'embed', { model: modelKey, input: 'OpenVibe answers by meaning.' }, { contentPolicy: 'standard' });
+                out = await pool.execute(testRoute, 'embed', { model: modelKey, input: ['OpenVibe answers by meaning.'] }, { contentPolicy: 'standard' });
             } else if (step.operation === 'speak') {
-                out = await pool.execute(testRoute, 'speak', { model: modelKey, voice: providerKey === 'polly' ? 'pl_joanna_neural' : 'gc_neural_chad', text: 'OpenVibe is ready.', format: 'mp3' }, { contentPolicy: 'standard' });
+                out = await pool.execute(testRoute, 'speak', { model: modelKey, voice: TEST_VOICE[providerKey] || 'gc_neural_chad', text: 'OpenVibe is ready.', format: 'mp3' }, { contentPolicy: 'standard' });
             } else if (step.operation === 'transcribe') {
                 const clip = wavClip();
                 try {

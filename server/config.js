@@ -160,6 +160,8 @@ function load(env = process.env) {
             googleBaseUrl: trimUrl(env.AI_GOOGLE_TTS_BASE_URL || 'https://texttospeech.googleapis.com'),
             pollyKeyRef: String(env.AI_POLLY_KEY_REF || 'env:AI_POLLY_ACCESS_KEY_ID').trim(),
             pollyBaseUrl: trimUrl(env.AI_POLLY_BASE_URL || ''),
+            elevenLabsKeyRef: String(env.AI_ELEVENLABS_KEY_REF || 'env:AI_ELEVENLABS_API_KEY').trim(),
+            elevenLabsBaseUrl: trimUrl(env.AI_ELEVENLABS_BASE_URL || 'https://api.elevenlabs.io'),
             timeoutMs: int(env.AI_SPEECH_TIMEOUT_MS, 60000),
         },
         // ── Spend safety for runs nobody pays for (the free allowance, the anonymous Try it) ──

@@ -14,9 +14,24 @@
 const { keyPage } = require('../owner-inputs');
 
 const CHECKED = '2026-11-12';
-// Altare Inference is free until 2026-12-01 (usage does not count toward the included amount; rate limits apply), then
-// Always Free includes $100 of usage a month (https://docs.altare.gg/inference/pricing): an offer worth trying first.
-const ALTARE_NOTE = 'Free until December 1, then $100 of usage a month on Altare\'s free plan (60 requests a minute; 30 for its flagship models). Record the $100 as a monthly credit on Exchange → Console → Providers.';
+/** The day the new providers' own prices and terms were read (their own pages, 2026-11-13). */
+const READ = '2026-11-13';
+
+/**
+ * Altare Inference, read on 2026-11-13 (https://docs.altare.gg/inference/pricing): the Always Free
+ * plan now carries no Token Plan and no plan credit, so there is no free inference left. The $10 a
+ * month Starter is a Token Plan for interactive coding only — its fair-use terms say it is not for
+ * bots, scheduled jobs, CI or other pipelines, reselling or sharing outside the team — and images,
+ * speech, transcription, embeddings and rerank are never covered by a Token Plan. The only way in is
+ * prepaid API credit ($5 to $1,000 at a time, never expires) spent at list price.
+ *
+ * So Altare is not recommended here: the network runs bots, schedules and resold work, which the
+ * plan forbids, and the credit route buys the same models dearer than their owner. The provider
+ * stays in the pool (server/providers/pool-providers.js), where the owner may still use it for their
+ * own work, and its free claims are gone from that record too.
+ */
+const ALTARE_NOTE = 'Read 2026-11-13 on https://docs.altare.gg/inference/pricing: Altare\'s Always Free plan has no Token Plan and no plan credit, so there is no free inference. The $10 a month Starter is a Token Plan for interactive coding only — its fair-use terms say it is not for bots, scheduled jobs, CI or other pipelines, reselling or sharing outside the team — and images, speech, transcription, embeddings and rerank are never covered by a Token Plan. The network may only use Altare from prepaid API credit ($5 to $1,000 at a time, never expires), at list price.';
+
 const SOURCES = Object.freeze({
     deepseek: 'https://api-docs.deepseek.com/quick_start/pricing',
     gemini: 'https://ai.google.dev/gemini-api/docs/pricing',
@@ -30,6 +45,13 @@ const SOURCES = Object.freeze({
     serper: 'https://serper.dev/pricing',
     altare: 'https://inference.altare.global/v1/models',
     geminiDecision: 'https://blog.google/innovation-and-ai/technology/developers-tools/gemini-decisions-api/',
+    fal: 'https://fal.ai/models/fal-ai/flux/schnell',
+    bfl: 'https://bfl.ai/pricing',
+    recraft: 'https://www.recraft.ai/docs/api-reference/models/recraft-v4-1',
+    ideogram: 'https://ideogram.ai/pricing',
+    elevenLabs: 'https://elevenlabs.io/pricing/api',
+    deepgram: 'https://deepgram.com/pricing',
+    voyage: 'https://docs.voyageai.com/docs/pricing',
 });
 
 /** A price in the page's plain words; `unit` is what the number is per. */
@@ -41,9 +63,15 @@ const picturePrice = (usd) => ({ kind: 'image', per_image_usd: usd, unit: 'pictu
 const minutePrice = (usd) => ({ kind: 'minute', per_minute_usd: usd, unit: 'minute', text: `$${usd} per minute` });
 const charsPrice = (usd) => ({ kind: 'characters', per_million_chars_usd: usd, unit: '1M characters', text: `$${usd} per 1M characters` });
 const searchPrice = (usd) => ({ kind: 'search', per_1000_usd: usd, unit: '1,000 searches', text: `$${usd} per 1,000 searches` });
+/** A price the provider sells by the credit, not by the unit we meter. */
+const creditPrice = (usd) => ({ kind: 'credit', per_credit_usd: usd, unit: 'credit', text: `$${usd} per credit` });
 const FREE = { kind: 'free', text: 'free', unit: null };
 
-/** One offer: where the key comes from, what it costs and whether it can be recommended. */
+/**
+ * One offer: where the key comes from, what it costs and whether it can be recommended.
+ * `extra.checked` says the day that offer's own price was read; without it the offer is read on
+ * the catalogue's own day.
+ */
 function offer(provider, model, label, price, source, extra = {}) {
     return { provider, model, label, price, source, checked: CHECKED, ...extra };
 }
@@ -61,7 +89,6 @@ const STEPS = Object.freeze([
         recommended: offer('deepseek', 'deepseek-flash', 'DeepSeek Flash', tokenPrice(0.15, 0.6, 0.003), SOURCES.deepseek,
             { why: 'cheapest that looks good', note: 'The price is DeepSeek\'s off-peak list price; daytime is higher.' }),
         alternatives: [
-            offer('altare', 'deepseek-v4.1-flash', 'DeepSeek V4.1 Flash on Altare', tokenPrice(0.3, 1.2, 0.006), SOURCES.altare, { why: 'free until December 1', note: ALTARE_NOTE }),
             offer('deepseek', 'deepseek-chat', 'DeepSeek Chat', tokenPrice(0.26, 0.38), SOURCES.deepseek),
             offer('openai', 'gpt-5-mini', 'GPT-5 mini', tokenPrice(0.25, 2), SOURCES.openaiImages),
         ],
@@ -86,6 +113,22 @@ const STEPS = Object.freeze([
         alternatives: [
             offer('gemini', 'gemini-2.5-flash-image', 'Gemini 2.5 Flash Image', picturePrice(0.039), SOURCES.gemini),
             offer('xai', 'grok-2-image', 'xAI Grok Image', picturePrice(0.07), 'https://docs.x.ai/docs/models'),
+            offer('fal', 'flux-schnell', 'FLUX.1 [schnell] on fal', picturePrice(0.003), SOURCES.fal,
+                { why: 'the cheapest picture we found', checked: READ,
+                  key_page: { url: 'https://fal.ai/dashboard/keys', how: 'Sign in, open the API keys page and create a key for the account that pays.' },
+                  note: 'FLUX.1 [schnell] is $0.003 per megapixel and fal bills by rounding up to the next whole megapixel; the price shown is one 1024×1024 picture.' }),
+            offer('bfl', 'flux-3-image', 'FLUX 3 Image', picturePrice(0.048), SOURCES.bfl,
+                { why: 'the model owner itself', checked: READ,
+                  key_page: { url: 'https://dashboard.bfl.ai', how: 'Sign in, open the API keys page and create a key for the account that pays.' },
+                  note: 'FLUX 3 Image is $0.041 a picture at 768 px, $0.048 at 1K, $0.07 at 1.5K, $0.10 at 2K and $0.607 at 4K; the price shown is the 1K picture. The address BFL answers with is signed and expires after an hour.' }),
+            offer('recraft', 'recraftv4_1_vector', 'Recraft vector', picturePrice(0.08), SOURCES.recraft,
+                { why: 'SVG and icons', svg: true, icons: true, checked: READ,
+                  key_page: { url: 'https://www.recraft.ai/app/api/api-keys', how: 'Sign in, open API tokens and create a token; the account needs a positive units balance.' },
+                  note: 'Recraft\'s vector models answer in editable SVG: recraftv4_1_vector is $0.08 a picture, the raster recraftv4_1 is $0.035. The icon studio wants this one.' }),
+            offer('ideogram', 'ideogram-4-5', 'Ideogram 4.5', creditPrice(0.01), SOURCES.ideogram,
+                { why: 'SVG and strong lettering', svg: true, checked: READ,
+                  key_page: { url: 'https://developer.ideogram.ai/', how: 'Sign in, open the API dashboard, add a payment method and credits, then create an API key.' },
+                  note: 'Ideogram\'s API is prepaid by credit: $0.01 a credit, and a generation costs the credits its model and rendering settings need — the price list is in your own account\'s Settings, so the network cannot meter an Ideogram picture yet. The same key answers in SVG (ideogram-vector-1).' }),
         ],
     },
     {
@@ -97,6 +140,10 @@ const STEPS = Object.freeze([
         alternatives: [
             offer('openai', 'whisper-1', 'OpenAI Whisper', minutePrice(0.006), SOURCES.openaiAudio),
             offer('mistral', 'voxtral-mini-latest', 'Mistral Voxtral', minutePrice(0.003), 'https://mistral.ai/pricing'),
+            offer('deepgram', 'nova-3', 'Deepgram Nova-3', minutePrice(0.0077), SOURCES.deepgram,
+                { why: '$200 free credit, no card', checked: READ,
+                  key_page: { url: 'https://console.deepgram.com/', how: 'Sign in, open the API keys page and create a key.' },
+                  note: 'A new account starts with $200 of credit, with no card and no minimum. Nova-3 is $0.0077 a minute monolingual and $0.0092 multilingual, pay as you go; the Growth tier is $0.0065.' }),
         ],
     },
     {
@@ -110,6 +157,10 @@ const STEPS = Object.freeze([
             offer('google-tts', 'gc_smooth_operator', 'Google Standard', charsPrice(4), SOURCES.googleSpeech),
             offer('polly', 'pl_joanna_neural', 'Amazon Polly Neural', charsPrice(16), SOURCES.polly,
                 { key_page: { url: 'https://console.aws.amazon.com/iam/home#/security_credentials', how: 'Create an access key for a user that may call Polly, then paste the access key id here.' } }),
+            offer('elevenlabs', 'eleven_voice', 'ElevenLabs voice', charsPrice(80), SOURCES.elevenLabs,
+                { why: 'the best-sounding voices', checked: READ,
+                  key_page: { url: 'https://elevenlabs.io/app/settings/api-keys', how: 'Sign in, open Profile, then API keys, and create a key for the account that pays.' },
+                  note: 'ElevenLabs bills its API at $0.08 per 1,000 characters for the multilingual models ($40 for Flash and Turbo), so $80 per 1M characters. It replaces its default voices over time, so the voice is read from your own account\'s voice list. A commercial licence starts at the $5 Starter plan; the free plan has none.' }),
         ],
     },
     {
@@ -121,6 +172,10 @@ const STEPS = Object.freeze([
         alternatives: [
             offer('local', 'nomic-embed-text', 'nomic-embed-text on this machine', FREE, 'https://ollama.com/library/nomic-embed-text', { keyless: true }),
             offer('gemini', 'text-embedding-004', 'Gemini Embedding', tokenPrice(0.1, 0), SOURCES.gemini),
+            offer('voyage', 'voyage-4-lite', 'Voyage 4 Lite', tokenPrice(0.02, 0), SOURCES.voyage,
+                { why: '200M free tokens to start', rerank: true, checked: READ,
+                  key_page: { url: 'https://dashboard.voyageai.com/api-keys', how: 'Sign in, open API keys and create a key for the account that pays.' },
+                  note: 'The first 200 million tokens of every account are free; voyage-4-lite is $0.02 per 1M tokens, voyage-4 $0.06 and voyage-4-large $0.12. The same key also reranks: rerank-3 is $0.05 per 1M tokens, rerank-3-lite $0.02. The setup has no rerank step yet, so the reranker is not an offer of its own.' }),
         ],
     },
     {
@@ -141,7 +196,6 @@ const STEPS = Object.freeze([
         recommended: offer('deepseek', 'deepseek-chat', 'DeepSeek Chat', tokenPrice(0.26, 0.38), SOURCES.deepseek,
             { why: 'cheapest that looks good' }),
         alternatives: [
-            offer('altare', 'glm-5.3', 'GLM-5.3 on Altare', tokenPrice(1.4, 4.4, 0.26), SOURCES.altare, { why: 'free until December 1', note: ALTARE_NOTE }),
             offer('gemini', 'gemini-4-hydrogen', 'Gemini 4 Hydrogen', tokenPrice(1.5, 7.5, 0.075), SOURCES.gemini, { why: 'free tier, 1M context',
                 note: 'Free on a free AI Studio key, but Google uses the free tier\'s prompts and answers to improve its products: public or synthetic work only (Bench, public repos), never a person\'s code. Paid is $1.50 in / $7.50 out per 1M.' }),
             offer('openai', 'gpt-5-mini', 'GPT-5 mini', tokenPrice(0.25, 2), SOURCES.openaiImages),
@@ -158,7 +212,6 @@ const STEPS = Object.freeze([
         // on decide.fallback; the route gets the cheap structured model and the Decisions API needs only the Gemini key.
         routeOffer: offer('deepseek', 'deepseek-flash', 'DeepSeek Flash', tokenPrice(0.15, 0.6, 0.003), SOURCES.deepseek),
         alternatives: [
-            offer('altare', 'gemma-4-26b', 'Gemma 4 26B on Altare', tokenPrice(0.1, 0.3, 0.05), SOURCES.altare, { why: 'free until December 1', note: ALTARE_NOTE }),
             offer('deepseek', 'deepseek-flash', 'DeepSeek Flash', tokenPrice(0.15, 0.6, 0.003), SOURCES.deepseek),
         ],
     },
@@ -192,4 +245,4 @@ function keyPageOf(provider) {
     }
 }
 
-module.exports = { STEPS, BY_ID, KIND_LABELS, stepById, offersOf, keyPageOf, CHECKED };
+module.exports = { STEPS, BY_ID, KIND_LABELS, stepById, offersOf, keyPageOf, CHECKED, READ, ALTARE_NOTE };

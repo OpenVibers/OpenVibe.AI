@@ -112,6 +112,17 @@ function speechProviderRecords(config, env) {
         default_model: 'pl_joanna_std', capabilities: ['speak'],
         timeout_ms: (config.speech && config.speech.timeoutMs) || 60000, priority: 20, provider_access: 'OWN_DEPLOYMENT',
         metadata: { configured_by: 'AI_POLLY_ACCESS_KEY_ID', provider_name: 'polly', billing_profile: 'metered' } });
+    // ElevenLabs (2026-11-13): the third voice. The key is the owner's (AI_ELEVENLABS_API_KEY in the
+    // server's settings, or the key the guided setup stores in ai.provider_keys). UNVERIFIED until the
+    // owner reads its terms, so it serves the network's own work and stays out of paid managed routes.
+    const ekey = config.speech ? resolveSecret(config.speech.elevenLabsKeyRef, env) : '';
+    out.push({ key: 'elevenlabs', display_name: 'ElevenLabs', kind: 'elevenlabs',
+        status: ekey ? 'active' : 'disabled',
+        base_url: (config.speech && config.speech.elevenLabsBaseUrl) || 'https://api.elevenlabs.io',
+        auth_mode: 'x-api-key', secret_ref: config.speech ? config.speech.elevenLabsKeyRef : 'env:AI_ELEVENLABS_API_KEY',
+        default_model: 'eleven_voice', capabilities: ['speak'],
+        timeout_ms: (config.speech && config.speech.timeoutMs) || 60000, priority: 20, provider_access: 'UNVERIFIED',
+        metadata: { configured_by: 'AI_ELEVENLABS_API_KEY', provider_name: 'elevenlabs', billing_profile: 'metered' } });
     return out;
 }
 
@@ -203,15 +214,18 @@ async function seed({ registry, quotas, config, env = process.env, db }) {
         for (const [id, v] of Object.entries(VOICES)) {
             const prev = await registry.getModel(v.provider, id);
             if (prev && !(prev.metadata && prev.metadata.configured_by === 'AI_SPEECH_SEED')) continue;
-            const source = v.provider === 'google-tts' ? 'https://cloud.google.com/text-to-speech/pricing' : 'https://aws.amazon.com/polly/pricing/';
+            const source = v.provider === 'google-tts' ? 'https://cloud.google.com/text-to-speech/pricing'
+                : v.provider === 'elevenlabs' ? 'https://elevenlabs.io/pricing/api' : 'https://aws.amazon.com/polly/pricing/';
+            // The day that voice's own price was read (the Google and Polly voices on 2026-11-10, ElevenLabs on 2026-11-13).
+            const checked = v.provider === 'elevenlabs' ? '2026-11-13' : '2026-11-10';
             await registry.upsertModel({ provider_key: v.provider, model_key: id,
-                display_name: v.voiceId ? `${v.voiceId} (${v.engine})` : v.voice,
+                display_name: v.voiceId ? `${v.voiceId} (${v.engine})` : (v.label || v.voice || v.voiceName || v.id),
                 type: 'speech', status: 'active', context_window: null, max_output: null,
                 cost: { in_per_mtok: v.price_per_million_chars_usd, out_per_mtok: 0, cached_per_mtok: null,
-                    effective_from: '2026-11-10', source, verified_at: '2026-11-10' },
+                    effective_from: checked, source, verified_at: checked },
                 supports: { json: false, tools: false, streaming: false, vision: false },
                 metadata: { configured_by: 'AI_SPEECH_SEED', unit: 'characters', price_per_million_chars_usd: v.price_per_million_chars_usd,
-                    cloud_voice: v.voice || v.voiceId, cloud_engine: v.engine || googleTierOf(v.voice),
+                    cloud_voice: v.voice || v.voiceId || null, cloud_engine: v.engine || googleTierOf(v.voice),
                     ...(v.voice && /Journey/i.test(v.voice) ? { pricing_note: 'Journey has no row on the current pricing page; priced at the Neural2 SKU until Google publishes one.' } : {}) },
             }, { actor: 'seed' });
         }
