@@ -16,8 +16,11 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const nodeHttp = require('http');
+const { spawnSync } = require('child_process');
 const { suite, seamServer, boot, request, token, tmpDir } = require('./helpers');
 const catalog = require('../server/setup/catalog');
+// The setup page's speech-to-text test speaks a real clip with ffmpeg; without it that round trip is skipped.
+const HAS_FFMPEG = spawnSync('ffmpeg', ['-version']).status === 0;
 const { createFalProvider } = require('../server/providers/fal');
 const { createBflProvider } = require('../server/providers/bfl');
 const { createRecraftProvider } = require('../server/providers/recraft');
@@ -308,6 +311,7 @@ t.test('the setup page runs a new provider end to end: a key, a model, a route a
 });
 
 t.test('the setup page runs a new transcription provider end to end', async () => {
+    if (!HAS_FFMPEG) return console.log('setup transcription end to end: skipped (no ffmpeg)');
     const up = await seamServer(() => ({ results: { channels: [{ alternatives: [{ transcript: 'OpenVibe is ready.', words: [] }] }] } }));
     const h = await boot({ env: { AI_STUB_FALLBACK: 'false' } });
     try {
