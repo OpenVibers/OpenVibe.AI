@@ -71,17 +71,24 @@ function checked(body) {
     return { parts, text, questions, prefer, onlyText: parts.every((p) => p.type === 'text') };
 }
 
-function decisionsRouter({ runs, auth, db, registry, env = process.env, fetchImpl = globalThis.fetch, log = console, now = () => Date.now() }) {
-    const r = express.Router();
-    r.use(http.middleware());
-    const guard = auth.personOrCap('ai.run.create');
-
+/**
+ * Google's Decisions API with the gemini provider's own key (calibrated, metered as a 'classify' request), shared by
+ * POST /api/v1/decisions and Auto's routing step (server/routing/auto-decision.js). ask(req) → the answer, or null when
+ * there is no key; it throws when Google does not answer.
+ */
+function createGeminiDecider({ db, registry, env = process.env, fetchImpl = globalThis.fetch, log = console, now = () => Date.now() }) {
     const meter = async (row) => {
         try {
             await db.prepare("INSERT INTO requests (operation, provider_key, model_key, status, cost_usd, created_at) VALUES ('classify', ?, ?, ?, ?, ?)")
                 .run(row.provider, row.model, row.status, row.cost_usd || 0, new Date(now()).toISOString());
         } catch (err) { log.warn(`[ai] decisions meter: ${String(err && err.message || err).slice(0, 160)}`); }
     };
+
+    /** Is a key there at all (no call)? */
+    async function available() {
+        const row = registry && registry.getProvider ? await registry.getProvider('gemini').catch(() => null) : null;
+        return Boolean(row ? providerSecret(row, env) : env.GEMINI_API_KEY);
+    }
 
     /** Google's Decisions API with the gemini provider's own key, or null when there is no key. */
     async function viaGemini(req) {
@@ -104,6 +111,14 @@ function decisionsRouter({ runs, auth, db, registry, env = process.env, fetchImp
         await meter({ provider: 'gemini', model: GEMINI_MODEL, status: 'ok', cost_usd: cost });
         return { answers: data.answers, calibrated: true, receipt: { provider: 'gemini', model: GEMINI_MODEL, input_tokens: tokens, cost_usd: cost } };
     }
+    return { ask: viaGemini, available };
+}
+
+function decisionsRouter({ runs, auth, db, registry, env = process.env, fetchImpl = globalThis.fetch, log = console, now = () => Date.now() }) {
+    const r = express.Router();
+    r.use(http.middleware());
+    const guard = auth.personOrCap('ai.run.create');
+    const viaGemini = createGeminiDecider({ db, registry, env, fetchImpl, log, now }).ask;
 
     /** The router's cheap structured-output route (decide.fallback): text only, estimated probabilities. */
     async function viaRouter(req, http) {
@@ -116,6 +131,20 @@ function decisionsRouter({ runs, auth, db, registry, env = process.env, fetchImp
         return { answers: run.output.answers, calibrated: false,
             receipt: { provider: String((run.provenance && run.provenance.provider) || 'router').slice(0, 100), model: String((run.provenance && run.provenance.model) || 'unknown').slice(0, 200), run_id: String(run.id), cost_usd: Number(run.usage && run.usage.cost_usd) || 0 } };
     }
+
+    // How an Auto answer went (plan 16d): a product that knows (a test passed, the person voted) tells the weekly fit.
+    // Only the person or service the decision answered may report it; anyone else gets the 404 of a missing one.
+    const autoOutcomes = require('../routing/auto-decision').createAutoDecision({ db, log });
+    r.post('/api/v1/route-decisions/:id/outcome', guard, async (req, res) => {
+        try {
+            const good = req.body && req.body.good;
+            if (typeof good !== 'boolean') throw new AiError(422, 'input.invalid', 'good is true or false');
+            const p = req.principal || {};
+            const out = await autoOutcomes.outcome(String(req.params.id).slice(0, 64), good, { onBehalfOf: p.onBehalfOf || null, type: p.subject && p.subject.type, id: p.subject && p.subject.id });
+            if (out.status === 404) throw new AiError(404, 'route_decision.not_found', 'no such decision');
+            res.json({ id: String(req.params.id), outcome: out.outcome });
+        } catch (err) { sendError(res, err, req); }
+    });
 
     r.post('/api/v1/decisions', guard, async (req, res) => {
         try {
@@ -135,4 +164,4 @@ function decisionsRouter({ runs, auth, db, registry, env = process.env, fetchImp
     return r;
 }
 
-module.exports = { decisionsRouter, checked };
+module.exports = { decisionsRouter, checked, createGeminiDecider, GEMINI_PER_MTOK };
