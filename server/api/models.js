@@ -26,6 +26,9 @@ const epochOf = (iso) => {
     const ms = Date.parse(iso || '');
     return Number.isFinite(ms) ? Math.floor(ms / 1000) : LEGACY_CREATED;
 };
+// A dynamic alias is a routing policy, not one artifact: which of these it can do depends on the model
+// the router picks, so every feature is unknown (null) until the answer says which model ran.
+const emptyFeatures = () => Object.fromEntries(modelCatalog.FEATURE_KEYS.map((k) => [k, null]));
 const aliasEntry = (alias) => ({
     ...alias,
     object: 'model',
@@ -34,6 +37,7 @@ const aliasEntry = (alias) => ({
     created: LEGACY_CREATED,
     created_at: LEGACY_CREATED_AT,
     display_name: alias.name,
+    features: emptyFeatures(),
 });
 const catalogOpenAi = (x) => ({
     ...x.entry,
@@ -65,14 +69,15 @@ const anthropicAlias = (alias) => ({
     object: undefined,
     owned_by: undefined,
     created: undefined,
+    features: emptyFeatures(),
 });
 
 /** The catalog list in one protocol. Flag off: today's single virtual model. */
 async function list({ registry, config, protocol }) {
     const enabled = Boolean(config.modelCatalog && config.modelCatalog.enabled);
     if (!enabled) {
-        if (protocol === 'anthropic') return { data: [{ type: 'model', id: LEGACY_MODEL, display_name: 'OpenVibe AI', created_at: LEGACY_CREATED_AT }], has_more: false, first_id: LEGACY_MODEL, last_id: LEGACY_MODEL };
-        return { object: 'list', data: [{ id: LEGACY_MODEL, object: 'model', created: LEGACY_CREATED, owned_by: 'openvibe' }] };
+        if (protocol === 'anthropic') return { data: [{ type: 'model', id: LEGACY_MODEL, display_name: 'OpenVibe AI', created_at: LEGACY_CREATED_AT, features: emptyFeatures() }], has_more: false, first_id: LEGACY_MODEL, last_id: LEGACY_MODEL };
+        return { object: 'list', data: [{ id: LEGACY_MODEL, object: 'model', created: LEGACY_CREATED, owned_by: 'openvibe', features: emptyFeatures() }] };
     }
     const aliases = modelCatalog.ALIASES.map((a) => (protocol === 'anthropic' ? anthropicAlias(a) : aliasEntry(a)));
     const models = (await modelCatalog.entries({ registry })).map((x) => (protocol === 'anthropic' ? catalogAnthropic(x) : catalogOpenAi(x)));

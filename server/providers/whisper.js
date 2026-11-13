@@ -210,7 +210,7 @@ function createWhisperProvider(record, { config }) {
         });
     }
 
-    function decode(wavPath, { language = 'en', live = false, lowPower = false, offsetSec = 0, words = false, signal, timeoutMs }) {
+    function decode(wavPath, { language = 'en', live = false, lowPower = false, offsetSec = 0, words = false, prompt = null, temperature = null, signal, timeoutMs }) {
         return new Promise((resolve, reject) => {
             const lang = language && language !== 'en' && multi() ? String(language) : 'en';
             const model = lang !== 'en' ? multi() : (live && exists(MODEL_LIVE) ? MODEL_LIVE : MODEL);
@@ -221,6 +221,9 @@ function createWhisperProvider(record, { config }) {
             // -ojf adds every token with its offsets (word timing, C12); only when asked, since it is a far larger file.
             const args = ['-m', model, '-f', wavPath, words ? '-ojf' : '-oj', '-of', outBase, '-t', String(threads), '-l', lang];
             if (w.beam > 1) args.push('-bs', String(w.beam));
+            // The OpenAI-compatible transcription fields: an initial prompt and the decoding temperature.
+            if (prompt) args.push('--prompt', String(prompt).slice(0, 1000));
+            if (temperature != null) args.push('--temperature', String(temperature));
             const vm = vadModel();
             if (vm) args.push('--vad', '-vm', vm);
             let ch;
@@ -304,7 +307,8 @@ function createWhisperProvider(record, { config }) {
         try {
             await acquire(lane);
             try {
-                const opts = { language: req.language, live: req.live, lowPower: req.lowPower === true, offsetSec: req.offsetSec || 0, words: req.words === true, signal: req.signal, timeoutMs };
+                const opts = { language: req.language, live: req.live, lowPower: req.lowPower === true, offsetSec: req.offsetSec || 0, words: req.words === true,
+                    prompt: req.prompt || null, temperature: req.temperature != null ? req.temperature : null, signal: req.signal, timeoutMs };
                 let r = null;
                 if (engineFor(req.language) === 'parakeet') {
                     try { r = await decodeParakeet(wav, opts); }
