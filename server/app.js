@@ -104,7 +104,7 @@ function createApp({ choices = null, searchFetch = null, config, db, registry, p
     // Terms, Privacy and DMCA moved with the human site: /terms, /privacy and /dmca answer 301 to
     // OpenVibe.Exchange's own legal pages (see the page map below).
     // Inline images arrive as data URLs; the per-run input cap is enforced again in runs.create.
-    app.use(['/api', '/v1'], express.json({ limit: Math.ceil(config.runs.maxInputBytes * 1.5), type: ['application/json', 'application/*+json'] }));
+    app.use(['/api', '/v1', '/v1beta'], express.json({ limit: Math.ceil(config.runs.maxInputBytes * 1.5), type: ['application/json', 'application/*+json'] }));
 
     app.get('/api/health', (_req, res) => {
         res.json({ status: 'ok', service: 'openvibe-ai', version: pkg.version });
