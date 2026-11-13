@@ -22,6 +22,7 @@ function decider(p, { calls = [], fail = false, none = false, available = true }
     return {
         calls,
         available: async () => available,
+        privateOk: async () => available,
         ask: async (q) => {
             calls.push(q);
             if (fail) throw new Error('gemini decisions 503');
@@ -96,6 +97,11 @@ t.test('skips: private, exact, a pin, the owner order, one candidate, cheapest f
     assert.deepStrictEqual((await run(auto, { list: [CHEAP, STRONG] })).out, [CHEAP, STRONG]);
     assert.strictEqual(calls.length, 0, 'none of those asked Decisions');
     same(await run(make(decider(0.99, { available: false }))));
+    // A decider that cannot say it keeps people's words out of training is never asked.
+    const unsure = decider(0.99, { calls: [] });
+    delete unsure.privateOk;
+    same(await run(make(unsure)));
+    assert.strictEqual(unsure.calls.length, 0, 'a key alone is not enough');
     same(await run(make(decider(0.99, { fail: true }))));
     same(await run(make(decider(0.99, { none: true }))));
     const quiet = await run(make(decider(0.99, { fail: true })));

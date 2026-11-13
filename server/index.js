@@ -96,9 +96,9 @@ async function start({ searchFetch = null, config, db: givenDb = null, clock = {
     // The owner's inference configuration: one read for the router's economy switches and the runs'
     // answer cache and batch decisions (server/owner-config.js).
     const ownerConfig = require('./owner-config').createOwnerConfig({ db, registry, clock });
-    // Auto's decision step (plan 16d): one calibrated question before openvibe/auto picks a cheaper model. Off with
-    // AI_AUTO_DECISIONS=0; it asks only with a Gemini key (Google's Decisions API).
-    const autoDecision = /^(0|false|off)$/i.test(env.AI_AUTO_DECISIONS || '') ? null : require('./routing/auto-decision').createAutoDecision({
+    // Auto's decision step (plan 16d): one calibrated question before openvibe/auto picks a cheaper model. OFF unless
+    // AI_AUTO_DECISIONS=1, and then it asks only when the gemini provider is active and does not train on inputs.
+    const autoDecision = !/^(1|true|on)$/i.test(env.AI_AUTO_DECISIONS || '') ? null : require('./routing/auto-decision').createAutoDecision({
         db, clock, log, decider: require('./api/decisions').createGeminiDecider({ db, registry, env, fetchImpl, log, now: () => clock.now() }),
         explore: Number.isFinite(Number(env.AI_AUTO_EXPLORE)) && env.AI_AUTO_EXPLORE !== '' ? Math.min(0.2, Math.max(0, Number(env.AI_AUTO_EXPLORE))) : 0.05,
     });
