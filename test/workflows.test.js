@@ -61,6 +61,8 @@ const EXAMPLES = {
     'codes.generate_docs': { project: 'demo', sources: [{ source_type: 'code.file', title: 'index.js', content: 'module.exports = 1;' }] },
     'games.generate_lore': { world: 'Hobo Quest', prompt: 'The origin of the tin-can knights', sources: SRC(1) },
     'moderation.classify': { text: 'you absolute potato, gg', context: 'arena chat' },
+    'ai.moderate': { text: 'you absolute potato, gg', context: 'arena chat' },
+    'ai.transcribe': { audio: { data_url: 'data:audio/ogg;base64,T2dnUw==', mime: 'audio/ogg' }, language: 'en' },
     'rent.screen_listing': { listing: { title: 'Bright room near the river', kind: 'room', price: 650, currency: 'EUR', period: 'month', city: 'Porto', country: 'PT', description: 'I am abroad for work; send the deposit by wire and I will mail the keys.' } },
     'food.suggest_recipes': { pantry: ['rice', 'onions', 'canned tomatoes'], people: 2, sources: [{ source_type: 'food.food', source_id: 'lentils', title: 'Lentils, dried', content: '{"id":"lentils","unit":"kg"}' }] },
     'chat.vibe.listen': { audio: { data_url: 'data:audio/ogg;base64,T2dnUw==', mime: 'audio/ogg' }, language: 'en' },
