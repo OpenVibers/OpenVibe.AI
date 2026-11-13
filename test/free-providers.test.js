@@ -39,7 +39,7 @@ t.test('the default sources, the local family and the ceiling rule', () => {
 t.test('boot a named source and a cheaper provider outside the list', async () => {
     // OpenAI format: the free allowance and a person's own token reach the service through ai.complete
     // (a Chat Completions passthrough), which only an OpenAI-format provider offers.
-    srv = await seamServer(() => ({ model: 'm', choices: [{ index: 0, message: { role: 'assistant', content: 'an answer' }, finish_reason: 'stop' }], usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 } }));
+    srv = await seamServer(() => ({ model: 'm', text: 'an answer', choices: [{ index: 0, message: { role: 'assistant', content: 'an answer' }, finish_reason: 'stop' }], usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 } }));
     h = await boot({ env: { AI_STUB_FALLBACK: 'false', AI_PROVIDER_RETRIES: '0' } });
     for (const key of ['deepseek', 'openai']) {
         await h.registry.upsertProvider({ key, display_name: key, kind: 'openai', status: 'active', base_url: `${srv.url}/v1`, auth_mode: 'none', capabilities: ['chat', 'generate', 'json'], default_model: models[key].model_key, timeout_ms: 3000 }, { actor: 'test', origin: 'admin' });
