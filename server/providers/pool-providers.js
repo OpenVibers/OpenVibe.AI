@@ -231,7 +231,7 @@ const FREE_TIERS = {
     },
     gemini: {
         available: true,
-        summary: 'Free tier gives free input and output tokens on supported models (gemini-3.8-flash, gemini-3.6-flash, gemini-3.5-flash-lite were free on the pricing page). Gemini 4 Carbon/Argon/Hydrogen are not available on the Free tier.',
+        summary: 'Free tier: input, output and context caching are free of charge on the models the pricing page marks free, Gemini 4 Hydrogen among them (read 2026-11-12); Search and Maps grounding are not part of it. The rate-limits page prints no free-tier row for Hydrogen, so its free limits are not stated; limits are per project, requests per day reset at midnight Pacific, and a project sees its own at aistudio.google.com/rate-limit.',
         limits: { rpm: null, rpd: null, tpm: null, tpd: null },
         card_required: false,
         trains_on_free: true,
@@ -891,7 +891,30 @@ const PROVIDERS = [
     { key: 'gemini', models_dev_id: 'google', keys_url: 'https://aistudio.google.com/apikey', display_name: 'Google AI Studio (Gemini API)', base_url: 'https://generativelanguage.googleapis.com/v1beta/openai',
         models_endpoint: 'https://generativelanguage.googleapis.com/v1beta/models',
         api_family: 'google', docs_url: 'https://ai.google.dev/gemini-api/docs/openai', capabilities: ['chat', 'vision', 'tools', 'embed'],
-        free_tier: FREE_TIERS.gemini },
+        free_tier: FREE_TIERS.gemini,
+        // The key the network asks for is a free one, and Google uses the free tier's prompts and answers to improve
+        // its products: the label and the policy are the free tier's, so a run that asks for privacy never lands here
+        // and only public or synthetic work (Bench, public repos) does.
+        privacy: privacy({
+            label: 'anonymized', terms_url: 'https://ai.google.dev/gemini-api/terms',
+            wording: FREE_TIERS.gemini.wording, checked: '2026-11-12',
+        }),
+        data_policy: policy({
+            trains: true, retention: null, trust: 'first-party', region: null,
+            retention_note: 'unpaid quota: Google uses the prompts and answers to improve its products and machine learning',
+            terms: 'https://ai.google.dev/gemini-api/terms', checked: '2026-11-12',
+        }),
+        // Gemini's Batch and Flex tiers are half the list price, but no multiplier is recorded: the Gemini batch adapter
+        // stays disabled until its endpoint is read (server/batch/providers/gemini.js), and the network never offers a
+        // tier it cannot run. Priority (1.8x) is above the list price, which no tier here is.
+        models: [{
+            model_key: 'gemini-4-hydrogen', display_name: 'Gemini 4 Hydrogen', family: 'gemini', context_window: 1048576,
+            cost: { in_per_mtok: 1.50, cached_per_mtok: 0.075, out_per_mtok: 7.50 },
+            source: 'https://ai.google.dev/gemini-api/docs/pricing', checked: '2026-11-12',
+            supports: { json: true, tools: true, streaming: true, vision: false },
+            quantization: null, refusal_rate: null,
+            note: 'Everyday coding and agentic work, 1M context and long answers. Free tier: input, output and caching free, and Google uses the free tier\'s prompts and answers to improve its products, so public or synthetic work only. Paid: caching is implicit only; Batch and Flex $0.75 in / $3.75 out; Priority $2.70 / $13.50 per 1M.' }],
+    },
     { key: 'xai', keys_url: 'https://console.x.ai/', display_name: 'xAI', base_url: 'https://api.x.ai/v1',
         docs_url: 'https://docs.x.ai/docs/api-reference', capabilities: ['chat', 'vision', 'tools', 'image', 'video'] },
     { key: 'mistral', keys_url: 'https://console.mistral.ai/api-keys', display_name: 'Mistral', base_url: 'https://api.mistral.ai/v1',
