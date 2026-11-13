@@ -103,4 +103,52 @@ t.test('the record of a run carries the tokens and the money, and no text at all
     assert.throws(() => record.recordOf({ paid_by: 'someone_else' }), /paid_by/, 'only the known payers');
 });
 
+t.test('the 1.1.0 fields: operation, speed, task, place and the failure class', () => {
+    const rec = record.recordOf({
+        system: 'ai', run_id: 'run_01JAB2C3D4E5F6G7H8J9K0MNPQ', subject: 'usr_01JAB2C3D4E5F6G7H8J9K0MNPQ',
+        attribution: 'site:design', surface: 'ai.generate', provider: 'anthropic', model: 'claude-sonnet-4-5',
+        paid_by: 'openvibe_key', input: 200, output: 80, list_cost_usd: 0.0021, charged_usd: 0.0021,
+        latency_ms: 1200, ttft_ms: 300, attempts: 3, outcome: 'succeeded', at: '2026-10-31T18:00:00.000Z',
+        operation: 'chat', streamed: true, tps: 21.5, queue_ms: 12, task: 'chat.reply', task_id: 'run_PARENT',
+        harness: 'openvibe', place: 'provider', error_class: null, fallbacks: 2, cache_hit: false,
+    });
+    const payload = events.callPayload(rec);
+    assert.strictEqual(payload.operation, 'chat', 'what kind of call it was');
+    assert.strictEqual(payload.streamed, true, 'whether it streamed');
+    assert.strictEqual(payload.tps, 21.5, 'decode tokens per second');
+    assert.strictEqual(payload.queue_ms, 12, 'time waited before the call');
+    assert.strictEqual(payload.task, 'chat.reply');
+    assert.strictEqual(payload.task_id, 'run_PARENT', 'the task the call is one step of');
+    assert.strictEqual(payload.place, 'provider', 'where the model ran');
+    assert.strictEqual(payload.fallbacks, 2, 'the offers that failed before the answer');
+    assert.strictEqual(payload.cache_hit, false, 'not an exact-cache answer');
+    assert.strictEqual(payload.harness, 'openvibe');
+
+    // The operation comes from the run's own operation or workflow, never invented.
+    assert.strictEqual(record.operationOf({ workflowKey: 'ai.generate', operation: 'generate' }), 'chat');
+    assert.strictEqual(record.operationOf({ workflowKey: 'decide.fallback', operation: 'classify' }), 'decision');
+    assert.strictEqual(record.operationOf({ workflowKey: 'ai.embed', operation: 'embed' }), 'embedding');
+    assert.strictEqual(record.operationOf({ workflowKey: 'ai.speak', operation: 'speak' }), 'speech');
+    assert.strictEqual(record.operationOf({ workflowKey: 'live.media.transcribe', operation: 'transcribe' }), 'transcription');
+    assert.strictEqual(record.operationOf({ workflowKey: 'live.translate', operation: 'generate' }), 'translation');
+    assert.strictEqual(record.operationOf({ workflowKey: 'moderation.classify', operation: 'classify' }), 'moderation');
+    assert.strictEqual(record.operationOf({ workflowKey: 'ai.image', operation: 'image' }), 'image');
+
+    // The provider's five failure classes become the meter's names.
+    assert.strictEqual(record.errorClassOf({ failureClass: 'rate_limit' }), 'rate_limited');
+    assert.strictEqual(record.errorClassOf({ failureClass: 'auth' }), 'auth');
+    assert.strictEqual(record.errorClassOf({ failureClass: 'transient', code: 'provider.timeout' }), 'timeout');
+    assert.strictEqual(record.errorClassOf({ failureClass: 'transient', message: 'fetch failed: ECONNRESET' }), 'network');
+    assert.strictEqual(record.errorClassOf({ failureClass: 'transient', status: 503 }), 'server');
+    assert.strictEqual(record.errorClassOf({ failureClass: 'request', message: 'maximum context length exceeded' }), 'context_length');
+    assert.strictEqual(record.errorClassOf({ failureClass: 'request', message: 'the policy floor refused it' }), 'refused');
+    assert.strictEqual(record.errorClassOf({ failureClass: 'request', message: 'invalid schema' }), 'invalid');
+
+    // TPS is null when there is too little to measure: under 8 output tokens or under 200 ms.
+    assert.strictEqual(record.tpsOf({ output: 20, streamed: true, firstDeltaAt: 1000, finishedAt: 2000 }), 20);
+    assert.strictEqual(record.tpsOf({ output: 7, streamed: true, firstDeltaAt: 1000, finishedAt: 2000 }), null);
+    assert.strictEqual(record.tpsOf({ output: 20, streamed: true, firstDeltaAt: 1000, finishedAt: 1199 }), null);
+    assert.strictEqual(record.tpsOf({ output: 20, streamed: false, firstDeltaAt: 1000, finishedAt: 2000 }), null);
+});
+
 (async () => { await t.run(); })();

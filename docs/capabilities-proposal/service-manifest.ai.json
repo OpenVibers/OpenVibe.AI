@@ -29,6 +29,7 @@
     "ai.run.create",
     "ai.run.read",
     "ai.usage.read",
+    "ai.usage.report",
     "ai.workflow.manage",
     "exchange.search.icons"
   ],
