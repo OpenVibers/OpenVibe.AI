@@ -303,7 +303,9 @@ function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () =>
         const key = own?.apiKey || state.key;
         if (!key) throw new AiError(503, 'search.unavailable', 'Unsplash needs a key to record a download');
         const scope = subject || 'shared';
-        const eventKey = createHash('sha256').update(url).digest('hex');
+        // The ixid query is Unsplash's tracking token, not a different picture: count the photo path once.
+        const photo = new URL(url);
+        const eventKey = createHash('sha256').update(photo.origin + photo.pathname.replace(/\/$/, '')).digest('hex');
         const claim = await assetEvents.once(scope, a.id, eventKey);
         if (!claim.created) return { tracked: true, already: true };
         try {
