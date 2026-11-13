@@ -18,4 +18,19 @@ assert.ok(conf.indexOf('location = /release-metrics') < conf.lastIndexOf('    lo
 const apps = /location ~ \^\/api\/v1\/\(([a-z|]+)\)\$ \{([\s\S]*?)\n    \}/.exec(conf);
 assert.ok(apps && apps[1].split('|').includes('decisions'), 'POST /api/v1/decisions reaches the app');
 assert.ok(/limit_except POST \{ deny all; \}/.test(apps[2]) && /limit_req zone=ovai_apps/.test(apps[2]), 'POST only, rate limited like the other operations');
+// 2026-11-13: the compatible API beyond chat, messages and models was answered by the app but refused by nginx (403 on
+// ai.openvibe.services, 404 on api.openvibe.exchange). Every route passes on both hosts, and Gemini's path never logs a query.
+const exchangeConf = fs.readFileSync(path.join(__dirname, '..', 'deploy', 'nginx', 'api.openvibe.exchange.conf'), 'utf8');
+for (const [name, text] of [['ai.openvibe.services', conf], ['api.openvibe.exchange', exchangeConf]]) {
+    const many = /location ~ \^\/v1\/\(([a-z|/]+)\)\$ \{([\s\S]*?)\n    \}/.exec(text);
+    assert.ok(many, `${name}: the compatible POST routes`);
+    assert.deepStrictEqual(many[1].split('|').sort(), ['completions', 'embeddings', 'images/generations', 'moderations', 'rerank', 'responses'], name);
+    assert.ok(/limit_except POST \{ deny all; \}/.test(many[2]) && /proxy_buffering off;/.test(many[2]), `${name}: POST only, streamed`);
+    assert.ok(/location = \/v1\/audio\/transcriptions \{[\s\S]*?client_max_body_size 6m;/.test(text), `${name}: the transcription upload`);
+    assert.ok(/location = \/v1\/generation \{/.test(text), `${name}: GET /v1/generation`);
+    const gemini = /location ~ \^\/v1beta\/models\/[^\n]*\{([\s\S]*?)\n    \}/.exec(text);
+    assert.ok(gemini && /access_log \S+ ovai_noquery;/.test(gemini[1]), `${name}: Gemini's path logs no query (a ?key= never reaches a log)`);
+}
+assert.match(conf, /log_format ovai_noquery '[^']*\$uri[^']*';/, 'the path-only log format (no $request, no $args)');
+assert.ok(!/log_format ovai_noquery '[^']*(\$request |\$request"|\$args|\$request_uri)/.test(conf), 'it never logs the query');
 console.log('vhost catch-all: GET/HEAD reach the app (favicon, 404 page); other methods refused; /metrics refused; POST /release-metrics passes; POST /api/v1/decisions passes');
