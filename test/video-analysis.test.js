@@ -316,6 +316,39 @@ t.test('a video the requester may not read: Media decides, and the run fails wit
     } finally { await h.stop(); await media.close(); await seam.close(); }
 });
 
+t.test('a host without ffprobe, and a video it cannot read: the run says why', async () => {
+    const media = await mediaServer();
+    const seam = await modelSeam();
+    // A host where ffprobe is not installed: the child process cannot even start.
+    const missing = () => {
+        const child = new EventEmitter();
+        child.stdout = new EventEmitter();
+        child.stderr = new EventEmitter();
+        child.kill = () => {};
+        setImmediate(() => child.emit('error', Object.assign(new Error('spawn ffprobe ENOENT'), { code: 'ENOENT' })));
+        return child;
+    };
+    const h = await service({ tools: { spawnImpl: missing }, media, seam });
+    try {
+        const created = await request(h.base, 'POST', '/api/v1/video-analyses', { tok, body: { url: media.url + '/video.mp4', depth: 'quick' } });
+        const state = await waitFor(h.base, created.body.video_analysis.id);
+        assert.strictEqual(state.status, 'failed');
+        assert.strictEqual(state.error.code, 'video_analysis.tool_unavailable', 'a named reason, never run.internal');
+        assert.ok(!/internal error/i.test(String(state.error.detail || '')), JSON.stringify(state.error));
+    } finally { await h.stop(); await media.close(); await seam.close(); }
+    // A file ffprobe cannot read: media.unreadable, and named too.
+    const media2 = await mediaServer();
+    const seam2 = await modelSeam();
+    const tools = fakeTools({ probeFails: true });
+    const h2 = await service({ tools, media: media2, seam: seam2 });
+    try {
+        const created = await request(h2.base, 'POST', '/api/v1/video-analyses', { tok, body: { url: media2.url + '/video.mp4', depth: 'quick' } });
+        const state = await waitFor(h2.base, created.body.video_analysis.id);
+        assert.strictEqual(state.status, 'failed');
+        assert.strictEqual(state.error.code, 'media.unreadable');
+    } finally { await h2.stop(); await media2.close(); await seam2.close(); }
+});
+
 t.test('a real run on the real ffprobe and ffmpeg', async () => {
     if (!HAS_FFMPEG) return console.log('video-analysis real run: skipped (no ffmpeg/ffprobe)');
     const media = await mediaServer();

@@ -21,7 +21,9 @@ Workflow `video.analyze` (`server/workflows/video.js`), one `video_analyze` step
 | `explicit` | the house rule on explicit content (the same one Live keeps for clips): `fine`, `sex_acts` or `minor_sexual` |
 | `report` | `ai.video-analysis@1` assembled from what was actually measured, heard and seen, validated and stored with the run |
 
-A step that fails leaves a named gap; nothing is made up. A video without sound has no transcript, and the run says
+A step that fails leaves a named gap; nothing is made up. A run that cannot start at all says why in the
+run's error: `video_analysis.tool_unavailable` (this service has no ffprobe), `media.unreadable` (the file is not
+a video this tool can read), `media.not_readable` (Media will not give it to this requester) or `input.invalid`. A video without sound has no transcript, and the run says
 so (`receipt.steps[transcript].status` is `skipped`, and the gap names it). A name the video does not show or say is
 dropped, and the gap says which one.
 

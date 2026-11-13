@@ -215,7 +215,16 @@ function createVideoAnalysis({ config = {}, db, clock = { now: () => Date.now() 
             const t0 = clock.now();
             const got = await source.resolve(input, { owner: owner && owner.id, dir: runDir, signal: ctx.signal });
             file = got.file;
-            const probe = await ffmpeg.probe(file, { signal: ctx.signal });
+            let probe;
+            try {
+                probe = await ffmpeg.probe(file, { signal: ctx.signal });
+            } catch (err) {
+                // A host with no ffprobe, or a file ffprobe cannot read: both are named reasons, never an
+                // internal error, so the caller knows whether to retry, fix the service or change the video.
+                if (err && err.code === 'tool.unavailable') throw new AiError(503, 'video_analysis.tool_unavailable', 'ffprobe is not installed on this service');
+                if (err && err.code === 'media.unreadable') throw new AiError(422, 'media.unreadable', 'the video could not be read');
+                throw err;
+            }
             if (!probe.video && !probe.audio) throw new AiError(422, 'media.unreadable', 'the file has no audio or video stream');
             const duration = probe.duration_s;
             const maxMinutes = Number(cfg.maxMinutes) || 180;

@@ -174,7 +174,8 @@ t.test('every workflow has compiling, versioned input and output schemas and an 
 
 t.test('every workflow runs end to end on the stub and returns schema-valid output', async () => {
     for (const w of await h.registry.listWorkflows()) {
-        if (w.key === 'media.analyze' && !HAS_FFMPEG) { console.log('workflow media.analyze end to end: skipped (no ffprobe)'); continue; }
+        // Both of these need ffprobe on the host; without it the run cannot read a video at all.
+        if ((w.key === 'media.analyze' || w.key === 'video.analyze') && !HAS_FFMPEG) { console.log('workflow ' + w.key + ' end to end: skipped (no ffprobe)'); continue; }
         // A deep dive captures real sites: its own test brings a fake capture, search, research and registers.
         if (w.key === 'design.deep_dive') { console.log('workflow design.deep_dive end to end: covered by test/deep-dive.test.js (no live capture)'); continue; }
         // image.picture reads Commons/Openverse and writes Media: its own test brings a fake researcher and store.
