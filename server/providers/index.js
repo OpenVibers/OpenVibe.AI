@@ -238,7 +238,7 @@ function withoutPromptCache(req) {
     return out;
 }
 
-function createProviderPool({ db, registry, config, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, credentialFetch = null, machineModels = null, community = null, bench = null, variantEvidence = null, adultStatus = null, offPeak = null, creditGrants = null, ownerNotify = null, ownerConfig = null }) {
+function createProviderPool({ db, registry, config, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, credentialFetch = null, machineModels = null, community = null, bench = null, variantEvidence = null, adultStatus = null, offPeak = null, creditGrants = null, ownerNotify = null, ownerConfig = null, autoDecision = null }) {
     const rateGate = require('./rate-gate').createRateGate({ now: () => clock.now() });
     // A person's own machine as their model (credential provider node, server/machines.js).
     const machines = machineModels || require('../machines').createMachineModels({ config, env, fetchImpl });
@@ -290,6 +290,8 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             out.push(c);
         }
         let order = out;
+        // The owner's own order is final: Auto's decision step (plan 16d) never reorders it.
+        if (routing && routing.enabled && ['fixed', 'cheapest', 'fastest'].includes(routing.strategy)) explain.owner_routing = routing.strategy;
         if (routing && routing.enabled && routing.strategy === 'fixed') {
             const pos = new Map(routing.choices.map((c, i) => [`${c.provider}/${c.model || ''}`, i]));
             order = choicesSubset(out, routing.choices);
@@ -1898,6 +1900,8 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             list = ordered;
             if (!list.length) throw new AiError(503, 'ai.routing_unavailable', 'No provider satisfies the requested routing policy', { explain });
         }
+        // Auto's decision step (plan 16d): on openvibe/auto, one calibrated question may put the cheaper model first.
+        if (autoDecision && !ordered) list = await autoDecision.step({ list, ctx, req, route, operation, explain, describe: describeCandidate, exact: Boolean(exact) });
         const evidenceReason = explain.evidence ? explain.evidence.reason : null;
         explain.content_policy = contentPolicy;
         if (uncensored) explain.label = tier.LABEL;

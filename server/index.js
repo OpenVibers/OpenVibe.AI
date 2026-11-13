@@ -96,7 +96,13 @@ async function start({ searchFetch = null, config, db: givenDb = null, clock = {
     // The owner's inference configuration: one read for the router's economy switches and the runs'
     // answer cache and batch decisions (server/owner-config.js).
     const ownerConfig = require('./owner-config').createOwnerConfig({ db, registry, clock });
-    const pool = createProviderPool({ db, registry, config, clock, fetchImpl, env, log, credentialFetch, machineModels: machines, community, bench, variantEvidence, adultStatus, offPeak, creditGrants, ownerNotify, ownerConfig });
+    // Auto's decision step (plan 16d): one calibrated question before openvibe/auto picks a cheaper model. Off with
+    // AI_AUTO_DECISIONS=0; it asks only with a Gemini key (Google's Decisions API).
+    const autoDecision = /^(0|false|off)$/i.test(env.AI_AUTO_DECISIONS || '') ? null : require('./routing/auto-decision').createAutoDecision({
+        db, clock, log, decider: require('./api/decisions').createGeminiDecider({ db, registry, env, fetchImpl, log, now: () => clock.now() }),
+        explore: Number.isFinite(Number(env.AI_AUTO_EXPLORE)) && env.AI_AUTO_EXPLORE !== '' ? Math.min(0.2, Math.max(0, Number(env.AI_AUTO_EXPLORE))) : 0.05,
+    });
+    const pool = createProviderPool({ db, registry, config, clock, fetchImpl, env, log, credentialFetch, machineModels: machines, community, bench, variantEvidence, adultStatus, offPeak, creditGrants, ownerNotify, ownerConfig, autoDecision });
     // An open balance/auth circuit that was persisted by an earlier process is announced once (notified_at dedupes).
     if (listen && config.nodeEnv !== 'test') pool.notifyOpenCircuits().catch((err) => log.warn(`[ai] owner alerts: ${err && err.message}`));
     // The hourly provider balance probe (server/providers/balance.js): a gauge for the operator alert, started
@@ -266,6 +272,14 @@ async function start({ searchFetch = null, config, db: givenDb = null, clock = {
             if (Object.values(abusePruned).some((n) => n)) log.log(`[ai] abuse retention: ${Object.entries(abusePruned).filter(([, n]) => n).map(([k, n]) => `${n} ${k}`).join(', ')}`);
         } catch (err) { log.error(`[ai] retention failed: ${err.message}`); }
         try { await share.ensure(); } catch (err) { log.warn(`[ai] traffic share failed: ${err.message}`); }
+        // Auto's thresholds, re-fitted once a week from real outcomes (plan 16d), and its decisions kept 120 days.
+        if (autoDecision) {
+            try {
+                const fit = await autoDecision.fitIfDue();
+                if (fit.due) log.log(`[ai] auto thresholds fitted: ${fit.fitted.map((f) => `${f.kind} ${f.threshold} (n ${f.n})`).join(', ') || 'nothing to fit yet'}`);
+                await db.prepare('DELETE FROM route_decisions WHERE created_at < ?').run(new Date(clock.now() - 120 * 24 * 3600 * 1000).toISOString());
+            } catch (err) { log.warn(`[ai] auto thresholds: ${err.message}`); }
+        }
     }, 60 * 60 * 1000);
     housekeeping.unref?.();
 
