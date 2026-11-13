@@ -3,7 +3,8 @@ const searchTerms = require('./terms');
 const { guardedFetch } = require('../providers/guarded-fetch');
 const { publicTarget } = require('./transport');
 const { AiError, providerSecret } = require('../util');
-const { validate } = require('openvibe-contracts');
+const searchClasses = require('./classes');
+const searchContract = require('./contract');
 const net = require('node:net');
 const { createHash } = require('node:crypto');
 const { rankImages } = require('./image-rank');
@@ -15,6 +16,9 @@ const adapters = ['openverse', 'commons', 'searxng', 'openvibe', 'iconify',
     'meta', 'serper-images', 'serpapi-images', 'searchapi-images', 'serpapi-reverse', 'tineye',
     'mojeek', 'parallel', 'you', 'dataforseo', 'europeana', 'nasa', 'dataforseo-images', 'smithsonian']
     .map(n => require('./adapters/' + n));
+// Every adapter says what class of engine it is (plan §W.2 step 4); an adapter without a known class is refused
+// here, because an engine that cannot be compared with another one may never be routed to.
+searchClasses.checkAdapters(adapters);
 const CHARGE = Symbol('search Exchange charge');
 const FILTER_KEYS = ['license', 'commercial', 'format', 'orientation', 'size', 'color', 'after', 'type', 'style', 'set', 'safe_search'];
 const invalid = (message) => new AiError(422, 'ai.invalid', message);
@@ -28,6 +32,13 @@ const credentialId = a => a.credential_id || a.id;
 const dimension = n => Number.isInteger(n) && n > 0 ? n : null;
 function inputFor(kind, b) {
     if (!b || typeof b !== 'object' || Array.isArray(b)) throw invalid('A JSON object is required');
+    // The classes the request asks for (plan §W.2 step 4): one name or a list of them.
+    if (b.class != null) {
+        const wanted = Array.isArray(b.class) ? b.class : [b.class];
+        if (!wanted.length || wanted.some(c => typeof c !== 'string')) throw invalid('class must be a class name or a list of them');
+        const unknown = wanted.filter(c => !searchClasses.isClass(c));
+        if (unknown.length) throw invalid(`class must be one of ${searchClasses.CLASS_NAMES.join(', ')}`);
+    }
     if (kind === 'reverse_image') {
         const imageUrl = typeof b.image_url === 'string' && b.image_url.startsWith('https://') && b.image_url.length <= 8192 && safeUrl(b.image_url);
         const upload = typeof b.image === 'string' && /^data:image\/(?:png|jpe?g|gif|bmp|tiff|webp);base64,[A-Za-z0-9+/=\s]+$/i.test(b.image);
@@ -206,7 +217,7 @@ function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () =>
         const open = await Promise.all(adapters.map(a => circuit.openUntil('shared', a.id)));
         return adapters.map((a, i) => {
             const state = binding(a, providers);
-            return { id: a.id, kinds: a.kinds, price_per_1000: a.price_per_1000,
+            return { id: a.id, kinds: a.kinds, class: a.class, price_per_1000: a.price_per_1000,
                 byok: a.byok, available: state.available, freshness: a.freshness, healthy: open[i] <= now(),
                 provider: state.provider?.key || null, manual_only: a.manual_only === true,
                 source: a.source, checked_on: a.checked_on, pricing_note: a.pricing_note || null,
@@ -222,11 +233,25 @@ function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () =>
             throw new AiError(422, 'search.invalid', 'Choose an engine for a reverse image search');
         const candidates = [];
         const skippedForFilters = new Set();
+        const notConsidered = [];
         const providers = registry ? await registry.listProviders() : [];
+        // The class gate (plan §W.2 step 4). A request may name the classes it wants; otherwise a web search uses
+        // the classes a web search uses (an index, a proxy, OpenVibe's own services, a metasearch) and an answer
+        // engine or a semantic engine joins only when the request asks for an answer or for research. A named engine
+        // is the caller asking for that engine, so only a named class can refuse it.
+        const explicit = Boolean(b.engine && b.engine !== 'auto');
+        const named = searchClasses.asked(b);
+        const allowed = explicit ? named : searchClasses.allowedFor(kind, b);
+        if (explicit && named) {
+            const engine = adapters.find(a => a.id === b.engine);
+            if (engine && !named.includes(engine.class))
+                throw new AiError(422, 'search.unsupported', `${b.engine} is not a ${named.join(' or ')} engine`);
+        }
         for (const a of adapters) {
-            if (a.manual_only && (!b.engine || b.engine === 'auto')) continue;
-            if (!a.kinds.includes(kind) || b.engine && b.engine !== 'auto' && b.engine !== a.id ||
-                b.freshness && !a.freshness.includes(b.freshness) || (a.requires || []).some(k => !env[k])) continue;
+            if (a.manual_only && !explicit) continue;
+            if (!a.kinds.includes(kind)) continue;
+            if (explicit && b.engine !== a.id) continue;
+            if (b.freshness && !a.freshness.includes(b.freshness) || (a.requires || []).some(k => !env[k])) continue;
             if (kind !== 'fetch' && a.max_query && [...b.q].length + (b.freshness ? 17 : 0) > a.max_query) continue;
             const unsupported = unsupportedFor(a, kind, b);
             if (unsupported.length) {
@@ -258,6 +283,12 @@ function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () =>
             }
             const key = own?.apiKey || state.key;
             if (a.key_env && !key || a.setting && !state.env?.[a.setting]) continue;
+            // An engine of another class is not considered at all: auto never ranks unlike engines by price alone,
+            // so a cheap answer engine never beats a raw index on a plain display. The receipt says which ones.
+            if (allowed && !allowed.includes(a.class)) {
+                notConsidered.push({ engine: a.id, class: a.class, reason: 'class_not_considered' });
+                continue;
+            }
             // The breaker's scope says whose key failed: a person's own key is its own circuit.
             const scope = own ? 'k:' + createHash('sha256').update(key).digest('hex') : 'shared';
             candidates.push({ a, key, own: Boolean(own), scope, engine: a.id, ceiling, provider: state.provider?.key || null, managed: state.managed, env: state.env || env,
@@ -281,21 +312,34 @@ function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () =>
                 throw new AiError(422, 'search.terms', `No engine's terms allow this request (${searchTerms.purposeOf(b)}${b.private ? ', private' : ''})`);
             if (skippedForFilters.size)
                 throw new AiError(422, 'search.unsupported', `No configured engine can honour the requested filters (${[...new Set(requested)].join(', ') || 'engine limitation'})`);
+            if (named && named.length)
+                throw new AiError(422, 'search.unsupported', `No ${named.join(' or ')} engine serves this search`);
             if (b.engine && b.engine !== 'auto' && !selected.length) {
-                const explicit = adapters.find(a => a.id === b.engine);
-                if (!explicit || !explicit.kinds.includes(kind))
+                const chosen = adapters.find(a => a.id === b.engine);
+                if (!chosen || !chosen.kinds.includes(kind))
                     throw new AiError(422, 'search.unsupported', 'This engine does not serve this search');
             }
             throw new AiError(503, 'search.unavailable', 'No configured engine serves this request within its price and freshness limits');
         }
-        return { kind, b, candidates: selected, ceiling: Math.min(b.max_cost_usd ?? Infinity, runnable.reduce((n, c) => n + (c.own ? 0 : c.ceiling), 0)) };
+        // The classes this request was allowed to use, and the engines whose class kept them out of it.
+        const classesAllowed = allowed || [adapters.find(a => a.id === b.engine)?.class].filter(Boolean);
+        return { kind, b, candidates: selected, notConsidered, classesAllowed,
+            ceiling: Math.min(b.max_cost_usd ?? Infinity, runnable.reduce((n, c) => n + (c.own ? 0 : c.ceiling), 0)) };
     }
-    const receipt = (engine, cost, start, attempts) => ({ engine, cost_usd: cost, time_ms: Math.max(0, now() - start), ...(attempts ? { attempts } : {}) });
+    // The receipt names the class of the engine that answered, the classes the request allowed, and the engines
+    // whose class kept them out of it (plan §W.2 step 4).
+    const receipt = (plan, engine, cost, start, attempts, engineClass) => ({
+        engine, cost_usd: cost, time_ms: Math.max(0, now() - start),
+        ...(engineClass ? { class: engineClass } : {}),
+        ...(plan.classesAllowed && plan.classesAllowed.length ? { classes_allowed: plan.classesAllowed } : {}),
+        ...(plan.notConsidered && plan.notConsidered.length ? { not_considered: plan.notConsidered } : {}),
+        ...(attempts ? { attempts } : {}),
+    });
     async function execute(plan, budget = Infinity) {
         const start = now();
         let incurred = 0, charge = 0;
         const attempts = [];
-        const attempt = (c, status, started, cost, reason) => ({ provider: c.provider || credentialId(c.a), engine: c.a.id, status,
+        const attempt = (c, status, started, cost, reason) => ({ provider: c.provider || credentialId(c.a), engine: c.a.id, class: c.a.class, status,
             ...(reason ? { reason } : {}), time_ms: Math.max(0, now() - started), cost_usd: cost });
         for (const c of plan.candidates) {
             const attemptStart = now();
@@ -331,9 +375,9 @@ function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () =>
                 const cost = raw.cost ?? c.a.price_per_1000 / 1000;
                 if (!Number.isFinite(cost) || cost < 0) throw new Error('Invalid engine cost');
                 const out = plan.kind === 'fetch'
-                    ? { url: plan.b.url, text: String(raw.text || '').slice(0, 200000), receipt: receipt(c.a.id, cost + incurred, start, [...attempts, attempt(c, 'ok', attemptStart, cost)]) }
-                    : { results: normalize(Array.isArray(raw) ? raw : raw.rows, c.a.id, plan.kind, plan.b), receipt: receipt(c.a.id, cost + incurred, start, [...attempts, attempt(c, 'ok', attemptStart, cost)]) };
-                if (plan.kind !== 'fetch' && !validate(plan.kind === 'web' ? 'exchange.search-result@1' : 'exchange.image-result@1', out).valid) throw new Error('Invalid search response');
+                    ? { url: plan.b.url, text: String(raw.text || '').slice(0, 200000), receipt: receipt(plan, c.a.id, cost + incurred, start, [...attempts, attempt(c, 'ok', attemptStart, cost)], c.a.class) }
+                    : { results: normalize(Array.isArray(raw) ? raw : raw.rows, c.a.id, plan.kind, plan.b), receipt: receipt(plan, c.a.id, cost + incurred, start, [...attempts, attempt(c, 'ok', attemptStart, cost)], c.a.class) };
+                if (plan.kind !== 'fetch' && !searchContract.check(plan.kind === 'web' ? 'web' : 'images', out).valid) throw new Error('Invalid search response');
                 await circuit.clear(c.scope, c.engine);
                 Object.defineProperty(out, CHARGE, { value: charge + (c.own ? 0 : cost) });
                 return out;

@@ -3,6 +3,7 @@ const { requestFor, query, web } = require('../transport');
 module.exports = {
     id: 'brave', byok: true, checked_on: '2026-11-09',
     kinds: ['web'], key_env: 'SEARCH_BRAVE_KEY', hosts: ['api.search.brave.com'],
+    class: 'independent_index',
     price_per_1000: 5, source: 'https://api-dashboard.search.brave.com/app/plans', freshness: ['day', 'month', 'year'],
     included_allowance: '$5 monthly credit',
     async search(b, { fetchImpl, key }) {

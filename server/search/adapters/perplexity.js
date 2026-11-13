@@ -3,6 +3,7 @@ const { requestFor, post, bearer, web } = require('../transport');
 module.exports = {
     id: 'perplexity', byok: true, checked_on: '2026-11-09',
     kinds: ['web'], key_env: 'SEARCH_PERPLEXITY_KEY', hosts: ['api.perplexity.ai'],
+    class: 'answer_engine',
     price_per_1000: null, source: 'https://docs.perplexity.ai/docs/getting-started/pricing', freshness: [],
     pricing_note: 'Sonar on Agent API: $0.25/M input, $2.50/M output, $0.0625/M cached; web search $2.50/1000 tool calls. No flat answer price.',
     input_per_million: 0.25, output_per_million: 2.5, search_per_1000: 2.5,

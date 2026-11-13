@@ -6,6 +6,7 @@ module.exports = {
     freshness: ['day', 'month', 'year'],
     hosts: [],
     kinds: ['web'],
+    class: 'metasearch',
     setting: 'EXCHANGE_SEARXNG_URL',
     async search(b, { fetchImpl, env }) {
         const base = env.EXCHANGE_SEARXNG_URL;

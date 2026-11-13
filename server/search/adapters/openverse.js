@@ -6,6 +6,7 @@ module.exports = {
     freshness: [],
     hosts: ['api.openverse.org'],
     kinds: ['images'],
+    class: 'open_asset_catalog',
     upstreams: ['openverse'],
     filters: {
         license: 'native', commercial: 'native', format: 'native', orientation: 'native',

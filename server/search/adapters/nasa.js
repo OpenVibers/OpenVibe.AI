@@ -11,6 +11,7 @@ const thirdParty = (data) => {
 module.exports = {
     id: 'nasa', byok: false, checked_on: '2026-11-13',
     kinds: ['images'], price_per_1000: 0, freshness: [],
+    class: 'open_asset_catalog',
     hosts: ['images-api.nasa.gov', 'images-assets.nasa.gov'],
     source: 'https://images.nasa.gov/docs/images.nasa.gov_api_docs.pdf',
     pricing_note: 'No provider fee: the NASA Image and Video Library API is public and needs no key. NASA content is generally not copyrighted, but a record that names another creator keeps its rights unknown.',

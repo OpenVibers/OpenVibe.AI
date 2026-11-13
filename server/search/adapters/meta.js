@@ -4,6 +4,7 @@ const MAX_OUTPUT = 512;
 module.exports = {
     id: 'meta', byok: true, manual_only: true, registry_required: true, checked_on: '2026-11-10',
     kinds: ['web'], key_env: 'SEARCH_META_KEY', hosts: ['api.meta.ai'], freshness: [],
+    class: 'answer_engine',
     price_per_1000: null, source: 'https://dev.meta.ai/docs/pricing-rate-limits',
     pricing_note: 'Muse Spark 1.3 Standard: $1.25/M input, $0.15/M cached, $4.25/M output plus $2.50/1000 queries. Explicit selection only; up to $4 reserved for one built-in call and its model iterations.',
     // One built-in call permits at most two model iterations. Reserve both full context windows,

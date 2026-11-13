@@ -7,6 +7,7 @@ const { imageRow } = require('../image-row');
 module.exports = {
     id: 'serpapi-images', credential_id: 'serpapi', byok: true, checked_on: '2026-11-13',
     kinds: ['images'], key_env: 'SEARCH_SERPAPI_KEY', hosts: ['serpapi.com'], freshness: [],
+    class: 'web_image_discovery',
     price_per_1000: 25, source: 'https://serpapi.com/google-images-api',
     included_allowance: '250 searches a month',
     pricing_note: 'Starter $25/month for 1,000 searches; 250 free searches a month. Search results do not establish reuse rights.',

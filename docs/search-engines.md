@@ -61,6 +61,51 @@ The existing free engines remain: Openverse, Wikimedia Commons, Iconify, OpenVib
 
 **Europeana** is an open catalog: the rights come from the record's own rights statement, never from the CC0 licence of the API's metadata, and a preview Europeana marks as no-distribute is not returned. **Smithsonian**'s metadata is CC0 for every record, but a media file is only given for an object whose underlying work is in the public domain, so a picture from this engine is a public-domain object and a record without a media file is not a picture. **NASA** content is generally not copyrighted, but NASA also hosts third party material it marks as copyright protected, so only a NASA-created record is `public_domain` and every other record keeps its rights unknown. **DataForSEO images** is a discovery engine: it finds where a picture appears and grants nothing, so its rights are unknown.
 
+## Engine classes
+
+Every adapter says what class of engine it is, and the class is what the router compares before it compares prices. A raw index, a SERP proxy, an answer engine and a page reader do not sell the same thing: an answer engine that costs a few cents a call must never beat a raw index that costs less than a cent a query, because those are not the same unit. Auto therefore keeps the classes the request asked for first, and only then sorts by price, health and terms inside that set.
+
+| Engine | Class | What the provider says |
+|---|---|---|
+| openvibe | first_party_index | OpenVibe's own index of OpenVibe's own services (search.openvibe.network) |
+| brave | independent_index | Brave Search is its own index of the web |
+| mojeek | independent_index | "Mojeek is an independent search engine" |
+| kagi | independent_index | Kagi's own index of the web |
+| google | independent_index | Google Custom Search answers from Google's web index |
+| deepseek | independent_index | DeepSeek's own search engine, behind `/v1/tools/search` |
+| tavily | independent_index | "Tavily Search, a powerful search engine for LLM agents" |
+| serpapi | serp_proxy | SerpApi asks Google's results page and returns it as data |
+| serper | serp_proxy | Serper returns the Google results page as JSON |
+| searchapi-images | serp_proxy | SearchAPI.io returns Google, Bing or Yandex results |
+| dataforseo | serp_proxy | DataForSEO's live SERP: the upstream index is Google |
+| exa | semantic | Exa searches meaning, not keywords (neural index) |
+| parallel | semantic | "natural language web searches": an objective replaces keyword queries |
+| perplexity | answer_engine | Sonar answers, with its citations |
+| you | answer_engine | You.com's search answers the question |
+| meta | answer_engine | Muse Spark answers from a web search and cites it |
+| searxng | metasearch | SearXNG gathers other engines' results |
+| jina | page_reader | Jina Reader reads a page (and s.jina.ai searches for one) |
+| openvibe-egress | page_reader | OpenVibe's own egress reads a page |
+| openverse | open_asset_catalog | Openverse is an open catalog of media with the licence it claims |
+| commons | open_asset_catalog | Wikimedia Commons is an open catalog of media |
+| europeana | open_asset_catalog | Europeana is an open cultural catalog |
+| smithsonian | open_asset_catalog | The Smithsonian Open Access catalog |
+| nasa | open_asset_catalog | The NASA Image and Video Library |
+| unsplash | provider_asset_catalog | Unsplash's own photographs under its licence |
+| pexels | provider_asset_catalog | Pexels' own photographs under its licence |
+| pixabay | provider_asset_catalog | Pixabay's own pictures under its licence |
+| brave-images | web_image_discovery | Brave Images finds where a picture appears |
+| serper-images | web_image_discovery | Google Images through Serper |
+| serpapi-images | web_image_discovery | SerpApi's Google Images |
+| dataforseo-images | web_image_discovery | DataForSEO's Google Images |
+| iconify | icon_catalog | Iconify is an icon set |
+| serpapi-reverse | reverse_image | Google Reverse Image |
+| tineye | reverse_image | TinEye finds the pages that carry an image |
+
+The classes a kind uses when a request names none: a **web** search uses `independent_index`, `serp_proxy`, `first_party_index` and `metasearch`; an **images** search uses `open_asset_catalog`, `provider_asset_catalog` and `web_image_discovery`; an **icons** search uses `icon_catalog`; a **fetch** uses `page_reader`; a **reverse_image** uses `reverse_image`. An answer engine or a semantic engine joins a web search only when the request asks for that class, or when the purpose is `answer_grounding` or `agent_research`.
+
+A request may name the classes it wants: `"class": "serp_proxy"` or `"class": ["independent_index", "serp_proxy"]`. Only engines of those classes are called; an unknown class is 422, and a class with no engine behind it for that search is 422 as well. The receipt then names the class of the engine that answered (`class`), the classes the request allowed (`classes_allowed`) and the engines whose class kept them out (`not_considered`, each with its class and the reason).
+
 ## The breaker and the keys in the query string
 
 A failing engine cools down for 60 seconds. With a Valkey connection the cooldown is shared by every process of the service: the key is `search:circuit:<scope>:<engine>`, the value is the time the circuit opens again and the TTL is that same time (`scope` is `shared` for a key the service holds, `k:<hash>` for a person's own key). Without Valkey (tests, a small install) the breaker is a Map in that process.

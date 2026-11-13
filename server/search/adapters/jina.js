@@ -3,6 +3,7 @@ const { requestFor, post, bearer, query, web } = require('../transport');
 module.exports = {
     id: 'jina', byok: true, checked_on: '2026-11-09',
     kinds: ['web', 'fetch'], key_env: 'SEARCH_JINA_KEY', hosts: ['s.jina.ai', 'r.jina.ai'],
+    class: 'page_reader',
     price_per_1000: 0.5, source: 'https://jina.ai/reader/#apiform',
     pricing_note: 'Search from 10000 tokens/request; $50/1B token pack ($0.05/M). Reader is token based, not a fixed request fee.',
     price_per_million_tokens: 0.05, freshness: [], ceiling: () => 0.005,

@@ -11,6 +11,7 @@ const published = (r) => {
 module.exports = {
     id: 'mojeek', byok: true, checked_on: '2026-11-13',
     kinds: ['web'], key_env: 'SEARCH_MOJEEK_KEY', hosts: ['api.mojeek.com'],
+    class: 'independent_index',
     price_per_1000: 2.65,
     source: 'https://www.mojeek.com/services/search/web-search-api',
     pricing_note: 'Startup £2 per 1,000 requests (up to 10 results), Business £3, Enterprise on request; VAT excluded. Mojeek publishes in GBP, not USD: converted at 1 GBP = 1.3227 USD (ECB reference rate read 2026-11-13), $2.65 per 1,000 requests.',
