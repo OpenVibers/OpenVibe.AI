@@ -5,16 +5,19 @@
 // set, read or remove Live's caps; removing the cap lets runs through again.
 const assert = require('assert');
 const { validate } = require('openvibe-contracts');
-const { boot, request, token, suite, ALL } = require('./helpers');
+const { boot, request, token, suite, ALL, fixedClock } = require('./helpers');
 
 const t = suite('attribution-quotas');
+// The cap is a day window: on the wall clock a UTC midnight between the two runs would reset the
+// count and the second run would be served. The fixed clock keeps both runs in one window.
+const clock = fixedClock();
 const live = token('live', [...ALL, 'ai.quota.attribution.manage']);
 const tools = token('tools', [...ALL, 'ai.quota.attribution.manage']);
 const plain = token('live', ALL);
 let h;
 const run = async (workflow, userId) => await request(h.base, 'POST', '/api/v1/runs?wait=5000', { tok: live, body: { workflow, input: { role: 'chat', user: 'hi' }, attribution: { service: 'live', type: 'user', id: String(userId) } } });
 
-t.test('boot', async () => { h = await boot(); });
+t.test('boot', async () => { h = await boot({ clock }); });
 
 t.test('a service sets, reads and removes caps on its own attributions only', async () => {
     let r = await request(h.base, 'PUT', '/api/v1/attribution-quotas/live:user:42', { tok: plain, body: { window: 'day', max_requests: 1 } });

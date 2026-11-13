@@ -110,6 +110,23 @@ async function seamServer(handler) {
     return s;
 }
 
+/**
+ * A fixed clock for the quota-window tests. A quota window (minute, hour, day) is decided by the
+ * clock the service reads, so a test that counts requests inside one window depends on where the
+ * wall clock happens to be: a boundary that passes between two requests resets the counter and the
+ * test flakes. This clock stands still until the test moves it (advance), so "the next window" is
+ * a fact the test decides, not a race it loses.
+ */
+function fixedClock(startIso = '2026-11-13T10:00:30.000Z') {
+    let ms = Date.parse(startIso);
+    return {
+        now: () => ms,
+        at: () => new Date(ms).toISOString(),
+        /** Move the clock forward; the quota windows follow it. */
+        advance(byMs) { ms += byMs; return ms; },
+    };
+}
+
 /** Sequential async test runner with a summary line; exits non-zero on any failure. */
 function suite(name) {
     const tests = [];
@@ -135,4 +152,4 @@ function suite(name) {
 
 const ALL = ['ai.run.create', 'ai.run.read', 'ai.workflow.manage', 'ai.provider.manage', 'ai.usage.read'];
 
-module.exports = { token, boot, request, seamServer, suite, tmpDir, silent, publicKey, privateKey, ISSUER, ALL };
+module.exports = { token, boot, request, seamServer, suite, tmpDir, silent, publicKey, privateKey, ISSUER, ALL, fixedClock };
