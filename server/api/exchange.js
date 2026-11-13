@@ -25,13 +25,26 @@ const { createUsage } = require('../exchange/usage');
 
 const CATALOG_MS = 30_000;
 
+// Stale while revalidating (11-13): past its 30 s the last catalog answers at once and one rebuild runs behind it, so a
+// visitor never waits on the measured-stats queries (0.5-0.75 s under load, server/exchange/observed.js). A first build
+// is shared by callers who arrive together. An answer older than ten lifetimes (a rebuild that keeps failing) is not
+// served stale: that caller waits for the rebuild, and its error, as before.
 function memo(fn, ttlMs, clock) {
     let hit = { at: 0, value: null };
+    let pending = null;
+    const rebuild = () => {
+        if (!pending) {
+            pending = Promise.resolve().then(fn)
+                .then((value) => { hit = { at: clock.now(), value }; return value; })
+                .finally(() => { pending = null; });
+        }
+        return pending;
+    };
     return async () => {
-        if (hit.value && clock.now() - hit.at < ttlMs) return hit.value;
-        const value = await fn();
-        hit = { at: clock.now(), value };
-        return value;
+        const age = clock.now() - hit.at;
+        if (hit.value && age < ttlMs) return hit.value;
+        if (hit.value && age < ttlMs * 10) { rebuild().catch(() => {}); return hit.value; }
+        return rebuild();
     };
 }
 
@@ -315,4 +328,4 @@ function exchangeRouter({ db, registry, pool, quotas = null, env = process.env, 
     return r;
 }
 
-module.exports = { exchangeRouter, CATALOG_MS };
+module.exports = { memo, exchangeRouter, CATALOG_MS };
