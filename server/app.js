@@ -147,7 +147,7 @@ function createApp({ choices = null, searchFetch = null, config, db, registry, p
         const guard = baseAppOrCap(...caps);
         return (req, res, next) => { if (req.exchangePrincipal) { req.principal = req.exchangePrincipal; return next(); } return guard(req, res, next); };
     } };
-    const exchangePlatform = require('./platform/router').platform({ db, auth, clock, log, credentials, registry, env, searchFetch });
+    const exchangePlatform = require('./platform/router').platform({ db, auth, clock, log, credentials, registry, env, searchFetch, publicBase: config.baseUrl });
     app.use(exchangePlatform.keyMiddleware);
     app.use(exchangePlatform.router);
     // OpenVibe.Exchange's read API (server/api/exchange.js): the public catalog and aggregate usage. Public on

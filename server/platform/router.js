@@ -5,12 +5,15 @@ const { AiError, sendError } = require('../util');
 const { createKeys } = require('./keys');
 const { claimRequest } = require('./idempotency');
 const { createSearch, CHARGE } = require('../search');
-function platform({ db, auth, clock, log, searchFetch, credentials, registry, env = process.env }) {
+const { createAssetEvents } = require('../search/events');
+function platform({ db, auth, clock, log, searchFetch, credentials, registry, env = process.env, publicBase }) {
     const keys = createKeys({ db, clock });
     const presets = require('../exchange/compat-presets').createCompatPresets(db);
     const search = createSearch({
         ...(searchFetch ? { fetchImpl: searchFetch } : {}),
         now: () => clock.now(), credentials, registry, env,
+        events: createAssetEvents({ db, clock }),
+        ...(publicBase ? { publicBase } : {}),
     });
     const r = express.Router();
     const wrap = (fn) => async (req, res) => {
@@ -122,6 +125,29 @@ function platform({ db, auth, clock, log, searchFetch, credentials, registry, en
             wrap(async (req) => search.search(kind, req.body || {}, searchContext(req))),
         );
     r.post(
+        '/v1/search/reverse-image',
+        allow,
+        searchLimit,
+        wrap(async (req) => search.search('reverse_image', req.body || {}, searchContext(req))),
+    );
+    // Unsplash's required download event, once per person and photo (the claim is the idempotency key).
+    r.post(
+        '/v1/search/images/unsplash/download',
+        allow,
+        searchLimit,
+        wrap(async (req) => search.trackDownload(req.body || {}, { subject: req.principal?.kind === 'user' ? req.principal.subject.id : null })),
+    );
+    // Pixabay's terms forbid permanent hotlinking: a short-lived cache proxy, not its CDN, is what results use.
+    r.get(
+        '/v1/search/images/pixabay/:id',
+        wrap(async (req, res) => {
+            const image = await search.pixabayImage(req.params.id);
+            res.set('Cache-Control', 'private, max-age=3600');
+            res.set('Content-Type', image.type);
+            res.send(image.body);
+        }),
+    );
+    r.post(
         '/v1/search/icons',
         allowIcons,
         iconLimit,
@@ -148,6 +174,8 @@ function platform({ db, auth, clock, log, searchFetch, credentials, registry, en
                     '/v1/search',
                     '/v1/search/images',
                     '/v1/search/icons',
+                    '/v1/search/reverse-image',
+                    '/v1/search/images/unsplash/download',
                     '/v1/fetch',
                 ].includes(req.path);
             const inference =
@@ -173,18 +201,22 @@ function platform({ db, auth, clock, log, searchFetch, credentials, registry, en
                 throw new AiError(403, 'exchange.model_denied', 'This model is not allowed by this key');
             if (inference && req.get('idempotency-key'))
                 claim = await claimRequest(db, key.owner, req.get('idempotency-key'), req.path === '/v1/chat/completions' ? req.body : { path: req.path, body: req.body });
-            if (isSearch) {
-                const kind = req.path === '/v1/fetch' ? 'fetch' : req.path.split('/')[3] || 'web';
+            // The Unsplash download event is an allowed search-key action but has no engine plan or ceiling.
+            const planned = isSearch && req.path !== '/v1/search/images/unsplash/download';
+            if (planned) {
+                const kind = req.path === '/v1/fetch' ? 'fetch'
+                    : req.path === '/v1/search/reverse-image' ? 'reverse_image'
+                    : req.path.split('/')[3] || 'web';
                 req.searchPlan = await search.prepare(kind, req.body || {}, { subject: key.owner });
             }
             const searchCeiling = req.searchPlan?.ceiling || 0;
             const hold = models || claim?.replay ? null : await keys.reserve(
                 key, isSearch ? 'search:' + req.path : require('../exchange/compat-routing').modelName(req.body?.model || req.body?.models?.[0] || 'openvibe/auto').model,
-                isSearch && searchCeiling === 0,
-                isSearch ? searchCeiling : Number.isFinite(req.body?.max_cost_usd) ? req.body.max_cost_usd : null,
+                isSearch ? (planned ? searchCeiling === 0 : true) : false,
+                planned ? searchCeiling : isSearch ? 0 : Number.isFinite(req.body?.max_cost_usd) ? req.body.max_cost_usd : null,
                 isSearch,
             );
-            if (isSearch) {
+            if (planned) {
                 req.searchBudget = hold.amount;
                 const minimum = Math.min(...req.searchPlan.candidates.map(c => c.own ? 0 : c.ceiling));
                 if (hold.amount + 1e-12 < minimum) {

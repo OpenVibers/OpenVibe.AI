@@ -1,0 +1,25 @@
+{
+  "response": {
+    "images_results": [
+      {
+        "position": 1,
+        "title": "Cat",
+        "link": "https://example.org/article",
+        "source": "example.org",
+        "original": "https://images.example.org/cat.jpg",
+        "original_width": 2400,
+        "original_height": 1600,
+        "thumbnail": "https://images.example.org/thumb.jpg"
+      }
+    ]
+  },
+  "request": {
+    "host": "www.searchapi.io",
+    "path": "/api/v1/search",
+    "method": "GET"
+  },
+  "expected": {
+    "title": "Cat",
+    "cost": 0.004
+  }
+}

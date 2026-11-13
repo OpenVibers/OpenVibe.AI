@@ -805,7 +805,7 @@ route('post', '/exchange/presets', { operationId: 'exchangeRequestPresetSave', s
 route('delete', '/exchange/presets/{name}', { operationId: 'exchangeRequestPresetDelete', summary: 'Delete your request preset', tags: ['exchange'], security: [{ bearer: [] }], parameters: [{ in: 'path', name: 'name', required: true, schema: str() }], responses: { 200: json('Deletion result', { type: 'object' }), ...errors([400, 401, 403]) } });
 route('get', '/exchange/search/engines', {
     operationId: 'exchangeSearchEngines', summary: 'The search engines behind web, image and icon search', tags: ['exchange'], security: [],
-    description: 'Public. Engine IDs, kinds (web, images, icons, fetch), availability of shared keys, BYOK support, health, supported freshness filters, price_per_1000 in USD (null when variable), pricing_note, source URL and checked_on date. Personal key availability is private. Tariffs exclude free allowances and volume discounts.',
+    description: 'Public. Engine IDs, kinds (web, images, icons, reverse_image, fetch), availability of shared keys, BYOK support, health, supported freshness, price_per_1000 in USD (null when variable), pricing_note, included_allowance, onboarding, upstreams, filter support (native, local or unsupported per filter), source URL and checked_on date. Personal key availability is private. Tariffs exclude free allowances and volume discounts.',
     responses: { 200: json('The engines', { type: 'object', required: ['engines'], properties: { engines: arrayOf({ type: 'object' }) } }) },
 });
 route('get', '/own-endpoints', {

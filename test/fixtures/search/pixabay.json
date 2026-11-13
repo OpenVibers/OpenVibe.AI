@@ -2,9 +2,10 @@
   "response": {
     "hits": [
       {
+        "id": 12345,
         "tags": "Cat",
-        "largeImageURL": "https://images.example.org/cat.jpg",
-        "previewURL": "https://images.example.org/thumb.jpg",
+        "largeImageURL": "https://cdn.pixabay.com/cat.jpg",
+        "previewURL": "https://cdn.pixabay.com/thumb.jpg",
         "imageWidth": 2400,
         "imageHeight": 1600,
         "user": "Alex",

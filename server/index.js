@@ -119,7 +119,7 @@ async function start({ searchFetch = null, config, db: givenDb = null, clock = {
     // Exchange's search engines (server/search/): the deep dive's web, picture and icon searches. It shares the
     // same guarded fetch as the platform API; a test hands in its own.
     const search = givenSearch || require('./search').createSearch({
-        ...(searchFetch ? { fetchImpl: searchFetch } : {}), now: () => clock.now(), registry, env,
+        ...(searchFetch ? { fetchImpl: searchFetch } : {}), now: () => clock.now(), registry, env, publicBase: config.baseUrl,
     });
     // The capture worker: AI_CAPTURE_URL points at the openvibe-ai-capture unit; unset runs the same capture in
     // this process (tests and a small install). Screenshots land in Media private to the run's owner.

@@ -1,0 +1,36 @@
+{
+  "response": {
+    "code": 200,
+    "results": {
+      "matches": [
+        {
+          "image_url": "https://images.example.org/cat.jpg",
+          "domain": "example.org",
+          "score": 100,
+          "width": 2400,
+          "height": 1600,
+          "format": "JPEG",
+          "backlinks": [
+            {
+              "url": "https://images.example.org/cat.jpg",
+              "backlink": "https://example.org/article",
+              "crawl_date": "2026-11-01"
+            }
+          ]
+        }
+      ]
+    },
+    "stats": {
+      "total_results": 1
+    }
+  },
+  "request": {
+    "host": "api.tineye.com",
+    "path": "/rest/search/",
+    "method": "GET"
+  },
+  "expected": {
+    "title": "example.org · 100% match",
+    "cost": 0.04
+  }
+}
