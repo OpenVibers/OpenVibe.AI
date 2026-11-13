@@ -33,7 +33,7 @@ function init(db, { eventsUrl = process.env.EVENTS_URL, clientSecret = process.e
     svc.start();
     pruneTimer = setInterval(() => { if (svc) svc.outbox.prune().catch((err) => log.warn('[Events] outbox prune failed:', err && err.message)); }, PRUNE_EVERY_MS);
     if (pruneTimer.unref) pruneTimer.unref();
-    log.log(`[Events] ai → ${eventsUrl} (${svc.outbox.pending()} pending)`);
+    log.log(`[Events] ai to ${eventsUrl} (${svc.outbox.pending()} pending)`);
     return svc.outbox;
 }
 

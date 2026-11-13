@@ -38,9 +38,9 @@ const PROVIDERS = [
         name: 'ChatGPT',
         what: 'Your chats. ChatGPT does not put its saved-memory list in the data export, so paste the extraction prompt too if you want that list.',
         url: 'https://chatgpt.com/#settings/DataControls',
-        export_label: 'Settings → Data controls → Export data',
+        export_label: 'Settings, then Data controls, then Export data',
         steps: [
-            'Open Settings → Data controls → Export data and choose Export.',
+            'Open Settings, then Data controls, then Export data and choose Export.',
             'OpenAI emails you a download link; the file is a .zip.',
             'Drop the .zip here. We read conversations.json and skip the HTML copy.',
         ],
@@ -53,9 +53,9 @@ const PROVIDERS = [
         name: 'Claude',
         what: 'Claude’s own memory list, when your plan exports it, plus the chats in the same export.',
         url: 'https://claude.ai/settings/data-privacy-controls',
-        export_label: 'Settings → Privacy → Export data',
+        export_label: 'Settings, then Privacy, then Export data',
         steps: [
-            'Open Settings → Privacy → Export data (Claude emails you a link when it is ready).',
+            'Open Settings, then Privacy, then Export data (Claude emails you a link when it is ready).',
             'Download the .zip and drop it here.',
             'We read memories.json first, then conversations.json for things you asked Claude to remember.',
         ],
@@ -68,7 +68,7 @@ const PROVIDERS = [
         name: 'Gemini',
         what: 'Your Gemini Apps activity from Google Takeout. The separate “Gemini” Takeout option is Gems, not chats.',
         url: 'https://takeout.google.com',
-        export_label: 'Takeout → My Activity → Gemini Apps',
+        export_label: 'Takeout, then My Activity, then Gemini Apps',
         steps: [
             'In Google Takeout choose Deselect all, then select My Activity.',
             'Open All activity data included, deselect all, and tick only Gemini Apps (called Bard on older accounts).',
@@ -486,7 +486,7 @@ function parseExport({ provider, files = [], text = null, filename = '' } = {}) 
             add(parseGeminiConversations(Array.isArray(doc) ? doc : [doc], baseName(file.name), summary));
         }
         if (!activity.length && !gem.length) {
-            throw new ImportError('This Takeout zip has no Gemini Apps activity JSON. In Takeout, choose My Activity → Gemini Apps, not “Gemini”.');
+            throw new ImportError('This Takeout zip has no Gemini Apps activity JSON. In Takeout, choose My Activity, then Gemini Apps, not “Gemini”.');
         }
     } else if (chosen === 'paste') {
         throw new ImportError('Paste the answer to the extraction prompt, or drop an export zip.');

@@ -375,7 +375,7 @@ function definitions({ staff, csrf, kind, rows, inUse }) {
         head = ['Route', 'Newest', 'Status', 'Primary', 'Fallbacks, in order', 'Format / timeout', 'Created'];
         body = rows.map((r) => html`<tr><td>${link(r.key)}</td><td>v${r.version}</td><td>${badge(r.status)}</td>
 <td>${r.alias_of ? html`alias of <a href="/console/routes/${enc(r.alias_of)}"><code>${r.alias_of}</code></a>` : target(r.primary)}</td>
-<td>${r.alias_of ? '—' : r.fallbacks.length ? r.fallbacks.map((f, i) => html`${i ? ' → ' : ''}${target(f)}`) : html`<span class="warn">none</span>`}</td>
+<td>${r.alias_of ? '—' : r.fallbacks.length ? r.fallbacks.map((f, i) => html`${i ? ' then ' : ''}${target(f)}`) : html`<span class="warn">none</span>`}</td>
 <td>${r.response_format}${r.timeout_ms ? ` · ${n(r.timeout_ms)} ms` : ''}</td><td>${r.created_by || '—'}<br>${when(r.created_at)}</td></tr>`);
     } else if (kind === 'templates') {
         head = ['Template', 'Newest', 'Status', 'In use', 'Name', 'Default route', 'Owner / visibility', 'Created'];
