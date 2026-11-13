@@ -1,4 +1,5 @@
 'use strict';
+const searchTerms = require('./terms');
 const { guardedFetch } = require('../providers/guarded-fetch');
 const { publicTarget } = require('./transport');
 const { AiError, providerSecret } = require('../util');
@@ -49,6 +50,8 @@ function inputFor(kind, b) {
     if (b.safe_search != null && b.safe_search !== 'strict') throw invalid('safe_search must be strict');
     if (b.size && !['small', 'medium', 'large'].includes(b.size)) throw invalid('size must be small, medium or large');
     if (b.upstream && !['google', 'bing', 'yandex'].includes(b.upstream)) throw invalid('upstream must be google, bing or yandex');
+    if (b.purpose != null && !searchTerms.PURPOSES.includes(b.purpose)) throw invalid(`purpose must be one of ${searchTerms.PURPOSES.join(', ')}`);
+    if (b.private != null && typeof b.private !== 'boolean') throw invalid('private must be true or false');
     return { ...b, q: kind === 'fetch' ? undefined : b.q.trim(), limit: b.limit || 10 };
 }
 function normalize(rows, engine, kind, b) {
@@ -156,7 +159,7 @@ function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () =>
                 source: a.source, checked_on: a.checked_on, pricing_note: a.pricing_note || null,
                 included_allowance: a.included_allowance || null, onboarding: a.onboarding || null,
                 upstreams: a.upstreams || (a.upstream ? [a.upstream] : []),
-                uploads: a.uploads === true, filters: filtersFor(a) };
+                uploads: a.uploads === true, filters: filtersFor(a), terms: searchTerms.termsOf(a.id) };
         });
     }
     async function prepare(kind, body, { subject = null } = {}) {
@@ -178,6 +181,18 @@ function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () =>
                 if (b.engine && b.engine !== 'auto' && b.engine === a.id)
                     throw new AiError(422, 'search.unsupported', `${a.id} cannot honour ${unsupported.join(', ')}; choose an engine that supports it`);
                 skippedForFilters.add(a.id);
+                continue;
+            }
+            // The provider's own terms decide (plan §W.2 step 2): a purpose they do not allow, a private request to a
+            // provider that keeps queries, monitoring on transient-only results. Named explicitly, it is refused; on auto
+            // it is skipped with the reason in the receipt.
+            const denied = searchTerms.denial(a.id, b);
+            if (denied) {
+                if (b.engine && b.engine !== 'auto' && b.engine === a.id) {
+                    const t = searchTerms.termsOf(a.id);
+                    throw new AiError(422, 'search.terms', `${a.id} cannot serve this request (${denied.replace(/_/g, ' ')})${t ? `: ${t.source}` : ': its terms are not reviewed yet'}`);
+                }
+                candidates.push({ a, key: null, own: false, healthKey: a.id, ceiling: 0, provider: null, managed: false, env, skipReason: denied });
                 continue;
             }
             const own = a.byok && subject && credentials ? await credentials.searchForRun(subject, credentialId(a)) : null;
@@ -207,6 +222,9 @@ function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () =>
         const runnable = selected.filter(c => !c.skipReason);
         if (!runnable.length) {
             const requested = FILTER_KEYS.filter(k => b[k] != null && b[k] !== '' && b[k] !== false && !(k === 'type' && b.type === 'icon'));
+            const TERMS_REASONS = ['terms_unreviewed', 'terms_disallow_purpose', 'privacy_incompatible', 'retention_incompatible'];
+            if (selected.length && selected.every(c => TERMS_REASONS.includes(c.skipReason)))
+                throw new AiError(422, 'search.terms', `No engine's terms allow this request (${searchTerms.purposeOf(b)}${b.private ? ', private' : ''})`);
             if (skippedForFilters.size)
                 throw new AiError(422, 'search.unsupported', `No configured engine can honour the requested filters (${[...new Set(requested)].join(', ') || 'engine limitation'})`);
             if (b.engine && b.engine !== 'auto' && !selected.length) {

@@ -10,6 +10,8 @@ const properties = {
     engine: { type: 'string', default: 'auto', description: 'Engine ID from the public catalog. Auto prefers personal keys, then price among healthy engines supporting freshness. Failed personal keys never fall back to shared keys.' },
     limit: { type: 'integer', minimum: 1, maximum: 50, default: 10, description: 'Maximum returned results; some providers return fewer.' },
     freshness: { type: 'string', enum: ['day', 'month', 'year'] },
+    purpose: { type: 'string', enum: require('./terms').PURPOSES, description: 'What the results are for (default interactive_display). An engine whose own terms do not allow it is skipped (or refused when named): Brave never serves evaluation, benchmarks or training; an unreviewed engine never serves any AI-use purpose.' },
+    private: { type: 'boolean', description: 'A sensitive query: only engines whose terms keep no query (zero or transient retention) are used; otherwise the call is refused.' },
     max_cost_usd: { type: 'number', minimum: 0, description: 'Maximum provider cost for this call, including BYOK. Variable-cost engines must fit their documented conservative ceiling.' },
 };
 const errors = Object.fromEntries([401, 403, 422, 429, 503].map(n => [n, { description: 'Authentication, invalid request, cap/rate limit or engine unavailable (application/problem+json).' }]));
@@ -45,7 +47,7 @@ paths['/v1/search/reverse-image'] = { post: {
         engine: { type: 'string', enum: ['tineye', 'serpapi-reverse'], description: 'Required; reverse image is explicit selection only.' },
         image_url: { type: 'string', format: 'uri', maxLength: 8192 },
         image: { type: 'string', description: 'A base64 data URL (PNG, JPEG, GIF, BMP, TIFF or WebP, at most 5 MB decoded). TinEye only.' },
-        limit: properties.limit, max_cost_usd: properties.max_cost_usd,
+        limit: properties.limit, max_cost_usd: properties.max_cost_usd, purpose: properties.purpose, private: properties.private,
     }, oneOf: [{ required: ['image_url'] }, { required: ['image'] }] }) },
     responses: { 200: { description: 'exchange.image-result@1 with reverse_image rows', ...json(contract('exchange.image-result@1')) }, ...errors },
 } };
@@ -64,7 +66,7 @@ paths['/v1/fetch'] = { post: {
     operationId: 'fetchSearchPage', tags: ['exchange'], summary: 'Read a public HTTPS page as text or Markdown', security: [{ bearer: [] }],
     description: 'engine: auto, openvibe-egress, deepseek or jina. Auto prefers an eligible personal reader key, otherwise free local egress. Remote reader targets pass the existing public DNS/address guard before submission. Direct reads recheck DNS at connect time. Remote reader redirects are subject to the provider security policy. Receipt and cap semantics match search.',
     requestBody: { required: true, ...json({ type: 'object', required: ['url'], properties: {
-        url: { type: 'string', format: 'uri', maxLength: 8192 }, engine: properties.engine, max_cost_usd: properties.max_cost_usd,
+        url: { type: 'string', format: 'uri', maxLength: 8192 }, engine: properties.engine, max_cost_usd: properties.max_cost_usd, purpose: properties.purpose, private: properties.private,
     } }) },
     responses: { 200: { description: 'The URL, extracted text (at most 200000 characters) and receipt', ...json({ type: 'object', required: ['url', 'text', 'receipt'], properties: {
         url: { type: 'string', format: 'uri' }, text: { type: 'string' }, receipt: contract('exchange.search-result@1').properties.receipt,
