@@ -20,6 +20,8 @@ const json = (value) => new Response(JSON.stringify(value), { status: 200 });
     assert.equal(terms.denial('brave-images', { purpose: 'public_benchmark' }), 'terms_disallow_purpose');
     assert.equal(terms.denial('brave', { purpose: 'monitoring' }), 'retention_incompatible', 'monitoring keeps results; Brave allows transient only');
     assert.equal(terms.denial('exa', { private: true }), 'privacy_incompatible', 'Exa keeps queries');
+    assert.equal(terms.denial('perplexity', { private: true }), 'privacy_incompatible', 'Perplexity keeps Search Data (§2.2)');
+    assert.equal(terms.termsOf('perplexity').personal_data, 'written_authorization_required');
     assert.equal(terms.denial('tavily', { purpose: 'model_training' }), 'terms_unreviewed');
     assert.equal(terms.denial('tavily', { private: true }), 'privacy_incompatible', 'unknown retention is not private');
     assert.equal(terms.denial('tavily', { purpose: 'agent_research' }), null);

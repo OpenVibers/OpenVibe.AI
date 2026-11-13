@@ -33,6 +33,19 @@ const BRAVE = {
 const TERMS = Object.freeze({
     brave: BRAVE,
     'brave-images': BRAVE,
+    perplexity: {
+        reviewed_on: '2026-11-13',
+        source: 'https://www.perplexity.ai/hub/legal/perplexity-api-terms-of-service-search',
+        storage: 'unknown',
+        query_retention: 'retained',
+        ai_use: null,
+        resale: 'unknown',
+        personal_data: 'written_authorization_required',
+        clauses: 'Search Addendum, last updated 2025-09-22. §2.2: Perplexity may retain, copy, distribute and otherwise use '
+            + 'Search Data (inputs and outputs) for its lawful business purposes, including improving its products; Search '
+            + 'Data is not Customer Confidential Information. §2.3: no Personal Data to the Search Services without written '
+            + 'authorization. §1.2.2(iii): zero data retention obligations do not apply to the Search Services.',
+    },
     exa: {
         reviewed_on: '2026-11-13',
         source: 'https://exa.ai/terms',
