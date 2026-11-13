@@ -3,9 +3,11 @@
 // run tries that provider/model alone and records it, a model the routing does not offer is 422, an
 // app token may not pin, a caller's namespace still fails closed, and quotas apply exactly as before.
 const assert = require('assert');
-const { boot, request, token, suite, seamServer, ALL } = require('./helpers');
+const { boot, request, token, suite, seamServer, ALL, fixedClock } = require('./helpers');
 
 const t = suite('pin-route');
+// The quota below counts in an hour window; a fixed clock keeps both requests in one window.
+const clock = fixedClock();
 const admin = token('live', ALL);
 // Design's shape: a first-party service with ai.run.create and the ai.* namespace.
 const design = token('design', ['ai.run.create', 'ai.run.read'], { ns: ['ai.*'] });
@@ -34,7 +36,7 @@ const offersOn = (routes, key) => (routes.find((r) => r.key === key) || {}).offe
 t.test('boot with two offered generate providers and no stub fallback', async () => {
     a = await seam('a');
     b = await seam('b');
-    h = await boot({ env: { AI_STUB_FALLBACK: 'false', AI_PROVIDER_RETRIES: '0' } });
+    h = await boot({ clock, env: { AI_STUB_FALLBACK: 'false', AI_PROVIDER_RETRIES: '0' } });
     await provider('seam-a', a.url, 'a-model');
     await provider('seam-b', b.url, 'b-model');
 });

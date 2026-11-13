@@ -14,10 +14,14 @@
 // AI_GOOGLE_TTS_BASE_URL / AI_POLLY_BASE_URL. The keys are dummies.
 const assert = require('assert');
 const http = require('http');
-const { boot, request, token, suite, ALL } = require('./helpers');
+const { boot, request, token, suite, ALL, fixedClock } = require('./helpers');
 
 const t = suite('exchange-speech');
 const service = token('exchange', ALL);
+// The over-quota call below is refused because the calls before it counted in the same minute
+// window; on the wall clock a minute boundary between them would reset that count and the test
+// would see a served call instead of a refusal. A fixed clock decides the window instead.
+const clock = fixedClock();
 const FAKE_MP3 = Buffer.from('ID3\x04fake-mp3-bytes');
 
 let h;
@@ -65,7 +69,7 @@ const speak = (body) => request(h.base, 'POST', '/v1/audio/speech', { tok: servi
 t.test('boot with fake Google and Polly hosts', async () => {
     google = await fakeGoogle();
     polly = await fakePolly();
-    h = await boot({ env: {
+    h = await boot({ clock, env: {
         AI_STUB_FALLBACK: 'false',
         AI_GOOGLE_TTS_API_KEY: 'test-google-key',
         AI_GOOGLE_TTS_BASE_URL: google.url,

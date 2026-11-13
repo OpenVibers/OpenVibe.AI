@@ -4,20 +4,24 @@
 // service separately; attribution quotas (Live's per-streamer budgets) and cost caps work too.
 
 const assert = require('assert');
-const { boot, request, token, suite, seamServer, ALL } = require('./helpers');
+const { boot, request, token, suite, seamServer, ALL, fixedClock } = require('./helpers');
 
 const t = suite('quota');
 const live = token('live', ALL);
 const tools = token('tools', ['ai.run.create', 'ai.run.read']);
 let h;
 let seam;
+// A quota window is decided by the clock the service reads. On the wall clock a minute boundary
+// that passes between two requests resets the counter and this test flakes; on a fixed clock the
+// window only moves when the test moves it.
+const clock = fixedClock();
 
 const runCount = async () => (await h.db.prepare('SELECT COUNT(*) n FROM runs').get()).n;
 const gen = async (tok, prompt, extra = {}) => await request(h.base, 'POST', '/api/v1/generate', { tok, body: { prompt, options: { cache: false }, ...extra } });
 
 t.test('boot with a counting seam provider as the only route target', async () => {
     seam = await seamServer(() => ({ text: 'ok', usage: { input: 1000, output: 1000 } }));
-    h = await boot({ env: { AI_STUB_FALLBACK: 'false', AI_QUOTA_SERVICE_RPM: '3' } });
+    h = await boot({ clock, env: { AI_STUB_FALLBACK: 'false', AI_QUOTA_SERVICE_RPM: '3' } });
     await request(h.base, 'POST', '/api/v1/providers', { tok: live, body: { key: 'seam', kind: 'http', base_url: seam.url, auth_mode: 'none', capabilities: ['generate', 'chat'] } });
     await request(h.base, 'POST', '/api/v1/models', { tok: live, body: { provider_key: 'seam', model_key: 'm1', cost: { in_per_mtok: 1000, out_per_mtok: 1000 } } });
     const r = await request(h.base, 'POST', '/api/v1/routes/default.chat/versions', { tok: live, body: { primary: { provider: 'seam', model: 'm1' }, fallbacks: [] } });
@@ -37,6 +41,13 @@ t.test('the per-service rate refuses the 4th request with 429 before the provide
     assert.strictEqual(r.body.quota.scope_id, 'live');
     assert.strictEqual(seam.calls, callsBefore, 'the provider was never called');
     assert.strictEqual(await runCount(), runsBefore, 'no run was created');
+});
+
+t.test('the next window starts a new count: the request after it is served again', async () => {
+    // The window moves when the clock moves, not when the wall clock happens to tick over.
+    clock.advance(61_000);
+    const r = await gen(live, 'next window');
+    assert.strictEqual(r.status, 201, r.text);
 });
 
 t.test("'*' service quotas give each service its own window", async () => {

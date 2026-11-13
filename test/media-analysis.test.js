@@ -15,7 +15,7 @@ const fs = require('fs');
 const path = require('path');
 const nodeHttp = require('http');
 const { spawnSync } = require('child_process');
-const { boot, request, token, suite, seamServer, ALL } = require('./helpers');
+const { boot, request, token, suite, seamServer, ALL, fixedClock } = require('./helpers');
 const ma = require('../server/workflows/media-analysis');
 
 const HAS_FFMPEG = spawnSync('ffprobe', ['-version']).status === 0 && spawnSync('ffmpeg', ['-version']).status === 0;
@@ -38,6 +38,9 @@ const LOG = [
 ];
 
 const t = suite('media-analysis');
+// The paid-media budget is a day window; a fixed clock keeps the spend the test inserts and the
+// window the service reads on the same day.
+const clock = fixedClock();
 let media; let mediaBase;
 const tok = token('live', ALL);
 const run = async (h, input) => await request(h.base, 'POST', '/api/v1/runs?wait=60000', { tok, body: { workflow: 'media.analyze', input: { media_url: `${mediaBase}/fixture.mp4`, language: 'en', ...input } } });
@@ -130,7 +133,7 @@ t.test('local model down: extractive, and it says so; paid only with allow_paid 
     if (!HAS_FFMPEG) return console.log('media-analysis local model down: skipped (no ffmpeg/ffprobe)');
     const local = await seamServer(() => ({ status: 500, body: { error: 'model not loaded' } }));
     const paid = await seamServer(() => completion('Paid overview of the recording.'));
-    const h = await boot({ env: {
+    const h = await boot({ clock, env: {
         OV_MEDIA_INTERNAL_URL: mediaBase, AI_LOCAL_LLM_URL: `${local.url}/v1`, AI_STUB_FALLBACK: '0',
         AI_PROVIDER: 'openai', AI_BASE_URL: `${paid.url}/v1`, AI_API_KEY: 'paid-key', AI_MODEL: 'paid-model', AI_PROVIDER_RETRIES: '0',
     } });
@@ -161,7 +164,8 @@ t.test('local model down: extractive, and it says so; paid only with allow_paid 
         const other = await request(h.base, 'POST', '/api/v1/runs?wait=10000', { tok, body: { workflow: 'ai.summarize', input: { text: 'SQLite is small.', max_words: 20 } } });
         assert.strictEqual(other.status, 201, `the media.paid budget does not gate other workflows: ${other.text.slice(0, 300)}`);
 
-        const day = new Date().toISOString().slice(0, 10);
+        // The budget is a day window: the clock decides which day the spend belongs to.
+        const day = clock.at().slice(0, 10);
         const callsBefore = paid.calls;
         await h.db.prepare("INSERT INTO usage_daily (day, requester, attribution, workflow_key, provider_key, model_key, requests, cost_usd) VALUES (?, 'service:live', '', 'media.analyze', 'shared', 'paid-model', 1, 0.75)").run(day);
         r = await run(h, { allow_paid: true });
