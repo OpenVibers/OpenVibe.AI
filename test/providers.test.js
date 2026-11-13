@@ -100,6 +100,23 @@ t.test('OpenAI adapter steps down json_schema -> json_object on a gateway that r
     await srv.close();
 });
 
+t.test('OpenAI adapter: a reasoning model that thinks its whole allowance away gets room to answer, once', async () => {
+    // 2026-11-10 to 11-13: gpt-5-nano answered "ok" with no text on most background calls (512 tokens of headroom).
+    const bodies = [];
+    const srv = await seamServer((body) => {
+        bodies.push({ max: body.max_completion_tokens, effort: body.reasoning_effort });
+        if (bodies.length === 1) return { choices: [{ message: { content: '' }, finish_reason: 'length' }], usage: { prompt_tokens: 900, completion_tokens: body.max_completion_tokens, completion_tokens_details: { reasoning_tokens: body.max_completion_tokens } }, model: 'gpt-5-nano-2025-08-07' };
+        return { choices: [{ message: { content: '{"ok":true}' }, finish_reason: 'stop' }], usage: { prompt_tokens: 900, completion_tokens: 300, completion_tokens_details: { reasoning_tokens: 200 } }, model: 'gpt-5-nano-2025-08-07' };
+    });
+    const a = createOpenAiProvider({ key: 'shared', base_url: srv.url, capabilities: [] }, { apiKey: 'k' });
+    const r = await a.chat(req({ model: 'gpt-5-nano', maxTokens: 1700 }));
+    assert.strictEqual(r.text, '{"ok":true}', 'the second try answers');
+    assert.strictEqual(bodies.length, 2, 'one retry, no more');
+    assert.ok(bodies[0].max >= 1700 + 4096, `the first try already has room to think (${bodies[0].max})`);
+    assert.ok(bodies[1].max > bodies[0].max * 2 && bodies[1].effort === 'low', 'the retry has three times the room at low effort');
+    await srv.close();
+});
+
 t.test('OpenAI adapter: auth failures and timeouts are typed errors', async () => {
     const srv = await seamServer((b) => (b.messages[b.messages.length - 1].content === 'slow' ? new Promise(r => setTimeout(() => r({}), 1500)) : { status: 401, body: { error: { message: 'bad key' } } }));
     const a = createOpenAiProvider({ key: 'o', base_url: srv.url, capabilities: [] }, { apiKey: 'k' });

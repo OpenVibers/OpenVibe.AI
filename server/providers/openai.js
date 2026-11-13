@@ -28,6 +28,12 @@ const TEXT_OPS = ['chat', 'generate', 'summarize', 'classify', 'extract', 'enric
 
 function isReasoningModel(m) { return /^(gpt-[56]|o\d)/i.test(m || ''); }
 
+/** The thinking room a reasoning model gets on top of the answer's own allowance. */
+let lastEmptyLog = 0;
+/** At most one line a minute about empty answers (they came by the thousand when it went wrong). */
+function emptyLog(line) { const now = Date.now(); if (now - lastEmptyLog > 60000) { lastEmptyLog = now; console.warn(line); } }
+const REASONING_HEADROOM = 4096;
+
 /**
  * The provider routing object of an OpenRouter offer (2026-11-10): only the fields OpenRouter documents,
  * copied from the model offer's own settings. It lets an offer pin one endpoint exactly (only/order, no
@@ -57,8 +63,11 @@ function buildBody(req, jsonMode) {
     });
     const body = { model, messages: msgs };
     if (isReasoningModel(model)) {
-        body.max_completion_tokens = Math.max(maxTokens, 256) + 512;
-        body.reasoning_effort = /^gpt-5/i.test(model) ? 'minimal' : 'low';
+        // A reasoning model thinks out of the same allowance it answers from. 512 tokens of headroom left nothing to
+        // answer with on a longer prompt (2026-11-10 to 11-13: gpt-5-nano answered "ok" with no text on ~80% of the
+        // background routes' calls). The allowance is a cap: only the tokens used are billed.
+        body.max_completion_tokens = Math.max(maxTokens, 256) + (req.thinkRoom || REASONING_HEADROOM);
+        body.reasoning_effort = req.retryEffort || (/^gpt-5/i.test(model) ? 'minimal' : 'low');
     } else {
         body.max_tokens = maxTokens;
         if (temperature != null) body.temperature = temperature;
@@ -118,6 +127,13 @@ function createOpenAiProvider(record, { apiKey = '', fetchImpl = globalThis.fetc
                 const j = await postJson(`${baseUrl}/chat/completions`, headers(), body, { signal: req.signal, timeoutMs: req.timeoutMs, fetchImpl });
                 const msg = j.choices && j.choices[0] && j.choices[0].message;
                 const text = (msg && typeof msg.content === 'string' ? msg.content : '').trim();
+                const finish = j.choices && j.choices[0] && j.choices[0].finish_reason;
+                if (!text && isReasoningModel(req.model) && !req.thinkRoom) {
+                    // Nothing to show: say why once, then give the model room to finish its thinking and answer.
+                    const reasoning = (j.usage && j.usage.completion_tokens_details && j.usage.completion_tokens_details.reasoning_tokens) || 0;
+                    emptyLog(`[ai] ${req.model}: an empty answer (finish ${finish || '?'}, ${reasoning} reasoning of ${(j.usage && j.usage.completion_tokens) || 0} completion tokens); trying once with more room`);
+                    if (finish === 'length' || reasoning > 0) return chat({ ...req, thinkRoom: REASONING_HEADROOM * 3, retryEffort: 'low' });
+                }
                 return { text, json: null, model: j.model || req.model, serviceTier: j.service_tier || null, usage: usageParser.openAiCompatibleUsage(j.usage || {}) };
             } catch (e) {
                 // Gateways without structured-output support: schema -> json_object -> prose.
