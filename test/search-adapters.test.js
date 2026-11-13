@@ -13,13 +13,21 @@ const json = value => new Response(JSON.stringify(value), { status: 200 });
         const fetchImpl = async (input, init) => {
             const u = new URL(input);
             calls.push({ u, init });
-            assert.equal(u.hostname, sample.request.host, a.id);
             assert.equal(init.redirect, 'error');
             assert.ok(init.signal);
             if (u.pathname === '/collections') return json(fixture('iconify-collections'));
+            // NASA's assets live in their own host: the item's collection.json is a second read.
+            if (a.id === 'nasa' && u.pathname.endsWith('/collection.json')) return json(fixture('nasa-assets'));
+            assert.equal(u.hostname, sample.request.host, a.id);
             assert.equal(u.pathname, sample.request.path, a.id);
             assert.equal(init.method || 'GET', sample.request.method, a.id);
-            if (a.byok) assert.ok(JSON.stringify(init).includes(KEY) || u.search.includes(KEY), a.id + ' authenticates');
+            if (a.byok) {
+                if (a.id === 'dataforseo' || a.id === 'dataforseo-images') {
+                    // DataForSEO authenticates with HTTP Basic: the key is the login and the password.
+                    const auth = String((init.headers || {}).authorization || '');
+                    assert.ok(Buffer.from(auth.replace(/^Basic /, ''), 'base64').toString('utf8').includes(KEY), a.id + ' authenticates');
+                } else assert.ok(JSON.stringify(init).includes(KEY) || u.search.includes(KEY), a.id + ' authenticates');
+            }
             return json(sample.response);
         };
         const search = createSearch({ fetchImpl, env });
@@ -38,7 +46,7 @@ const json = value => new Response(JSON.stringify(value), { status: 200 });
         if (kind === 'web') {
             assert.equal(out.results[0].url, 'https://example.org/article');
             assert.equal(out.results[0].snippet, 'A new lantern', a.id);
-            assert.equal(out.results[0].published, ['google', 'meta'].includes(a.id) ? null : '2026-11-08T12:00:00Z');
+            assert.equal(out.results[0].published, ['google', 'meta', 'dataforseo'].includes(a.id) ? null : '2026-11-08T12:00:00Z');
         } else if (kind === 'images' || kind === 'reverse_image') {
             const row = out.results[0];
             if (kind === 'reverse_image') {
@@ -51,15 +59,39 @@ const json = value => new Response(JSON.stringify(value), { status: 200 });
                     // Its terms forbid permanent hotlinking: the result points at the short-lived proxy.
                     assert.match(row.url, /^https:\/\/ai\.openvibe\.services\/v1\/search\/images\/pixabay\/12345$/);
                     assert.equal(row.thumbnail, row.url);
+                } else if (a.id === 'nasa') {
+                    // The assets come from the item's own collection.json, in NASA's own file names.
+                    assert.equal(row.url, 'https://images.example.org/PIA23403~orig.jpg');
+                    assert.equal(row.thumbnail, 'https://images.example.org/PIA23403~thumb.jpg');
+                } else if (a.id === 'smithsonian') {
+                    // The picture comes from the Smithsonian Image Delivery Service.
+                    assert.equal(row.url, 'https://ids.si.edu/ids/deliveryService?id=fixture-image-1&max=1000');
+                    assert.equal(row.thumbnail, 'https://ids.si.edu/ids/deliveryService?id=fixture-image-1&max=400');
                 } else {
                     assert.equal(row.url, 'https://images.example.org/cat.jpg');
                     assert.equal(row.thumbnail, 'https://images.example.org/thumb.jpg');
                 }
-                assert.deepEqual([row.width, row.height], [2400, 1600]);
-                assert.equal(row.source_page, 'https://example.org/article');
-                assert.equal(row.author, ['brave-images', 'serper-images', 'serpapi-images', 'searchapi-images'].includes(a.id) ? null : 'Alex');
-                if (['brave-images', 'serper-images', 'serpapi-images', 'searchapi-images'].includes(a.id)) assert.deepEqual([row.license, row.attribution], [null, null]);
-                else assert.ok(row.license && row.attribution.includes('Alex'));
+                // The open catalogs and the SERP proxies say nothing about the size of a picture.
+                if (['europeana', 'nasa', 'dataforseo-images', 'smithsonian'].includes(a.id)) assert.deepEqual([row.width, row.height], [null, null]);
+                else assert.deepEqual([row.width, row.height], [2400, 1600]);
+                assert.equal(row.source_page, a.id === 'nasa' ? 'https://images.nasa.gov/details/PIA23403'
+                    : a.id === 'smithsonian' ? 'https://www.si.edu/object/edanmdm:nmah_687529' : 'https://example.org/article');
+                const discovery = ['brave-images', 'serper-images', 'serpapi-images', 'searchapi-images', 'dataforseo-images'];
+                if (a.id === 'nasa') {
+                    // A NASA-created picture is public domain and says who made it.
+                    assert.equal(row.author, 'NASA/JPL-Caltech');
+                    assert.equal(row.license, 'public_domain');
+                    assert.ok(row.attribution.includes('NASA'));
+                } else if (a.id === 'smithsonian') {
+                    // A record with a media file is an object whose work is in the public domain.
+                    assert.equal(row.author, 'Smithsonian Institution, National Museum of American History');
+                    assert.equal(row.license, 'cc0');
+                    assert.ok(row.attribution.includes('Smithsonian'));
+                } else {
+                    assert.equal(row.author, discovery.includes(a.id) ? null : 'Alex');
+                    if (discovery.includes(a.id)) assert.deepEqual([row.license, row.attribution], [null, null]);
+                    else assert.ok(row.license && row.attribution.includes('Alex'));
+                }
                 assert.ok(row.upstream, a.id + ' names its upstream');
             }
             assert.equal(row.upstream_rank, 1, a.id);
@@ -68,7 +100,9 @@ const json = value => new Response(JSON.stringify(value), { status: 200 });
         const card = (await search.engines()).find(e => e.id === a.id);
         assert.equal(card.price_per_1000, a.price_per_1000);
         assert.equal(card.source, a.source);
-        assert.equal(card.checked_on, ['serpapi-images', 'searchapi-images', 'serpapi-reverse', 'tineye', 'pixabay', 'unsplash'].includes(a.id) ? '2026-11-13' : a.id === 'openvibe' ? '2026-11-12' : ['meta', 'serper-images'].includes(a.id) ? '2026-11-10' : '2026-11-09');
+        assert.equal(card.checked_on, ['serpapi-images', 'searchapi-images', 'serpapi-reverse', 'tineye', 'pixabay', 'unsplash',
+            'mojeek', 'parallel', 'you', 'dataforseo', 'europeana', 'nasa', 'dataforseo-images', 'smithsonian'].includes(a.id)
+            ? '2026-11-13' : a.id === 'openvibe' ? '2026-11-12' : ['meta', 'serper-images'].includes(a.id) ? '2026-11-10' : '2026-11-09');
         if (a.byok) {
             assert.equal((await createSearch({ env: {} }).engines()).find(e => e.id === a.id).available, false);
             await assert.rejects(createSearch({ env: {}, fetchImpl: () => assert.fail('unconfigured engine called') }).search(kind, { q: 'x', engine: a.id }));
@@ -76,7 +110,7 @@ const json = value => new Response(JSON.stringify(value), { status: 200 });
         if (a.freshness.length) {
             await search.search(kind, { q: 'lantern', engine: a.id, freshness: 'day' });
             const last = calls.at(-1), sent = last.u.href + (last.init.body || '');
-            assert.match(sent, /after|freshness|PublishedDate|time_range|tbs|dateRestrict/);
+            assert.match(sent, /after|freshness|PublishedDate|time_range|tbs|dateRestrict|since/);
         }
     }
     for (const id of ['deepseek', 'jina']) {

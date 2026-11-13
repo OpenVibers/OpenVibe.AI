@@ -1,0 +1,37 @@
+{
+  "response": {
+    "collection": {
+      "version": "1.1",
+      "href": "https://images-api.nasa.gov/search?q=lantern&media_type=image",
+      "items": [
+        {
+          "href": "https://images-assets.nasa.gov/image/PIA23403/collection.json",
+          "data": [
+            {
+              "center": "JPL",
+              "date_created": "2026-11-08T12:00:00Z",
+              "description": "A new lantern",
+              "keywords": [
+                "lantern"
+              ],
+              "media_type": "image",
+              "nasa_id": "PIA23403",
+              "secondary_creator": "NASA/JPL-Caltech",
+              "title": "Lantern"
+            }
+          ],
+          "links": []
+        }
+      ]
+    }
+  },
+  "request": {
+    "host": "images-api.nasa.gov",
+    "path": "/search",
+    "method": "GET"
+  },
+  "expected": {
+    "title": "Lantern",
+    "cost": 0
+  }
+}

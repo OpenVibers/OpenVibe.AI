@@ -16,6 +16,7 @@
  */
 const { guardedFetch } = require('../providers/guarded-fetch');
 const { publicTarget } = require('../search/transport');
+const { redact } = require('../redact');
 
 const ONE_LINE = (s, n) => String(s == null ? '' : s).replace(/\s+/g, ' ').trim().slice(0, n);
 const HOST = (u) => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return null; } };
@@ -137,7 +138,7 @@ function createSourceGatherer({ config = {}, log = console, fetchImpl = guardedF
                     for (const r of (page && page.results) || []) {
                         add({ kind: kind === 'images' ? 'picture' : kind === 'icons' ? 'icon' : 'web', url: r.url, title: r.title, snippet: r.snippet || r.attribution || r.author, engine, publisher: HOST(r.url), license: r.license || null });
                     }
-                } catch (err) { warnings.push(`${kind} search: ${String(err && err.message || err).slice(0, 160)}`); }
+                } catch (err) { warnings.push(`${kind} search: ${redact(String(err && err.message || err)).slice(0, 160)}`); }
             }
         }
 

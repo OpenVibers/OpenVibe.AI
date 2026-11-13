@@ -1,0 +1,45 @@
+{
+  "response": {
+    "version": "0.1.20200129",
+    "status_code": 20000,
+    "status_message": "Ok.",
+    "cost": 0.002,
+    "tasks": [
+      {
+        "id": "fixture",
+        "status_code": 20000,
+        "status_message": "Ok.",
+        "cost": 0.002,
+        "result": [
+          {
+            "keyword": "lantern",
+            "type": "organic",
+            "se_domain": "google.com",
+            "location_code": 2840,
+            "language_code": "en",
+            "datetime": "2026-11-08 12:00:00 +00:00",
+            "items": [
+              {
+                "type": "organic",
+                "title": "Lantern",
+                "url": "https://example.org/article",
+                "description": "A new lantern",
+                "domain": "example.org",
+                "position": 1
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "request": {
+    "host": "api.dataforseo.com",
+    "path": "/v3/serp/google/organic/live/regular",
+    "method": "POST"
+  },
+  "expected": {
+    "title": "Lantern",
+    "cost": 0.002
+  }
+}

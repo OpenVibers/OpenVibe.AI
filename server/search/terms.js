@@ -57,6 +57,58 @@ const TERMS = Object.freeze({
             + 'improve its products; (e): no reselling, leasing or sublicensing the Services without consent; (f): no using '
             + 'the Services or Output to develop a competing product. Zero data retention is an enterprise agreement.',
     },
+    mojeek: {
+        reviewed_on: '2026-11-13',
+        source: 'https://www.mojeek.com/about/legal/api-terms.html',
+        storage: 'one_hour_cache',
+        query_retention: 'retained',
+        ai_use: true,
+        resale: 'allowed',
+        clauses: 'Usage: "Data provided by the Services may be used in any application, including internet search '
+            + 'experiences and artificial intelligence applications such as retrieval-augmented generation, grounding, AI '
+            + 'agents and assistants, and model evaluation, subject to these Terms. You may reorder the ranking of search '
+            + 'results. You may combine Data with search results from other sources." Exclusions: "Do not compile, copy or '
+            + 'store any Data unless you subscribe to a plan with storage rights. Without storage rights, do not cache any '
+            + 'Data except temporarily, to serve the same user, for up to 1 hour. Do not use Data as part of any search '
+            + 'index." Standard retention is 90 days; Zero Data Retention is on request.',
+    },
+    parallel: {
+        reviewed_on: '2026-11-13',
+        source: 'https://parallel.ai/customer-terms',
+        storage: 'one_customer',
+        query_retention: 'unknown',
+        ai_use: false,
+        resale: 'prohibited',
+        clauses: '§2(b): Customer Output may be modified and shown to End Customers, but "Customer Output generated from '
+            + 'one query shall be primarily for the use of one End Customer only, and shall not be copied, cached, stored, or '
+            + 'made available to other End Customers or other third parties." §2(c)(iv): no reselling, sublicensing or '
+            + 'otherwise making the Services or Customer Outputs available; §2(c)(vi): no use of the Services or Output to '
+            + 'create synthetic training data or to train a model, to build data selling businesses, or for any competitive '
+            + 'purpose.',
+    },
+    you: {
+        reviewed_on: '2026-11-13',
+        source: 'https://you.com/terms',
+        storage: 'unknown',
+        query_retention: 'unknown',
+        ai_use: false,
+        resale: 'prohibited',
+        clauses: 'Terms & Conditions, last updated August 27, 2024. Prohibited uses: "modifying, copying, sublicensing, '
+            + 'leasing, selling or otherwise distributing any of our Services"; "automatically or programmatically extracting '
+            + 'data or Output"; "developing any products or services that compete with our Services". The engine is a '
+            + 'person\'s own key only (manual_only).',
+    },
+    dataforseo: {
+        reviewed_on: '2026-11-13',
+        source: 'https://dataforseo.com/pricing/',
+        storage: 'unknown',
+        query_retention: 'unknown',
+        ai_use: null,
+        resale: 'requires_contract',
+        clauses: 'The published pricing page states the pay-as-you-go model and the $50 minimum top-up. White label, the '
+            + 'MCP server and reselling the raw API need a separate agreement with DataForSEO, so those uses are not '
+            + 'cleared for a shared Exchange key.',
+    },
 });
 
 function purposeOf(b) {

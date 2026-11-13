@@ -1,0 +1,56 @@
+{
+  "response": {
+    "status": 200,
+    "responseCode": 1,
+    "response": {
+      "rowCount": 1,
+      "rows": [
+        {
+          "id": "ld1-1646150069810-0",
+          "title": "Railroad Hand-Signal Lantern",
+          "unitCode": "NMAH",
+          "type": "edanmdm",
+          "url": "edanmdm:nmah_687529",
+          "content": {
+            "descriptiveNonRepeating": {
+              "guid": "http://n2t.net/ark:/65665/ng49ca746ac",
+              "title": {
+                "label": "title",
+                "content": "Railroad Hand-Signal Lantern"
+              },
+              "record_ID": "nmah_687529",
+              "unit_code": "NMAH",
+              "title_sort": "RAILROAD HAND-SIGNAL LANTERN",
+              "data_source": "Smithsonian Institution, National Museum of American History",
+              "record_link": "https://americanhistory.si.edu/collections/object/nmah_687529",
+              "metadata_usage": {
+                "text": "",
+                "access": "CC0"
+              },
+              "online_media": {
+                "media": [
+                  {
+                    "type": "Images",
+                    "idsId": "fixture-image-1",
+                    "usage": {
+                      "access": "CC0"
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "request": {
+    "host": "api.si.edu",
+    "path": "/openaccess/api/v1.0/search",
+    "method": "GET"
+  },
+  "expected": {
+    "title": "Railroad Hand-Signal Lantern",
+    "cost": 0
+  }
+}

@@ -7,10 +7,13 @@ const { validate } = require('openvibe-contracts');
 const net = require('node:net');
 const { createHash } = require('node:crypto');
 const { rankImages } = require('./image-rank');
+const { createCircuit } = require('./circuit');
+const { redactError } = require('../redact');
 const adapters = ['openverse', 'commons', 'searxng', 'openvibe', 'iconify',
     'deepseek', 'brave', 'exa', 'tavily', 'serper', 'serpapi', 'jina',
     'openvibe-egress', 'perplexity', 'kagi', 'google', 'unsplash', 'pexels', 'pixabay', 'brave-images',
-    'meta', 'serper-images', 'serpapi-images', 'searchapi-images', 'serpapi-reverse', 'tineye']
+    'meta', 'serper-images', 'serpapi-images', 'searchapi-images', 'serpapi-reverse', 'tineye',
+    'mojeek', 'parallel', 'you', 'dataforseo', 'europeana', 'nasa', 'dataforseo-images', 'smithsonian']
     .map(n => require('./adapters/' + n));
 const CHARGE = Symbol('search Exchange charge');
 const FILTER_KEYS = ['license', 'commercial', 'format', 'orientation', 'size', 'color', 'after', 'type', 'style', 'set', 'safe_search'];
@@ -62,7 +65,7 @@ function inputFor(kind, b) {
 // content licence (Unsplash, Pexels, Pixabay) allows commercial use but is not an open licence: no standalone
 // redistribution, the provider's display rules (attribution, hotlinking, download tracking). An open catalog's result
 // carries the licence it claims (provider_claimed: the catalog did not verify it).
-const DISCOVERY_ENGINES = new Set(['brave-images', 'serper-images', 'serpapi-images', 'searchapi-images', 'serpapi-reverse', 'tineye']);
+const DISCOVERY_ENGINES = new Set(['brave-images', 'serper-images', 'serpapi-images', 'searchapi-images', 'serpapi-reverse', 'tineye', 'dataforseo-images']);
 const PROVIDER_LICENSES = {
     unsplash: { attribution_required: true, hotlink_required: true },
     pexels: { attribution_required: true, hotlink_required: false },
@@ -70,7 +73,8 @@ const PROVIDER_LICENSES = {
 };
 const SOFTWARE_LICENSES = /^(mit|apache(?:[ -]?2(?:\.0)?)?|isc|bsd(?:-\d-clause)?|ofl(?:-1\.1)?|mpl(?:-2\.0)?|gpl.*|lgpl.*|unlicense)$/;
 function rightsOf(engine, license, r = {}) {
-    const id = String(license || '').toLowerCase().trim().replace(/^cc[ -]/, '').replace(/[ -]v?\d+(?:\.\d+)*$/, '');
+    // cc-by-sa, by_sa and public_domain are the same licence written three ways.
+    const id = String(license || '').toLowerCase().trim().replace(/^cc[ -]/, '').replace(/_/g, '-').replace(/[ -]v?\d+(?:\.\d+)*$/, '');
     const base = { status: 'unknown', family: 'unknown', license_id: license == null ? null : String(license), commercial_use: null,
         modifications: null, standalone_redistribution: null, attribution_required: false, hotlink_required: false,
         download_tracking_url: r.download_location || null };
@@ -153,8 +157,10 @@ function createMemoryEvents() {
         async release(scope, provider, id) { seen.delete(key(scope, provider, id)); },
     };
 }
-function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () => Date.now(), credentials = null, registry = null, targetGuard = publicTarget, events = null, publicBase = process.env.AI_PUBLIC_URL || 'https://ai.openvibe.services' } = {}) {
-    const health = new Map();
+function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () => Date.now(), credentials = null, registry = null, targetGuard = publicTarget, events = null, publicBase = process.env.AI_PUBLIC_URL || 'https://ai.openvibe.services', valkey = null } = {}) {
+    // The breaker lives in Valkey when the service has one, so every process sees the same open circuit
+    // (server/search/circuit.js); without one it is a Map in this process.
+    const circuit = createCircuit({ valkey, now });
     const assetEvents = events || createMemoryEvents();
     const providerFor = (a, providers) => providers.find(p => p.metadata?.search_adapters?.includes(a.id));
     function binding(a, providers) {
@@ -196,10 +202,12 @@ function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () =>
     }
     async function engines() {
         const providers = registry ? await registry.listProviders() : [];
-        return adapters.map(a => {
+        // The breaker lives in Valkey when the service has one: the card says whether the engine is healthy.
+        const open = await Promise.all(adapters.map(a => circuit.openUntil('shared', a.id)));
+        return adapters.map((a, i) => {
             const state = binding(a, providers);
             return { id: a.id, kinds: a.kinds, price_per_1000: a.price_per_1000,
-                byok: a.byok, available: state.available, freshness: a.freshness, healthy: (health.get(a.id) || 0) <= now(),
+                byok: a.byok, available: state.available, freshness: a.freshness, healthy: open[i] <= now(),
                 provider: state.provider?.key || null, manual_only: a.manual_only === true,
                 source: a.source, checked_on: a.checked_on, pricing_note: a.pricing_note || null,
                 included_allowance: a.included_allowance || null, onboarding: a.onboarding || null,
@@ -212,7 +220,6 @@ function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () =>
         if (b.type === 'icon') kind = 'icons';
         if (kind === 'reverse_image' && (!b.engine || b.engine === 'auto'))
             throw new AiError(422, 'search.invalid', 'Choose an engine for a reverse image search');
-        for (const [k, until] of health) if (until <= now()) health.delete(k);
         const candidates = [];
         const skippedForFilters = new Set();
         const providers = registry ? await registry.listProviders() : [];
@@ -237,7 +244,7 @@ function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () =>
                     const t = searchTerms.termsOf(a.id);
                     throw new AiError(422, 'search.terms', `${a.id} cannot serve this request (${denied.replace(/_/g, ' ')})${t ? `: ${t.source}` : ': its terms are not reviewed yet'}`);
                 }
-                candidates.push({ a, key: null, own: false, healthKey: a.id, ceiling: 0, provider: null, managed: false, env, skipReason: denied });
+                candidates.push({ a, key: null, own: false, scope: 'shared', engine: a.id, ceiling: 0, provider: null, managed: false, env, skipReason: denied });
                 continue;
             }
             const own = a.byok && subject && credentials ? await credentials.searchForRun(subject, credentialId(a)) : null;
@@ -246,22 +253,24 @@ function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () =>
             if (!own && !state.available) {
                 // An owner-managed provider that is off stays in the plan so the receipt says why it was skipped.
                 if (state.managed && state.provider && state.configured)
-                    candidates.push({ a, key: state.key, own: false, healthKey: a.id, ceiling, provider: state.provider.key, managed: true, env: state.env, skipReason: 'disabled' });
+                    candidates.push({ a, key: state.key, own: false, scope: 'shared', engine: a.id, ceiling, provider: state.provider.key, managed: true, env: state.env, skipReason: 'disabled' });
                 continue;
             }
             const key = own?.apiKey || state.key;
             if (a.key_env && !key || a.setting && !state.env?.[a.setting]) continue;
-            const healthKey = own ? `${a.id}:${createHash('sha256').update(key).digest('hex')}` : a.id;
-            candidates.push({ a, key, own: Boolean(own), healthKey, ceiling, provider: state.provider?.key || null, managed: state.managed, env: state.env || env,
+            // The breaker's scope says whose key failed: a person's own key is its own circuit.
+            const scope = own ? 'k:' + createHash('sha256').update(key).digest('hex') : 'shared';
+            candidates.push({ a, key, own: Boolean(own), scope, engine: a.id, ceiling, provider: state.provider?.key || null, managed: state.managed, env: state.env || env,
                 skipReason: b.max_cost_usd != null && ceiling > b.max_cost_usd ? 'budget' : null });
         }
         // Once the person has an eligible key, fallback stays within their keys (0% Exchange fee).
         const cohort = candidates.some(c => c.own) ? candidates.filter(c => c.own) : candidates;
         // A cooldown is a skip in the receipt, not a disappearance; an explicit engine may still retry.
-        const selected = cohort.map(c => {
-            if (!c.skipReason && !(b.engine && b.engine !== 'auto') && health.has(c.healthKey)) c.skipReason = 'circuit_open';
-            return c;
-        });
+        const selected = [];
+        for (const c of cohort) {
+            if (!c.skipReason && !(b.engine && b.engine !== 'auto') && (await circuit.openUntil(c.scope, c.engine)) > now()) c.skipReason = 'circuit_open';
+            selected.push(c);
+        }
         const price = c => c.a.estimate ? c.a.estimate(b) : c.a.price_per_1000 == null ? c.ceiling : c.a.price_per_1000 / 1000;
         selected.sort((a, b) => price(a) - price(b));
         const runnable = selected.filter(c => !c.skipReason);
@@ -325,10 +334,12 @@ function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () =>
                     ? { url: plan.b.url, text: String(raw.text || '').slice(0, 200000), receipt: receipt(c.a.id, cost + incurred, start, [...attempts, attempt(c, 'ok', attemptStart, cost)]) }
                     : { results: normalize(Array.isArray(raw) ? raw : raw.rows, c.a.id, plan.kind, plan.b), receipt: receipt(c.a.id, cost + incurred, start, [...attempts, attempt(c, 'ok', attemptStart, cost)]) };
                 if (plan.kind !== 'fetch' && !validate(plan.kind === 'web' ? 'exchange.search-result@1' : 'exchange.image-result@1', out).valid) throw new Error('Invalid search response');
-                health.delete(c.healthKey);
+                await circuit.clear(c.scope, c.engine);
                 Object.defineProperty(out, CHARGE, { value: charge + (c.own ? 0 : cost) });
                 return out;
             } catch (error) {
+                // An upstream error can carry the request URL, and a request URL can carry the key.
+                redactError(error);
                 // A transport timeout or malformed successful response may already be billed.
                 // Keep its ceiling in both the fallback budget and receipt, rather than overspend.
                 const failedCost = attempted && !error.unbilled ? c.ceiling : 0;
@@ -336,8 +347,7 @@ function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () =>
                     : /usage is missing|Invalid engine cost|Invalid search response/.test(error.message || '') ? 'invalid_response' : 'upstream_error';
                 attempts.push(attempt(c, 'error', attemptStart, failedCost, reason));
                 if (failedCost) { incurred += failedCost; if (!c.own) charge += failedCost; }
-                health.set(c.healthKey, now() + 60000);
-                if (health.size > 1000) health.delete(health.keys().next().value);
+                await circuit.trip(c.scope, c.engine, now() + 60000);
             }
         }
         throw Object.assign(new AiError(503, 'search.unavailable', 'The selected engines did not answer', { attempts }), { [CHARGE]: charge });
