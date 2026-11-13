@@ -25,7 +25,10 @@ for (const kind of ['web', 'images', 'icons']) {
             ...properties,
             ...(kind === 'web' ? {} : {
                 license: { type: 'string', description: 'Exact licence filter; cc-by and by are equivalent. Unknown licences never pass commercial=true.' },
-                commercial: { type: 'boolean' }, format: { type: 'string' },
+                commercial: { type: 'boolean', description: 'Only results whose rights allow commercial use and are not unknown (web-image discovery never passes).' },
+                require_known_rights: { type: 'boolean', description: 'Drop results whose rights are unknown: web-image discovery, or a licence the catalog does not name.' },
+                allow_provider_license: { type: 'boolean', description: 'false keeps only open licences and public domain (no Unsplash, Pexels or Pixabay content licences).' },
+                format: { type: 'string' },
                 orientation: { type: 'string', enum: ['landscape', 'portrait', 'square'] },
                 size: { type: 'string', enum: ['small', 'medium', 'large'], description: 'Longest side: below 800px, 800–1999px, or 2000px and above. Missing dimensions do not match.' },
                 color: { type: 'string', enum: ['black_and_white', 'black', 'white', 'yellow', 'orange', 'red', 'purple', 'magenta', 'green', 'teal', 'blue'], description: 'Available through Unsplash. Requires a configured Unsplash key.' },

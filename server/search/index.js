@@ -52,8 +52,48 @@ function inputFor(kind, b) {
     if (b.upstream && !['google', 'bing', 'yandex'].includes(b.upstream)) throw invalid('upstream must be google, bing or yandex');
     if (b.purpose != null && !searchTerms.PURPOSES.includes(b.purpose)) throw invalid(`purpose must be one of ${searchTerms.PURPOSES.join(', ')}`);
     if (b.private != null && typeof b.private !== 'boolean') throw invalid('private must be true or false');
+    if (b.require_known_rights != null && typeof b.require_known_rights !== 'boolean') throw invalid('require_known_rights must be true or false');
+    if (b.allow_provider_license != null && typeof b.allow_provider_license !== 'boolean') throw invalid('allow_provider_license must be true or false');
     return { ...b, q: kind === 'fetch' ? undefined : b.q.trim(), limit: b.limit || 10 };
 }
+// ── Image rights (plan §W.2 step 1, 11-13) ─────────────────────────────────────────────────────────────────────────────
+// What a result says about reuse, kept apart from what it IS. A web-image discovery engine finds where a picture appears;
+// it grants nothing, so its rights are unknown and it never passes a known-rights or commercial request. A provider's own
+// content licence (Unsplash, Pexels, Pixabay) allows commercial use but is not an open licence: no standalone
+// redistribution, the provider's display rules (attribution, hotlinking, download tracking). An open catalog's result
+// carries the licence it claims (provider_claimed: the catalog did not verify it).
+const DISCOVERY_ENGINES = new Set(['brave-images', 'serper-images', 'serpapi-images', 'searchapi-images', 'serpapi-reverse', 'tineye']);
+const PROVIDER_LICENSES = {
+    unsplash: { attribution_required: true, hotlink_required: true },
+    pexels: { attribution_required: true, hotlink_required: false },
+    pixabay: { attribution_required: true, hotlink_required: false },
+};
+const SOFTWARE_LICENSES = /^(mit|apache(?:[ -]?2(?:\.0)?)?|isc|bsd(?:-\d-clause)?|ofl(?:-1\.1)?|mpl(?:-2\.0)?|gpl.*|lgpl.*|unlicense)$/;
+function rightsOf(engine, license, r = {}) {
+    const id = String(license || '').toLowerCase().trim().replace(/^cc[ -]/, '').replace(/[ -]v?\d+(?:\.\d+)*$/, '');
+    const base = { status: 'unknown', family: 'unknown', license_id: license == null ? null : String(license), commercial_use: null,
+        modifications: null, standalone_redistribution: null, attribution_required: false, hotlink_required: false,
+        download_tracking_url: r.download_location || null };
+    if (DISCOVERY_ENGINES.has(engine)) return { ...base, family: 'third_party', license_id: null };
+    if (PROVIDER_LICENSES[engine]) {
+        return { ...base, status: 'provider_claimed', family: 'provider_content_license', license_id: engine, commercial_use: true,
+            modifications: true, standalone_redistribution: false, ...PROVIDER_LICENSES[engine] };
+    }
+    const claimed = { ...base, status: 'provider_claimed' };
+    if (['0', 'cc0', 'pdm', 'publicdomain', 'public domain', 'public-domain', 'pd'].includes(id)) {
+        return { ...claimed, family: 'public_domain', commercial_use: true, modifications: true, standalone_redistribution: true };
+    }
+    const cc = /^by(-nc)?(-nd)?(-sa)?$/.exec(id) || /^by(-nc)?(-sa)?(-nd)?$/.exec(id);
+    if (cc) {
+        return { ...claimed, family: 'open_license', commercial_use: !/-nc/.test(id), modifications: !/-nd/.test(id),
+            standalone_redistribution: true, attribution_required: true };
+    }
+    if (SOFTWARE_LICENSES.test(id)) {
+        return { ...claimed, family: 'open_license', commercial_use: true, modifications: true, standalone_redistribution: true, attribution_required: true };
+    }
+    return { ...claimed, family: 'unknown' };
+}
+
 function normalize(rows, engine, kind, b) {
     const imageKind = kind !== 'web';
     let out = rows
@@ -68,6 +108,7 @@ function normalize(rows, engine, kind, b) {
                 width: dimension(r.width), height: dimension(r.height),
                 license: r.license == null ? null : String(r.license), author: r.author == null ? null : String(r.author),
                 attribution: r.attribution == null ? null : String(r.attribution),
+                ...(kind === 'images' || kind === 'icons' || kind === 'reverse_image' ? { rights: rightsOf(engine, r.license, r) } : {}),
             } : {}),
         }))
         .filter(r => r.url);
@@ -76,7 +117,7 @@ function normalize(rows, engine, kind, b) {
     // honour was already refused or skipped in prepare(), never silently dropped here.
     if (kind === 'images') {
         if (b.license) out = out.filter(r => licenseId(r.license) === licenseId(b.license));
-        if (b.commercial) out = out.filter(r => ['cc0', 'pdm', 'by', 'by-sa', 'unsplash', 'pexels', 'pixabay'].includes(licenseId(r.license)));
+        if (b.commercial) out = out.filter(r => r.rights.status !== 'unknown' && r.rights.commercial_use === true);
         if (b.format) out = out.filter(r => r.format === b.format || new URL(r.url).pathname.toLowerCase().endsWith('.' + b.format));
         if (b.orientation) out = out.filter(r => r.width && r.height && (b.orientation === 'square' ? r.width === r.height : b.orientation === 'portrait' ? r.height > r.width : r.width > r.height));
         if (b.size) out = out.filter(r => r.width && r.height && (b.size === 'small' ? Math.max(r.width, r.height) < 800 : b.size === 'medium' ? Math.max(r.width, r.height) >= 800 && Math.max(r.width, r.height) < 2000 : Math.max(r.width, r.height) >= 2000));
@@ -89,8 +130,12 @@ function normalize(rows, engine, kind, b) {
         if (b.style && b.style !== 'any') out = out.filter(r => r.style === b.style);
         if (b.format) out = out.filter(r => r.format === b.format || new URL(r.url).pathname.toLowerCase().endsWith('.' + b.format));
         if (b.license) out = out.filter(r => licenseId(r.license) === licenseId(b.license));
-        if (b.commercial) out = out.filter(r => ['cc0', 'pdm', 'by', 'by-sa'].includes(licenseId(r.license)));
+        if (b.commercial) out = out.filter(r => r.rights.status !== 'unknown' && r.rights.commercial_use === true);
     }
+    // Known rights only (Design, Website), and provider content licences only when the caller allows them (a template
+    // or a product for sale wants open licences or public domain).
+    if (imageKind && b.require_known_rights === true) out = out.filter(r => r.rights && r.rights.status !== 'unknown' && r.rights.family !== 'unknown');
+    if (imageKind && b.allow_provider_license === false) out = out.filter(r => r.rights && r.rights.family !== 'provider_content_license');
     const limited = kind === 'images' ? rankImages(out, b.limit) : out.slice(0, b.limit);
     return limited.map((r, i) => ({ ...r, rank: i + 1 }));
 }
@@ -340,4 +385,4 @@ function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () =>
     }
     return { engines, search, read, prepare, trackDownload, pixabayImage };
 }
-module.exports = { createSearch, adapters, credentialId, CHARGE };
+module.exports = { createSearch, adapters, credentialId, CHARGE, rightsOf };
