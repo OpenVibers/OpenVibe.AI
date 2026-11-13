@@ -66,17 +66,20 @@ t.test('the Exchange chat path (complete) gets the same reasoning room', async (
     assert.strictEqual(out.result.text, answer);
 });
 
-t.test('without the reserve the same 48 tokens are all reasoning and the answer is empty', async () => {
+t.test('without the reserve the same 48 tokens are all reasoning: the empty answer is a failed attempt, not a success', async () => {
     await h.registry.upsertModel({
         provider_key: 'deepseek', model_key: 'deepseek-flash', display_name: 'DeepSeek V4.1 Flash', type: 'chat',
         supports: { json: true, tools: true, streaming: true }, cost: { in_per_mtok: 0.3, out_per_mtok: 1.2 },
         metadata: { reasoning: true },
     }, { actor: 'test' });
-    const out = await h.pool.execute(route, 'chat', { messages: MESSAGES, maxTokens: 48, timeoutMs: 3000 },
-        { routeKey: route.key, routeVersion: route.version });
+    // The reproduction of the production run (11-10 to 11-13): the model spends the room on reasoning and answers
+    // nothing. The router counts that as a failed attempt (provider.empty), so with no other offer the call fails
+    // instead of handing back an empty "success".
+    await assert.rejects(
+        () => h.pool.execute(route, 'chat', { messages: MESSAGES, maxTokens: 48, timeoutMs: 3000 }, { routeKey: route.key, routeVersion: route.version }),
+        (err) => /could answer/.test(err.message),
+    );
     assert.strictEqual(srv.last.max_tokens, 48, 'no reserve means no extra room');
-    assert.strictEqual(out.result.text, '', 'the reproduction of the production run');
-    assert.strictEqual(out.usage.output, 0);
 });
 
 t.test('the seed puts the reasoning room on the model, not on every provider', async () => {
