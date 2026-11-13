@@ -116,7 +116,9 @@ function usageCallsRouter({ db, pool, config, auth, clock = { now: () => Date.no
                     rejected.push({ index, error: 'run_id or turn_id is required' });
                     continue;
                 }
-                const key = call.run_id ? `run:${call.run_id}` : `turn:${call.turn_id}`;
+                // The key names the calling service too, so one product's ids can never block another's report.
+                const caller = String((req.principal && req.principal.sub) || 'unknown');
+                const key = `${caller}|${call.run_id ? `run:${call.run_id}` : `turn:${call.turn_id}`}`;
                 const rec = await recordFor(req, call);
                 let duplicate = false;
                 await db.tx(async () => {

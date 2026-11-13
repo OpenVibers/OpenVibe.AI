@@ -76,6 +76,9 @@ t.test('the same report twice is recorded once and counted as a duplicate', asyn
     assert.strictEqual(second.status, 202, second.text);
     assert.deepStrictEqual(second.body, { accepted: 0, duplicates: 1, rejected: [] });
     assert.strictEqual((await calls()).filter((p) => p.run_id === 'run_REPORT0000000000000000002').length, 1, 'one event, not two');
+    // Another service's report with the same ids is its own call: one product can never block another's.
+    const other = await request(h.base, 'POST', '/api/v1/usage/calls', { tok: plain, body });
+    assert.deepStrictEqual(other.body, { accepted: 1, duplicates: 0, rejected: [] }, other.text);
 });
 
 t.test('a token that does not act for the person keeps no subject; no rate card means unknown with zeros', async () => {

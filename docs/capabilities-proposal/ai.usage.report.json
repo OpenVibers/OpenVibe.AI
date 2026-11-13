@@ -1,0 +1,21 @@
+{
+  "id": "ai.usage.report",
+  "version": "1.0",
+  "owner": "ai",
+  "status": "active",
+  "visibility": "internal",
+  "description": "Report AI calls a product made without OpenVibe.AI (ai.call-report@1). AI prices each call, records it once by system and run or turn id, and publishes it as ai.call.recorded@1.",
+  "permissions": [
+    "ai:write"
+  ],
+  "resourceConstraints": [
+    "none"
+  ],
+  "quotaClass": "ai-write",
+  "events": [
+    "ai.call.recorded"
+  ],
+  "implementedBy": [
+    "POST /api/v1/usage/calls"
+  ]
+}
