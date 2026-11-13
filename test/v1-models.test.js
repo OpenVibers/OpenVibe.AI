@@ -166,6 +166,23 @@ t.test('both protocols list the real models and the dynamic aliases', async () =
     assert.deepStrictEqual([one.status, one.body.id, one.body.display_name], [200, ALPHA_ID, 'alpha-1']);
 });
 
+t.test('every model lists the twelve features from the registry; unknown is null, never guessed', async () => {
+    const r = await request(h.base, 'GET', '/v1/models', { tok: service });
+    assert.strictEqual(r.status, 200, r.text);
+    const keys = ['audio_in', 'audio_out', 'batch', 'files', 'logprobs', 'prompt_caching', 'realtime', 'reasoning_effort', 'streaming', 'structured_output', 'tools', 'vision'];
+    for (const m of r.body.data) {
+        assert.deepStrictEqual(Object.keys(m.features || {}).sort(), [...keys].sort(), `${m.id} carries every feature`);
+        for (const [key, value] of Object.entries(m.features)) assert.ok(value === null || typeof value === 'boolean', `${m.id}.${key}`);
+    }
+    const alpha = r.body.data.find((m) => m.id === ALPHA_ID);
+    assert.deepStrictEqual([alpha.features.tools, alpha.features.structured_output, alpha.features.vision, alpha.features.streaming, alpha.features.prompt_caching],
+        [true, true, false, true, true], 'the registry support flags and the cache price');
+    assert.deepStrictEqual([alpha.features.audio_in, alpha.features.audio_out, alpha.features.reasoning_effort, alpha.features.logprobs, alpha.features.batch, alpha.features.realtime, alpha.features.files],
+        [null, null, null, null, null, null, null], 'nothing said is null');
+    const alias = r.body.data.find((m) => m.id === 'openvibe/auto');
+    assert.ok(Object.values(alias.features).every((value) => value === null), 'a dynamic alias is not one model, so every feature is unknown');
+});
+
 t.test('an exact id runs only that artifact; an alias is dynamic and says which model answered', async () => {
     alpha.calls.length = 0; beta.calls.length = 0; gamma.calls.length = 0;
     const exact = await chat(ALPHA_ID);
@@ -270,6 +287,7 @@ t.test('flag off: the legacy single model and no disclosure, exactly as before',
     try {
         const list = await request(off.base, 'GET', '/v1/models', { tok: service });
         assert.deepStrictEqual(list.body.data.map((m) => m.id), ['openvibe']);
+        assert.ok(list.body.data[0].features && Object.values(list.body.data[0].features).every((value) => value === null), 'the legacy virtual model has the feature matrix, all unknown');
         const anthropic = await request(off.base, 'GET', '/v1/models', { tok: service, headers: { 'anthropic-version': '2023-06-01' } });
         assert.deepStrictEqual(anthropic.body.data.map((m) => m.id), ['openvibe']);
         const res = await request(off.base, 'POST', '/v1/chat/completions', { tok: service, body: { model: 'not-a-catalog-id', messages: [{ role: 'user', content: 'hi' }] } });

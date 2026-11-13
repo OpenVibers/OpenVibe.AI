@@ -115,6 +115,39 @@ function availabilityOf(row, provider) {
     return 'available';
 }
 
+/**
+ * The feature matrix of one model, from what the registry and its provider declare. A feature is true or
+ * false only when a registry field says so; an absent field is null (unknown), never a guess from the
+ * model's name or another model on the same provider. The twelve keys are the OpenAI-compatible
+ * `features` object of GET /v1/models (server/api/models.js).
+ */
+const FEATURE_KEYS = ['tools', 'structured_output', 'vision', 'audio_in', 'audio_out', 'reasoning_effort',
+    'prompt_caching', 'logprobs', 'streaming', 'batch', 'realtime', 'files'];
+function featuresOf(row, provider) {
+    const support = (row && row.supports) || {};
+    const meta = (row && row.metadata) || {};
+    const caps = new Set((provider && provider.capabilities) || []);
+    const bool = (v) => (typeof v === 'boolean' ? v : null);
+    const type = (row && row.type) || 'chat';
+    const cost = (row && row.cost) || {};
+    return {
+        tools: bool(support.tools),
+        structured_output: bool(support.json),
+        vision: type === 'vision' ? true : bool(support.vision),
+        // The registry's type is the only fact about audio: an stt model takes audio in, a speech model
+        // gives it out. A chat model's audio is unknown unless its row says so.
+        audio_in: type === 'stt' ? true : bool(meta.audio_in),
+        audio_out: type === 'speech' ? true : bool(meta.audio_out),
+        reasoning_effort: bool(meta.reasoning_effort) ?? (meta.reasoning === true ? true : null),
+        prompt_caching: bool(meta.prompt_caching) ?? (cost.cached_per_mtok == null ? null : true),
+        logprobs: bool(meta.logprobs) ?? (caps.has('logprobs') ? true : null),
+        streaming: bool(support.streaming),
+        batch: bool(meta.batch) ?? (caps.has('batch') || (provider && provider.metadata && provider.metadata.tier_rates && provider.metadata.tier_rates.batch != null) ? true : null),
+        realtime: bool(meta.realtime) ?? (caps.has('realtime') ? true : null),
+        files: bool(meta.files) ?? (caps.has('files') ? true : null),
+    };
+}
+
 /** Owner price override and provider markup are the final retail rate, while the stored row remains the accepted base price. */
 function effectiveCost(row, provider) {
     const override = row && row.metadata && row.metadata.owner_override && row.metadata.owner_override.cost;
@@ -147,6 +180,7 @@ function entryOf(row, provider) {
         },
         supports: { ...row.supports },
         metadata: meta,
+        features: featuresOf(row, provider),
         created_at: row.created_at || null,
         updated_at: row.updated_at || null,
         availability: availabilityOf(row, provider),
@@ -256,6 +290,6 @@ async function disclosureOf({ registry, run }) {
 }
 
 module.exports = {
-    ACCESS, MANAGED_ACCESS, ALIASES, EXACT_ID,
-    accessOf, managedAccessAllowed, artifactOf, entryOf, entries, exactOffers, select, facts, disclosureOf, retailRate, kindOf,
+    ACCESS, MANAGED_ACCESS, ALIASES, EXACT_ID, FEATURE_KEYS,
+    accessOf, managedAccessAllowed, artifactOf, entryOf, entries, exactOffers, select, facts, disclosureOf, retailRate, kindOf, featuresOf,
 };

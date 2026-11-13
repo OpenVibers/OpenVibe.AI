@@ -118,6 +118,8 @@ async function seedPoolProviders({ registry, actor = 'system', env = process.env
             const metadata = { ...defaults.metadata, ...prev.metadata, search_adapters: [...new Set([...(prev.metadata.search_adapters || []), ...(defaults.metadata.search_adapters || [])])] };
             if (p.key === 'gemini' && prev.base_url === p.base_url && prev.metadata.models_endpoint === `${p.base_url}/models`)
                 metadata.models_endpoint = defaults.metadata.models_endpoint;
+            // The free tier is a dated reading of the provider's own page: a newer reading replaces the one the row kept.
+            if (defaults.metadata.free_tier) metadata.free_tier = defaults.metadata.free_tier;
             if (!configured && prev.base_url !== p.base_url) {
                 metadata.models_endpoint = defaults.metadata.models_endpoint;
                 metadata.api_family = defaults.metadata.api_family;

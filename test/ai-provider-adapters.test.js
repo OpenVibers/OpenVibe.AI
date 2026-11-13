@@ -137,6 +137,14 @@ t.test('every free tier states availability, its own page and the day it was rea
         assert.strictEqual(p.free_tier.checked, '2026-11-12', `${p.key} free tier checked`);
     }
     assert.strictEqual(pool.byKey.get('groq').free_tier.limits.rpm, 30, 'Groq free plan is 30 RPM');
+    // Gemini 4 Hydrogen (2026-11-12): free on a free key, but Google trains on the free tier, so the policy says it trains
+    // and the label is never private: a run that asks for privacy never lands on it.
+    const hydrogen = pool.priceOf('gemini', 'gemini-4-hydrogen');
+    assert.deepStrictEqual([hydrogen.cost.in_per_mtok, hydrogen.cost.cached_per_mtok, hydrogen.cost.out_per_mtok], [1.50, 0.075, 7.50]);
+    assert.strictEqual(pool.byKey.get('gemini').free_tier.trains_on_free, true);
+    assert.match(pool.byKey.get('gemini').free_tier.summary, /Hydrogen among them/);
+    assert.strictEqual(pool.byKey.get('gemini').data_policy.trains, true);
+    assert.strictEqual(privacy.labelFor({ record: { metadata: { data_policy: pool.byKey.get('gemini').data_policy } } }).label, 'anonymized');
 });
 
 t.test('the seed writes the privacy label, the quantization and the refusal rate into the registry', async () => {
@@ -162,6 +170,11 @@ t.test('the seed writes the privacy label, the quantization and the refusal rate
     assert.strictEqual(models.get('refuseless/deepseek-v4.1-flash-abliterated').cost.in_per_mtok, null);
     assert.strictEqual(models.get('abliteration/abliterated-model').cost.in_per_mtok, 1.00);
     assert.strictEqual(models.get('abliteration/abliterated-model').metadata.privacy.label, 'private');
+    // A newer reading of a free tier replaces the one a catalogue row kept.
+    saved.set('gemini', { ...saved.get('gemini'), origin: 'catalog', metadata: { ...saved.get('gemini').metadata, free_tier: { summary: 'an older reading', checked: '2026-11-01' } } });
+    await seed.seedPoolProviders({ registry });
+    assert.strictEqual(saved.get('gemini').metadata.free_tier.checked, '2026-11-12', 'the catalogue\'s newer free tier wins');
+    assert.strictEqual(models.get('gemini/gemini-4-hydrogen').cost.in_per_mtok, 1.50);
     // The owner edits a provider: a second seed never touches its row.
     saved.set('qwen', { ...saved.get('qwen'), origin: 'admin', base_url: 'https://proxy.example/v1' });
     const again = await seed.seedPoolProviders({ registry });

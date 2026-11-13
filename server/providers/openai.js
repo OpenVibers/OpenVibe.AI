@@ -146,6 +146,8 @@ function createOpenAiProvider(record, { apiKey = '', fetchImpl = globalThis.fetc
         form.append('model', req.model);
         form.append('response_format', 'verbose_json');
         if (req.language && req.language !== 'auto') form.append('language', req.language);
+        if (req.prompt) form.append('prompt', String(req.prompt).slice(0, 1000));
+        if (req.temperature != null) form.append('temperature', String(req.temperature));
         let res;
         try {
             res = await fetchImpl(`${baseUrl}/audio/transcriptions`, { method: 'POST', headers: headers(), body: form, signal: deadline(req.signal, req.timeoutMs) });

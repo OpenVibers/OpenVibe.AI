@@ -5,6 +5,7 @@
  * and attribution as any product workflow — the convenience routes are thin, not a second engine.
  */
 const { PASSTHROUGH_OUTPUT } = require('./live');
+const { CITES } = require('./common-schemas');
 
 const STR = (n) => ({ type: 'string', maxLength: n });
 const OBJ = (props, required = []) => ({ type: 'object', additionalProperties: false, required, properties: props });
@@ -117,6 +118,43 @@ const workflows = [
         input_schema: OBJ({ compat_routing: { type: 'object' }, max_cost_usd: COMMON.max_cost_usd, input: { anyOf: [STR(32000), { type: 'array', minItems: 1, maxItems: 64, items: STR(32000) }] } }, ['input']),
         output_schema: OBJ({ vectors: { type: 'array', items: { type: 'array', items: { type: 'number' } } }, dimensions: { type: 'integer' } }, ['vectors', 'dimensions']),
         steps: [{ kind: 'embed', route: 'default.embedding' }], cache_mode: 'private',
+    },
+    {
+        // POST /v1/audio/transcriptions (server/api/compat-extra.js): the caller's audio (multipart, a base64
+        // data: URL here) spoken to text by the router's transcribe route. The prompt and temperature are the
+        // caller's, passed to the provider that supports them; the audio is never kept (retain_input false).
+        key: 'ai.transcribe', name: 'Speech-to-text (OpenAI-compatible)', namespace: 'ai',
+        input_schema: OBJ({
+            audio: OBJ({ data_url: STR(6 * 1024 * 1024), mime: STR(80) }, ['data_url']),
+            language: STR(8),
+            prompt: STR(1000),
+            temperature: { type: ['number', 'null'], minimum: 0, maximum: 1 },
+            max_cost_usd: COMMON.max_cost_usd,
+        }, ['audio']),
+        output_schema: OBJ({
+            text: STR(400000),
+            language: STR(8),
+            segments: { type: 'array', maxItems: 10000, items: OBJ({ start: { type: 'number' }, end: { type: 'number' }, text: STR(10000) }, ['start', 'end', 'text']) },
+        }, ['text']),
+        steps: [{ kind: 'transcribe', route: 'live.stt' }],
+        cache_mode: 'none', metadata: { seed: true, retain_input: false },
+    },
+    {
+        // POST /v1/moderations (server/api/compat-extra.js): the moderation.classify template's fixed
+        // classification prompt, under its own key so the caller's text is not kept (retain_input false).
+        key: 'ai.moderate', name: 'Moderation (OpenAI-compatible)', namespace: 'ai',
+        input_schema: OBJ({ text: STR(8000), context: STR(1000) }, ['text']),
+        output_schema: OBJ({
+            labels: { type: 'array', maxItems: 8, items: { enum: ['threat', 'minors', 'doxxing', 'harassment', 'spam', 'sexual', 'self_harm', 'none'] } },
+            action: { enum: ['allow', 'review', 'block'] },
+            severity: { enum: ['none', 'low', 'medium', 'high'] },
+            rationale: STR(1000),
+            spans: { type: 'array', maxItems: 20, items: OBJ({ quote: STR(500), label: STR(40) }, ['quote', 'label']) },
+            citations: CITES,
+        }, ['labels', 'action', 'severity']),
+        default_route: 'moderation.classify',
+        steps: [{ kind: 'llm', template: 'moderation.classify', operation: 'classify', output: 'json', prepare: 'sources', cite: true, params: { max_tokens: 2400, temperature: 0.3 } }],
+        cache_mode: 'none', metadata: { seed: true, internal: true, retain_input: false },
     },
     {
         // The OpenAI-compatible endpoint (POST /v1/chat/completions, server/api/openai.js): the caller's Chat Completions

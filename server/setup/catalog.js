@@ -142,6 +142,8 @@ const STEPS = Object.freeze([
             { why: 'cheapest that looks good' }),
         alternatives: [
             offer('altare', 'glm-5.3', 'GLM-5.3 on Altare', tokenPrice(1.4, 4.4, 0.26), SOURCES.altare, { why: 'free until December 1', note: ALTARE_NOTE }),
+            offer('gemini', 'gemini-4-hydrogen', 'Gemini 4 Hydrogen', tokenPrice(1.5, 7.5, 0.075), SOURCES.gemini, { why: 'free tier, 1M context',
+                note: 'Free on a free AI Studio key, but Google uses the free tier\'s prompts and answers to improve its products: public or synthetic work only (Bench, public repos), never a person\'s code. Paid is $1.50 in / $7.50 out per 1M.' }),
             offer('openai', 'gpt-5-mini', 'GPT-5 mini', tokenPrice(0.25, 2), SOURCES.openaiImages),
             offer('anthropic', 'claude-opus-5-5', 'Claude Opus 5.5', tokenPrice(4, 20, 0.2), 'https://platform.claude.com/docs/en/models/opus-5-5/overview'),
         ],

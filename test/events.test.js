@@ -7,11 +7,12 @@ const contracts = require('openvibe-contracts');
 process.env.EVENTS_URL = 'http://127.0.0.1:9';           // unreachable: rows stay in the outbox
 process.env.OV_OAUTH_CLIENT_SECRET = 'ai-secret-for-tests';
 process.env.OV_NETWORK_INTERNAL_URL = 'http://127.0.0.1:9';
-const { boot, request, token, suite, tmpDir, ALL } = require('./helpers');
+const { boot, request, token, suite, tmpDir, seamServer, ALL } = require('./helpers');
 
 const t = suite('events');
 const live = token('live', ALL);
 let h;
+let seam;
 const queued = async () => (await h.db.prepare('SELECT envelope FROM event_outbox ORDER BY id').all()).map((r) => (typeof r.envelope === 'string' ? (typeof r.envelope === 'string' ? (typeof r.envelope === 'string' ? JSON.parse(r.envelope) : r.envelope) : r.envelope) : r.envelope));
 const valid = (env) => { const r = contracts.validate(`${env.event_type}@1`, env.payload); assert.ok(r.valid, `${env.event_type}: ${JSON.stringify(r.errors)}`); };
 // The ai.call.recorded schema rides with the contracts release that is not out yet: until it is, the shape is checked here.
@@ -127,6 +128,56 @@ t.test('a refused own key queues ai.credential.failed, never the key (L36 Y8)', 
     try { contracts.resolve('ai.credential.failed@1'); } catch { known = false; }
     if (known) valid(ev);   // the schema arrives with openvibe-contracts 0.257.0
     assert.ok(!JSON.stringify(ev).includes('sk-'), 'no key');
+});
+
+t.test('a streamed run says so, and how fast, on its ai.call.recorded', async () => {
+    const res = await fetch(`${h.base}/v1/chat/completions`, {
+        method: 'POST', headers: { Authorization: `Bearer ${live}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: 'openvibe', stream: true, messages: [{ role: 'user', content: 'stream this answer' }] }),
+    });
+    assert.strictEqual(res.status, 200);
+    await res.text();
+    const usage = (await queued()).filter((e) => e.event_type === 'ai.call.recorded').at(-1);
+    validUsage(usage);
+    assert.strictEqual(usage.payload.streamed, true, 'the deltas went to the caller');
+    assert.strictEqual(usage.payload.operation, 'chat', 'the Chat Completions operation');
+    assert.strictEqual(usage.payload.task, 'ai.complete', 'the workflow it served');
+    assert.strictEqual(usage.payload.task_id, usage.payload.run_id, 'a run is its own task');
+    assert.strictEqual(usage.payload.cache_hit, false);
+    assert.ok(usage.payload.tps === null || usage.payload.tps > 0, 'TPS is measured or null, never negative');
+});
+
+t.test('a failed run carries the failed attempt class and the fallbacks before it', async () => {
+    seam = await seamServer(() => ({ status: 429, body: { error: { message: 'too many requests: rate limit', type: 'rate_limit_error' } } }));
+    const p = await request(h.base, 'POST', '/api/v1/providers', { tok: live, body: {
+        key: 'bad', kind: 'http', auth_mode: 'none', base_url: seam.url, default_model: 'bad-1',
+        capabilities: ['chat', 'generate', 'json'], timeout_ms: 5000 } });
+    assert.strictEqual(p.status, 201, p.text);
+    const m = await request(h.base, 'POST', '/api/v1/models', { tok: live, body: {
+        provider_key: 'bad', model_key: 'bad-1', type: 'chat', cost: { in_per_mtok: 1, out_per_mtok: 1 } } });
+    assert.strictEqual(m.status, 201, m.text);
+    const routed = await request(h.base, 'POST', '/api/v1/routes/default.chat/versions', { tok: live, body: {
+        primary: { provider: 'bad', model: 'bad-1' }, fallbacks: [], timeout_ms: 5000 } });
+    assert.strictEqual(routed.status, 201, routed.text);
+    await request(h.base, 'POST', '/api/v1/providers/stub/disable', { tok: live });
+    try {
+        const r = await request(h.base, 'POST', '/api/v1/runs?wait=5000', { tok: live, body: {
+            workflow: 'ai.generate', input: { prompt: 'this will be rate limited' }, options: { cache: false } } });
+        assert.strictEqual(r.status, 201, r.text);
+        assert.strictEqual(r.body.run.status, 'failed', r.text);
+        const usage = (await queued()).find((e) => e.event_type === 'ai.call.recorded' && e.payload.run_id === r.body.run.id);
+        assert.ok(usage, 'the failed run has its usage record');
+        validUsage(usage);
+        assert.strictEqual(usage.payload.outcome, 'failed');
+        assert.strictEqual(usage.payload.error_class, 'rate_limited', '429 from the provider is rate_limited');
+        assert.ok(usage.payload.fallbacks >= 1, 'the failed offers before the answer are counted');
+        assert.strictEqual(usage.payload.operation, 'chat');
+        assert.strictEqual(usage.payload.task, 'ai.generate');
+        assert.strictEqual(usage.payload.task_id, r.body.run.id);
+    } finally {
+        await request(h.base, 'POST', '/api/v1/providers/stub/enable', { tok: live });
+        await seam.close();
+    }
 });
 
 t.test('close() stops the ai.run.* relay (unsent rows stay in the outbox)', async () => {
