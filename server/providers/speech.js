@@ -10,6 +10,10 @@
  *   polly        Amazon Polly (`POST polly.{region}.amazonaws.com/v1/speech`, SigV4-signed).
  *                Auth is the access key id (`AI_POLLY_ACCESS_KEY_ID`, the record's secret_ref) plus
  *                `AI_POLLY_SECRET_ACCESS_KEY` and `AI_POLLY_REGION` (default `us-east-1`).
+ *   elevenlabs   ElevenLabs (`POST api.elevenlabs.io/v1/text-to-speech/{voice_id}`), the key in the
+ *                `xi-api-key` header. The voice is the account's own: ElevenLabs replaces its default
+ *                voices and their ids expire, so the voice is read from the account's voice list
+ *                (`GET /v2/voices`) by name, once, and remembered.
  *
  * Voices are Chat's voice ids, one to one (so Chat can switch without anyone hearing a difference):
  * `voice` names the entry below, and the entry names the provider, the provider's own voice and the
@@ -34,6 +38,10 @@ const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 // List price, USD per million characters, per provider voice tier (read 2026-11-10, see above).
 const GOOGLE_PRICE = { standard: 4, wavenet: 4, neural2: 16, studio: 160, journey: 16 };
 const POLLY_PRICE = { standard: 4, neural: 16, 'long-form': 100, generative: 30 };
+// ElevenLabs bills the API per character, not per plan credit: $0.08 per 1,000 characters for the
+// multilingual models and $0.04 for Flash and Turbo (elevenlabs.io/pricing/api, read 2026-11-13).
+// The rate cards price `in_per_mtok` as dollars per million characters for these models.
+const ELEVEN_PRICE = { 'multilingual-v2': 80, turbo: 40, flash: 40 };
 
 const googleTierOf = (name) => {
     const n = String(name || '');
@@ -96,16 +104,20 @@ const VOICES = {
     pl_ruth_long: { provider: 'polly', voiceId: 'Ruth', engine: 'long-form', locale: 'en-US' },
     pl_matthew_gen: { provider: 'polly', voiceId: 'Matthew', engine: 'generative', locale: 'en-US' },
     pl_ruth_gen: { provider: 'polly', voiceId: 'Ruth', engine: 'generative', locale: 'en-US' },
+    // ElevenLabs' voices are named, not numbered: the account's own voice list is the authority,
+    // because ElevenLabs replaces its default voices over time and the old ids expire.
+    eleven_voice: { provider: 'elevenlabs', voiceName: null, engine: 'multilingual-v2', locale: 'en-US', gender: 'FEMALE', label: 'ElevenLabs voice' },
 };
 for (const [id, v] of Object.entries(VOICES)) {
     v.id = id;
-    v.price_per_million_chars_usd = v.provider === 'google-tts' ? GOOGLE_PRICE[googleTierOf(v.voice)] : POLLY_PRICE[v.engine];
+    v.price_per_million_chars_usd = v.provider === 'google-tts' ? GOOGLE_PRICE[googleTierOf(v.voice)]
+        : v.provider === 'elevenlabs' ? ELEVEN_PRICE[v.engine] : POLLY_PRICE[v.engine];
 }
 
 const FORMATS = {
-    mp3: { google: 'MP3', polly: 'mp3', mime: 'audio/mpeg' },
-    ogg_opus: { google: 'OGG_OPUS', polly: 'ogg_vorbis', mime: 'audio/ogg' },
-    wav: { google: 'LINEAR16', polly: 'pcm', mime: 'audio/wav' },
+    mp3: { google: 'MP3', polly: 'mp3', elevenlabs: 'mp3_44100_128', mime: 'audio/mpeg' },
+    ogg_opus: { google: 'OGG_OPUS', polly: 'ogg_vorbis', elevenlabs: 'opus_48000_128', mime: 'audio/ogg' },
+    wav: { google: 'LINEAR16', polly: 'pcm', elevenlabs: 'pcm_44100', mime: 'audio/wav' },
 };
 
 const payoffOf = (err, def) => { throw err instanceof ProviderError ? err : new ProviderError(def, { code: 'provider.unreachable' }); };
@@ -177,6 +189,7 @@ function createSpeechProvider(record, { apiKey = '', fetchImpl = globalThis.fetc
     // production calls the providers' own hosts.
     const googleBase = String(env.AI_GOOGLE_TTS_BASE_URL || 'https://texttospeech.googleapis.com').replace(/\/+$/, '');
     const pollyBase = String(env.AI_POLLY_BASE_URL || '').replace(/\/+$/, '');
+    const elevenBase = String(record.base_url || env.AI_ELEVENLABS_BASE_URL || 'https://api.elevenlabs.io').replace(/\/+$/, '');
     const svcAccount = () => {
         const raw = env.AI_GOOGLE_TTS_SERVICE_ACCOUNT_JSON || '';
         if (!raw) return null;
@@ -228,6 +241,71 @@ function createSpeechProvider(record, { apiKey = '', fetchImpl = globalThis.fetc
         }
     }
 
+    /** The ElevenLabs model of a voice entry's engine. */
+    const ELEVEN_MODELS = { 'multilingual-v2': 'eleven_multilingual_v2', turbo: 'eleven_turbo_v2_5', flash: 'eleven_flash_v2_5' };
+
+    /**
+     * The account's own voice list, read once and remembered. ElevenLabs replaces its default voices
+     * and their ids expire, so the account's list is the only authority on which voice is there today:
+     * the entry's voice by name, else the account's first premade voice.
+     */
+    let elevenVoiceCache = null;
+    async function elevenVoiceId(entry) {
+        if (!elevenVoiceCache) {
+            const ctrl = new AbortController();
+            const timer = setTimeout(() => ctrl.abort(), 20000);
+            let res;
+            try {
+                res = await fetchImpl(`${elevenBase}/v2/voices?page_size=100`, {
+                    headers: { 'xi-api-key': apiKey, accept: 'application/json' }, signal: ctrl.signal,
+                });
+            } catch (err) {
+                throw new ProviderError(`elevenlabs voice list failed: ${String((err && err.message) || err).slice(0, 160)}`, { code: 'provider.unreachable' });
+            } finally { clearTimeout(timer); }
+            const text = await res.text().catch(() => '');
+            if (!res.ok) throw new ProviderError(`elevenlabs voice list HTTP ${res.status}: ${text.slice(0, 200)}`, { status: res.status, code: res.status === 401 || res.status === 403 ? 'provider.auth' : 'provider.http' });
+            let j = {};
+            try { j = text ? JSON.parse(text) : {}; } catch { j = {}; }
+            elevenVoiceCache = Array.isArray(j.voices) ? j.voices : [];
+        }
+        const list = elevenVoiceCache;
+        if (!list.length) throw new ProviderError('elevenlabs account has no voices', { code: 'provider.output' });
+        if (entry.voiceName) {
+            const named = list.find((v) => String(v.name || '').toLowerCase() === String(entry.voiceName).toLowerCase());
+            if (!named || !named.voice_id) throw new ProviderError(`elevenlabs has no voice named ${entry.voiceName}`, { code: 'provider.model' });
+            return String(named.voice_id);
+        }
+        const premade = list.find((v) => v.category === 'premade') || list[0];
+        if (!premade || !premade.voice_id) throw new ProviderError('elevenlabs account has no voice to speak with', { code: 'provider.output' });
+        return String(premade.voice_id);
+    }
+
+    /** One line in one ElevenLabs voice: POST /v1/text-to-speech/{voice_id}, the key in xi-api-key. */
+    async function speakEleven(entry, { text, format, speed, timeoutMs, signal }) {
+        const f = FORMATS[format] || FORMATS.mp3;
+        const voiceId = await elevenVoiceId(entry);
+        const body = JSON.stringify({
+            text, model_id: ELEVEN_MODELS[entry.engine] || ELEVEN_MODELS['multilingual-v2'],
+            ...(speed && Number(speed) !== 1 ? { voice_settings: { speed: Number(speed) } } : {}),
+        });
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), Math.max(1000, Number(timeoutMs) || 60000));
+        let res;
+        try {
+            res = await fetchImpl(`${elevenBase}/v1/text-to-speech/${encodeURIComponent(voiceId)}?output_format=${f.elevenlabs}`, {
+                method: 'POST', headers: { 'xi-api-key': apiKey, 'Content-Type': 'application/json', accept: 'audio/mpeg' },
+                body, signal: signal ? AbortSignal.any([signal, ctrl.signal]) : ctrl.signal,
+            });
+        } catch (err) {
+            throw new ProviderError(`elevenlabs request failed: ${String((err && err.message) || err).slice(0, 200)}`, { code: err && err.name === 'AbortError' ? 'provider.timeout' : 'provider.unreachable' });
+        } finally { clearTimeout(timer); }
+        if (!res.ok) {
+            const raw = await res.text().catch(() => '');
+            throw new ProviderError(`elevenlabs HTTP ${res.status}: ${raw.slice(0, 300)}`, { status: res.status, code: res.status === 401 || res.status === 403 ? 'provider.auth' : 'provider.http' });
+        }
+        return { audio: Buffer.from(await res.arrayBuffer()), mimeType: f.mime };
+    }
+
     /**
      * Synthesize one line. req: { voice (a VOICES id), text, format, speed, model, timeoutMs, signal }.
      * → { audio (Buffer), mimeType, model, usage }. usage.input carries the characters (the rate
@@ -240,7 +318,9 @@ function createSpeechProvider(record, { apiKey = '', fetchImpl = globalThis.fetc
         if (entry.provider !== kind) throw new ProviderError(`voice ${entry.id} is not a ${kind} voice`, { code: 'provider.model' });
         const text = String(req.text || '');
         if (!text.trim()) throw new ProviderError('speech needs text', { code: 'provider.input' });
-        const out = entry.provider === 'google-tts' ? await speakGoogle(entry, req) : await speakPolly(entry, req);
+        const out = entry.provider === 'google-tts' ? await speakGoogle(entry, req)
+            : entry.provider === 'elevenlabs' ? await speakEleven(entry, req)
+            : await speakPolly(entry, req);
         const characters = text.length;
         return { ...out, model: entry.id, usage: { input: characters, output: 0, cached: 0, characters } };
     }
@@ -248,4 +328,4 @@ function createSpeechProvider(record, { apiKey = '', fetchImpl = globalThis.fetc
     return { key: record.key, kind: 'speech', synthetic: false, speak, supports: (f) => f === 'speak' };
 }
 
-module.exports = { createSpeechProvider, VOICES, FORMATS, googleTierOf, GOOGLE_PRICE, POLLY_PRICE, GOOGLE_ENDPOINT };
+module.exports = { createSpeechProvider, VOICES, FORMATS, googleTierOf, GOOGLE_PRICE, POLLY_PRICE, ELEVEN_PRICE, GOOGLE_ENDPOINT };

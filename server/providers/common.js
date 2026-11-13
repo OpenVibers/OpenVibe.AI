@@ -48,6 +48,30 @@ async function postJson(url, headers, body, { signal, timeoutMs = 30000, fetchIm
 }
 
 /**
+ * A GET with the same timeout, cancellation and error mapping as postJson: the JSON answers that
+ * arrive on their own address (a provider's polling url, a generation's status).
+ */
+async function getJson(url, headers = {}, { signal, timeoutMs = 30000, fetchImpl = globalThis.fetch } = {}) {
+    let res;
+    try {
+        res = await fetchImpl(url, { method: 'GET', headers: { Accept: 'application/json', ...headers }, signal: deadline(signal, timeoutMs) });
+    } catch (err) {
+        throw describeAbort(err, signal, timeoutMs) || new ProviderError(`connection failed: ${err.message}`, { code: 'provider.unreachable' });
+    }
+    let text;
+    try { text = await res.text(); } catch (err) {
+        throw describeAbort(err, signal, timeoutMs) || new ProviderError(`read failed: ${err.message}`, { code: 'provider.unreachable' });
+    }
+    let j = {};
+    try { j = text ? JSON.parse(text) : {}; } catch { j = { raw: text }; }
+    if (!res.ok) {
+        const msg = (j.error && (j.error.message || j.error)) || `HTTP ${res.status}: ${String(text).slice(0, 200)}`;
+        throw new ProviderError(typeof msg === 'string' ? msg : JSON.stringify(msg), { status: res.status, code: res.status === 401 || res.status === 403 ? 'provider.auth' : 'provider.http', body: j });
+    }
+    return j;
+}
+
+/**
  * The provider's own answer that its account is out of money: DeepSeek answers HTTP 402 with
  * `{ "error": { "message": "Insufficient Balance" } }`; OpenAI-shaped gateways use 429/403 with
  * `insufficient_quota`, or name a credit balance. This is not the caller's fault and not a transient
@@ -104,4 +128,4 @@ function schemaInstruction(json) {
 }
 
 module.exports = {
-    schemaInstruction, ProviderError, deadline, describeAbort, postJson, retryable, approxTokens, estimateUsage, sleep, insufficientBalance };
+    schemaInstruction, ProviderError, deadline, describeAbort, postJson, getJson, retryable, approxTokens, estimateUsage, sleep, insufficientBalance };

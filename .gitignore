@@ -1,4 +1,6 @@
 node_modules/
+# The shared dependency link `ov test` puts here is a symlink, and the pattern above matches directories only.
+node_modules
 data/
 dist/
 .env

@@ -13,7 +13,8 @@ const { sha256, parseJson, iso, AiError, secretRefValid, providerSecret } = requ
 const schemas = require('./schemas');
 const { provenance } = require('./providers/rate-cards');
 
-const PROVIDER_KINDS = ['stub', 'openai', 'responses', 'anthropic', 'http', 'whisper', 'google-tts', 'polly'];
+const PROVIDER_KINDS = ['stub', 'openai', 'responses', 'anthropic', 'http', 'whisper', 'google-tts', 'polly',
+    'elevenlabs', 'fal', 'bfl', 'recraft', 'ideogram', 'deepgram', 'voyage'];
 const BILLING_PROFILES = ['metered', 'subscription', 'payg', 'free', 'byok'];
 // AI Exchange D3: who may resell this offer's capacity. Defaults to UNVERIFIED (migrations/0024).
 const PROVIDER_ACCESS = ['OWN_DEPLOYMENT', 'AUTHORIZED_WHOLESALE', 'CUSTOMER_BYOK', 'RESTRICTED', 'UNVERIFIED'];
