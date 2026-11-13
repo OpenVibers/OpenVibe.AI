@@ -9,8 +9,8 @@ const t = suite('exchange-observed');
 let h;
 let nowMs = Date.now();
 let seq = 0;
-// The catalog read is memoised for 30 s per kind; advancing this clock past that makes each test read
-// what it just inserted.
+// The catalog read is memoised for 30 s per kind and served stale while it rebuilds for up to ten lifetimes
+// (server/api/exchange.js memo); advancing this clock past 300 s makes each test read what it just inserted.
 const clock = { now: () => nowMs };
 const at = (n) => new Date(nowMs - n * 86400000).toISOString();
 const uid = (p) => `${p}_${Date.now()}_${seq++}`;
@@ -32,7 +32,7 @@ async function reset() {
     await h.db.prepare('DELETE FROM runs').run();
 }
 async function catalog() {
-    nowMs += 31000;
+    nowMs += 301000;
     const r = await request(h.base, 'GET', '/api/v1/exchange/catalog');
     assert.strictEqual(r.status, 200, r.text);
     return r.body;
