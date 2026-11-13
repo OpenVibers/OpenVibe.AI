@@ -121,7 +121,9 @@ t.test('a local embedding model makes default.embedding a pool: the failing paid
 
 t.test('the local provider embeds on AI_LOCAL_EMBED_URL while chat stays on AI_LOCAL_LLM_URL', async () => {
     // llama.cpp serves one model per process: the chat GGUF and the embedding GGUF may be two local servers.
-    const chat = await seamServer(() => ({ text: 'local chat answer', model: 'chat-model', usage: { prompt_tokens: 3, completion_tokens: 2 } }));
+    // An OpenAI-shaped answer: the local server speaks Chat Completions (a { text } body read as empty, which was counted
+    // a success until empty answers became failures).
+    const chat = await seamServer(() => ({ choices: [{ message: { content: 'local chat answer' } }], model: 'chat-model', usage: { prompt_tokens: 3, completion_tokens: 2 } }));
     const embedSrv = await seamServer((body, req) => {
         assert.ok(req.url.endsWith('/embeddings'), `except embedding requests, nothing reaches the embed server (${req.url})`);
         return { data: [{ index: 0, embedding: [0.3, 0.4, 0.5] }], model: body.model, usage: { prompt_tokens: 2, total_tokens: 2 } };
@@ -256,6 +258,23 @@ t.test('an upstream 429 shifts to another provider without opening the circuit',
     assert.strictEqual(exec.explain.selected, 'steady');
     assert.strictEqual((await h.pool.health('busy')).state, 'closed', 'a 429 is capacity, not ill health');
     await ok.close(); await busy.close();
+});
+
+t.test('an answer with nothing in it is a failed attempt: the next provider answers', async () => {
+    // 2026-11-10 to 11-13: a model answered "ok" with no text on most background calls and each was counted a success.
+    const ok = await seamServer(() => ({ text: 'a real answer', model: 'full-m', usage: { input: 3, output: 4 } }));
+    const blank = await seamServer(() => ({ text: '', model: 'blank-m', usage: { input: 3, output: 0 } }));
+    await provider({ key: 'blank', base_url: blank.url, capabilities: ['enrich'], default_model: 'blank-m' });
+    await model('blank', 'blank-m', 0.4);
+    await provider({ key: 'full', base_url: ok.url, capabilities: ['enrich'], default_model: 'full-m' });
+    await model('full', 'full-m', 0.45);   // next after the empty one, before the other tests' closed servers
+    const r = await route('test.pool-empty', { capability: 'enrich', constraints: { objective: 'cheapest' }, timeout_ms: 3000 });
+    const exec = await h.pool.execute(r, 'enrich', { messages: [{ role: 'user', content: 'x' }], timeoutMs: 3000 }, { routeKey: r.key, routeVersion: r.version });
+    assert.strictEqual(exec.provider, 'full', 'the empty answer gives way to the next provider');
+    assert.strictEqual(exec.result.text, 'a real answer');
+    const blankTry = (exec.explain.attempts || []).find((a) => a.provider === 'blank');
+    assert.ok(blankTry && blankTry.status !== 'ok', 'the empty attempt is recorded as failed, not ok');
+    await ok.close(); await blank.close();
 });
 
 t.test('explain rides the run response and GET /runs/:id; the request log stays', async () => {

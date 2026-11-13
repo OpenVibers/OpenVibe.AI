@@ -1503,6 +1503,17 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         return [...out].sort();
     }
 
+    // The operations whose answer is text, JSON or tool calls: one with none of them is empty.
+    const EMPTY_CHECKED_OPS = new Set(['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich']);
+    function isEmptyAnswer(result) {
+        if (!result) return true;
+        if (result.json != null) return false;
+        if (Array.isArray(result.toolCalls) && result.toolCalls.length) return false;
+        if (Array.isArray(result.tool_calls) && result.tool_calls.length) return false;
+        if (result.message || result.completion) return false;
+        return !String(result.text == null ? '' : result.text).trim();
+    }
+
     async function execute(route, operation, req, ctx = {}) {
         if (ctx.compatRouting && (ctx.credential || ctx.byok || ctx.selfPreferences?.only_my_keys))
             throw new AiError(400, 'input.invalid', 'Provider routing cannot be combined with an explicit credential or only_my_keys');
@@ -2130,6 +2141,12 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                     if (floorGuard) floorGuard.finish();
                     const floorOut = floor.checkResult(result);
                     if (!floorOut.ok) throw new AiError(403, 'policy.floor_refused', floorOut.detail, { rule: floorOut.rule, policy: contentPolicy });
+                    // An answer with nothing in it is a failed attempt, not a success: the next offer answers instead, and
+                    // the provider's record counts it (2026-11-10 to 11-13 a model answered "ok" with no text on most
+                    // background calls, and every one of them was counted a success).
+                    if (EMPTY_CHECKED_OPS.has(operation) && isEmptyAnswer(result)) {
+                        throw new ProviderError('the provider answered with nothing', { code: 'provider.empty' });
+                    }
                     if (uncensored) { result.policy = 'uncensored'; result.label = tier.LABEL; }
                     const latency = Date.now() - t0;
                     const usage = result.usage || { input: 0, output: 0, cached: 0 };
