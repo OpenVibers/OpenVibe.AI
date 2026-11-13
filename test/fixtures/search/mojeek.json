@@ -1,0 +1,35 @@
+{
+  "response": {
+    "response": {
+      "status": "OK",
+      "head": {
+        "query": "lantern",
+        "timer": 0.12,
+        "start": 1,
+        "return": 1,
+        "exact": true,
+        "results": 42
+      },
+      "results": [
+        {
+          "url": "https://example.org/article",
+          "title": "Lantern",
+          "desc": "A new lantern",
+          "size": "12kb",
+          "timestamp": 1794139200,
+          "date": "Sun Nov 08 12:00:00 2026",
+          "pdate": 1794139200
+        }
+      ]
+    }
+  },
+  "request": {
+    "host": "api.mojeek.com",
+    "path": "/search",
+    "method": "GET"
+  },
+  "expected": {
+    "title": "Lantern",
+    "cost": 0.00265
+  }
+}

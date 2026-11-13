@@ -1,0 +1,24 @@
+{
+  "response": {
+    "search_id": "search_fixture",
+    "results": [
+      {
+        "url": "https://example.org/article",
+        "title": "Lantern",
+        "publish_date": "2026-11-08T12:00:00Z",
+        "excerpts": [
+          "A new lantern"
+        ]
+      }
+    ]
+  },
+  "request": {
+    "host": "api.parallel.ai",
+    "path": "/v1/search",
+    "method": "POST"
+  },
+  "expected": {
+    "title": "Lantern",
+    "cost": 0.001
+  }
+}

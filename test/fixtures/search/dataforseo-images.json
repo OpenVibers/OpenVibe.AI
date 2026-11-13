@@ -1,0 +1,50 @@
+{
+  "response": {
+    "version": "0.1.20200129",
+    "status_code": 20000,
+    "cost": 0.002,
+    "tasks": [
+      {
+        "id": "fixture",
+        "status_code": 20000,
+        "cost": 0.002,
+        "result": [
+          {
+            "keyword": "lantern",
+            "type": "images",
+            "se_domain": "google.com",
+            "location_code": 2840,
+            "language_code": "en",
+            "items": [
+              {
+                "type": "images_search",
+                "rank_group": 1,
+                "rank_absolute": 1,
+                "title": "Cat",
+                "items": [
+                  {
+                    "type": "carousel_element",
+                    "title": "Cat",
+                    "url": "https://example.org/article",
+                    "source_url": "https://images.example.org/cat.jpg",
+                    "encoded_url": "https://images.example.org/thumb.jpg",
+                    "alt": "A lantern"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "request": {
+    "host": "api.dataforseo.com",
+    "path": "/v3/serp/google/images/live/advanced",
+    "method": "POST"
+  },
+  "expected": {
+    "title": "Cat",
+    "cost": 0.002
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "response": {
+    "apikey": "fixture",
+    "success": true,
+    "requestNumber": 1,
+    "itemsCount": 1,
+    "totalResults": 1,
+    "items": [
+      {
+        "id": "/123/item_FIXTURE",
+        "guid": "https://www.europeana.eu/item/123/item_FIXTURE",
+        "type": "IMAGE",
+        "title": [
+          "Cat"
+        ],
+        "dataProvider": [
+          "Alex"
+        ],
+        "edmIsShownAt": [
+          "https://example.org/article"
+        ],
+        "edmIsShownBy": [
+          "https://images.example.org/cat.jpg"
+        ],
+        "edmPreview": [
+          "https://images.example.org/thumb.jpg"
+        ],
+        "rights": [
+          "http://creativecommons.org/publicdomain/zero/1.0/"
+        ],
+        "previewNoDistribute": false,
+        "timestamp_created": "2026-11-08T12:00:00Z",
+        "timestamp_update": "2026-11-09T12:00:00Z"
+      }
+    ]
+  },
+  "request": {
+    "host": "api.europeana.eu",
+    "path": "/record/v2/search.json",
+    "method": "GET"
+  },
+  "expected": {
+    "title": "Cat",
+    "cost": 0
+  }
+}

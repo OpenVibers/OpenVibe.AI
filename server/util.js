@@ -2,6 +2,7 @@
 /** Small helpers shared by every module: hashing, stable JSON, row decoding, errors. */
 const crypto = require('crypto');
 const svc = require('openvibe-sdk/service');
+const { redact } = require('./redact');
 
 /** JSON with sorted object keys, so equal inputs always hash equal. */
 function stableStringify(value) {
@@ -37,7 +38,9 @@ const PROBLEMS = { name: 'api', internalCode: 'ai.internal', internalDetail: 'in
  */
 function sendError(res, err, ctx, log = console) {
     const req = { ov: ctx };
-    if (!(err instanceof AiError)) return svc.sendError(res, req, { stack: (err && err.stack) || String(err) }, log, PROBLEMS);
+    // A key in a query string must never reach a log or an answer: the one redaction for the whole service.
+    if (!(err instanceof AiError)) return svc.sendError(res, req, { stack: redact((err && err.stack) || String(err)) }, log, PROBLEMS);
+    if (err.detail) err.detail = redact(err.detail);
     if (err.extra && err.extra.retry_after_seconds && !res.headersSent) res.setHeader('Retry-After', String(err.extra.retry_after_seconds));
     return svc.sendError(res, req, err, log, PROBLEMS);
 }

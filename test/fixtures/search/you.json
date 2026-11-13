@@ -1,0 +1,32 @@
+{
+  "response": {
+    "results": {
+      "web": [
+        {
+          "url": "https://example.org/article",
+          "title": "Lantern",
+          "description": "A new lantern",
+          "snippets": [
+            "A new lantern"
+          ],
+          "page_age": "2026-11-08T12:00:00",
+          "favicon_url": "https://ydc-index.io/favicon?domain=example.org&size=128"
+        }
+      ]
+    },
+    "metadata": {
+      "query": "lantern",
+      "search_uuid": "fixture",
+      "latency": 0.12
+    }
+  },
+  "request": {
+    "host": "ydc-index.io",
+    "path": "/v1/search",
+    "method": "POST"
+  },
+  "expected": {
+    "title": "Lantern",
+    "cost": 0.005
+  }
+}

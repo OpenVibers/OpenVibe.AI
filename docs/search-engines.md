@@ -42,12 +42,30 @@ Prices checked **2026-11-09** (the new image adapters **2026-11-13**), USD per 1
 | serpapi-reverse | SEARCH_SERPAPI_KEY | $25; separate Google Reverse Image operation | [SerpApi](https://serpapi.com/google-reverse-image) |
 | searchapi-images | SEARCH_SEARCHAPI_KEY | $4 ($40/month for 10,000); 100 trial | [SearchAPI](https://www.searchapi.io/docs/google-images) |
 | tineye | SEARCH_TINEYE_KEY | $40 (example $200 per 5,000; verify) | [TinEye](https://api.tineye.com/python/docs/) |
+| mojeek | SEARCH_MOJEEK_KEY | £2 per 1,000 requests (Startup, up to 10 results); £3 on Business; published in GBP, read as $2.65 at 1 GBP = 1.3227 USD | [Mojeek](https://www.mojeek.com/services/search/web-search-api) |
+| parallel | SEARCH_PARALLEL_KEY | $1 per 1,000 fast requests (10 results); $5 in basic or advanced; $1 per 1,000 for results beyond the first 10 | [Parallel](https://docs.parallel.ai/getting-started/pricing) |
+| you | SEARCH_YOU_KEY | $5.00 per 1,000 calls (up to 100 results per call); page extraction $1.00 per 1,000 pages, not requested | [You.com](https://you.com/docs/administration/billing) |
+| dataforseo | SEARCH_DATAFORSEO_KEY | Live mode $2.00 per 1,000 SERPs (10 organic results each); $50 minimum top-up | [DataForSEO](https://dataforseo.com/pricing/google-serp/google-organic-serp-api) |
+| dataforseo-images | SEARCH_DATAFORSEO_KEY | Live mode $2.00 per 1,000 SERPs (up to 100 images each); shares the DataForSEO key | [DataForSEO](https://dataforseo.com/pricing/google-serp/google-images-serp-api) |
+| europeana | SEARCH_EUROPEANA_KEY | No provider fee; Europeana publishes no price list | [Europeana](https://api.europeana.eu/record/v2/search.json) |
+| smithsonian | SEARCH_SMITHSONIAN_KEY | No provider fee; the Open Access API is free with an api.data.gov key | [Smithsonian](https://www.si.edu/openaccess/devtools) |
+| nasa | — | No provider fee; the Image and Video Library API is public and needs no key | [NASA](https://images.nasa.gov/docs/images.nasa.gov_api_docs.pdf) |
 
 Jina's current displayed $50/1B token pack is $0.05/M; search starts at 10,000 tokens. Receipts use returned usage, with a 100,000-token request budget ($0.005 ceiling). Perplexity uses the current Agent API with `perplexity/sonar`, web search enabled, at most three steps and 1,024 output tokens; its conservative admission ceiling is $0.10. The receipt uses `usage.cost.total_cost`. Its answer is retained in the snippet of each returned source. Google is closed to new customers and ends 2027-01-01; Pexels currently pauses new key issuance. Kagi uses the still-documented v0 endpoint and its corresponding tariff.
 
 Meta web search uses the Responses API with Muse Spark 1.3, one built-in query and `store: false`; it is explicit selection only (`engine: "meta"`) and reserves a $4 ceiling for the bounded call. Serper image search uses `/images`, shares the Serper credential, and is also explicit selection only (`engine: "serper-images"`).
 
 The existing free engines remain: Openverse, Wikimedia Commons, Iconify, OpenVibe Search, and operator-configured SearXNG (`EXCHANGE_SEARXNG_URL`). Free direct fetching is `openvibe-egress`. Each adapter provides its own metadata instead of the router inventing a zero price or disabling BYOK.
+
+**Mojeek** is an independent index: its terms allow commercial use, AI use, re-ranking and combining with other sources, and its Startup plan allows a one hour cache for the same user (Business and Enterprise add storage rights). **Parallel** returns pages and excerpts for an objective, not a ranked list of links; its customer terms let a customer show the output to one end customer per query and forbid caching it, reselling the service and using it to train a model. **You.com** forbids selling or distributing the service, extracting the output automatically and building a competing product, so `you` is explicit selection only (`manual_only`): a person's own key, never a shared one. **DataForSEO** is a SERP proxy for Google (the upstream index is Google, every row says so) and authenticates with HTTP Basic: the key is the login and the password joined by a colon. White label, MCP and reselling the raw API need a separate agreement, so those uses are not cleared for a shared key.
+
+**Europeana** is an open catalog: the rights come from the record's own rights statement, never from the CC0 licence of the API's metadata, and a preview Europeana marks as no-distribute is not returned. **Smithsonian**'s metadata is CC0 for every record, but a media file is only given for an object whose underlying work is in the public domain, so a picture from this engine is a public-domain object and a record without a media file is not a picture. **NASA** content is generally not copyrighted, but NASA also hosts third party material it marks as copyright protected, so only a NASA-created record is `public_domain` and every other record keeps its rights unknown. **DataForSEO images** is a discovery engine: it finds where a picture appears and grants nothing, so its rights are unknown.
+
+## The breaker and the keys in the query string
+
+A failing engine cools down for 60 seconds. With a Valkey connection the cooldown is shared by every process of the service: the key is `search:circuit:<scope>:<engine>`, the value is the time the circuit opens again and the TTL is that same time (`scope` is `shared` for a key the service holds, `k:<hash>` for a person's own key). Without Valkey (tests, a small install) the breaker is a Map in that process.
+
+Some providers take their key in the query string. One redaction (`server/redact.js`) masks `api_key`, `apikey`, `key`, `token`, `access_token`, `app_id`, `app_key` and `client_secret` in every URL, every bare `name=value` pair and every authorization header, and it is used wherever a URL can reach a log, an error, a receipt or a trace: a search error, the deep dive's warnings and the API layer's error log. A key never appears in an answer, a receipt or a log line.
 
 ## Personal keys
 
