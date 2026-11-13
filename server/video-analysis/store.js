@@ -1,6 +1,6 @@
 'use strict';
 /**
- * The video analysis' durable state (migrations/0087_video_analyses.sql).
+ * The video analysis' durable state (migrations/0088_video_analyses.sql).
  *
  * The run row keeps the input, the output and the receipt; this row is what a page reads while the run
  * is still working: the steps and their status, the frames as they land (with the Media object each
