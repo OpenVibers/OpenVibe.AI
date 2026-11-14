@@ -87,8 +87,32 @@ function createAiReadiness({ db, registry, pool, keys, runs, release = null }) {
     });
 }
 
+// The gauges that read the whole runs table (1.3 GB on production, 11-14) answer from a five-minute memo. A scrape
+// every 30 s ran SUM(saved_usd) over every run (0.6 s alone, far longer under load) on one of the database's five
+// pooled connections, and the service stalled for minutes during a pin round. Past five minutes the last value
+// answers at once and one read runs behind it; the first scrape waits for the first read.
+const RUNS_GAUGE_MS = 5 * 60_000;
+function lastValue(read, { ttlMs = RUNS_GAUGE_MS, now = () => Date.now() } = {}) {
+    let hit = null;
+    let pending = null;
+    const refresh = () => {
+        if (!pending) {
+            pending = Promise.resolve().then(read)
+                .then((value) => { hit = { at: now(), value }; return value; })
+                .finally(() => { pending = null; });
+        }
+        return pending;
+    };
+    return async () => {
+        if (hit && now() - hit.at < ttlMs) return hit.value;
+        if (hit) { refresh().catch(() => {}); return hit.value; }
+        return refresh();
+    };
+}
+
 /** AI gauges on the openvibe-shared/metrics registry. */
-function registerAiGauges(registry, { runs, registry: ai, pool, balance = null, creditGrants = null, gpus = null, abuse = null, db = null }) {
+function registerAiGauges(registry, { runs, registry: ai, pool, balance = null, creditGrants = null, gpus = null, abuse = null, db = null, now = undefined }) {
+    const gaugeClock = now ? { now } : {};
     registry.gauge({
         name: 'ai_runs', help: 'Runs waiting for a slot (queued) and holding one (running)', labelNames: ['state'],
         collect: () => {
@@ -163,22 +187,22 @@ function registerAiGauges(registry, { runs, registry: ai, pool, balance = null, 
     // answered on ('standard', 'flex', 'offpeak', 'local'), never the tier we hoped for.
     registry.gauge({
         name: 'ai_runs_by_tier', help: 'Runs by the tier they really ran on', labelNames: ['tier', 'provider'],
-        collect: async () => {
+        collect: lastValue(async () => {
             if (!db) return [];
             const rows = await db.prepare(`SELECT service_tier AS tier, provider_key AS provider, COUNT(*)::bigint AS n
                 FROM runs WHERE service_tier IS NOT NULL GROUP BY service_tier, provider_key`).all();
             return (rows || []).map((r) => ({ labels: { tier: r.tier, provider: r.provider || '' }, value: Number(r.n) || 0 }));
-        },
+        }, gaugeClock),
     });
     // What waiting earned: the standard price minus the price the run really paid.
     registry.gauge({
         name: 'ai_saved_usd', help: 'What waiting earned: the standard price minus the price the run really paid',
-        collect: async () => {
+        collect: lastValue(async () => {
             if (!db) return 0;
             const row = await db.prepare('SELECT COALESCE(SUM(saved_usd), 0) AS saved FROM runs').get();
             return Number(row && row.saved) || 0;
-        },
+        }, gaugeClock),
     });
 }
 
-module.exports = { createAiReadiness, registerAiGauges };
+module.exports = { createAiReadiness, registerAiGauges, lastValue, RUNS_GAUGE_MS };
