@@ -25,7 +25,7 @@ const pkg = require('../package.json');
 const { adminRoutes } = require('openvibe-shared/config');
 const ownerInputs = require('./owner-inputs');
 
-function createApp({ choices = null, searchFetch = null, config, db, registry, pool, quotas, cache, runs, auth, keys, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, credentials = null, preferences = null, grants = null, vault = null, settings = null, benchEvents = null, runBudgets = null, memory = null, memoryImport = null, memoryServices = null, memorySharing = null, community = null, endpoints = null, webhooks = null, presets = null, receipts = null, balance = null, creditGrants = null, sessionCookies = null, gpus = null, gpuMarket = null, supply = null, abuse = null, priceBook = null, modelSync = null, modelDiscovery = null, ownEndpoints = null, refusal = null, willingness = null, abliterationTax = null, batches = null, share = null, deepDive = null, videoAnalysis = null, mediaStore = null, search = null, valkey = null }) {
+function createApp({ choices = null, searchFetch = null, config, db, registry, pool, quotas, cache, runs, auth, keys, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, credentials = null, preferences = null, grants = null, vault = null, settings = null, benchEvents = null, runBudgets = null, memory = null, memoryImport = null, memoryServices = null, memorySharing = null, community = null, endpoints = null, webhooks = null, presets = null, receipts = null, balance = null, creditGrants = null, sessionCookies = null, gpus = null, gpuMarket = null, supply = null, abuse = null, priceBook = null, modelSync = null, modelDiscovery = null, ownEndpoints = null, refusal = null, willingness = null, abliterationTax = null, batches = null, share = null, deepDive = null, videoAnalysis = null, mediaStore = null, search = null, valkey = null, decisionModels = null }) {
     const app = express();
     // /.well-known/agent.json (openvibe-shared/agent-layer, SEO-2): what this site serves, for agents.
     require('openvibe-shared/agent-layer').mount(app, { descriptor: require('./agent-descriptor') });
@@ -51,7 +51,7 @@ function createApp({ choices = null, searchFetch = null, config, db, registry, p
     const publicCorsPaths = new Set(['/stats', '/release.json']);
     // The creation catalogue is public data for every origin: an app or a page may read it without a
     // token, so it answers `*` rather than the exact-origin list above.
-    const openCorsPaths = new Set(['/api/v1/creations', '/api/v1/creations.md']);
+    const openCorsPaths = new Set(['/api/v1/creations', '/api/v1/creations.md', '/api/v1/decisions/models']);
     const corsOrigins = new Set((config.cors && config.cors.origins) || []);
     app.use((req, res, next) => {
         if (openCorsPaths.has(req.path)) {
@@ -221,7 +221,7 @@ function createApp({ choices = null, searchFetch = null, config, db, registry, p
             app.use('/internal/provider-session-credentials', cookiesRouter);
         }
         const configRoutes = adminRoutes([settings.exchange, settings.providerKeys.proxy, settings.gpus.proxy,
-            settings.servers.proxy, settings.accounts.proxy], {
+            settings.servers.proxy, settings.accounts.proxy, settings.decisions.proxy], {
             basePath: '/internal/config',
             requireAdmin: auth.requireCap(CAPS.configManage),
             actor: (req) => {
@@ -310,9 +310,10 @@ function createApp({ choices = null, searchFetch = null, config, db, registry, p
     app.use(actionsRouter({ runs, registry, auth, log }));
     // People's own controls (2026-11-11): one task that turns words into a checked ui.layout@1.
     app.use(require('./api/ui-layout').uiLayoutRouter({ runs, auth, log }));
-    // Decisions (2026-11-12): closed-set questions about one input, Google's Decisions API first, the router's cheap
-    // structured route without it (server/api/decisions.js).
-    app.use(require('./api/decisions').decisionsRouter({ runs, auth, db, registry, env, fetchImpl, log }));
+    // Decisions (2026-11-12; the model list and the escalation of 2026-11-14): closed-set questions about one input,
+    // Google's Decisions API first, the router's cheap structured route without it (server/api/decisions.js).
+    app.use(require('./api/decisions').decisionsRouter({ runs, auth, db, registry, pool, config, env, fetchImpl, log, clock,
+        models: decisionModels, decisions: settings && settings.decisions }));
     app.use(require('./api/compat-extra').compatExtra({ runs, auth, config, log }));
     // The OpenAI-compatible endpoint (POST /v1/chat/completions, GET /v1/models): runs of ai.complete.
     app.use(require('./api/routing-preview').routingPreview({ auth, registry, log }));
@@ -331,7 +332,7 @@ function createApp({ choices = null, searchFetch = null, config, db, registry, p
     // Community capacity (design: "Offer to the network"): the public offers Exchange lists and the seller's /sell
     // dashboard, an API for Exchange. Nothing here writes an offer; the offer belongs to Network and the Link owner.
     if (community) app.use('/api/v1', require('./api/community').communityRouter({ community, auth, log }));
-    app.use(setupRouter({ config, db, registry, pool, runs, auth, settings, search, env, clock, log, fetchImpl }));
+    app.use(setupRouter({ config, db, registry, pool, runs, auth, settings, search, env, clock, log, fetchImpl, decisionModels }));
     app.use(adminRouter({ config, db, registry, pool, quotas, cache, runs, auth, settings, ops, log }));
     app.use(require('./api/console-data').consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth, clock, fetchImpl, env, gpus, gpuMarket, supply, abuse, priceBook, modelSync, creditGrants, sessionCookies, vault, settings, config, log }));
     // The owner's search rate cards (plan §W.2 step 3): a new price is a draft until the owner activates it,

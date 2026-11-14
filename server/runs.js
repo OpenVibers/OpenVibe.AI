@@ -1129,6 +1129,9 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
                 communityOptIn: Boolean(ctx.communityOptIn),
                 communityFree,
                 ...(ctx.routePin ? { routePin: ctx.routePin } : {}),
+                // An exact model (2026-11-14: the decisions model): the run may only run on these own deployments,
+                // never on another model. The pool's exact path never re-ranks and never falls back to another offer.
+                ...(ctx.exact ? { exact: ctx.exact } : {}),
                 // L37: the soft preference the caller made (provider, and a model if it named one).
                 taskChoice: opts.task_choice || null, choiceBudget: { used: 0 },
                 prefer: opts.prefer || null,
