@@ -228,6 +228,28 @@ t.test('the GPU table carries the readings the provisioner already keeps', async
     }
 });
 
+
+t.test('the signatures follow their own schemes', async () => {
+    const { ovhHeaders, ociHeaders } = require('../server/setup/signing');
+    const ovh = ovhHeaders({ applicationKey: 'AK', applicationSecret: 'AS', consumerKey: 'CK', method: 'GET', url: 'https://api.ovh.com/v1/me', timestamp: 1405415936 });
+    assert.strictEqual(ovh['X-Ovh-Application'], 'AK');
+    assert.strictEqual(ovh['X-Ovh-Consumer'], 'CK');
+    assert.strictEqual(ovh['X-Ovh-Timestamp'], '1405415936');
+    // OVH signs the consumer key, the method, the query, the body and the timestamp with the application secret.
+    assert.strictEqual(ovh['X-Ovh-Signature'], '$1$' + crypto.createHmac('sha1', 'AS').update('CK+GET+/v1/me++1405415936').digest('base64'));
+
+    const { privateKey, publicKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048, privateKeyEncoding: { type: 'pkcs8', format: 'pem' }, publicKeyEncoding: { type: 'spki', format: 'pem' } });
+    const oci = ociHeaders({
+        tenancy: 'ocid1.tenancy.oc1..aaaa', user: 'ocid1.user.oc1..bbbb', fingerprint: 'aa:bb:cc',
+        privateKey, method: 'GET', url: 'https://compute.us-phoenix-1.oraclecloud.com/20160918/instances?compartmentId=ocid1.tenancy.oc1..aaaa',
+        now: new Date('2026-11-14T10:00:00Z'),
+    });
+    assert.match(oci.authorization, /^Signature version="1",keyId="ocid1\.tenancy[^"]+\/ocid1\.user[^"]+\/aa:bb:cc",algorithm="rsa-sha256",headers="content-length content-type date host x-content-sha256",signature="[^"]+"$/);
+    const signature = /signature="([^"]+)"/.exec(oci.authorization)[1];
+    assert.ok(crypto.createVerify('RSA-SHA256').update(oci.signable).verify(publicKey, Buffer.from(signature, 'base64')), 'the signature is over the signable string');
+    assert.ok(oci.signable.startsWith('GET\n/20160918/instances?compartmentId='), 'the signable string carries the verb and the request URI');
+});
+
 t.test('no log line carries a key', async () => {
     for (const k of Object.keys(original)) console[k] = original[k];
     for (const s of SECRETS) {

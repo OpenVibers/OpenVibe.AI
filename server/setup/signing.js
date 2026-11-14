@@ -43,30 +43,30 @@ function ociHeaders({ tenancy, user, fingerprint, privateKey, method = 'GET', ur
     const target = new URL(url);
     const date = now.toUTCString();
     const host = target.host;
-    const contentHash = crypto.createHash('sha256').update(body || '').digest('hex');
-    const contentType = 'application/json';
-    const contentLength = String(Buffer.byteLength(body || ''));
-    const signedHeaders = 'content-length content-type date host x-content-sha256';
-    const canonical = [
-        method.toUpperCase(),
-        target.pathname + target.search,
-        '',
-        contentType,
-        contentLength,
+    // The body hash is the Base64 SHA-256 of the body, as OCI's own signers write it.
+    const contentHash = crypto.createHash('sha256').update(body || '').digest('base64');
+    const headers = {
+        'content-type': 'application/json',
+        'content-length': String(Buffer.byteLength(body || '')),
         date,
         host,
-        signedHeaders,
-        contentHash,
-        '',
-    ].join('\n');
+        'x-content-sha256': contentHash,
+    };
+    const names = ['content-length', 'content-type', 'date', 'host', 'x-content-sha256'];
+    // The signable string, in OCI's own order: the verb, the request URI, the canonical headers, the names
+    // of the signed headers, and the hashed body.
+    const canonicalHeaders = names.map((name) => name + ':' + String(headers[name]).trim() + '\n').join('');
+    const signedHeaders = names.join(' ');
+    const signable = [method.toUpperCase(), target.pathname + target.search, canonicalHeaders, signedHeaders, contentHash].join('\n');
     const pem = String(privateKey || '').replace(/\\n/g, '\n');
-    const signature = crypto.createSign('RSA-SHA256').update(canonical).sign(pem, 'base64');
+    const signature = crypto.createSign('RSA-SHA256').update(signable).sign(pem, 'base64');
     return {
         date,
         host,
-        'content-type': contentType,
-        'content-length': contentLength,
+        'content-type': headers['content-type'],
+        'content-length': headers['content-length'],
         'x-content-sha256': contentHash,
+        signable,
         authorization: 'Signature version="1",keyId="' + tenancy + '/' + user + '/' + fingerprint + '",algorithm="rsa-sha256",headers="' + signedHeaders + '",signature="' + signature + '"',
     };
 }
