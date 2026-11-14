@@ -11,7 +11,8 @@
  *   transient   a timeout, a connection failure, a 5xx or a broken stream; a run of these opens a circuit
  *               for a backoff that starts at 30 seconds and doubles to 10 minutes
  *   request     the provider rejected the request itself (400, 404, 413, 422, context too long, a bad
- *               image or schema); the caller's fault and never a reason to open a circuit
+ *               image or schema), or our own content floor refused the request or the answer
+ *               (policy.floor_refused); the caller's fault and never a reason to open a circuit
  *
  * The class is pure and derived from the status and the provider's own error code/message. The body is
  * never stored: only the class (and the provider's short message) rides the request log and the circuit.
@@ -35,6 +36,10 @@ function classifyFailure(err) {
     if (!err) return { class: 'transient', code: '', status: null };
     if (err.code === 'provider.cancelled') return null;
     const { code, message, status, text } = detailOf(err);
+    // Our own content floor refusing a request or an answer is a 403 that says nothing about the provider. Read as auth
+    // it opened the circuit: on 11-14 one refused request paused DeepSeek Flash for everyone for over ten hours (and
+    // whisper.cpp), and the console and Compare said "the key was refused" over a key that worked.
+    if (err.code === 'policy.floor_refused' || code === 'policy.floor_refused') return { class: 'request', code: 'policy.floor_refused', status, message };
 
     // Balance first: several providers say it with a 403 or 429, which would otherwise read as auth or
     // ordinary capacity. The helper also knows DeepSeek's 402 and OpenAI's `insufficient_quota`.
