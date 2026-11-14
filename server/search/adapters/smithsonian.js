@@ -5,10 +5,9 @@ const { requestFor } = require('../transport');
 // (their developer tools), so a record that carries a picture is a public-domain object.
 const IDS = 'https://ids.si.edu/ids/deliveryService';
 module.exports = {
-    id: 'smithsonian', byok: true, checked_on: '2026-11-13',
+    id: 'smithsonian', byok: true,
     kinds: ['images'], key_env: 'SEARCH_SMITHSONIAN_KEY', hosts: ['api.si.edu', 'ids.si.edu'],
     class: 'open_asset_catalog',
-    price_per_1000: 0,
     source: 'https://www.si.edu/openaccess/devtools',
     pricing_note: 'No provider fee: the Open Access API is free with a key from api.data.gov. The metadata of every record is CC0; a media file is only given for an object whose underlying work is in the public domain, so a picture here is a public-domain object.',
     freshness: [],

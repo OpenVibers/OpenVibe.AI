@@ -24,6 +24,7 @@ const express = require('express');
 const { CAPS } = require('../auth');
 const { AiError, sendError, providerSecret } = require('../util');
 const { STEPS, stepById, offersOf, keyPageOf } = require('../setup/catalog');
+const { perThousand } = require('../search/rate-cards');
 
 const MONTH_MS = 30 * 24 * 3600 * 1000;
 /** The voice each speech provider's own test speaks with: one of that provider's own voices. */
@@ -252,7 +253,12 @@ function setupRouter({ config = {}, db, registry, pool = null, runs = null, auth
         let searchState = null;
         if (step.id === 'search') {
             const available = (searchEngines || []).filter((e) => e.available && e.healthy !== false);
-            searchState = { engines: available.map((e) => ({ id: e.id, price_per_1000: e.price_per_1000, byok: e.byok })), ready: available.length > 0 };
+            // The price is the engine's active rate card (plan §W.2 step 3): what a unit costs, and what
+            // a thousand of them cost for the surfaces that still show that number.
+            searchState = { engines: available.map((e) => {
+                const card = (e.rate_cards || [])[0] || null;
+                return { id: e.id, price: card ? card.price : null, unit: card ? card.unit : null, price_per_1000: perThousand(card), byok: e.byok };
+            }), ready: available.length > 0 };
         }
 
         let state = 'not_set';

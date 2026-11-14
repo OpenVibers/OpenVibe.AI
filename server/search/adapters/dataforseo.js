@@ -5,10 +5,9 @@ const { requestFor, post, web } = require('../transport');
 // Live mode answers in one POST; the queued modes are cheaper but take minutes, so they are not used here.
 const basic = (key) => ({ authorization: 'Basic ' + Buffer.from(String(key)).toString('base64') });
 module.exports = {
-    id: 'dataforseo', byok: true, checked_on: '2026-11-13',
+    id: 'dataforseo', byok: true,
     kinds: ['web'], key_env: 'SEARCH_DATAFORSEO_KEY', hosts: ['api.dataforseo.com'],
     class: 'serp_proxy',
-    price_per_1000: 2,
     source: 'https://dataforseo.com/pricing/google-serp/google-organic-serp-api',
     pricing_note: 'Live mode $0.002 per SERP = $2.00 per 1,000 SERPs (10 organic results each); the queued modes are cheaper ($0.60 per 1,000) but take minutes. $50 minimum top-up; the balance never expires.',
     freshness: [],

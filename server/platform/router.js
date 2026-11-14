@@ -5,6 +5,7 @@ const { AiError, sendError } = require('../util');
 const { createKeys } = require('./keys');
 const { claimRequest } = require('./idempotency');
 const { createSearch, CHARGE } = require('../search');
+const { usdOf } = require('../search/rate-cards');
 const { createAssetEvents } = require('../search/events');
 function platform({ db, auth, clock, log, searchFetch, credentials, registry, env = process.env, publicBase }) {
     const keys = createKeys({ db, clock });
@@ -14,6 +15,8 @@ function platform({ db, auth, clock, log, searchFetch, credentials, registry, en
         now: () => clock.now(), credentials, registry, env,
         events: createAssetEvents({ db, clock }),
         ...(publicBase ? { publicBase } : {}),
+        // The versioned rate cards live in the database (plan §W.2 step 3).
+        db,
     });
     const r = express.Router();
     const wrap = (fn) => async (req, res) => {
@@ -218,7 +221,8 @@ function platform({ db, auth, clock, log, searchFetch, credentials, registry, en
             );
             if (planned) {
                 req.searchBudget = hold.amount;
-                const minimum = Math.min(...req.searchPlan.candidates.map(c => c.own ? 0 : c.ceiling));
+                // The reserve each engine holds is its rate card's ceiling, in exact nano-USD.
+                const minimum = Math.min(...req.searchPlan.candidates.map(c => c.own ? 0 : usdOf(c.ceilingNano)));
                 if (hold.amount + 1e-12 < minimum) {
                     await hold.settle({ cost_usd: 0 });
                     throw new AiError(429, 'exchange.key_cap', 'The remaining key cap cannot cover this search');

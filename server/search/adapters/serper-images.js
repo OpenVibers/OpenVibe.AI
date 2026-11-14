@@ -1,10 +1,10 @@
 'use strict';
 const { requestFor, post } = require('../transport');
 module.exports = {
-    id: 'serper-images', credential_id: 'serper', byok: true, manual_only: true, checked_on: '2026-11-10',
+    id: 'serper-images', credential_id: 'serper', byok: true, manual_only: true,
     kinds: ['images'], key_env: 'SEARCH_SERPER_KEY', hosts: ['google.serper.dev'], freshness: [],
     class: 'web_image_discovery',
-    price_per_1000: 1, source: 'https://serper.dev/',
+    source: 'https://serper.dev/',
     upstreams: ['google'],
     filters: {
         license: 'unsupported', commercial: 'unsupported', format: 'local', orientation: 'local',

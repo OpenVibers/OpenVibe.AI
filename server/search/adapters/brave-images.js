@@ -1,11 +1,10 @@
 'use strict';
 const { requestFor, query } = require('../transport');
 module.exports = {
-    id: 'brave-images', byok: true, checked_on: '2026-11-09',
+    id: 'brave-images', byok: true,
     kinds: ['images'], key_env: 'SEARCH_BRAVE_IMAGES_KEY', credential_id: 'brave', hosts: ['api.search.brave.com'],
     class: 'web_image_discovery',
-    price_per_1000: 5, source: 'https://api-dashboard.search.brave.com/app/plans', freshness: [],
-    included_allowance: '$5 monthly credit',
+    source: 'https://api-dashboard.search.brave.com/app/plans', freshness: [],
     upstreams: ['brave'],
     filters: {
         license: 'unsupported', commercial: 'unsupported', format: 'local', orientation: 'local',

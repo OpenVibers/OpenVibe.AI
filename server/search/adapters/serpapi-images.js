@@ -5,11 +5,10 @@ const { imageRow } = require('../image-row');
 // SerpApi's Google Images operation. The supplier is SerpApi; the upstream index is Google, and every row
 // says so. Search results grant no reuse rights: licence and author stay null rather than being guessed.
 module.exports = {
-    id: 'serpapi-images', credential_id: 'serpapi', byok: true, checked_on: '2026-11-13',
+    id: 'serpapi-images', credential_id: 'serpapi', byok: true,
     kinds: ['images'], key_env: 'SEARCH_SERPAPI_KEY', hosts: ['serpapi.com'], freshness: [],
     class: 'web_image_discovery',
-    price_per_1000: 25, source: 'https://serpapi.com/google-images-api',
-    included_allowance: '250 searches a month',
+    source: 'https://serpapi.com/google-images-api',
     pricing_note: 'Starter $25/month for 1,000 searches; 250 free searches a month. Search results do not establish reuse rights.',
     upstreams: ['google'],
     filters: {

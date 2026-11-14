@@ -1,10 +1,10 @@
 'use strict';
 const { requestFor, post, bearer, query, since, web } = require('../transport');
 module.exports = {
-    id: 'deepseek', byok: true, checked_on: '2026-11-09',
+    id: 'deepseek', byok: true,
     kinds: ['web', 'fetch'], key_env: 'SEARCH_DEEPSEEK_KEY', hosts: ['api.deepseek.com'],
     class: 'independent_index',
-    price_per_1000: 0.75, source: 'https://api-docs.deepseek.com/guides/search/',
+    source: 'https://api-docs.deepseek.com/guides/search/',
     freshness: ['day', 'month', 'year'], max_query: 128,
     async search(b, { fetchImpl, key, now }) {
         const q = b.q + (b.freshness ? ' after:' + since(b.freshness, now()).slice(0, 10) : '');

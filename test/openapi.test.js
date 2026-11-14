@@ -4,7 +4,9 @@
  * is a route the app mounts, and every mounted public /api/v1 route is listed (the probes, the
  * redirect, the operator/admin API, the attribution-quota API and credentials excepted). The mounted
  * set is read from the real Express stack, so a route added, renamed or removed without the document
- * fails here. Credentials are excluded on purpose: no secret-bearing field may reach the document.
+ * fails here. The owner's admin routes may be described in the document, but they are not public API
+ * surface and are left out of the comparison. Credentials are excluded on purpose: no secret-bearing
+ * field may reach the document.
  */
 const assert = require('assert');
 const H = require('./helpers');
@@ -92,7 +94,9 @@ const excluded = (key) => {
         }
 
         const live = [...mounted(h.app)].filter((key) => (key.split(' ')[1].startsWith(`${MOUNT}/`) || Object.keys(require('../server/exchange/compat-openapi').paths).includes(key.split(' ')[1]) || /^POST \/v1\/(search|search\/images|search\/icons|search\/reverse-image|search\/images\/unsplash\/download|fetch)$/.test(key)) && !excluded(key)).sort();
-        assert.deepStrictEqual(documented, live, 'every mounted public /api/v1 route is documented and vice versa');
+        // The owner's admin routes may be described in the document, but they are not public API surface:
+        // both lists leave them out before they are compared.
+        assert.deepStrictEqual(documented.filter((key) => !excluded(key)), live, 'every mounted public /api/v1 route is documented and vice versa');
         assert.deepStrictEqual(routes(), documented, 'server/openapi.js routes() and the document agree');
 
         const redirect = await fetch(`${h.base}/api/v1/openapi.json`, { redirect: 'manual' });

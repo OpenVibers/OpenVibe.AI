@@ -9,8 +9,8 @@ const thirdParty = (data) => {
     return /copyright\s*(?:protected|holder|©|:)/i.test(String(data.description_508 || data.description || ''));
 };
 module.exports = {
-    id: 'nasa', byok: false, checked_on: '2026-11-13',
-    kinds: ['images'], price_per_1000: 0, freshness: [],
+    id: 'nasa', byok: false,
+    kinds: ['images'], freshness: [],
     class: 'open_asset_catalog',
     hosts: ['images-api.nasa.gov', 'images-assets.nasa.gov'],
     source: 'https://images.nasa.gov/docs/images.nasa.gov_api_docs.pdf',

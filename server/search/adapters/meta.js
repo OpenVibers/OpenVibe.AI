@@ -2,15 +2,15 @@
 const { requestFor, post, bearer, web } = require('../transport');
 const MAX_OUTPUT = 512;
 module.exports = {
-    id: 'meta', byok: true, manual_only: true, registry_required: true, checked_on: '2026-11-10',
+    id: 'meta', byok: true, manual_only: true, registry_required: true,
     kinds: ['web'], key_env: 'SEARCH_META_KEY', hosts: ['api.meta.ai'], freshness: [],
     class: 'answer_engine',
-    price_per_1000: null, source: 'https://dev.meta.ai/docs/pricing-rate-limits',
+    source: 'https://dev.meta.ai/docs/pricing-rate-limits',
     pricing_note: 'Muse Spark 1.3 Standard: $1.25/M input, $0.15/M cached, $4.25/M output plus $2.50/1000 queries. Explicit selection only; up to $4 reserved for one built-in call and its model iterations.',
     // One built-in call permits at most two model iterations. Reserve both full context windows,
     // the output budget, and conservatively one search query per generated token.
-    ceiling: () => 4,
-    estimate: () => 0.01,
+    ceilingNano: () => 4000000000n,
+    estimateNano: () => 10000000n,
     async search(b, { fetchImpl, key }) {
         const out = await requestFor(this.hosts, fetchImpl)('https://api.meta.ai/v1/responses', post({
             model: 'muse-spark-1.3', input: b.q, instructions: 'Search the web for this question. Use one concise search query and cite the sources.',

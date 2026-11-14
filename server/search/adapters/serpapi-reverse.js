@@ -4,11 +4,10 @@ const { requestFor, query } = require('../transport');
 // SerpApi's Google Reverse Image operation: a separate operation from its Google Images search, sharing the
 // same SerpApi credential and price. It returns pages that carry the image; each row is marked reverse_image.
 module.exports = {
-    id: 'serpapi-reverse', credential_id: 'serpapi', byok: true, manual_only: true, checked_on: '2026-11-13',
+    id: 'serpapi-reverse', credential_id: 'serpapi', byok: true, manual_only: true,
     kinds: ['reverse_image'], key_env: 'SEARCH_SERPAPI_KEY', hosts: ['serpapi.com'], freshness: [],
     class: 'reverse_image',
-    price_per_1000: 25, source: 'https://serpapi.com/google-reverse-image',
-    included_allowance: '250 searches a month',
+    source: 'https://serpapi.com/google-reverse-image',
     pricing_note: 'Starter $25/month for 1,000 searches; 250 free searches a month. Accepts an image URL only.',
     uploads: false,
     filters: {},
@@ -32,7 +31,6 @@ module.exports = {
                 upstream_rank: Number.isInteger(r.position) && r.position > 0 ? r.position : i + 1,
                 reverse_image: true,
             })),
-            cost: this.price_per_1000 / 1000,
         };
     },
 };
