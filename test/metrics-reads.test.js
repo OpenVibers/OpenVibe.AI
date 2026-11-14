@@ -70,12 +70,16 @@ t.test('hour job records receipts and daily catalogue prices once across restart
     // The catalogue is built outside the transaction (11-14: inside, the transaction sat idle past Postgres's 60 s
     // limit and the cut connection crashed the service), and not at all when the hour is not due.
     let inside = null, builds = 0;
-    const watched = { models: async () => { builds++; inside = await db.prepare('SELECT now() <> statement_timestamp() AS in_tx').get().then((r) => r.in_tx).catch(() => null); return catalog.models(); } };
-    assert.equal((await createObservations({ db, registry, catalog: watched, clock }).tick()).skipped, 'not_due');
+    // Whether a transaction is open is read from db.tx itself (a clock comparison differs by driver protocol).
+    let inTx = false;
+    const txdb = Object.create(db);
+    txdb.tx = async (...args) => { inTx = true; try { return await db.tx(...args); } finally { inTx = false; } };
+    const watched = { models: async () => { builds++; inside = inTx; return catalog.models(); } };
+    assert.equal((await createObservations({ db: txdb, registry, catalog: watched, clock }).tick()).skipped, 'not_due');
     assert.equal(builds, 0, 'not due: no catalogue build');
     assert.equal((await createObservations({ db, registry, catalog, clock }).tick()).skipped, 'not_due');
     await db.prepare('UPDATE exchange_observations_job SET algorithm_version = 1 WHERE id = 1').run();
-    assert.deepEqual(await createObservations({ db, registry, catalog: watched, clock }).tick(), { hours: 1, prices: 0 });
+    assert.deepEqual(await createObservations({ db: txdb, registry, catalog: watched, clock }).tick(), { hours: 1, prices: 0 });
     assert.equal(builds, 1, 'due: one build');
     assert.equal(inside, false, 'and it ran outside any transaction');
     const prices = await get('/prices/openai%2Fgpt-test');
