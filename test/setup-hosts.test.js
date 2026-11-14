@@ -59,6 +59,24 @@ async function fakeFetch(url, init = {}) {
     if (u.includes('aiplatform.googleapis.com')) return json(200, { publisherModels: [{ name: 'publishers/google/models/gemini-2.5-flash' }] });
 
     // The price APIs.
+    // Shadeform's own instance types (recorded 2026-11-14): the price is in cents, and a card with no free
+    // region cannot be rented.
+    if (u.startsWith('https://api.shadeform.ai/v1/instances/types')) {
+        return json(200, { instance_types: [
+            { shade_instance_type: 'H100', cloud_instance_type: 'gpu_1x_h100', configuration: { gpu_type: 'H100', num_gpus: 1 }, vcpus: 16, memory_in_gb: 268, hourly_price: 599, availability: [{ region: 'us-ny-1', display_name: 'US, New York, NY', available: true, rental_type: 'on_demand' }] },
+            { shade_instance_type: 'A100_80G', cloud_instance_type: 'gpu_1x_a100_80g', configuration: { gpu_type: 'A100_80G', num_gpus: 1 }, vcpus: 12, memory_in_gb: 120, hourly_price: 200, availability: [{ region: 'us-va-1', display_name: 'US, Culpeper, VA', available: true, rental_type: 'on_demand' }] },
+            { shade_instance_type: 'H100_sxm5', cloud_instance_type: 'gpu_8x_h100', configuration: { gpu_type: 'H100', num_gpus: 8 }, vcpus: 128, memory_in_gb: 1920, hourly_price: 1592, availability: [{ region: 'us-dallas-1', display_name: 'US, Dallas, TX', available: true, rental_type: 'on_demand' }] },
+            { shade_instance_type: 'H200', cloud_instance_type: 'gpu_1x_h200', configuration: { gpu_type: 'H200', num_gpus: 1 }, vcpus: 44, memory_in_gb: 185, hourly_price: 441, availability: [{ region: 'ca-montreal-1', display_name: 'CA, Montreal', available: false, rental_type: 'on_demand' }] },
+        ] });
+    }
+    // Verda (DataCrunch) instance types (recorded 2026-11-14): the on-demand hour and the spot hour.
+    if (u.startsWith('https://api.datacrunch.io/v1/instance-types')) {
+        return json(200, [
+            { instance_type: '1H100.80S.30V', name: 'H100', model: 'H100', gpu: { description: '1x H100 SXM5 80GB', number_of_gpus: 1 }, cpu: { number_of_cores: 30 }, memory: { size_in_gigabytes: 120 }, price_per_hour: '5.241', spot_price: '2.621' },
+            { instance_type: '1A100.22V', name: 'A100 80GB', model: 'A100 80GB', gpu: { description: '1x A100 SXM4 80GB', number_of_gpus: 1 }, cpu: { number_of_cores: 22 }, memory: { size_in_gigabytes: 120 }, price_per_hour: '2.386', spot_price: '1.193' },
+            { instance_type: '2A100.22V', name: '2x A100 SXM4 80GB', model: 'A100 80GB', gpu: { description: '2x A100 SXM4 80GB', number_of_gpus: 2 }, cpu: { number_of_cores: 44 }, memory: { size_in_gigabytes: 240 }, price_per_hour: '4.772', spot_price: '2.386' },
+        ]);
+    }
     if (u.startsWith('https://api.vultr.com/v2/plans')) {
         return json(200, { plans: [
             { id: 'vc2-1c-1gb', vcpu_count: 1, ram: 1024, monthly_cost: 5, hourly_cost: 0.007 },
@@ -233,6 +251,23 @@ t.test('the GPU table carries the readings the provisioner already keeps', async
         assert.ok(typeof r.usd_per_hour === 'number');
         assert.ok(r.source_url, 'a GPU row has no source');
     }
+});
+
+t.test('the two providers that publish their prices as an API are read there', async () => {
+    const g = await request(h.base, 'GET', '/api/v1/prices/gpus');
+    const shade = g.body.rows.find((r) => r.provider === 'Shadeform' && r.gpu === 'H100');
+    assert.ok(shade, 'Shadeform has no row: ' + JSON.stringify(g.body.rows.map((r) => r.provider)));
+    // Shadeform's price is in cents, and only a one-GPU card is comparable with the other rows.
+    assert.strictEqual(shade.usd_per_hour, 5.99, 'the cents were not turned into dollars');
+    assert.strictEqual(shade.source_url, 'https://api.shadeform.ai/v1/instances/types');
+    assert.ok(!g.body.rows.some((r) => r.provider === 'Shadeform' && r.gpu === 'H200'), 'a card with no free region is not a price');
+    assert.ok(!g.body.rows.some((r) => r.provider === 'Shadeform' && r.usd_per_hour === 15.92), 'an eight-GPU card is not a one-GPU hour');
+    const verda = g.body.rows.find((r) => r.provider === 'Verda (DataCrunch)' && r.gpu === 'H100');
+    assert.ok(verda, 'Verda has no row: ' + JSON.stringify(g.body.rows.map((r) => r.provider)));
+    assert.strictEqual(verda.usd_per_hour, 5.241);
+    assert.strictEqual(verda.source_url, 'https://api.datacrunch.io/v1/instance-types');
+    assert.match(verda.note, /spot hour of the same card is 2.621/);
+    assert.ok(!g.body.rows.some((r) => r.provider === 'Verda (DataCrunch)' && r.plan === '2A100.22V'), 'a two-GPU card is not a one-GPU hour');
 });
 
 
