@@ -19,7 +19,8 @@ const { PRESETS } = require('./console/presets');
 const { GPU_HOSTS, SERVER_HOSTS, ACCOUNTS } = require('./setup/hosts');
 const { ovhHeaders, ociHeaders, googleAccessToken } = require('./setup/signing');
 
-// The Setup groups by id (openvibe-shared 4.125.0's OWNER_INPUT_GROUPS): x-owner-input.group is one of these ids.
+// The Setup groups by id (openvibe-shared's OWNER_INPUT_GROUPS, 4.125.0 and the 4.250.0 servers group):
+// x-owner-input.group is one of these ids.
 const SETUP_GROUPS = Object.freeze(['money', 'ai-providers', 'gpus', 'servers', 'voices', 'chat-apps', 'sign-in-apps',
     'data-sources', 'design-publishing', 'domains', 'legal']);
 const TEST_TIMEOUT_MS = 10_000;
@@ -146,7 +147,6 @@ async function testGpuKey(marketplace, key, { fetchImpl, origin }) {
     if (r.status >= 200 && r.status < 300) return { ok: true, message: 'RunPod accepted the key.' };
     return { ok: false, message: refused('RunPod', r) };
 }
-
 
 /**
  * The host rows (server/setup/hosts.js): the GPU marketplaces and the servers the owner can configure. The
