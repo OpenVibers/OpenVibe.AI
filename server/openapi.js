@@ -1213,9 +1213,17 @@ route('post', '/decisions', {
             input: { oneOf: [str({ minLength: 1, maxLength: 200000 }), { type: 'array', minItems: 1, maxItems: 50, items: { type: 'object' } }] },
             questions: { type: 'object', minProperties: 1, maxProperties: 1000, additionalProperties: { type: 'object', required: ['type', 'instructions'], properties: { type: str({ enum: ['noul', 'choice', 'score'] }), instructions: str({ minLength: 1, maxLength: 4000 }), criteria: {} } } },
             prefer: str({ enum: ['calibrated', 'cheap'] }),
+            model: str({ maxLength: 200, description: 'The model that answers: "auto" (the order of today) or a model id from GET /api/v1/decisions/models ("<provider>/<model>"). An unknown id is a 400 in plain words.' }),
+            kind: str({ enum: ['routing', 'moderation', 'grading', 'tool_choice', 'other'], description: 'What the question is for: it picks the model the owner set for that kind, the ladder to escalate along and the confidence below which an answer is escalated.' }),
         },
     }),
     responses: { 200: json('The answers', { type: 'object', required: ['answers', 'calibrated', 'receipt'], properties: { answers: { type: 'object' }, calibrated: { type: 'boolean' }, receipt: { type: 'object' } } }), ...errors([400, 401, 403, 422, 503]) },
+});
+
+route('get', '/decisions/models', {
+    operationId: 'listDecisionModels', summary: 'The models that can answer a decision', tags: ['decisions'], security: [],
+    description: 'Public, cached for ten minutes, open to every origin. Every model that can answer a decision: Google\'s Decisions API (gemini-decision-1, calibrated, up to 1,000 questions) and every catalogue model that can answer with structured output (a JSON schema) from an active provider (up to 100 questions). Each entry says the id to send as \`model\` ("<provider>/<model>"), the price per 1M tokens in and out, the measured median answer time (null when nobody measured it), whether its answers are calibrated, how many questions it may carry, what it can read and whether it can answer right now.',
+    responses: { 200: json('The models', { type: 'object', required: ['models', 'count', 'generated_at'], properties: { models: { type: 'array', items: { type: 'object' } }, count: integer({ minimum: 0 }), generated_at: str({ format: 'date-time' }) } }), ...errors([500]) },
 });
 
 route('post', '/route-decisions/{id}/outcome', {
