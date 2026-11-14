@@ -144,6 +144,12 @@ const priceRow = {
         usd_per_hour: nullable('number'), usd_per_month: nullable('number'),
         at: nullable(str({ format: 'date-time' })), source_url: nullable(str({ format: 'uri' })),
         live: { type: 'boolean' }, currency: str(), stale: { type: 'boolean' }, note: str(),
+        // The rate a euro price was converted with, when it was converted at all.
+        fx: {
+            type: 'object', additionalProperties: false,
+            required: ['rate', 'base', 'quote'],
+            properties: { rate: { type: 'number' }, base: str(), quote: str(), source_url: str(), at: str({ format: 'date-time' }) },
+        },
     },
 };
 const priceList = {

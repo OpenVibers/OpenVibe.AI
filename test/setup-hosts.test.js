@@ -209,6 +209,13 @@ t.test('the price table is public, cached, and every row says when it was read a
     assert.strictEqual(vultr.ram_gb, 4);
     const ovh = s.body.rows.find((r) => r.provider === 'OVHcloud');
     assert.ok(ovh && ovh.fx && ovh.fx.rate === 1.1052, 'the euro price carries the rate that converted it: ' + JSON.stringify(ovh));
+    // The Server Auction sells refurbished dedicated servers and does not give their size: the row is there
+    // with its own floor price, and a size it does not know is null, never 0.
+    const auction = s.body.rows.find((r) => r.provider === 'Hetzner Server Auction');
+    assert.ok(auction, 'the Server Auction has no row: ' + JSON.stringify(s.body.rows.map((r) => r.provider)));
+    assert.strictEqual(auction.vcpu, null, 'a size the page does not give is null, not 0');
+    assert.strictEqual(auction.ram_gb, null);
+    assert.ok(auction.usd_per_month > 0, 'the auction row has no price');
     const again = await request(h.base, 'GET', '/api/v1/prices/servers');
     assert.strictEqual(again.body.cached, true, 'the second answer is the cached one');
     assert.strictEqual(again.headers.get('cache-control'), 'public, max-age=3600');
