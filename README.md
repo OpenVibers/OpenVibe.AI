@@ -48,6 +48,11 @@ owns publication truth: Wiki, Blog, News, Live, … decide what to publish.
   machine `any` (contracts 0.221.0) uses the fastest of their machines that is on with the model, then the next
 - the `ai.run.queued|succeeded|failed|cached` events and the `ai.preferences` / `ai.usage_summary`
   user modules' AI side
+- **the owner's hosts:** the GPU marketplaces, the servers for agent desktops, Codes runners and routers, and the
+  provider accounts that need more than one value (Vertex AI), each a row in the owner's Setup tab with its key
+  page, what it unlocks and a test that reads the host's own account and never spends; and the public price
+  table that ranks them (`GET /api/v1/prices/servers`, `GET /api/v1/prices/gpus`,
+  [docs/setup-hosts.md](docs/setup-hosts.md))
 
 ## Does not own
 
@@ -150,6 +155,7 @@ idempotent replay):
 | `POST /api/v1/usage/calls` — up to 100 calls a product made outside AI (`ai.call-report@1`, 202 `{ accepted, duplicates, rejected }`) | `ai.usage.report` |
 | `GET /api/v1/usage/series?days=N` (N 1–90) — aggregate demand per UTC day and model: requests, successes and the four token totals, never a caller id or text (`AI_USAGE_SERIES=on`) | `ai.usage.read` |
 | `GET /api/health`, `GET /api/ready`, `GET /release.json` | public |
+| `GET /api/v1/prices/servers`, `GET /api/v1/prices/gpus` | public: what an agent desktop and a GPU hour cost, read from the providers themselves and cached for an hour ([docs/setup-hosts.md](docs/setup-hosts.md)) |
 | `GET /metrics` | direct loopback callers only (a request carrying X-Forwarded-For gets 404) |
 | `GET /console…` | 301 to the same path on [OpenVibe.Exchange](https://openvibe.exchange/console) |
 | `GET /runs/:id` — one run's receipt (status, workflow, model, cost, times, output or error; never the input) | the run's person, signed in (see [Run receipts](#run-receipts)) |

@@ -134,6 +134,36 @@ route('get', '/creations.md', {
     responses: { 200: { description: 'The catalogue as Markdown', content: { 'text/markdown': { schema: { type: 'string' } } } }, ...errors([429]) },
 });
 
+
+// ── The owner's hosts and what they cost (plan §AB.10, §AB.17) ───────────────────────────────────────
+const priceRow = {
+    type: 'object', additionalProperties: false,
+    required: ['provider', 'plan', 'vcpu', 'ram_gb', 'usd_per_hour', 'usd_per_month', 'at', 'source_url'],
+    properties: {
+        provider: str(), plan: str(), vcpu: nullable('number'), ram_gb: nullable('number'), gpu: str(),
+        usd_per_hour: nullable('number'), usd_per_month: nullable('number'),
+        at: nullable(str({ format: 'date-time' })), source_url: nullable(str({ format: 'uri' })),
+        live: { type: 'boolean' }, currency: str(), stale: { type: 'boolean' }, note: str(),
+    },
+};
+const priceList = {
+    type: 'object', additionalProperties: false, required: ['ok', 'kind', 'rows', 'count', 'at'],
+    properties: {
+        ok: { type: 'boolean' }, kind: str(), rows: arrayOf(priceRow), count: integer({ minimum: 0 }),
+        at: str({ format: 'date-time' }), cached: { type: 'boolean' },
+    },
+};
+route('get', '/prices/servers', {
+    operationId: 'listServerPrices', summary: 'What an agent desktop costs, host by host', tags: ['prices'], security: [],
+    description: 'Public, cached for an hour, no token. One row per host: the cheapest plan that fits an agent desktop (2 vCPU, 4 GB), with the price, the day it was read and the page it was read from. The prices that come in euros carry the rate of the day that converted them. A host that publishes no price we can read is not in the table.',
+    responses: { 200: json('The prices', priceList), ...errors([429]) },
+});
+route('get', '/prices/gpus', {
+    operationId: 'listGpuPrices', summary: 'What a GPU hour costs, marketplace by marketplace', tags: ['prices'], security: [],
+    description: 'Public, cached for an hour, no token. One row per provider, card and kind, read from the provider\'s own page: the price, the day it was read and where it came from. A reading that could not be refreshed is marked stale.',
+    responses: { 200: json('The prices', priceList), ...errors([429]) },
+});
+
 // ── AI tasks and choices (rich-content plan §1) ──────────────────────────────────────────────
 route('get', '/tasks', {
     operationId: 'listTasks', summary: 'The task catalogue: every named piece of AI work', tags: ['choices'], security: [],
@@ -1226,7 +1256,7 @@ function openapi() {
             contact: { name: 'OpenVibers', url: 'https://github.com/OpenVibers/OpenVibe.AI', email: 'contact@openvibe.network' },
         },
         servers: [{ url: SITE }],
-        tags: ['runs', 'operations', 'actions', 'choices', 'exchange', 'presets', 'receipts'].map((name) => ({ name })),
+        tags: ['runs', 'operations', 'actions', 'choices', 'exchange', 'presets', 'receipts', 'prices'].map((name) => ({ name })),
         components: {
             securitySchemes: {
                 bearer: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT', description: 'A Network service or user token for audience openvibe.ai carrying the route\'s capability (ai.run.create, ai.run.read, ai.actions.read)' },

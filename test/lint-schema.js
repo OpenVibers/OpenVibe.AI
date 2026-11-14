@@ -9,9 +9,10 @@
  *   - an x-owner-input names a Setup group, says what it unlocks, links an https page and says what to pick there;
  *   - x-required-for, when present, names a feature.
  */
-// openvibe-shared 4.125.0's OWNER_INPUT_GROUPS ids, and the members an x-owner-input may have.
-const GROUPS = new Set(['money', 'ai-providers', 'gpus', 'voices', 'chat-apps', 'sign-in-apps', 'data-sources',
-    'design-publishing', 'domains', 'legal']);
+// openvibe-shared's OWNER_INPUT_GROUPS ids (4.125.0, plus the two the 4.250.0 pin adds: servers and
+// email), and the members an x-owner-input may have.
+const GROUPS = new Set(['money', 'ai-providers', 'gpus', 'servers', 'email', 'voices', 'chat-apps', 'sign-in-apps',
+    'data-sources', 'design-publishing', 'domains', 'legal']);
 const MEMBERS = new Set(['group', 'unlocks', 'get_it_at', 'get_it_how', 'test']);
 
 function lintField(name, f, out) {
