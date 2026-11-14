@@ -15,12 +15,13 @@ Code: `server/routing/auto-decision.js`, called from the pool (`server/providers
 - the owner's own order (fixed, cheapest, fastest) is on for the capability;
 - the request carries a picture, or there is no text;
 - there is one candidate, or the cheapest is already first;
-- there is no Gemini key (only a calibrated answer can meet a threshold; the router's own fallback would route through
-  this same pool);
+- the gemini provider is not active, has no key, or its data policy does not say `training: false`: a person's words
+  never go to a tier that may train on them (Google's free tier may; the owner's note of 11-12). Only a calibrated
+  answer can meet a threshold, and the router's own fallback would route through this same pool;
 - the question would cost 5% or more of the stronger model's expected answer (input tokens at its price, plus its
   output limit or 512 tokens).
 
-A decision that fails is skipped and the order stays. `AI_AUTO_DECISIONS=0` turns the step off.
+A decision that fails is skipped and the order stays. The step is OFF unless `AI_AUTO_DECISIONS=1`.
 
 ## Receipts
 

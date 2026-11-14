@@ -9,7 +9,9 @@
  * Skipped, and the stronger order kept, when: not openvibe/auto; private (the alias or the route's objective); an
  * exact id, a pin, a task choice or provider routing named the model; the request is not plain text; there is one
  * candidate, or the cheapest one is already first; no Gemini key (only calibrated answers can meet a threshold, and the
- * router's own fallback would route through this pool again); or the decision would cost 5% or more of the stronger
+ * router's own fallback would route through this pool again); the gemini provider is not active, or its data policy
+ * does not say it never trains on what it reads (a person's words never go to a free tier that may); or the decision
+ * would cost 5% or more of the stronger
  * model's expected cost. A decision that fails is skipped, never retried.
  *
  * The thresholds (route_thresholds, seeded 0.7) are re-fitted weekly from real outcomes (fitIfDue, from AI's
@@ -124,7 +126,9 @@ function createAutoDecision({ db, decider = null, clock = { now: () => Date.now(
         if (cheap === strong || !(cheap.cost < strong.cost)) return list;
         const decisionCost = (inTokens * GEMINI_PER_MTOK) / 1e6;
         if (!(decisionCost < DECISION_SHARE_CAP * strong.cost)) return list;
-        if (decider.available && !(await decider.available())) return list;
+        // A person's words go only to a provider that does not train on them (plan 16d; the owner's 11-12 note on
+        // Google's free tier): the decider must say so, a key alone is never enough.
+        if (typeof decider.privateOk !== 'function' || !(await decider.privateOk())) return list;
         const kind = kindOf(route, operation);
         let p;
         let receipt = null;

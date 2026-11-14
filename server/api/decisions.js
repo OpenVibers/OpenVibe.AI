@@ -90,6 +90,18 @@ function createGeminiDecider({ db, registry, env = process.env, fetchImpl = glob
         return Boolean(row ? providerSecret(row, env) : env.GEMINI_API_KEY);
     }
 
+    /**
+     * May a person's own words go to it (Auto's routing step, plan 16d)? Only when the gemini provider is active and its
+     * recorded data policy says it does not train on what it reads: Google's free tier may (the owner's note, 11-12:
+     * public or synthetic data only), so a key alone is never enough.
+     */
+    async function privateOk() {
+        const row = registry && registry.getProvider ? await registry.getProvider('gemini').catch(() => null) : null;
+        if (!row || row.status !== 'active' || !providerSecret(row, env)) return false;
+        const policy = require('../exchange/privacy').dataPolicyOf(row);
+        return Boolean(policy && policy.training === false);
+    }
+
     /** Google's Decisions API with the gemini provider's own key, or null when there is no key. */
     async function viaGemini(req) {
         const row = registry && registry.getProvider ? await registry.getProvider('gemini').catch(() => null) : null;
@@ -111,7 +123,7 @@ function createGeminiDecider({ db, registry, env = process.env, fetchImpl = glob
         await meter({ provider: 'gemini', model: GEMINI_MODEL, status: 'ok', cost_usd: cost });
         return { answers: data.answers, calibrated: true, receipt: { provider: 'gemini', model: GEMINI_MODEL, input_tokens: tokens, cost_usd: cost } };
     }
-    return { ask: viaGemini, available };
+    return { ask: viaGemini, available, privateOk };
 }
 
 function decisionsRouter({ runs, auth, db, registry, env = process.env, fetchImpl = globalThis.fetch, log = console, now = () => Date.now() }) {
