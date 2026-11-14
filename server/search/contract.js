@@ -41,6 +41,11 @@ const RECEIPT_FIELDS = {
         type: 'object', required: ['reviewed_on'], additionalProperties: false,
         properties: { reviewed_on: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' } },
     },
+    // The cache (plan §W.2 step 6): a hit says so and how old the kept answer is, a miss says it was not kept.
+    cache: {
+        type: 'object', required: ['hit'], additionalProperties: false,
+        properties: { hit: { type: 'boolean' }, age_s: { type: 'integer', minimum: 0 } },
+    },
     purpose: { type: 'string', minLength: 1, maxLength: 40 },
     estimate: {
         type: 'object', required: ['nano_usd'], additionalProperties: false,
@@ -92,6 +97,7 @@ function covered(out) {
     delete receipt.purpose;
     delete receipt.estimate;
     delete receipt.actual;
+    delete receipt.cache;
     for (const attempt of receipt.attempts || []) {
         delete attempt.class;
         if (attempt.reason && REASONS.includes(attempt.reason)) delete attempt.reason;

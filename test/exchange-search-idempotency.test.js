@@ -110,6 +110,8 @@ const { createKeys } = require('../server/platform/keys');
         assert.equal(upstreamCalls, 1);
 
         // Disconnect while the provider is pending: close must release the hold even without finish.
+        // The query is one nobody asked before, so the search reaches the provider (a kept answer would be
+        // served without it, and there would be nothing pending to disconnect).
         const disconnected = await keys.create(stale.owner, {
             name: 'Disconnected search', monthly_cap_usd: 1, allowed_models: ['openvibe'],
         });
@@ -119,7 +121,7 @@ const { createKeys } = require('../server/platform/keys');
         const pending = fetch(h.base + '/v1/search', {
             method: 'POST', signal: controller.signal,
             headers: { authorization: 'Bearer ' + disconnected.secret, 'content-type': 'application/json' },
-            body: JSON.stringify(searchBody),
+            body: JSON.stringify({ ...searchBody, q: 'lantern still pending' }),
         }).catch(error => error);
         await started;
         controller.abort();

@@ -11,6 +11,7 @@ const net = require('node:net');
 const { createHash } = require('node:crypto');
 const { rankImages } = require('./image-rank');
 const { createCircuit } = require('./circuit');
+const { createSearchCache, keyOf: searchCacheKey, policyFor: cachePolicyFor } = require('./cache');
 const { redactError } = require('../redact');
 const adapters = ['openverse', 'commons', 'searxng', 'openvibe', 'iconify',
     'deepseek', 'brave', 'exa', 'tavily', 'serper', 'serpapi', 'jina',
@@ -23,6 +24,9 @@ const adapters = ['openverse', 'commons', 'searxng', 'openvibe', 'iconify',
 searchClasses.checkAdapters(adapters);
 const CHARGE = Symbol('search Exchange charge');
 const FILTER_KEYS = ['license', 'commercial', 'format', 'orientation', 'size', 'color', 'after', 'type', 'style', 'set', 'safe_search'];
+// The reasons an engine is not called that a kept answer still satisfies: the engine is in cooldown or the
+// caller's budget would not cover a call, and a kept answer costs nothing either way.
+const FREE_SKIPS = new Set(['budget', 'circuit_open']);
 const invalid = (message) => new AiError(422, 'ai.invalid', message);
 const safeUrl = (s) => {
     try {
@@ -182,6 +186,9 @@ function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () =>
     // The versioned rate cards (plan §W.2 step 3): what a unit of an engine costs, what a hold reserves, and
     // the card a receipt names. A process without a database reads version 1 as it was seeded.
     const rateCards = createRateCards({ db, clock: { now: () => now() } });
+    // The search caches (plan §W.2 step 6): what a provider's own terms allow us to keep. Valkey when the
+    // service has one, a Map in this process otherwise; never PostgreSQL (server/search/cache.js).
+    const searchCache = createSearchCache({ valkey, now });
     const assetEvents = events || createMemoryEvents();
     const providerFor = (a, providers) => providers.find(p => p.metadata?.search_adapters?.includes(a.id));
     function binding(a, providers) {
@@ -364,14 +371,15 @@ function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () =>
         // What the call holds: every runnable engine's reserve, capped by the caller's own ceiling.
         const held = runnable.reduce((n, c) => n + (c.own ? 0n : c.ceilingNano), 0n);
         const ceilingNano = budgetNano == null ? held : (budgetNano < held ? budgetNano : held);
-        return { kind, b, candidates: selected, notConsidered, classesAllowed, ceilingNano,
+        // The person the search is for: a same-person cache is named after them, and nobody else answers it.
+        return { kind, b, subject: subject || null, candidates: selected, notConsidered, classesAllowed, ceilingNano,
             ceiling: rateCards.usdOf(ceilingNano) };
     }
     // The receipt names the class of the engine that answered, the classes the request allowed, and the engines
     // whose class kept them out of it (plan §W.2 step 4). It also names the rate card that priced the call and
     // the terms that allowed it (plan §W.2 step 3): the card {id, version}, the terms' review day, the purpose,
     // the hold the call reserved and what it settled.
-    const receipt = (plan, engine, costNano, start, attempts, engineClass, card, estimateNano) => ({
+    const receipt = (plan, engine, costNano, start, attempts, engineClass, card, estimateNano, cache = null) => ({
         engine, cost_usd: rateCards.usdOf(costNano), time_ms: Math.max(0, now() - start),
         ...(engineClass ? { class: engineClass } : {}),
         ...(plan.classesAllowed && plan.classesAllowed.length ? { classes_allowed: plan.classesAllowed } : {}),
@@ -382,7 +390,21 @@ function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () =>
         purpose: searchTerms.purposeOf(plan.b),
         estimate: { nano_usd: String(estimateNano == null ? 0n : estimateNano) },
         actual: { nano_usd: String(costNano) },
+        // The cache (plan §W.2 step 6): a hit says so and how old the answer is; a miss says it was not kept.
+        ...(cache ? { cache } : {}),
     });
+    /**
+     * The cache a provider's own terms allow (plan §W.2 step 6): what may be kept, for whom and for how long.
+     * Nothing is kept when the request is private, when the provider's terms forbid caching, when the kind is a
+     * page read rather than a result, or when a same-person cache has no person to name it after.
+     */
+    function cachePlanFor(c, plan) {
+        const policy = cachePolicyFor(c.a.id, { kind: plan.kind, private: plan.b.private === true, subject: plan.subject });
+        if (!policy) return null;
+        const key = searchCacheKey({ scope: policy.scope, engine: c.a.id, kind: plan.kind, body: plan.b,
+            purpose: searchTerms.purposeOf(plan.b), subject: plan.subject });
+        return { key, scope: policy.scope, ttl_s: policy.ttl_s };
+    }
     async function execute(plan, budget = Infinity) {
         const start = now();
         // The money is integer nano-USD from here on: what the call reserved, what it settled, what it charges.
@@ -394,6 +416,20 @@ function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () =>
             ...(reason ? { reason } : {}), time_ms: Math.max(0, now() - started), cost_usd: cost });
         for (const c of plan.candidates) {
             const attemptStart = now();
+            // A kept answer costs nothing: it is served even when the engine itself would not be called
+            // (its circuit is open, or the caller's budget would not cover a call). An engine the terms
+            // refuse, or one the owner turned off, is never answered from a cache.
+            if (c.skipReason && !FREE_SKIPS.has(c.skipReason)) { attempts.push(attempt(c, 'skipped', attemptStart, 0, c.skipReason)); continue; }
+            const kept = cachePlanFor(c, plan);
+            if (kept) {
+                const hit = await searchCache.get(kept.key);
+                if (hit) {
+                    const out = { results: hit.results, receipt: receipt(plan, c.a.id, incurredNano, start, null, c.a.class, c.card, c.ceilingNano, { hit: true, age_s: hit.age_s }) };
+                    if (!searchContract.check(plan.kind === 'web' ? 'web' : 'images', out).valid) throw new Error('Invalid search response');
+                    Object.defineProperty(out, CHARGE, { value: rateCards.usdOf(chargeNano) });
+                    return out;
+                }
+            }
             if (c.skipReason) { attempts.push(attempt(c, 'skipped', attemptStart, 0, c.skipReason)); continue; }
             if ((!c.own && budgetNano != null && c.ceilingNano + chargeNano > budgetNano) || (capNano != null && c.ceilingNano + incurredNano > capNano)) {
                 attempts.push(attempt(c, 'skipped', attemptStart, 0, 'budget')); continue;
@@ -431,10 +467,14 @@ function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () =>
                 const costNano = reported != null ? rateCards.nanoOfCost(reported)
                     : c.card ? rateCards.settle(c.card, rateCards.unitsUsed(c.card, { results: (rows || []).length }))
                         : (c.estimateNano == null ? 0n : c.estimateNano);
+                const results = plan.kind === 'fetch' ? null : normalize(rows, c.a.id, plan.kind, plan.b);
+                const rec = receipt(plan, c.a.id, costNano + incurredNano, start, [...attempts, attempt(c, 'ok', attemptStart, rateCards.usdOf(costNano))], c.a.class, c.card, c.ceilingNano, kept ? { hit: false } : null);
                 const out = plan.kind === 'fetch'
-                    ? { url: plan.b.url, text: String(raw.text || '').slice(0, 200000), receipt: receipt(plan, c.a.id, costNano + incurredNano, start, [...attempts, attempt(c, 'ok', attemptStart, rateCards.usdOf(costNano))], c.a.class, c.card, c.ceilingNano) }
-                    : { results: normalize(rows, c.a.id, plan.kind, plan.b), receipt: receipt(plan, c.a.id, costNano + incurredNano, start, [...attempts, attempt(c, 'ok', attemptStart, rateCards.usdOf(costNano))], c.a.class, c.card, c.ceilingNano) };
+                    ? { url: plan.b.url, text: String(raw.text || '').slice(0, 200000), receipt: rec }
+                    : { results, receipt: rec };
                 if (plan.kind !== 'fetch' && !searchContract.check(plan.kind === 'web' ? 'web' : 'images', out).valid) throw new Error('Invalid search response');
+                // A miss stores the normalized results for as long as the provider's own terms allow.
+                if (kept) await searchCache.set(kept.key, results, kept.ttl_s);
                 await circuit.clear(c.scope, c.engine);
                 Object.defineProperty(out, CHARGE, { value: rateCards.usdOf(chargeNano + (c.own ? 0n : costNano)) });
                 return out;
