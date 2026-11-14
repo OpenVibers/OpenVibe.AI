@@ -106,16 +106,18 @@ function createSearchCache({ valkey = null, now = () => Date.now() } = {}) {
      */
     async function set(key, results, ttlS) {
         const seconds = Math.max(1, Math.trunc(Number(ttlS) || 0));
-        const payload = { stored_at: now(), results };
-        const text = JSON.stringify(payload);
-        if (Buffer.byteLength(text, 'utf8') > MAX_VALUE_BYTES) return false;
-        if (valkey) {
-            try { await valkey.client.set(storeKey(key), text, 'EX', seconds); } catch { return false; }
+        try {
+            const payload = { stored_at: now(), results };
+            const text = JSON.stringify(payload);
+            if (Buffer.byteLength(text, 'utf8') > MAX_VALUE_BYTES) return false;
+            if (valkey) {
+                await valkey.client.set(storeKey(key), text, 'EX', seconds);
+                return true;
+            }
+            local.set(key, { results, storedAt: payload.stored_at, expiresAt: now() + seconds * 1000 });
+            if (local.size > 1000) local.delete(local.keys().next().value);
             return true;
-        }
-        local.set(key, { results, storedAt: payload.stored_at, expiresAt: now() + seconds * 1000 });
-        if (local.size > 1000) local.delete(local.keys().next().value);
-        return true;
+        } catch { return false; }
     }
     return { get, set };
 }
