@@ -157,6 +157,12 @@ function createApp({ choices = null, searchFetch = null, config, db, registry, p
     // purpose — the site and anyone comparing prices reads the same numbers the router ranks on.
     app.use(require('./api/exchange').exchangeRouter({ config, db, registry, pool, quotas, env, clock, presets, receipts, auth, log, ownEndpoints, fetchImpl, share, modelSync }));
     if (modelDiscovery) app.use(require('./api/model-spots').modelSpotsRouter({ discovery: modelDiscovery, auth, registry, log }));
+    // What is left on each provider account, read live where the provider publishes it (plan §AB.21): the owner's Setup.
+    const providerBalances = require('./providers/balances').createProviderBalances({ registry, fetchImpl, clock, env, log });
+    app.get('/api/v1/admin/console/provider-balances', auth.requireCap(CAPS.configManage), async (req, res) => {
+        try { res.set('Cache-Control', 'no-store').json({ providers: await providerBalances.list() }); }
+        catch (err) { sendError(res, err, req.ov, log); }
+    });
     // The 18+ board's public read API (server/willing/): the measured willingness rates, the published
     // prompt set, and the abliteration tax. Read-only; plan=1 is the dry run and never calls a provider.
     app.use(require('./api/willing').createWillingRouter({ db, willingness, abliterationTax, log }));
