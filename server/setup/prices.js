@@ -293,6 +293,82 @@ async function upcloudPlans(fetchImpl, at, key, parts) {
 }
 
 /**
+ * Shadeform: its own public list of instance types, each with the on-demand price in cents. Shadeform is a
+ * marketplace: it lists the same card in many clouds, so the cheapest one it offers is the price of that card.
+ * A card nobody can rent right now (every region says it is unavailable) is not a price.
+ */
+async function shadeformCards(fetchImpl, at) {
+    const url = 'https://api.shadeform.ai/v1/instances/types';
+    const r = await read(fetchImpl, url);
+    if (r.status < 200 || r.status >= 300 || !r.json) return [];
+    const list = Array.isArray(r.json) ? r.json : (r.json.instance_types || []);
+    const out = [];
+    for (const t of list) {
+        // The price is in cents, and only a one-GPU instance is comparable with the other rows.
+        const cents = num(t.hourly_price);
+        const config = t.configuration || {};
+        if (cents == null || Number(config.num_gpus) !== 1) continue;
+        // The card's name: Shadeform names it in the configuration, with its own spelling.
+        const name = String(config.gpu_type || t.gpu_type || '');
+        const card = SHADEFORM_CARDS[name];
+        if (!card) continue;
+        // A card with no free region cannot be rented: its price is not a price.
+        const free = (t.availability || []).filter((a) => a && a.available && a.rental_type !== 'spot');
+        if (!free.length) continue;
+        const price = cents / 100;
+        out.push(row({
+            provider: 'Shadeform', plan: t.shade_instance_type || t.cloud_instance_type || name, gpu: card,
+            vcpu: num(t.vcpus) != null ? num(t.vcpus) : num(config.vcpus),
+            ram_gb: num(t.memory_in_gb) != null ? num(t.memory_in_gb) : num(config.memory_in_gb),
+            usd_per_hour: price, usd_per_month: price * HOURS_PER_MONTH, at, source_url: url,
+            note: 'on-demand, in ' + free[0].display_name + '; Shadeform adds no fee of its own',
+        }));
+    }
+    return out;
+}
+
+/** The cards Shadeform names the way the GPU table names them. */
+const SHADEFORM_CARDS = Object.freeze({
+    'RTX3090': 'RTX 3090', 'RTX4090': 'RTX 4090', 'RTX5090': 'RTX 5090',
+    'A100_80G': 'A100 80GB', 'H100': 'H100', 'H200': 'H200',
+});
+
+/**
+ * Verda (DataCrunch): its own public list of instance types, each with the on-demand and the spot price of the
+ * hour. Its cards are named in the model field, and only a one-GPU instance is comparable with the other rows.
+ */
+async function verdaCards(fetchImpl, at) {
+    const url = 'https://api.datacrunch.io/v1/instance-types';
+    const r = await read(fetchImpl, url);
+    if (r.status < 200 || r.status >= 300 || !r.json) return [];
+    const list = Array.isArray(r.json) ? r.json : (r.json.instance_types || []);
+    const out = [];
+    for (const t of list) {
+        const gpu = t.gpu || {};
+        if (Number(gpu.number_of_gpus) !== 1) continue;
+        const card = VERDA_CARDS[String(t.model || '')];
+        if (!card) continue;
+        const price = num(t.price_per_hour);
+        if (price == null) continue;
+        const spot = num(t.spot_price);
+        out.push(row({
+            provider: 'Verda (DataCrunch)', plan: t.instance_type || t.name || card, gpu: card,
+            vcpu: num((t.cpu || {}).number_of_cores),
+            ram_gb: num((t.memory || {}).size_in_gigabytes),
+            usd_per_hour: price, usd_per_month: price * HOURS_PER_MONTH, at, source_url: url,
+            note: spot != null ? 'on-demand; the spot hour of the same card is ' + spot + ' USD' : 'on-demand',
+        }));
+    }
+    return out;
+}
+
+/** The cards Verda names the way the GPU table names them. */
+const VERDA_CARDS = Object.freeze({
+    'H100': 'H100', 'H200': 'H200', 'A100 80GB': 'A100 80GB', 'A100 40GB': 'A100 40GB',
+    'RTX A6000': 'RTX A6000', 'RTX 6000 Ada': 'RTX 6000 Ada', 'L40S': 'L40S',
+});
+
+/**
  * Lambda Labs: its own instance types, read with the owner's own key. The GPU market (server/gpu/market.js)
  * does not read Lambda, so this is where its cards come from.
  */
@@ -415,6 +491,18 @@ async function gpuRows({ fetchImpl, gpuMarket = null, keys = {}, now = function 
         }
     }
     out.push.apply(out, await lambdaCards(fetchImpl, iso(now()), keys.lambda));
+    // Shadeform and Verda publish their prices as an API, not on the page the market reader used to read. When
+    // the API answers, its rows are the ones of that provider: the market's saved page is older than the API.
+    const shadeform = await shadeformCards(fetchImpl, iso(now()));
+    const verda = await verdaCards(fetchImpl, iso(now()));
+    // The market reader names them "Shadeform" and "Verda"; these rows carry the same provider, so the older
+    // rows of the same provider are taken out when the API answers.
+    const own = [];
+    if (shadeform.length) { own.push('Shadeform'); out.push.apply(out, shadeform); }
+    if (verda.length) { own.push('Verda', 'Verda (DataCrunch)'); out.push.apply(out, verda); }
+    for (let i = out.length - 1; i >= 0; i -= 1) {
+        if (own.includes(out[i].provider) && !shadeform.includes(out[i]) && !verda.includes(out[i])) out.splice(i, 1);
+    }
     return out;
 }
 

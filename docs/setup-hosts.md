@@ -33,8 +33,8 @@ test and the price feed of a host are written down together.
 | Jarvis Labs | jarvislabs.com/gpu-compute | none (no public API) | no |
 | Paperspace | console.paperspace.io/account/keys | none (no public API) | no |
 | Akash | akash.network | none (no public API) | no |
-| Shadeform | console.shadeform.com | the account | yes, the price page |
-| Verda | verda.com/console | the account | yes, the price page |
+| Shadeform | console.shadeform.com | the account | yes, its own price API |
+| Verda | verda.com/console | the account | yes, its own price API |
 | Thunder Compute | thundercompute.com | none (no public API) | yes, the price page |
 | CoreWeave | cloud.coreweave.com/account/api-keys | none (no public API) | no (a quote only) |
 
@@ -91,9 +91,11 @@ price and no size. A row is never a guess, and a missing number is never a zero.
 Where the price comes from:
 
 - the GPU rows are the readings the provisioner already keeps (`server/gpu/market.js`): Vast.ai's public
-  offer search, RunPod's price table, Salad's tiers, TensorDock's "from" prices, Shadeform's, Verda's and
-  Thunder's - each read from the provider's own page, each marked with the day it was read and whether it is
-  stale.
+  offer search, RunPod's price table, Salad's tiers, TensorDock's "from" prices, CloudRift's and Thunder's -
+  each read from the provider's own page, each marked with the day it was read and whether it is stale.
+- Shadeform and Verda (DataCrunch) publish their prices as an API rather than on a page, so they are read
+  there: Shadeform's own list of instance types (the price in cents) and DataCrunch's own list (the on-demand
+  hour and the spot hour). A card that no region can rent right now is left out: its price is not a price.
 - the server rows are read live from the hosts' own APIs and pages: Vultr's plan list, Linode's type list,
   OVHcloud's public catalog, Hetzner's cloud price page, the Hetzner Server Auction, and - with the owner's
   own key - DigitalOcean's sizes, UpCloud's price list and Lambda's instance types.
@@ -101,6 +103,10 @@ Where the price comes from:
   (`api.frankfurter.dev`); the row carries the rate it used.
 
 A provider that publishes no price we can read is simply not in the table. A price is never a guess.
+
+A provider can be in the price table without being a row of its own: CloudRift publishes its prices and the
+estate reads them, but it has no adapter yet, so a CloudRift key would unlock nothing and there is no row.
+When the estate gains one, the row comes with it.
 
 ## Why the row's address is written by AI
 
