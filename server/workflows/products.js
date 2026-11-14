@@ -484,4 +484,12 @@ workflows.push({
     metadata: { seed: true, internal: true },
 });
 
+// A background product run (a summary, a digest, a description) thinks at low effort unless it names its own. Without
+// one a workflow resolves to medium (server/effort/defaults.js), and gpt-5-nano on background.json spent all 6,496
+// tokens of its allowance reasoning, answered nothing, retried on the slow Flex tier and timed out: on 11-14
+// trade.summarize_market_context failed 122 of ~880 runs a day and the model's public uptime read 55%.
+for (const w of workflows) {
+    if (/^background\b/.test(String(w.default_route || '')) && !(w.metadata && w.metadata.effort)) w.metadata = { ...(w.metadata || {}), effort: 'low' };
+}
+
 module.exports = { templates, workflows };
