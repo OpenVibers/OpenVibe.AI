@@ -105,6 +105,17 @@ t.test('a Flex-tier run is not a sample of the model\'s uptime or speed', async 
     assert.strictEqual(offer.speed.p95_ms, 200, 'nor does a Flex answer\'s wait count as its speed');
 });
 
+t.test('the catalog says the median reply once 20 answers exist (a first token is rarely recorded)', async () => {
+    await reset();
+    const latencies = Array.from({ length: 20 }, (_, i) => 100 + i * 10);
+    for (const ms of latencies.slice(0, 19)) { const id = await insertRun(); await insertRequest({ runId: id, latency: ms }); }
+    assert.strictEqual((await catalog()).median_reply_ms, null, '19 answers: not yet');
+    const id = await insertRun(); await insertRequest({ runId: id, latency: latencies[19] });
+    const body = await catalog();
+    assert.strictEqual(body.median_reply_ms, 200, 'the middle of 100 … 290 ms');
+    assert.strictEqual(body.median_ttft_ms, null, 'no streamed answer, no first token');
+});
+
 t.test('an ok attempt that produced no output is a failure, not a success', async () => {
     await reset();
     // 10 runs ended output.empty; their provider answered but produced nothing usable.
