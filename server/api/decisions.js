@@ -293,6 +293,7 @@ function decisionsRouter({ runs, auth, db, registry, pool = null, config = {}, e
                 step: 1, provider: first.receipt.provider, model: first.receipt.model,
                 cost_usd: Number(first.receipt.cost_usd) || 0, input_tokens: Number(first.receipt.input_tokens) || 0,
                 calibrated: Boolean(first.calibrated), questions: Object.keys(q.questions),
+                ...(first.receipt.run_id ? { run_id: first.receipt.run_id } : {}),
             }];
             let answers = first.answers || {};
             let calibrated = Boolean(first.calibrated);
@@ -313,6 +314,7 @@ function decisionsRouter({ runs, auth, db, registry, pool = null, config = {}, e
                                 step: steps.length + 1, provider: second.receipt.provider, model: second.receipt.model,
                                 cost_usd: Number(second.receipt.cost_usd) || 0, input_tokens: Number(second.receipt.input_tokens) || 0,
                                 calibrated: Boolean(second.calibrated), questions: names, escalated: true,
+                                ...(second.receipt.run_id ? { run_id: second.receipt.run_id } : {}),
                             });
                             // The answer is calibrated only when every step was: a mixed answer is not.
                             calibrated = steps.every((s) => s.calibrated);
@@ -322,11 +324,12 @@ function decisionsRouter({ runs, auth, db, registry, pool = null, config = {}, e
             }
             const last = steps[steps.length - 1];
             const cost = Math.round(steps.reduce((sum, s) => sum + (Number(s.cost_usd) || 0), 0) * 1e8) / 1e8;
+            const tokens = steps.reduce((sum, s) => sum + (Number(s.input_tokens) || 0), 0);
             res.json({
                 answers, calibrated,
                 receipt: {
-                    provider: last.provider, model: last.model, input_tokens: last.input_tokens, cost_usd: cost,
-                    ...(steps[0].run_id ? { run_id: steps[0].run_id } : {}),
+                    provider: last.provider, model: last.model, input_tokens: tokens, cost_usd: cost,
+                    ...(last.run_id ? { run_id: last.run_id } : {}),
                     steps,
                     ...(steps.length > 1 ? { escalated: true, threshold } : {}),
                 },
