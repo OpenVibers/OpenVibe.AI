@@ -128,6 +128,9 @@ function createApp({ choices = null, searchFetch = null, config, db, registry, p
     };
     app.get('/api/v1/creations', sendCreations(false));
     app.get('/api/v1/creations.md', sendCreations(true));
+    // The public price table (plan §AB.10, §AB.17): what a GPU hour and an agent desktop cost, read from the
+    // providers themselves. Cached for an hour; no token, and nothing here spends anything.
+    app.use('/api/v1/prices', require('./api/prices').pricesRouter({ settings, gpuMarket, fetchImpl, clock, log }));
     app.get('/llms.txt', async (req, res, next) => {
         try {
             res.setHeader('Cache-Control', 'public, max-age=300');
@@ -217,7 +220,8 @@ function createApp({ choices = null, searchFetch = null, config, db, registry, p
             cookiesRouter.get('/:id/balance', async (req, res) => { try { res.set('Cache-Control', 'no-store').json({ balance: await sessionCookies.balance('operator', 'owner', req.params.id) }); } catch (err) { sendError(res, err, req.ov, log); } });
             app.use('/internal/provider-session-credentials', cookiesRouter);
         }
-        const configRoutes = adminRoutes([settings.exchange, settings.providerKeys.proxy, settings.gpus.proxy], {
+        const configRoutes = adminRoutes([settings.exchange, settings.providerKeys.proxy, settings.gpus.proxy,
+            settings.servers.proxy, settings.accounts.proxy], {
             basePath: '/internal/config',
             requireAdmin: auth.requireCap(CAPS.configManage),
             actor: (req) => {
@@ -244,17 +248,50 @@ function createApp({ choices = null, searchFetch = null, config, db, registry, p
                     const value = providerSecret(provider, env);
                     return { value, source: value ? (ref ? 'env' : 'vault') : null, env: ref ? ref[1] : null, provider };
                 }
-                if (namespace === settings.gpus.namespace && (key === 'vast.key' || key === 'runpod.key')) {
+                // The GPU marketplaces and the server hosts: one key per host, with the other fields of the
+                // same row (a consumer key, a region, an organization) the host asks for.
+                if (namespace === settings.gpus.namespace && key.endsWith('.key')) {
+                    const host = ownerInputs.hostRow('gpus', key.slice(0, -4));
+                    // A host with no public API to read has no test: the hook answers 404, as it does for
+                    // a key that has no test at all.
+                    if (!host || !host.test) return null;
                     const v = settings.gpus.values();
-                    const marketplace = key.slice(0, -4);
-                    const value = marketplace === 'vast' ? v.vast_key : v.runpod_key;
-                    return { value, source: value ? 'vault' : null, marketplace, origin: marketplace === 'vast' ? v.vast_origin : v.runpod_origin };
+                    const value = String(v.provider_keys[host.id] || '');
+                    const parts = (v.parts && v.parts[host.id]) || {};
+                    return { value, source: value ? 'vault' : null, host, origin: host.origin, parts, secrets: [] };
+                }
+                if (namespace === settings.servers.namespace && key.endsWith('.key')) {
+                    const host = ownerInputs.hostRow('servers', key.slice(0, -4));
+                    if (!host || !host.test) return null;
+                    const v = settings.servers.values();
+                    const value = String(v.keys[host.id] || '');
+                    const parts = v.parts[host.id] || {};
+                    // The other fields of a row are ids (a consumer key, a region, an organization), not
+                    // secrets: the answer may name them, the key itself never leaves here.
+                    return { value, source: value ? 'vault' : null, host, parts, secrets: [] };
+                }
+                if (namespace === settings.accounts.namespace && key.endsWith('.key')) {
+                    const account = ownerInputs.accountRow(key.slice(0, -4));
+                    if (!account) return null;
+                    const v = settings.accounts.values();
+                    const value = String(v.keys[account.id] || '');
+                    const parts = v.parts[account.id] || {};
+                    return { value, source: value ? 'vault' : null, account, parts, secrets: [] };
                 }
                 return null;
             },
-            run: (namespace, key, value, found) => (found.provider
-                ? ownerInputs.testProviderKey(found.provider, value, { fetchImpl })
-                : ownerInputs.testGpuKey(found.marketplace, value, { fetchImpl, origin: found.origin })),
+            run: (namespace, key, value, found) => {
+                if (found.provider) return ownerInputs.testProviderKey(found.provider, value, { fetchImpl });
+                if (found.account) return ownerInputs.testAccountKey(found.account, value, { fetchImpl, parts: found.parts });
+                if (found.host) {
+                    // Vast.ai and RunPod were the two the provisioner rented from; their own readers say more.
+                    if (found.host.id === 'vast' || found.host.id === 'runpod') {
+                        return ownerInputs.testGpuKey(found.host.id, value, { fetchImpl, origin: found.origin });
+                    }
+                    return ownerInputs.testHostKey(found.host, value, { fetchImpl, parts: found.parts });
+                }
+                return { ok: false, message: 'There is no test for this key.' };
+            },
         }));
         app.use(configRoutes.handle);
     }

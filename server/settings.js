@@ -18,24 +18,24 @@
 const { createConfigStore, ConfigError } = require('openvibe-shared/config');
 const { AiError } = require('./util');
 const { keyPage } = require('./owner-inputs');
+const { GPU_HOSTS, SERVER_HOSTS, ACCOUNTS } = require('./setup/hosts');
 
 const EXCHANGE_NAMESPACE = 'ai.exchange';
 const PROVIDER_KEYS_NAMESPACE = 'ai.provider_keys';
 const GPU_NAMESPACE = 'ai.gpus';
+const SERVERS_NAMESPACE = 'ai.servers';
+const ACCOUNTS_NAMESPACE = 'ai.accounts';
 const SERVICE = 'ai';
 const SELF = Object.freeze({ type: 'service', id: SERVICE });
 const GROUP = 'AI Exchange';
 const BATCHES_NAMESPACE = 'ai.batches';
 const PROVIDER_GROUP = 'Provider keys';
 const GPU_GROUP = 'OpenVibe GPUs';
+const SERVER_GROUP = 'Servers';
+const ACCOUNT_GROUP = 'AI provider accounts';
 // The marketplaces the GPU provisioner rents from. AI owns these origins and writes them into the
 // namespace, so the owner's key is sealed to the marketplace it was entered for.
-const GPU_ORIGINS = Object.freeze({
-    vast: 'https://console.vast.ai', runpod: 'https://api.runpod.io',
-    salad: 'https://api.salad.com', tensordock: 'https://dashboard.tensordock.com',
-    shadeform: 'https://api.shadeform.ai', verda: 'https://api.verda.com',
-    thunder: 'https://api.thundercompute.com:8443',
-});
+const GPU_ORIGINS = Object.freeze(Object.fromEntries(GPU_HOSTS.map((h) => [h.id, h.origin])));
 
 /**
  * Bounds from server/config.js (load()), so the schema and the code agree. Every field has a title in plain words and
@@ -204,46 +204,10 @@ const GPU_SCHEMA = Object.freeze({
             type: 'integer', minimum: 0, title: 'Storage and network allowance per hour', 'x-group': GPU_GROUP, 'x-unit': 'nano_usd', 'x-danger': true,
             description: 'A conservative upper bound for extra storage and network charges per instance per hour, in billionths of a dollar. Added to every reservation and metered estimate. Must be explicitly set, even when zero.',
         },
-        'vast.origin': {
-            type: 'string', title: 'Address the Vast.ai key is locked to', 'x-group': GPU_GROUP, 'x-advanced': true,
-            description: 'The Vast.ai address AI sends the key to. AI writes it itself; the key below only opens for this address, so it can never be sent anywhere else.',
-        },
-        'vast.key': {
-            type: 'string', title: 'Vast.ai API key', 'x-group': GPU_GROUP, 'x-bind': 'vast.origin',
-            description: 'The key AI rents Vast.ai GPUs with. Without it (and without a RunPod key) no GPU is rented. It is locked after saving and never shown again, only its last four characters.',
-            'x-example': 'a1b2c3…',
-            'x-owner-input': {
-                group: 'gpus',
-                unlocks: 'Lets AI rent Vast.ai GPUs to run open models when they are needed, and for a person’s own endpoint. Without a GPU key and a monthly cap nothing is rented.',
-                get_it_at: 'https://cloud.vast.ai/manage-keys/',
-                get_it_how: 'Create an API key with the Instance read and write permissions, for the account whose credit pays for the GPUs.',
-                test: true,
-            },
-            'x-required-for': 'Renting GPUs and own endpoints',
-        },
-        'runpod.origin': {
-            type: 'string', title: 'Address the RunPod key is locked to', 'x-group': GPU_GROUP, 'x-advanced': true,
-            description: 'The RunPod address AI sends the key to. AI writes it itself; the key below only opens for this address, so it can never be sent anywhere else.',
-        },
-        'runpod.key': {
-            type: 'string', title: 'RunPod API key', 'x-group': GPU_GROUP, 'x-bind': 'runpod.origin',
-            description: 'The key AI rents RunPod GPUs with. Without it (and without a Vast.ai key) no GPU is rented. It is locked after saving and never shown again, only its last four characters.',
-            'x-example': 'rpa_…',
-            'x-owner-input': {
-                group: 'gpus',
-                unlocks: 'Lets AI rent RunPod GPUs to run open models when they are needed, and for a person’s own endpoint. Without a GPU key and a monthly cap nothing is rented.',
-                get_it_at: 'https://www.runpod.io/console/user/settings',
-                get_it_how: 'Under API Keys create a key with Read/Write access, for the account whose balance pays for the GPUs.',
-                test: true,
-            },
-            'x-required-for': 'Renting GPUs and own endpoints',
-        },
-        ...Object.fromEntries(Object.entries(GPU_ORIGINS).filter(([name]) => !['vast', 'runpod'].includes(name)).flatMap(([name]) => [
-            [`${name}.origin`, { type: 'string', title: `${name} API origin`, 'x-group': GPU_GROUP, 'x-advanced': true,
-                description: `AI locks the ${name} key to this provider-owned API origin.` }],
-            [`${name}.key`, { type: 'string', title: `${name} API key`, 'x-group': GPU_GROUP, 'x-bind': `${name}.origin`,
-                description: `The owner's write-only ${name} API key. Only its last four characters are shown after saving.` }],
-        ])),
+        // One row per GPU marketplace (server/setup/hosts.js): the key, the address it is sealed to, and
+        // the key page, the line that says what to press there and the test that reads the marketplace's own
+        // account. Every marketplace the provisioner rents from is here, so the owner can configure all of them.
+        ...hostRows(GPU_HOSTS, GPU_GROUP, { requiredFor: 'Renting GPUs and own endpoints' }),
         monthly_cap: {
             type: 'integer', title: 'Most the GPUs may cost in a month', 'x-group': GPU_GROUP, 'x-unit': 'nano_usd', 'x-danger': true,
             minimum: 0, 'x-example': 50000000000,
@@ -277,6 +241,115 @@ const GPU_SCHEMA = Object.freeze({
             description: 'The region a rented GPU must be in, as the marketplace names it (default US). Another region may be cheaper but answers people here more slowly.',
         },
     },
+});
+
+/**
+ * The owner rows of a group of hosts (server/setup/hosts.js): one key per host, sealed to the host's own
+ * origin, with the key page, the line that says what to press there, and the test that reads the host's own
+ * account. A host that needs more than one value (a consumer key, a region, an organization) gets those as
+ * the other fields of the same row: x-owner-row names the row they belong to.
+ */
+function hostRows(hosts, group, { requiredFor = '' } = {}) {
+    const properties = {};
+    for (const h of hosts) {
+        if (h.no_key) continue;
+        if (h.bind !== 'region') {
+            properties[h.id + '.origin'] = {
+                type: 'string', title: 'Address the ' + h.name + ' key is locked to', 'x-group': group, 'x-advanced': true,
+                description: 'The ' + h.name + ' address AI sends the key to. AI writes it itself; the key below only opens for this address, so it can never be sent anywhere else.',
+            };
+        }
+        properties[h.id + '.key'] = {
+            type: 'string', title: h.name + ' API key', 'x-group': group, 'x-bind': h.bind === 'region' ? h.id + '.region' : h.id + '.origin',
+            description: 'The key AI uses for ' + h.name + '. It is locked after saving and never shown again, only its last four characters.',
+            'x-owner-input': {
+                group: h.group,
+                unlocks: h.unlocks,
+                get_it_at: h.keys_page,
+                get_it_how: h.keys_how,
+                test: Boolean(h.test),
+            },
+            'x-owner-row': h.id,
+            ...(requiredFor ? { 'x-required-for': requiredFor } : {}),
+        };
+        for (const part of h.parts || []) {
+            properties[h.id + '.' + part.key] = {
+                type: 'string', title: part.title, 'x-group': group,
+                description: part.description,
+                'x-owner-input': {
+                    group: h.group,
+                    unlocks: h.unlocks,
+                    get_it_at: h.keys_page,
+                    get_it_how: h.keys_how,
+                    test: false,
+                },
+                'x-owner-row': h.id,
+            };
+        }
+    }
+    return properties;
+}
+
+/**
+ * The owner rows of the providers whose credential is more than one value (Vertex AI: the service account,
+ * the project and the region). One row per provider, with its fields.
+ */
+function accountRows(accounts) {
+    const properties = {};
+    for (const a of accounts) {
+        properties[a.id + '.key'] = {
+            type: 'string', title: a.name + ' service account key', 'x-group': ACCOUNT_GROUP,
+            description: 'The service account JSON key AI signs its ' + a.name + ' requests with. It is locked after saving and never shown again, only its last four characters.',
+            'x-owner-input': {
+                group: a.group,
+                unlocks: a.unlocks,
+                get_it_at: a.keys_page,
+                get_it_how: a.keys_how,
+                test: Boolean(a.test),
+            },
+            'x-owner-row': a.id,
+        };
+        for (const part of a.parts || []) {
+            properties[a.id + '.' + part.key] = {
+                type: 'string', title: part.title, 'x-group': ACCOUNT_GROUP,
+                description: part.description,
+                'x-owner-input': {
+                    group: a.group,
+                    unlocks: a.unlocks,
+                    get_it_at: a.keys_page,
+                    get_it_how: a.keys_how,
+                    test: false,
+                },
+                'x-owner-row': a.id,
+            };
+        }
+    }
+    return properties;
+}
+
+/**
+ * The ai.servers store: the owner's server hosts. The addresses are written once (AI owns them), the keys
+ * and the other fields of each row are the owner's.
+ */
+const SERVERS_SCHEMA = Object.freeze({
+    $schema: 'https://json-schema.org/draft/2020-12/schema',
+    title: 'Servers',
+    description: 'The hosts that run agent desktops, Codes runners and routers, and the key of each one. Add a key when you sign up with a host; the key is sealed to that host and never shown again.',
+    type: 'object',
+    additionalProperties: false,
+    properties: hostRows(SERVER_HOSTS.filter((h) => !h.no_key), SERVER_GROUP, { requiredFor: 'Running agent desktops, Codes runners and routers' }),
+});
+
+/**
+ * The ai.accounts store: the AI providers whose credential is more than one value.
+ */
+const ACCOUNTS_SCHEMA = Object.freeze({
+    $schema: 'https://json-schema.org/draft/2020-12/schema',
+    title: 'AI provider accounts',
+    description: 'The AI providers that need more than one value to be reached: a service account, a project and a region. The row is one provider with its own fields.',
+    type: 'object',
+    additionalProperties: false,
+    properties: accountRows(ACCOUNTS),
 });
 
 /** Providers that never take a key: the stub, whisper.cpp and the local model servers (auth_mode none). */
@@ -487,6 +560,10 @@ async function createGpuSettings({ db, env = process.env, log = console, onChang
             runpod_origin: String(v['runpod.origin'] || ''),
             runpod_key: String(v['runpod.key'] || ''),
             provider_keys: Object.fromEntries(Object.keys(GPU_ORIGINS).map(name => [name, String(v[`${name}.key`] || '')])),
+            // The other fields of a marketplace row (Salad's organization and project): they are what the
+            // marketplace asks for besides the key.
+            parts: Object.fromEntries(GPU_HOSTS.filter((h) => (h.parts || []).length).map((h) => [h.id,
+                Object.fromEntries(h.parts.map((part) => [part.key, String(v[`${h.id}.${part.key}`] || '')]))])),
             monthly_cap: v.monthly_cap == null ? null : String(v.monthly_cap),
             idle_minutes: v.idle_minutes == null ? null : Number(v.idle_minutes),
             max_runtime_minutes: v.max_runtime_minutes == null ? null : Number(v.max_runtime_minutes),
@@ -503,6 +580,77 @@ async function createGpuSettings({ db, env = process.env, log = console, onChang
         get sealed() { return Boolean(store.sealed); },
     };
 }
+/**
+ * The ai.servers store: the owner's server hosts. The addresses are written once (AI owns them), the keys
+ * and the other fields of every row are the owner's. The values() answer holds the keys and the other fields
+ * of each row, so the price table and the tests can use them without reading the store twice.
+ */
+async function createServersSettings({ db, env = process.env, log = console, onChange }) {
+    const store = await createConfigStore({
+        db, service: SERVICE, namespace: SERVERS_NAMESPACE, schema: SERVERS_SCHEMA, classify, env, log, onChange,
+    });
+    const origins = {};
+    for (const h of SERVER_HOSTS) {
+        if (h.no_key || h.bind === 'region') continue;
+        origins[h.id + '.origin'] = h.origin;
+    }
+    const changes = await store.changes(origins, { merge: true });
+    if (changes.length) await store.apply(origins, { merge: true, actor: SELF, reason: 'the server host addresses' });
+    if (store.sealed) await store.reseal().catch((err) => log.warn('[config] ' + SERVERS_NAMESPACE + ': reseal failed: ' + err.message));
+
+    /** The owner's server settings: the keys, and the other fields of each row. The keys never leave here. */
+    function values() {
+        const v = store.get() || {};
+        const keys = {};
+        const parts = {};
+        for (const h of SERVER_HOSTS) {
+            if (h.no_key) continue;
+            keys[h.id] = String(v[h.id + '.key'] || '');
+            parts[h.id] = Object.fromEntries((h.parts || []).map((p) => [p.key, String(v[h.id + '.' + p.key] || '')]));
+        }
+        return { keys, parts };
+    }
+
+    return {
+        store,
+        proxy: store,
+        namespace: SERVERS_NAMESPACE,
+        values,
+        get sealed() { return Boolean(store.sealed); },
+    };
+}
+
+/**
+ * The ai.accounts store: the AI providers whose credential is more than one value (Vertex AI's service
+ * account, project and region).
+ */
+async function createAccountsSettings({ db, env = process.env, log = console, onChange }) {
+    const store = await createConfigStore({
+        db, service: SERVICE, namespace: ACCOUNTS_NAMESPACE, schema: ACCOUNTS_SCHEMA, classify, env, log, onChange,
+    });
+    if (store.sealed) await store.reseal().catch((err) => log.warn('[config] ' + ACCOUNTS_NAMESPACE + ': reseal failed: ' + err.message));
+
+    /** The owner's accounts: the keys, and the other fields of each row. */
+    function values() {
+        const v = store.get() || {};
+        const keys = {};
+        const parts = {};
+        for (const a of ACCOUNTS) {
+            keys[a.id] = String(v[a.id + '.key'] || '');
+            parts[a.id] = Object.fromEntries((a.parts || []).map((p) => [p.key, String(v[a.id + '.' + p.key] || '')]));
+        }
+        return { keys, parts };
+    }
+
+    return {
+        store,
+        proxy: store,
+        namespace: ACCOUNTS_NAMESPACE,
+        values,
+        get sealed() { return Boolean(store.sealed); },
+    };
+}
+
 
 /**
  * Create both namespaces (the DDL is migrations/0028_config.sql), apply ai.exchange to the live config object,
@@ -526,12 +674,16 @@ async function createSettings({ db, config, registry, clock = { now: () => Date.
     const batches = await createBatchesSettings({ db, env, log, onChange });
     applyBatches(config, batches.values());
     const gpus = await createGpuSettings({ db, env, log, onChange });
+    const servers = await createServersSettings({ db, env, log, onChange });
+    const accounts = await createAccountsSettings({ db, env, log, onChange });
     if (exchange.sealed) await exchange.reseal().catch((err) => log.warn(`[config] ${EXCHANGE_NAMESPACE}: reseal failed: ${err.message}`));
     if (providerKeys.sealed) await providerKeys.store.reseal().catch((err) => log.warn(`[config] ${PROVIDER_KEYS_NAMESPACE}: reseal failed: ${err.message}`));
-    return { exchange, providerKeys, gpus, batches, onChange };
+    return { exchange, providerKeys, gpus, servers, accounts, batches, onChange };
 }
 
 module.exports = {
-    EXCHANGE_NAMESPACE, PROVIDER_KEYS_NAMESPACE, GPU_NAMESPACE, BATCHES_NAMESPACE, SERVICE, SELF, EXCHANGE_SCHEMA, GPU_SCHEMA, GPU_ORIGINS, BATCH_SCHEMA,
-    applyExchange, applyBatches, originOf, providerKeysSchema, createGpuSettings, createBatchesSettings, createSettings,
+    EXCHANGE_NAMESPACE, PROVIDER_KEYS_NAMESPACE, GPU_NAMESPACE, SERVERS_NAMESPACE, ACCOUNTS_NAMESPACE, BATCHES_NAMESPACE,
+    SERVICE, SELF, EXCHANGE_SCHEMA, GPU_SCHEMA, GPU_ORIGINS, SERVERS_SCHEMA, ACCOUNTS_SCHEMA, BATCH_SCHEMA,
+    applyExchange, applyBatches, originOf, providerKeysSchema, hostRows, accountRows,
+    createGpuSettings, createServersSettings, createAccountsSettings, createBatchesSettings, createSettings,
 };

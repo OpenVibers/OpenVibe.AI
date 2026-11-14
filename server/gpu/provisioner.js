@@ -130,6 +130,7 @@ function createGpuProvisioner({
             strategy: STRATEGIES.includes(v.strategy) ? v.strategy : 'cheapest',
             dry_run: v.dry_run === true,
             keys,
+            parts: v.parts || {},
             vast_key: keys.vast,
             runpod_key: keys.runpod,
             cap_nano: cap,
@@ -146,10 +147,13 @@ function createGpuProvisioner({
     /** The adapter of a marketplace, or null when it is not usable. */
     function adapterFor(marketplace, cfg, { allowNoKey = false } = {}) {
         const policy = currentPolicies.get(marketplace) || null;
+        // The other fields of the marketplace's own row in the owner's setup (Salad's organization and
+        // project) fill the gaps the console policy leaves; the console policy still wins.
+        const setup = (cfg.parts && cfg.parts[marketplace]) || {};
         return createAdapter(marketplace, {
             fetchImpl,
             key: (cfg.keys && cfg.keys[marketplace]) || null,
-            options: (policy && policy.options) || {},
+            options: Object.assign({}, setup, (policy && policy.options) || {}),
             allowNoKey,
         });
     }

@@ -68,7 +68,7 @@ t.test('every field of every AI namespace has a title, a 30+ character descripti
     const r = await cfg(h, 'GET', '/internal/config');
     assert.strictEqual(r.status, 200, r.text);
     const names = r.body.namespaces.map((n) => n.namespace).sort();
-    assert.deepStrictEqual(names, ['ai.exchange', 'ai.gpus', 'ai.provider_keys']);
+    assert.deepStrictEqual(names, ['ai.accounts', 'ai.exchange', 'ai.gpus', 'ai.provider_keys', 'ai.servers']);
     for (const ns of r.body.namespaces) assert.deepStrictEqual(lintSchema(ns.schema), [], `${ns.namespace}: ${lintSchema(ns.schema).join('; ')}`);
 });
 

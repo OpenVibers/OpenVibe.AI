@@ -16,10 +16,13 @@
  * instance list. Nothing is created, rented or spent.
  */
 const { PRESETS } = require('./console/presets');
+const { GPU_HOSTS, SERVER_HOSTS, ACCOUNTS } = require('./setup/hosts');
+const { ovhHeaders, ociHeaders, googleAccessToken } = require('./setup/signing');
 
-// The Setup groups by id (openvibe-shared 4.125.0's OWNER_INPUT_GROUPS): x-owner-input.group is one of these ids.
-const SETUP_GROUPS = Object.freeze(['money', 'ai-providers', 'gpus', 'voices', 'chat-apps', 'sign-in-apps', 'data-sources',
-    'design-publishing', 'domains', 'legal']);
+// The Setup groups by id (openvibe-shared's OWNER_INPUT_GROUPS, 4.125.0 and the 4.250.0 servers group):
+// x-owner-input.group is one of these ids.
+const SETUP_GROUPS = Object.freeze(['money', 'ai-providers', 'gpus', 'servers', 'voices', 'chat-apps', 'sign-in-apps',
+    'data-sources', 'design-publishing', 'domains', 'legal']);
 const TEST_TIMEOUT_MS = 10_000;
 
 /** Where to get a provider's key, by the origin of its base URL: the presets' key pages, and a line on what to pick. */
@@ -146,6 +149,102 @@ async function testGpuKey(marketplace, key, { fetchImpl, origin }) {
 }
 
 /**
+ * The host rows (server/setup/hosts.js): the GPU marketplaces and the servers the owner can configure. The
+ * row's own fields are in the catalogue; here they are tested.
+ */
+const HOST_ROWS = Object.freeze({ gpus: GPU_HOSTS, servers: SERVER_HOSTS });
+
+/** The host row of a group with this id, or null. */
+function hostRow(group, id) {
+    const list = HOST_ROWS[group] || [];
+    return list.find((h) => h.id === String(id || '')) || null;
+}
+
+/** The account row with this id (a provider that needs more than one value), or null. */
+function accountRow(id) {
+    return ACCOUNTS.find((a) => a.id === String(id || '')) || null;
+}
+
+/** Fill a row's {placeholders} with the other fields of the same row. */
+function fillUrl(url, parts) {
+    return String(url || '').replace(/\{(\w+)\}/g, (whole, name) => (parts && parts[name] != null && parts[name] !== '' ? String(parts[name]) : whole));
+}
+
+/** The list in an answer: the array the host says it has. */
+function listOf(json, name) {
+    if (Array.isArray(json)) return json.length;
+    if (!json || typeof json !== 'object') return null;
+    for (const key of [name, 'data', 'items', 'results', 'offers', 'projects', 'servers']) {
+        if (Array.isArray(json[key])) return json[key].length;
+    }
+    return null;
+}
+
+/**
+ * Test one host row: one cheap authenticated read of the host's own account, servers or models. Nothing is
+ * created, rented or bought. The row's other fields (a consumer key, a region, an organization) are the ones
+ * the host asks for; they are read here and never written down.
+ */
+async function testHostKey(host, key, { fetchImpl, parts = {} } = {}) {
+    const spec = host && host.test;
+    const name = (host && (host.test && host.test.name)) || (host && host.name) || 'The host';
+    if (!spec) return { ok: false, message: `${name} has no public API to read, so there is nothing to test.` };
+    const url = fillUrl(spec.url, parts);
+    let headers = {};
+    if (spec.auth === 'bearer') headers = { Authorization: `Bearer ${key}` };
+    else if (spec.auth === 'basic') headers = { Authorization: `Basic ${Buffer.from(`${parts.user || ''}:${key}`).toString('base64')}` };
+    else if (spec.auth === 'x-api-key') headers = { 'X-API-Key': key };
+    else if (spec.auth === 'x-auth-token') headers = { 'X-Auth-Token': key };
+    else if (spec.auth === 'ovh') {
+        if (!parts.application_key || !parts.consumer_key) return { ok: false, message: `${name} needs its application key and consumer key before the key can be tested.` };
+        headers = ovhHeaders({ applicationKey: parts.application_key, applicationSecret: key, consumerKey: parts.consumer_key, method: 'GET', url });
+    } else if (spec.auth === 'oci') {
+        if (!parts.tenancy || !parts.user || !parts.fingerprint || !parts.region) {
+            return { ok: false, message: `${name} needs its tenancy, user, fingerprint and region before the key can be tested.` };
+        }
+        headers = ociHeaders({ tenancy: parts.tenancy, user: parts.user, fingerprint: parts.fingerprint, privateKey: key, method: 'GET', url });
+    } else return { ok: false, message: `${name} has no way to sign its requests.` };
+    const r = await probe(fetchImpl, url, { headers });
+    if (r.status >= 200 && r.status < 300) {
+        if (!spec.list) return { ok: true, message: `${name} accepted the key.` };
+        const items = listOf(r.json, spec.list_path || spec.list);
+        if (items == null) return { ok: false, message: `${name} answered without a ${spec.list} list.` };
+        const noun = items === 1 ? String(spec.list).replace(/s$/, '') : spec.list;
+        return { ok: true, message: `${name} accepted the key and lists ${items} ${noun}.` };
+    }
+    return { ok: false, message: refused(name, r) };
+}
+
+/**
+ * Test one account row: a provider that needs more than one value (Vertex AI's service account, project and
+ * region). The service account's JSON key buys a short access token from Google and the token is used for
+ * one read: the publisher models of that region.
+ */
+async function testAccountKey(account, key, { fetchImpl, parts = {} } = {}) {
+    const spec = account && account.test;
+    const name = (account && account.name) || 'The account';
+    if (!spec) return { ok: false, message: `${name} has no way to test its key.` };
+    let parsed = null;
+    try { parsed = typeof key === 'string' ? JSON.parse(key) : key; } catch { parsed = null; }
+    if (!parsed || !parsed.client_email) return { ok: false, message: `${name} needs the service account's JSON key, pasted whole.` };
+    const project = parts.project || parsed.project_id || '';
+    const region = parts.region || '';
+    if (!project) return { ok: false, message: `${name} needs the Google Cloud project id before the key can be tested.` };
+    if (!region) return { ok: false, message: `${name} needs the region before the key can be tested.` };
+    const token = await googleAccessToken({ serviceAccount: parsed, fetchImpl });
+    if (!token.ok) return { ok: false, message: token.message };
+    const url = fillUrl(spec.url, Object.assign({}, parts, { project, region }));
+    const r = await probe(fetchImpl, url, { headers: { Authorization: `Bearer ${token.token}` } });
+    if (r.status >= 200 && r.status < 300) {
+        const items = listOf(r.json, spec.list_path || spec.list || 'models');
+        if (items == null) return { ok: false, message: `${name} answered without a model list.` };
+        const noun = items === 1 ? String(spec.list).replace(/s$/, '') : spec.list;
+        return { ok: true, message: `${name} accepted the service account and lists ${items} ${noun} in ${region}.` };
+    }
+    return { ok: false, message: refused(name, r) };
+}
+
+/**
  * The test route. `resolve(namespace, key)` answers { value, source } (or null when the namespace/key has no test),
  * `tests[namespace](key, value, ctx)` runs the check. Mounted next to adminRoutes, behind the same guard.
  */
@@ -170,11 +269,14 @@ function testRoute({ guard, basePath = '/internal/config', resolve, run, log = c
             try { out = await run(namespace, key, found.value, found); } catch (e) { out = { ok: false, message: `The test could not run: ${(e && e.message) || 'unknown error'}` }; }
             const ok = Boolean(out && out.ok);
             const from = found.source === 'env' && found.env ? ` (the value from the server's settings file, ${found.env})` : '';
-            const message = oneLine(`${(out && out.message) || (ok ? 'It works.' : 'It did not work.')}${from}`, [found.value]);
+            const message = oneLine(`${(out && out.message) || (ok ? 'It works.' : 'It did not work.')}${from}`, [found.value, ...(found.secrets || [])]);
             (log.info || log.log).call(log, `[config] test ${namespace} ${key}: ${ok ? 'connected' : 'not working'}`);
             return res.json({ ...base, ok, state: ok ? 'connected' : 'not_working', message });
         });
     };
 }
 
-module.exports = { SETUP_GROUPS, KEY_HOW, keyPage, oneLine, probe, testProviderKey, testGpuKey, testRoute };
+module.exports = {
+    SETUP_GROUPS, KEY_HOW, keyPage, oneLine, probe, testProviderKey, testGpuKey, testHostKey, testAccountKey,
+    testRoute, hostRow, accountRow, fillUrl, listOf, HOST_ROWS,
+};
