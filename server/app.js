@@ -25,7 +25,7 @@ const pkg = require('../package.json');
 const { adminRoutes } = require('openvibe-shared/config');
 const ownerInputs = require('./owner-inputs');
 
-function createApp({ choices = null, searchFetch = null, config, db, registry, pool, quotas, cache, runs, auth, keys, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, credentials = null, preferences = null, grants = null, vault = null, settings = null, benchEvents = null, runBudgets = null, memory = null, memoryImport = null, memoryServices = null, memorySharing = null, community = null, endpoints = null, webhooks = null, presets = null, receipts = null, balance = null, creditGrants = null, sessionCookies = null, gpus = null, gpuMarket = null, supply = null, abuse = null, priceBook = null, modelSync = null, modelDiscovery = null, ownEndpoints = null, refusal = null, willingness = null, abliterationTax = null, batches = null, share = null, deepDive = null, videoAnalysis = null, mediaStore = null, search = null }) {
+function createApp({ choices = null, searchFetch = null, config, db, registry, pool, quotas, cache, runs, auth, keys, env = process.env, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, log = console, credentials = null, preferences = null, grants = null, vault = null, settings = null, benchEvents = null, runBudgets = null, memory = null, memoryImport = null, memoryServices = null, memorySharing = null, community = null, endpoints = null, webhooks = null, presets = null, receipts = null, balance = null, creditGrants = null, sessionCookies = null, gpus = null, gpuMarket = null, supply = null, abuse = null, priceBook = null, modelSync = null, modelDiscovery = null, ownEndpoints = null, refusal = null, willingness = null, abliterationTax = null, batches = null, share = null, deepDive = null, videoAnalysis = null, mediaStore = null, search = null, valkey = null }) {
     const app = express();
     // /.well-known/agent.json (openvibe-shared/agent-layer, SEO-2): what this site serves, for agents.
     require('openvibe-shared/agent-layer').mount(app, { descriptor: require('./agent-descriptor') });
@@ -147,7 +147,7 @@ function createApp({ choices = null, searchFetch = null, config, db, registry, p
         const guard = baseAppOrCap(...caps);
         return (req, res, next) => { if (req.exchangePrincipal) { req.principal = req.exchangePrincipal; return next(); } return guard(req, res, next); };
     } };
-    const exchangePlatform = require('./platform/router').platform({ db, auth, clock, log, credentials, registry, env, searchFetch, publicBase: config.baseUrl });
+    const exchangePlatform = require('./platform/router').platform({ db, auth, clock, log, credentials, registry, env, searchFetch, publicBase: config.baseUrl, valkey });
     app.use(exchangePlatform.keyMiddleware);
     app.use(exchangePlatform.router);
     // OpenVibe.Exchange's read API (server/api/exchange.js): the public catalog and aggregate usage. Public on

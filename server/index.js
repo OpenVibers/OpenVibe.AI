@@ -258,7 +258,7 @@ async function start({ searchFetch = null, config, db: givenDb = null, clock = {
         clientSecret: env.OV_OAUTH_CLIENT_SECRET, fetch: fetchImpl,
     }) : null;
     const benchEvents = createBenchEvents({ bench, accountData, accountSend, config, log, fetchImpl, clientSecret: env.OV_OAUTH_CLIENT_SECRET });
-    const app = createApp({ choices, searchFetch, config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, grants, vault, settings, benchEvents, runBudgets, memory, memoryImport, memoryServices, memorySharing, community, endpoints, webhooks, presets, receipts, balance, creditGrants, sessionCookies, gpus, gpuMarket, supply, abuse, priceBook, modelSync, modelDiscovery, ownEndpoints, refusal, willingness, abliterationTax, batches, share, deepDive, videoAnalysis, mediaStore, search });
+    const app = createApp({ choices, searchFetch, config, db, registry, pool, quotas, cache, runs, auth, keys, env, clock, fetchImpl, log, credentials, preferences, grants, vault, settings, benchEvents, runBudgets, memory, memoryImport, memoryServices, memorySharing, community, endpoints, webhooks, presets, receipts, balance, creditGrants, sessionCookies, gpus, gpuMarket, supply, abuse, priceBook, modelSync, modelDiscovery, ownEndpoints, refusal, willingness, abliterationTax, batches, share, deepDive, videoAnalysis, mediaStore, search, valkey });
     let jwks = null;
     let keyLoaded = Promise.resolve(null);
     if (!keys.pinned && config.nodeEnv !== 'test') {

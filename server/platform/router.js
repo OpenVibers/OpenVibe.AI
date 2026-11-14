@@ -7,7 +7,7 @@ const { claimRequest } = require('./idempotency');
 const { createSearch, CHARGE } = require('../search');
 const { usdOf } = require('../search/rate-cards');
 const { createAssetEvents } = require('../search/events');
-function platform({ db, auth, clock, log, searchFetch, credentials, registry, env = process.env, publicBase }) {
+function platform({ db, auth, clock, log, searchFetch, credentials, registry, env = process.env, publicBase, valkey = null }) {
     const keys = createKeys({ db, clock });
     const presets = require('../exchange/compat-presets').createCompatPresets(db);
     const search = createSearch({
@@ -15,6 +15,8 @@ function platform({ db, auth, clock, log, searchFetch, credentials, registry, en
         now: () => clock.now(), credentials, registry, env,
         events: createAssetEvents({ db, clock }),
         ...(publicBase ? { publicBase } : {}),
+        // The breaker and the search caches are shared between the processes of the service (server/search/).
+        ...(valkey ? { valkey } : {}),
         // The versioned rate cards live in the database (plan §W.2 step 3).
         db,
     });
