@@ -342,6 +342,9 @@ function createCatalog({ db, registry, pool, env = process.env, clock = { now: (
 
         const daysByModel = await db.prepare("SELECT model_key,substr(created_at,1,10) AS activity_day,COUNT(*)::int requests FROM runs WHERE created_at >= ? AND synthetic=0 AND status='succeeded' GROUP BY model_key,substr(created_at,1,10)").all(new Date(now-7*86400000).toISOString());
         const firstTokens = measured.latencies.map(r=>r.ttft_ms == null ? NaN : Number(r.ttft_ms)).filter(Number.isFinite).sort((a,b)=>a-b);
+        // Most calls are not streamed, so a first token is rarely recorded (2 of 49,525 receipts in a week on 11-14):
+        // the median reply, the whole answer's time on the same answered attempts, is the figure that is measured.
+        const replies = measured.latencies.map((r) => Number(r.latency_ms)).filter(Number.isFinite).sort((a, b) => a - b);
         let models = [...groups.values()];
         if (kind) models = models.filter((m) => m.kind === kind);
         for (const m of models) {
@@ -392,6 +395,7 @@ function createCatalog({ db, registry, pool, env = process.env, clock = { now: (
         return {
             generated_at: new Date(now).toISOString(),
             median_ttft_ms: firstTokens.length >= 20 ? firstTokens[Math.floor(firstTokens.length/2)] : null,
+            median_reply_ms: replies.length >= 20 ? replies[Math.floor(replies.length / 2)] : null,
             window_days: days,
             ...(kind ? { kind } : {}),
             count: models.length,
