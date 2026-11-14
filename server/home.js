@@ -115,7 +115,7 @@ function sections({ siteUrl, stats }) {
         `curl -s -X POST ${siteUrl}/api/v1/chat \\`,
         '  -H "Authorization: Bearer $TOKEN" -H \'Content-Type: application/json\' \\',
         '  -d \'{ "messages": [ { "role": "user", "content": "Name three uses for a paperclip." } ] }\'',
-        '# → { "run": { "id": "run_…", "status": "succeeded", "output": …, "provenance": …, "explain": … } }',
+        '# Response: { "run": { "id": "run_…", "status": "succeeded", "output": …, "provenance": …, "explain": … } }',
     ].join('\n');
     const read = [
         `curl -s ${siteUrl}/api/v1/runs/$RUN -H "Authorization: Bearer $TOKEN" | jq .run.explain`,

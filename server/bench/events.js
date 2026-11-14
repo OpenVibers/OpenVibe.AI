@@ -94,7 +94,7 @@ function createBenchEvents({ bench, db = null, accountData = null, accountSend =
             if (mine.some((s) => s.topic_pattern === TOPIC)) return;
             const made = await call('POST', '/api/v1/subscriptions', { topic_pattern: TOPIC, endpoint, secret: secrets[0] });
             if (!made.ok && made.status !== 409) throw new Error(`subscribing to ${TOPIC}: ${made.status} ${made.body.code || ''}`);
-            if (made.ok) log.log(`[bench] Events subscription created: ${made.body.id} (${TOPIC} → ${endpoint})`);
+            if (made.ok) log.log(`[bench] Events subscription created: ${made.body.id} (${TOPIC} to ${endpoint})`);
         };
         const delays = [0, 10_000, 60_000, 5 * 60_000, 15 * 60_000];
         let i = 0;

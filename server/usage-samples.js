@@ -104,7 +104,7 @@ function init(db, { enabled = true, billingUrl = '', audience = 'openvibe.billin
   relay.start();
   pruneTimer = setInterval(() => { if (relay) relay.prune().catch((err) => log.warn('[Billing] usage outbox prune failed:', err && err.message)); }, PRUNE_EVERY_MS);
   if (pruneTimer.unref) pruneTimer.unref();
-  log.log(`[Billing] ai usage samples → ${billingUrl}`);
+  log.log(`[Billing] ai usage samples to ${billingUrl}`);
   return relay;
 }
 // Delivery state as the outbox records it: sent, failed (Billing refused it; never retried), else queued (last_error
