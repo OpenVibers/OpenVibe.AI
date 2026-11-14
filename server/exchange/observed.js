@@ -16,6 +16,10 @@
  * (tokens_out = 0, e.g. all of max_tokens went to reasoning), is a failure of that provider and model.
  * A skipped or cancelled row was never an answer and is not a sample.
  *
+ * Uptime and speed are the standard tier's: a run that ran on the Flex tier (runs.service_tier = 'flex', background
+ * work that waits for a cheaper, slower slot and may time out by design) is not a sample of the model as people call
+ * it. On 11-14 the background routes' Flex timeouts made gpt-5-nano's public uptime read 55%.
+ *
  * The latency of an answer is its time to the first token when the receipt recorded one (a streamed
  * answer), else the total provider latency of the attempt that answered. Uptime and speed need enough
  * samples: 20 real attempts in the window. Below that both are null while `requests_7d` still says how
@@ -83,6 +87,7 @@ function createObserved({ db, clock = { now: () => Date.now() } }) {
         WHERE q.status IN ('ok', 'error', 'timeout')
           AND r.status IN ('succeeded', 'failed')
           AND r.synthetic = 0
+          AND COALESCE(r.service_tier, '') <> 'flex'
           AND r.created_at::timestamptz >= ?::timestamptz AND r.created_at::timestamptz <= ?::timestamptz
         GROUP BY 1, 2, 3, 4`);
     // A cached answer called no provider; it follows the run it reused (`cached_from`).
@@ -118,6 +123,7 @@ function createObserved({ db, clock = { now: () => Date.now() } }) {
         WHERE q.status = 'ok' AND q.latency_ms IS NOT NULL
           AND r.status IN ('succeeded', 'failed')
           AND r.synthetic = 0
+          AND COALESCE(r.service_tier, '') <> 'flex'
           AND (r.error_code IS NULL OR r.error_code <> 'output.empty')
           AND NOT (q.operation IN ('chat', 'generate', 'summarize', 'classify', 'extract', 'enrich', 'complete', 'messages')
                    AND COALESCE(q.tokens_out, 0) = 0

@@ -15,11 +15,11 @@ const clock = { now: () => nowMs };
 const at = (n) => new Date(nowMs - n * 86400000).toISOString();
 const uid = (p) => `${p}_${Date.now()}_${seq++}`;
 
-async function insertRun({ id = uid('run'), status = 'succeeded', provider = null, model = null, errorCode = null, created = at(0) } = {}) {
+async function insertRun({ id = uid('run'), status = 'succeeded', provider = null, model = null, errorCode = null, created = at(0), serviceTier = null } = {}) {
     await h.db.prepare(`INSERT INTO runs (id, workflow_key, workflow_version, status, requester_type, requester_id, input, input_hash,
-            provider_key, model_key, error_code, created_at, started_at, finished_at)
-        VALUES (?, 'ai.complete', 1, ?, 'service', 'test', '{}', 'input-hash', ?, ?, ?, ?, ?, ?)`)
-        .run(id, status, provider, model, errorCode, created, created, created);
+            provider_key, model_key, error_code, created_at, started_at, finished_at, service_tier)
+        VALUES (?, 'ai.complete', 1, ?, 'service', 'test', '{}', 'input-hash', ?, ?, ?, ?, ?, ?, ?)`)
+        .run(id, status, provider, model, errorCode, created, created, created, serviceTier);
     return id;
 }
 async function insertRequest({ runId, provider = 'deepseek', model = 'deepseek-flash', status = 'ok', operation = 'chat',
@@ -82,6 +82,27 @@ t.test('a failed run counts against the offer its failed attempt names', async (
     const offer = flash(await catalog());
     assert.strictEqual(offer.requests_7d, 20);
     assert.strictEqual(offer.uptime, 0.95, '19 answered attempts and 1 failed attempt');
+});
+
+t.test('a Flex-tier run is not a sample of the model\'s uptime or speed', async () => {
+    await reset();
+    // Background work on the Flex tier waits for a cheap slot and may time out by design (11-14: these made
+    // gpt-5-nano's public uptime read 55%). The standard tier's 20 answers are the model's record.
+    for (let i = 0; i < 20; i++) {
+        const id = await insertRun();
+        await insertRequest({ runId: id, latency: 200 });
+    }
+    for (let i = 0; i < 30; i++) {
+        const id = await insertRun({ status: 'failed', serviceTier: 'flex' });
+        await insertRequest({ runId: id, status: 'timeout', tokensOut: 0, latency: 180000 });
+    }
+    const id = await insertRun({ serviceTier: 'flex' });
+    await insertRequest({ runId: id, latency: 150000 });
+
+    const offer = flash(await catalog());
+    assert.strictEqual(offer.uptime, 1, 'the 31 Flex attempts do not count against the model');
+    assert.strictEqual(offer.requests_7d, 20, 'the samples are the standard tier\'s');
+    assert.strictEqual(offer.speed.p95_ms, 200, 'nor does a Flex answer\'s wait count as its speed');
 });
 
 t.test('an ok attempt that produced no output is a failure, not a success', async () => {
