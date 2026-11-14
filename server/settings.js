@@ -17,6 +17,7 @@
  */
 const { createConfigStore, ConfigError } = require('openvibe-shared/config');
 const { AiError } = require('./util');
+const { createDecisionsSettings } = require('./decisions/config');
 const { keyPage } = require('./owner-inputs');
 const { GPU_HOSTS, SERVER_HOSTS, ACCOUNTS } = require('./setup/hosts');
 
@@ -676,9 +677,11 @@ async function createSettings({ db, config, registry, clock = { now: () => Date.
     const gpus = await createGpuSettings({ db, env, log, onChange });
     const servers = await createServersSettings({ db, env, log, onChange });
     const accounts = await createAccountsSettings({ db, env, log, onChange });
+    // The owner's decisions settings (2026-11-14): per kind, the model, the ladder and the threshold.
+    const decisions = await createDecisionsSettings({ db, env, log, onChange });
     if (exchange.sealed) await exchange.reseal().catch((err) => log.warn(`[config] ${EXCHANGE_NAMESPACE}: reseal failed: ${err.message}`));
     if (providerKeys.sealed) await providerKeys.store.reseal().catch((err) => log.warn(`[config] ${PROVIDER_KEYS_NAMESPACE}: reseal failed: ${err.message}`));
-    return { exchange, providerKeys, gpus, servers, accounts, batches, onChange };
+    return { exchange, providerKeys, gpus, servers, accounts, batches, decisions, onChange };
 }
 
 module.exports = {

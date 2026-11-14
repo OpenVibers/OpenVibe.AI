@@ -24,6 +24,7 @@ const express = require('express');
 const { CAPS } = require('../auth');
 const { AiError, sendError, providerSecret } = require('../util');
 const { STEPS, stepById, offersOf, keyPageOf } = require('../setup/catalog');
+const { KINDS } = require('../decisions/config');
 const { perThousand } = require('../search/rate-cards');
 
 const MONTH_MS = 30 * 24 * 3600 * 1000;
@@ -136,7 +137,7 @@ function scrub(text, secret) {
 /** Google's Decisions API model: answered directly by POST /api/v1/decisions, never a route's chat model. */
 const isDecisionModel = (m) => String(m || '') === 'gemini-decision-1';
 
-function setupRouter({ config = {}, db, registry, pool = null, runs = null, auth, settings = null, search = null, env = process.env, clock = { now: () => Date.now() }, log = console, fetchImpl = globalThis.fetch }) {
+function setupRouter({ config = {}, db, registry, pool = null, runs = null, auth, settings = null, search = null, env = process.env, clock = { now: () => Date.now() }, log = console, fetchImpl = globalThis.fetch, decisionModels = null }) {
     const r = express.Router();
     const read = auth.requireCap(CAPS.providerManage, CAPS.usageRead);
     const write = auth.requireCap(CAPS.providerManage);
@@ -313,6 +314,9 @@ function setupRouter({ config = {}, db, registry, pool = null, runs = null, auth
             ok: true, generated_at: new Date(clock.now()).toISOString(),
             steps,
             summary: { ready: steps.filter((s) => s.ready).length, total: steps.length },
+            // The owner's decisions settings (2026-11-14): the model, the ladder and the threshold of every kind.
+            decisions: settings && settings.decisions ? settings.decisions.values() : null,
+            decision_kinds: KINDS,
             defaults: steps.map((s) => ({
                 id: s.id, name: s.name, route: s.route, current: s.current, options: s.options,
                 estimated_month_usd: s.estimated_month_usd, month_usd: s.month_usd, calls_30d: s.spend.calls_30d,
@@ -492,6 +496,34 @@ function setupRouter({ config = {}, db, registry, pool = null, runs = null, auth
             ON CONFLICT (task_kind) DO UPDATE SET monthly_cap_usd = excluded.monthly_cap_usd, updated_at = excluded.updated_at, updated_by = excluded.updated_by`)
             .run(step.id, money(cap), at, actorOf(req).id);
         return { ok: true, step: step.id, cap_usd: money(cap), updated_at: at };
+    }));
+
+    /**
+     * The owner's decisions settings (2026-11-14): per kind, the model that answers, the ladder to escalate along
+     * and the confidence below which an answer is escalated. The guided setup's Decisions step writes here.
+     */
+    r.get('/api/v1/setup/decisions', read, wrap(async () => ({
+        kinds: KINDS,
+        values: settings && settings.decisions ? settings.decisions.values() : {},
+    })));
+
+    r.put('/api/v1/setup/decisions/:kind', write, wrap(async (req) => {
+        if (!settings || !settings.decisions) throw new AiError(503, 'config.unavailable', 'the decisions settings are not ready');
+        const kind = String(req.params.kind);
+        const b = body(req);
+        const patch = {};
+        if (b.default_model !== undefined) patch.default_model = b.default_model;
+        if (b.ladder !== undefined) patch.ladder = b.ladder;
+        if (b.threshold !== undefined) patch.threshold = b.threshold;
+        if (!Object.keys(patch).length) throw new AiError(422, 'input.invalid', 'send default_model, ladder or threshold');
+        // A model id the list does not know is refused in plain words, before anything is written.
+        const wanted = patch.default_model ? String(patch.default_model).trim() : '';
+        if (wanted && decisionModels) {
+            const entry = await decisionModels.find(wanted);
+            if (!entry) throw new AiError(422, 'decisions.model_unknown', `no decision model called ${wanted}. GET /api/v1/decisions/models lists the ones that can answer.`);
+        }
+        const saved = await settings.decisions.set(kind, patch, { actor: actorOf(req), reason: 'the Decisions step of the AI setup' });
+        return { ok: true, kind, decisions: saved };
     }));
 
     r.post('/api/v1/setup/recommended', write, wrap(async (req) => {

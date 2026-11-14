@@ -109,7 +109,7 @@ const original = { log: console.log, warn: console.warn, error: console.error, i
 t.test('every host of every group is a row with a key page, a line that says what to press there and a test', async () => {
     h = await boot({ env: { OV_CONFIG_KEKS: 'k1:' + KEK, OV_CONFIG_KEK_CURRENT: 'k1', AI_USER_MODULES: 'off' }, log: capture, fetchImpl: fakeFetch });
     const names = (await cfg(h, 'GET', '/internal/config')).body.namespaces.map((n) => n.namespace).sort();
-    assert.deepStrictEqual(names, ['ai.accounts', 'ai.exchange', 'ai.gpus', 'ai.provider_keys', 'ai.servers']);
+    assert.deepStrictEqual(names, ['ai.accounts', 'ai.decisions', 'ai.exchange', 'ai.gpus', 'ai.provider_keys', 'ai.servers']);
     for (const ns of (await cfg(h, 'GET', '/internal/config')).body.namespaces) {
         assert.deepStrictEqual(lintSchema(ns.schema), [], ns.namespace + ': ' + lintSchema(ns.schema).join('; '));
     }
