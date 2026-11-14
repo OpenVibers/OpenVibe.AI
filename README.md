@@ -1108,7 +1108,7 @@ Part of the [OpenVibe network](https://openvibe.network). Built in the open by [
 <!-- versions:start -->
 - openvibe-contracts: v0.421.0
 - openvibe-sdk: v0.168.0
-- openvibe-shared: v4.247.0
+- openvibe-shared: v4.248.0
 <!-- versions:end -->
 
 ### Exchange search engines
