@@ -67,9 +67,21 @@ t.test('hour job records receipts and daily catalogue prices once across restart
     const registry = { listProviders: async () => [{ key: 'openai', kind: 'openai' }], listModels: async () => [{ provider_key: 'openai', model_key: 'gpt-test', metadata: { id: 'openai/gpt-test' } }] };
     const catalog = { models: async () => ({ models: [{ slug: 'openai/gpt-test', offers: [{ provider: 'openai', model: 'gpt-test', price: { in: 0.1, out: 0.5 }, price_source: 'https://example.test/prices' }] }] }) };
     assert.deepEqual(await createObservations({ db, registry, catalog, clock }).tick(), { hours: 1, prices: 1 });
+    // The catalogue is built outside the transaction (11-14: inside, the transaction sat idle past Postgres's 60 s
+    // limit and the cut connection crashed the service), and not at all when the hour is not due.
+    let inside = null, builds = 0;
+    // Whether a transaction is open is read from db.tx itself (a clock comparison differs by driver protocol).
+    let inTx = false;
+    const txdb = Object.create(db);
+    txdb.tx = async (...args) => { inTx = true; try { return await db.tx(...args); } finally { inTx = false; } };
+    const watched = { models: async () => { builds++; inside = inTx; return catalog.models(); } };
+    assert.equal((await createObservations({ db: txdb, registry, catalog: watched, clock }).tick()).skipped, 'not_due');
+    assert.equal(builds, 0, 'not due: no catalogue build');
     assert.equal((await createObservations({ db, registry, catalog, clock }).tick()).skipped, 'not_due');
     await db.prepare('UPDATE exchange_observations_job SET algorithm_version = 1 WHERE id = 1').run();
-    assert.deepEqual(await createObservations({ db, registry, catalog, clock }).tick(), { hours: 1, prices: 0 });
+    assert.deepEqual(await createObservations({ db: txdb, registry, catalog: watched, clock }).tick(), { hours: 1, prices: 0 });
+    assert.equal(builds, 1, 'due: one build');
+    assert.equal(inside, false, 'and it ran outside any transaction');
     const prices = await get('/prices/openai%2Fgpt-test');
     assert.equal(prices.body.series[0].price_out, 0.5);
     const health = await get('/providers/openai');
