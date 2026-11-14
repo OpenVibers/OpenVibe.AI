@@ -19,6 +19,9 @@
 const pool = require('./pool-providers');
 const { providerSecret } = require('../util');
 
+/** The catalogue's facts that carry the day they were read; seedPoolProviders keeps the newest reading. */
+const DATED_FACTS = Object.freeze(['free_tier', 'privacy', 'data_policy']);
+
 /** The registry row of one catalogued provider. */
 function recordOf(p) {
     return {
@@ -118,8 +121,14 @@ async function seedPoolProviders({ registry, actor = 'system', env = process.env
             const metadata = { ...defaults.metadata, ...prev.metadata, search_adapters: [...new Set([...(prev.metadata.search_adapters || []), ...(defaults.metadata.search_adapters || [])])] };
             if (p.key === 'gemini' && prev.base_url === p.base_url && prev.metadata.models_endpoint === `${p.base_url}/models`)
                 metadata.models_endpoint = defaults.metadata.models_endpoint;
-            // The free tier is a dated reading of the provider's own page: a newer reading replaces the one the row kept.
-            if (defaults.metadata.free_tier) metadata.free_tier = defaults.metadata.free_tier;
+            // The free tier, the privacy label and the data policy are dated readings of the provider's own pages: a
+            // reading at least as new replaces the one the row kept (an older placeholder such as "not verified" too).
+            for (const fact of DATED_FACTS) {
+                const next = defaults.metadata[fact];
+                if (!next) continue;
+                const kept = prev.metadata[fact];
+                if (!kept || String(next.checked || '') >= String(kept.checked || '')) metadata[fact] = next;
+            }
             if (!configured && prev.base_url !== p.base_url) {
                 metadata.models_endpoint = defaults.metadata.models_endpoint;
                 metadata.api_family = defaults.metadata.api_family;

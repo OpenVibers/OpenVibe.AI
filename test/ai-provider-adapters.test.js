@@ -176,6 +176,14 @@ t.test('the seed writes the privacy label, the quantization and the refusal rate
     await seed.seedPoolProviders({ registry });
     assert.strictEqual(saved.get('gemini').metadata.free_tier.checked, '2026-11-12', 'the catalogue\'s newer free tier wins');
     assert.strictEqual(models.get('gemini/gemini-4-hydrogen').cost.in_per_mtok, 1.50);
+    // An older placeholder privacy and data policy give way to the catalogue's dated reading; a newer one the row kept stays.
+    const placeholder = { label: 'anonymized', wording: 'Data retention and training terms have not been verified.', checked: '2026-11-10' };
+    saved.set('gemini', { ...saved.get('gemini'), origin: 'catalog', metadata: { ...saved.get('gemini').metadata, privacy: placeholder, data_policy: { trains: null, checked: '2026-11-10' } } });
+    saved.set('qwen', { ...saved.get('qwen'), origin: 'catalog', metadata: { ...saved.get('qwen').metadata, privacy: { label: 'anonymized', wording: 'a newer reading', checked: '2026-12-01' } } });
+    await seed.seedPoolProviders({ registry });
+    assert.strictEqual(saved.get('gemini').metadata.data_policy.trains, true, 'the free tier trains: the catalogue\'s reading replaces the placeholder');
+    assert.match(saved.get('gemini').metadata.privacy.wording, /unpaid quota/i);
+    assert.strictEqual(saved.get('qwen').metadata.privacy.wording, 'a newer reading', 'a newer reading the row kept is not overwritten');
     // The owner edits a provider: a second seed never touches its row.
     saved.set('qwen', { ...saved.get('qwen'), origin: 'admin', base_url: 'https://proxy.example/v1' });
     const again = await seed.seedPoolProviders({ registry });
