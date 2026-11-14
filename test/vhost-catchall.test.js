@@ -33,4 +33,8 @@ for (const [name, text] of [['ai.openvibe.services', conf], ['api.openvibe.excha
 }
 assert.match(conf, /log_format ovai_noquery '[^']*\$uri[^']*';/, 'the path-only log format (no $request, no $args)');
 assert.ok(!/log_format ovai_noquery '[^']*(\$request |\$request"|\$args|\$request_uri)/.test(conf), 'it never logs the query');
-console.log('vhost catch-all: GET/HEAD reach the app (favicon, 404 page); other methods refused; /metrics refused; POST /release-metrics passes; POST /api/v1/decisions passes');
+// 2026-11-14: the public price table (plan §AB.10, §AB.17) is a GET like the creations list: it passes.
+const prices = /location ~ \^\/api\/v1\/prices\/\(([a-z|]+)\)\$ \{([\s\S]*?)\n    \}/.exec(conf);
+assert.ok(prices && prices[1].split('|').sort().join(',') === 'gpus,servers', 'GET /api/v1/prices/{gpus,servers} reaches the app');
+assert.ok(/limit_except GET OPTIONS \{ deny all; \}/.test(prices[2]), 'GET only');
+console.log('vhost catch-all: GET/HEAD reach the app (favicon, 404 page); other methods refused; /metrics refused; POST /release-metrics passes; POST /api/v1/decisions passes; the public price table passes');
