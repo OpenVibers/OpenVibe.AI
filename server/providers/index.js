@@ -84,25 +84,44 @@ function rateLimited(err) {
 }
 
 /**
- * The hard floor on a streamed answer (server/policy/floor.js). The text is checked as it grows, before each chunk
- * goes out: a chunk that makes the answer break the floor is never delivered, and the stream stops with
- * `policy.floor_refused`. (Text already delivered cannot be recalled; the check is per chunk and over the whole
- * answer so far, including tool-call arguments.)
+ * The hard floor on a streamed answer (server/policy/floor.js). The text is checked as it grows, before it goes out:
+ * a chunk that makes the answer break the floor is never delivered, and the stream stops with `policy.floor_refused`.
+ * (Text already delivered cannot be recalled.)
+ *
+ * Up to FLOOR_EVERY_CHUNK characters the whole answer is checked on every chunk, so a short answer streams exactly
+ * as it comes. Past that, every chunk is checked at once over the answer's last FLOOR_WINDOW characters, enough for
+ * any phrase rule, and the whole answer (with its tool-call arguments) when it has grown by a sixteenth since the
+ * last whole check (up to 2,000 characters) or a chunk carries tool-call arguments. Text past the last whole check
+ * is held, so nothing the whole-text rules have not read goes out. Checking the whole answer on every chunk was
+ * quadratic: 25,000 characters in 4-character chunks cost 2.6 s of CPU and a long answer minutes, and on 11-14 the
+ * service's event loop stood still for 132 s.
  */
+const FLOOR_WINDOW = 600;
+const FLOOR_EVERY_CHUNK = 4000;   // up to this size the whole answer is checked on every chunk: cheap, and nothing waits
+const floorStep = (n) => Math.min(2000, Math.max(32, Math.floor(n / 16)));
 function createFloorGuard(emit, { hold = 0 } = {}) {
-    let all = '';           // the whole answer so far: the floor checks this, never only the held tail
-    let held = '';          // the text not yet delivered (hold characters, or nothing)
+    let all = '';           // the whole answer so far: the whole-text check reads this, never only the held tail
+    let held = '';          // the text not yet delivered (hold characters, plus what the whole check has not read)
     let args = '';
+    let checkedAll = 0;     // all.length at the last whole check
+    let checkedSize = 0;    // all.length + args.length at the last whole check
     const queued = [];       // { d, text } in arrival order; text is the content the delta carries
     const refuse = (r) => Object.assign(new Error(r.detail), { code: 'policy.floor_refused', status: 403, detail: r.detail, rule: r.rule });
-    const checkNow = () => {
+    const checkWhole = () => {
         const r = floor.checkAnswer([all, args].filter(Boolean));
+        if (!r.ok) throw refuse(r);
+        checkedAll = all.length;
+        checkedSize = all.length + args.length;
+    };
+    const checkTail = () => {
+        const r = floor.checkAnswer([all.slice(-FLOOR_WINDOW)]);
         if (!r.ok) throw refuse(r);
     };
     function flush(final) {
-        while (queued.length && (final || held.length > hold)) {
+        const keep = final ? 0 : hold + (all.length - checkedAll);
+        while (queued.length && (final || held.length > keep)) {
             const head = queued[0];
-            const over = held.length - hold;
+            const over = held.length - keep;
             if (head.text.length && !final && head.text.length > over) {
                 // Split the delta: deliver only what is outside the held tail.
                 const cut = head.text.length - over;
@@ -121,15 +140,18 @@ function createFloorGuard(emit, { hold = 0 } = {}) {
             if (!d || typeof d !== 'object') return;
             const content = d.delta && typeof d.delta.content === 'string' ? d.delta.content : '';
             if (content) { all += content; held += content; }
+            let withArgs = false;
             for (const t of (d.delta && d.delta.tool_calls) || []) {
-                if (t && t.function && t.function.arguments) args += String(t.function.arguments);
+                if (t && t.function && t.function.arguments) { args += String(t.function.arguments); withArgs = true; }
             }
-            checkNow();
+            const size = all.length + args.length;
+            if (withArgs || size <= FLOOR_EVERY_CHUNK || size - checkedSize >= floorStep(size)) checkWhole();
+            else if (content) checkTail();
             queued.push({ d, text: content });
             flush(false);
         },
         finish() {
-            checkNow();
+            checkWhole();
             flush(true);
         },
         get text() { return all; },
