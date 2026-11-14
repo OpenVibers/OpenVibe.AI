@@ -10,6 +10,7 @@ module.exports = {
     freshness: [],
     hosts: [HOST],
     kinds: ['web'],
+    class: 'first_party_index',
     async search(b, { fetchImpl }) {
         const get = requestFor(this.hosts, fetchImpl);
         const out = await get(

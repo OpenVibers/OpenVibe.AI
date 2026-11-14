@@ -11,6 +11,7 @@ const images = new Map();
 module.exports = {
     id: 'pixabay', byok: true, checked_on: '2026-11-13',
     kinds: ['images'], key_env: 'SEARCH_PIXABAY_KEY', hosts: ['pixabay.com'], freshness: [],
+    class: 'provider_asset_catalog',
     price_per_1000: 0, source: 'https://pixabay.com/api/docs/',
     pricing_note: 'No provider fee. Responses are cached for 24 hours and pictures are proxied, as its terms require.',
     filters: {

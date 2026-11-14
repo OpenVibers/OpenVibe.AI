@@ -7,6 +7,7 @@ module.exports = {
     freshness: [],
     hosts: ['commons.wikimedia.org'],
     kinds: ['images'],
+    class: 'open_asset_catalog',
     upstreams: ['commons'],
     filters: {
         license: 'local', commercial: 'local', format: 'native', orientation: 'local',

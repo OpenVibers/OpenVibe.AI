@@ -1,7 +1,7 @@
 'use strict';
 const assert = require('node:assert/strict');
-const { validate } = require('openvibe-contracts');
 const { createSearch, CHARGE } = require('../server/search');
+const searchContract = require('../server/search/contract');
 require('../server/search/adapters/meta');
 require('../server/search/adapters/serper-images');
 const sample = id => require('./fixtures/search/' + id + '.json').response;
@@ -32,7 +32,7 @@ const order = out => out.receipt.attempts.map(a => [a.provider, a.engine, a.stat
     assert.deepEqual(fallback.receipt.attempts.map(a => a.cost_usd), [0, 0.001, 0.005]);
     assert.equal(fallback.receipt.cost_usd, 0.006);
     assert.equal(fallback[CHARGE], 0.006);
-    assert.equal(validate('exchange.search-result@1', fallback).valid, true);
+    assert.equal(searchContract.check('web', fallback).valid, true);
     assert.equal(JSON.stringify(fallback).includes('refused the request'), false, 'no upstream error body is kept');
 
     // A provider that refuses the request is an error attempt; the next provider still answers.
@@ -107,7 +107,7 @@ const order = out => out.receipt.attempts.map(a => [a.provider, a.engine, a.stat
     });
     const imageAnswer = await images.search('images', { q: 'cat', engine: 'serper-images' });
     assert.deepEqual(order(imageAnswer), [['serper', 'serper-images', 'ok', null]]);
-    assert.equal(validate('exchange.image-result@1', imageAnswer).valid, true);
+    assert.equal(searchContract.check('images', imageAnswer).valid, true);
 
     // A managed reader may use either of its registered hosts (Jina reads from r.jina.ai).
     const jina = { key: 'jina', status: 'active', origin: 'admin', base_url: 'https://s.jina.ai', secret_ref: 'env:SEARCH_JINA_KEY', metadata: { search_adapters: ['jina'] } };

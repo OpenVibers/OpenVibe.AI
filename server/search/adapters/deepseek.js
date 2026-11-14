@@ -3,6 +3,7 @@ const { requestFor, post, bearer, query, since, web } = require('../transport');
 module.exports = {
     id: 'deepseek', byok: true, checked_on: '2026-11-09',
     kinds: ['web', 'fetch'], key_env: 'SEARCH_DEEPSEEK_KEY', hosts: ['api.deepseek.com'],
+    class: 'independent_index',
     price_per_1000: 0.75, source: 'https://api-docs.deepseek.com/guides/search/',
     freshness: ['day', 'month', 'year'], max_query: 128,
     async search(b, { fetchImpl, key, now }) {

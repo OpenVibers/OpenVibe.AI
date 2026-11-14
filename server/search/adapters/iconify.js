@@ -6,6 +6,7 @@ module.exports = {
     freshness: [],
     hosts: ['api.iconify.design'],
     kinds: ['icons'],
+    class: 'icon_catalog',
     upstreams: ['iconify'],
     filters: {
         license: 'local', commercial: 'unsupported', format: 'local', set: 'native',

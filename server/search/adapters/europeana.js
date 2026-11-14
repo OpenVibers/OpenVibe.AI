@@ -20,6 +20,7 @@ const licenseOf = (rights) => {
 module.exports = {
     id: 'europeana', byok: true, checked_on: '2026-11-13',
     kinds: ['images'], key_env: 'SEARCH_EUROPEANA_KEY', hosts: ['api.europeana.eu'],
+    class: 'open_asset_catalog',
     price_per_1000: 0,
     source: 'https://api.europeana.eu/record/v2/search.json',
     pricing_note: 'No provider fee: the API answers with a free key and Europeana publishes no price list. Its API terms page could not be read on 2026-11-13 (a bot check answered), so commercial use of the API is unconfirmed.',

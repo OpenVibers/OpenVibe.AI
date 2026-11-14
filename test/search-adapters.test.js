@@ -1,7 +1,7 @@
 'use strict';
 const assert = require('node:assert/strict');
-const { validate } = require('openvibe-contracts');
 const { createSearch, adapters, CHARGE } = require('../server/search');
+const searchContract = require('../server/search/contract');
 const { requestFor, publicTarget } = require('../server/search/transport');
 const fixture = name => require('./fixtures/search/' + name + '.json');
 const KEY = 'fixture-search-key';
@@ -41,7 +41,7 @@ const json = value => new Response(JSON.stringify(value), { status: 200 });
         assert.equal(out.receipt.cost_usd, sample.expected.cost, a.id);
         assert.equal(out[CHARGE], sample.expected.cost);
         assert.equal(out.receipt.engine, a.id);
-        assert.equal(validate(kind === 'web' ? 'exchange.search-result@1' : 'exchange.image-result@1', out).valid, true, a.id);
+        assert.equal(searchContract.check(kind === 'web' ? 'web' : 'images', out).valid, true, a.id);
         assert.ok(!JSON.stringify(out).includes(KEY));
         if (kind === 'web') {
             assert.equal(out.results[0].url, 'https://example.org/article');

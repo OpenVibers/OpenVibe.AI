@@ -15,6 +15,7 @@ const collect = (items, out = []) => {
 module.exports = {
     id: 'dataforseo-images', byok: true, checked_on: '2026-11-13',
     kinds: ['images'], key_env: 'SEARCH_DATAFORSEO_KEY', hosts: ['api.dataforseo.com'],
+    class: 'web_image_discovery',
     price_per_1000: 2,
     source: 'https://dataforseo.com/pricing/google-serp/google-images-serp-api',
     pricing_note: 'Live mode $0.002 per SERP = $2.00 per 1,000 SERPs (up to 100 images each); the queued modes are cheaper but take minutes. Search results grant no reuse rights.',

@@ -3,6 +3,7 @@ const { requestFor, query, web } = require('../transport');
 module.exports = {
     id: 'google', byok: true, checked_on: '2026-11-09',
     kinds: ['web'], key_env: 'SEARCH_GOOGLE_KEY', requires: ['SEARCH_GOOGLE_CX'], hosts: ['customsearch.googleapis.com'],
+    class: 'independent_index',
     price_per_1000: 5, source: 'https://developers.google.com/custom-search/v1/overview', freshness: ['day', 'month', 'year'],
     pricing_note: 'After 100 free queries/day. Existing customers only; service ends 2027-01-01.',
     async search(b, { fetchImpl, key, env }) {

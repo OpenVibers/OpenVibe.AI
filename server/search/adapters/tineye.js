@@ -6,6 +6,7 @@ const { requestFor, query } = require('../transport');
 module.exports = {
     id: 'tineye', byok: true, manual_only: true, checked_on: '2026-11-13',
     kinds: ['reverse_image'], key_env: 'SEARCH_TINEYE_KEY', hosts: ['api.tineye.com'], freshness: [],
+    class: 'reverse_image',
     price_per_1000: 40, source: 'https://api.tineye.com/python/docs/',
     pricing_note: 'Example bundle: $200 per 5,000 searches. Verify the current bundle before use.',
     uploads: true,

@@ -3,6 +3,7 @@ const { requestFor, query, web } = require('../transport');
 module.exports = {
     id: 'kagi', byok: true, checked_on: '2026-11-09',
     kinds: ['web'], key_env: 'SEARCH_KAGI_KEY', hosts: ['kagi.com'],
+    class: 'independent_index',
     price_per_1000: 25, source: 'https://help.kagi.com/kagi/api/search-legacy.html', freshness: [],
     pricing_note: 'Documented v0 Search API; requires an API-enabled account.',
     async search(b, { fetchImpl, key }) {

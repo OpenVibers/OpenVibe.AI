@@ -1,8 +1,15 @@
 'use strict';
 const { schema } = require('openvibe-contracts');
+const searchClasses = require('./classes');
+const searchContract = require('./contract');
 const contract = id => {
     const { $id, $schema, ...s } = schema(id);
     return s;
+};
+// The result contract with the engine class the receipt now carries (plan §W.2 step 4).
+const resultSchema = kind => {
+    const base = contract(kind === 'web' ? 'exchange.search-result@1' : 'exchange.image-result@1');
+    return { ...base, properties: { ...base.properties, receipt: searchContract.extended(kind === 'web' ? 'web' : 'images').properties.receipt } };
 };
 const json = s => ({ content: { 'application/json': { schema: s } } });
 const properties = {
@@ -11,6 +18,7 @@ const properties = {
     limit: { type: 'integer', minimum: 1, maximum: 50, default: 10, description: 'Maximum returned results; some providers return fewer.' },
     freshness: { type: 'string', enum: ['day', 'month', 'year'] },
     purpose: { type: 'string', enum: require('./terms').PURPOSES, description: 'What the results are for (default interactive_display). An engine whose own terms do not allow it is skipped (or refused when named): Brave never serves evaluation, benchmarks or training; an unreviewed engine never serves any AI-use purpose.' },
+    class: { oneOf: [{ type: 'string', enum: searchClasses.CLASS_NAMES }, { type: 'array', items: { type: 'string', enum: searchClasses.CLASS_NAMES } }], description: 'The engine classes to use, one name or a list. Only engines of these classes are called. Without it a web search uses the default classes (an independent index, a SERP proxy, OpenVibe\'s own index, a metasearch); an answer engine or a semantic engine joins only when the request asks for one, or when the purpose is answer_grounding or agent_research. Auto never ranks unlike engines by price alone. An unknown class is 422.' },
     private: { type: 'boolean', description: 'A sensitive query: only engines whose terms keep no query (zero or transient retention) are used; otherwise the call is refused.' },
     max_cost_usd: { type: 'number', minimum: 0, description: 'Maximum provider cost for this call, including BYOK. Variable-cost engines must fit their documented conservative ceiling.' },
 };
@@ -20,7 +28,7 @@ for (const kind of ['web', 'images', 'icons']) {
     paths['/v1/search' + (kind === 'web' ? '' : '/' + kind)] = { post: {
         operationId: 'search' + kind[0].toUpperCase() + kind.slice(1), tags: ['exchange'],
         summary: `Search ${kind} through Exchange`, security: [{ bearer: [] }],
-        description: 'Accepts an Exchange key, person token, authorized service or app token.' + (kind === 'icons' ? ' A first-party service holding exchange.search.icons reaches this route only, with its own minute quota.' : '') + ' Receipt reports engine, provider cost in USD and elapsed milliseconds, including fallbacks, and lists each ordered attempt (ok, error or skipped) with its provider, engine, safe reason, latency and cost. If a timed-out or malformed upstream answer may already have been billed, its reserved ceiling is included conservatively. BYOK has zero Exchange charge and zero fee; its provider cost remains visible in the receipt. Shared keys settle that cost against the Exchange key cap. Sources and checked dates are in GET /api/v1/exchange/search/engines.',
+        description: 'Accepts an Exchange key, person token, authorized service or app token.' + (kind === 'icons' ? ' A first-party service holding exchange.search.icons reaches this route only, with its own minute quota.' : '') + ' Receipt reports engine, provider cost in USD and elapsed milliseconds, including fallbacks, and lists each ordered attempt (ok, error or skipped) with its provider, engine, safe reason, latency and cost. It also names the class of the engine that answered, the classes the request allowed, and the engines whose class kept them out of it. If a timed-out or malformed upstream answer may already have been billed, its reserved ceiling is included conservatively. BYOK has zero Exchange charge and zero fee; its provider cost remains visible in the receipt. Shared keys settle that cost against the Exchange key cap. Sources and checked dates are in GET /api/v1/exchange/search/engines.',
         requestBody: { required: true, ...json({ type: 'object', required: ['q'], properties: {
             ...properties,
             ...(kind === 'web' ? {} : {
@@ -39,7 +47,7 @@ for (const kind of ['web', 'images', 'icons']) {
                 style: { type: 'string', enum: ['any', 'line', 'solid'] },
             }),
         } }) },
-        responses: { 200: { description: kind === 'web' ? 'exchange.search-result@1. Sonar answer text is the snippet on each cited source.' : 'exchange.image-result@1. Images include size, author, licence, source page and attribution; unavailable metadata is null. Search results confer no additional licence.', ...json(contract(kind === 'web' ? 'exchange.search-result@1' : 'exchange.image-result@1')) }, ...errors },
+        responses: { 200: { description: kind === 'web' ? 'exchange.search-result@1. Sonar answer text is the snippet on each cited source.' : 'exchange.image-result@1. Images include size, author, licence, source page and attribution; unavailable metadata is null. Search results confer no additional licence.', ...json(resultSchema(kind)) }, ...errors },
     } };
 }
 paths['/v1/search/reverse-image'] = { post: {
@@ -52,7 +60,7 @@ paths['/v1/search/reverse-image'] = { post: {
         image: { type: 'string', description: 'A base64 data URL (PNG, JPEG, GIF, BMP, TIFF or WebP, at most 5 MB decoded). TinEye only.' },
         limit: properties.limit, max_cost_usd: properties.max_cost_usd, purpose: properties.purpose, private: properties.private,
     }, oneOf: [{ required: ['image_url'] }, { required: ['image'] }] }) },
-    responses: { 200: { description: 'exchange.image-result@1 with reverse_image rows', ...json(contract('exchange.image-result@1')) }, ...errors },
+    responses: { 200: { description: 'exchange.image-result@1 with reverse_image rows', ...json(resultSchema('images')) }, ...errors },
 } };
 paths['/v1/search/images/unsplash/download'] = { post: {
     operationId: 'trackUnsplashDownload', tags: ['exchange'],
@@ -72,7 +80,7 @@ paths['/v1/fetch'] = { post: {
         url: { type: 'string', format: 'uri', maxLength: 8192 }, engine: properties.engine, max_cost_usd: properties.max_cost_usd, purpose: properties.purpose, private: properties.private,
     } }) },
     responses: { 200: { description: 'The URL, extracted text (at most 200000 characters) and receipt', ...json({ type: 'object', required: ['url', 'text', 'receipt'], properties: {
-        url: { type: 'string', format: 'uri' }, text: { type: 'string' }, receipt: contract('exchange.search-result@1').properties.receipt,
+        url: { type: 'string', format: 'uri' }, text: { type: 'string' }, receipt: searchContract.extended('web').properties.receipt,
     } }) }, ...errors },
 } };
 module.exports = { paths };

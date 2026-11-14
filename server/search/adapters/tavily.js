@@ -3,6 +3,7 @@ const { requestFor, post, bearer, query, web } = require('../transport');
 module.exports = {
     id: 'tavily', byok: true, checked_on: '2026-11-09',
     kinds: ['web'], key_env: 'SEARCH_TAVILY_KEY', hosts: ['api.tavily.com'],
+    class: 'independent_index',
     price_per_1000: 8, source: 'https://www.tavily.com/pricing', freshness: ['day', 'month', 'year'],
     pricing_note: 'Pay as you go; basic search uses one credit. Free allowance excluded.',
     included_allowance: '1,000 credits a month',

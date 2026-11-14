@@ -6,6 +6,7 @@ const { requestFor, query } = require('../transport');
 module.exports = {
     id: 'serpapi-reverse', credential_id: 'serpapi', byok: true, manual_only: true, checked_on: '2026-11-13',
     kinds: ['reverse_image'], key_env: 'SEARCH_SERPAPI_KEY', hosts: ['serpapi.com'], freshness: [],
+    class: 'reverse_image',
     price_per_1000: 25, source: 'https://serpapi.com/google-reverse-image',
     included_allowance: '250 searches a month',
     pricing_note: 'Starter $25/month for 1,000 searches; 250 free searches a month. Accepts an image URL only.',

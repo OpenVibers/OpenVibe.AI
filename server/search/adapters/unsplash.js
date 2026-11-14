@@ -6,6 +6,7 @@ const { requestFor, query } = require('../transport');
 module.exports = {
     id: 'unsplash', byok: true, checked_on: '2026-11-13',
     kinds: ['images'], key_env: 'SEARCH_UNSPLASH_KEY', hosts: ['api.unsplash.com'],
+    class: 'provider_asset_catalog',
     price_per_1000: 0, source: 'https://unsplash.com/documentation#search-photos', freshness: [],
     pricing_note: 'No provider fee. Attribution, hotlinking and a download event when a picture is chosen are required.',
     filters: {
