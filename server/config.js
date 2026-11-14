@@ -595,7 +595,9 @@ function load(env = process.env) {
             // media.object.upload there; Media seeds the tenant at boot.
             app: String(env.AI_MEDIA_APP || 'ai').trim() || 'ai',
             // https hostnames (exact, or *.suffix) that media/image URLs may point at.
-            allowHosts: list(env.AI_FETCH_ALLOW_HOSTS, ['openvibe.media', 'openvibe.live', 'openvibe.network', '*.openvibe.network', 'openvibe.community', 'openvibe.tools', 'openvibe.games']),
+            // The three doors of 2026-11-13 (openvibe.expert, openvibe.markets, openvibe.finance) are the network's
+            // own domains: their services come later, but the domains answer and their pages may be read.
+            allowHosts: list(env.AI_FETCH_ALLOW_HOSTS, ['openvibe.media', 'openvibe.live', 'openvibe.network', '*.openvibe.network', 'openvibe.community', 'openvibe.tools', 'openvibe.games', 'openvibe.expert', 'openvibe.markets', 'openvibe.finance']),
             // Object storage Media hands recordings off to (a 302 to a presigned URL), and Media's origin shield
             // edge.openvibe.media (where it sends a B2 copy's reads, through its slice cache): reachable ONLY as a
             // redirect from Media itself (its public host or the internal origin), never as a URL a caller names.
