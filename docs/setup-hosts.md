@@ -84,6 +84,10 @@ Public, cached for an hour, and no token is needed. A row is:
 row per host: the cheapest plan that fits an agent desktop (2 vCPU, 4 GB). The GPU table holds one row per
 provider, card and kind.
 
+A size the host does not publish is `null`, never `0`: the Hetzner Server Auction sells refurbished
+dedicated servers and does not give their cores or their memory, so its row carries the auction's floor
+price and no size. A row is never a guess, and a missing number is never a zero.
+
 Where the price comes from:
 
 - the GPU rows are the readings the provisioner already keeps (`server/gpu/market.js`): Vast.ai's public

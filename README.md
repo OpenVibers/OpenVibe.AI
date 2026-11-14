@@ -1073,8 +1073,10 @@ Deployed: `/opt/openvibe.ai`, env `/etc/openvibe/ai.env` (0600; `BASE_URL=https:
 `deploy/systemd/openvibe-ai.service` (`StateDirectory=openvibe-ai`; database `ov_ai` on the host's data role),
 principal `ai`. The vhost `deploy/nginx/ai.openvibe.services.conf` (on the `*.openvibe.services` certificate)
 serves the home, `/stats`, `/shared/*`, `/robots.txt`, `/sitemap.xml`, `/llms.txt`, health/ready, the operator
-console `/console` with its sign-in `/auth/`, and exactly the developer-app routes (the six operations by POST,
-`/api/v1/runs/:id` by GET, rate-limited per address); every other `/api/` path and `/metrics` stay host-local.
+console `/console` with its sign-in `/auth/`, the public reads (`/api/v1/creations`, the creations list, and
+`/api/v1/prices/{gpus,servers}`, the price table), and exactly the developer-app routes (the six operations by
+POST, `/api/v1/runs/:id` by GET, rate-limited per address); every other `/api/` path and `/metrics` stay
+host-local.
 The old `ai.openvibe.network` address was retired on 2026-10-10. The console needs
 `AI_CONSOLE_SESSION_SECRET` (32+ random characters) and `OV_OAUTH_CLIENT_SECRET` in the env file (without them it
 answers 503 in production); Network client `ai` lists `https://ai.openvibe.services/auth/callback`.

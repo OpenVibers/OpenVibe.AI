@@ -30,7 +30,8 @@ const RECORDED_ON = '2026-10-30';
 /** Hours in a month, the divisor every hourly price is turned into a monthly one with. */
 const HOURS_PER_MONTH = 730;
 
-const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : null);
+/** A number, or null when the value is not one. A missing value is null, never 0: 0 is a price. */
+const num = (v) => (v === null || v === undefined || v === '' ? null : (Number.isFinite(Number(v)) ? Number(v) : null));
 const round = (v, places = 6) => (v == null ? null : Math.round(Number(v) * 10 ** places) / 10 ** places);
 const iso = (ms) => new Date(ms).toISOString();
 
@@ -60,7 +61,7 @@ function plainText(html) {
         .replace(/<style[\s\S]*?<\/style>/gi, ' ')
         .replace(/<[^>]+>/g, ' ')
         .replace(/&nbsp;/g, ' ')
-        .replace(/&euro;/g, '~B~~B~')
+        .replace(/&euro;/g, '€')
         .replace(/&amp;/g, '&')
         .replace(/\s+/g, ' ');
 }
@@ -198,7 +199,7 @@ async function hetznerCloud(fetchImpl, at, fx) {
     if (r.status < 200 || r.status >= 300) return [];
     const flat = plainText(r.text);
     const out = [];
-    const re = /\b(CX\d{2}|CPX\d{2}|CAX\d{2})\s*[\s\S]{0,300}?~B~~B~\s*([\d.,]+)\s*per\s*hour/g;
+    const re = /\b(CX\d{2}|CPX\d{2}|CAX\d{2})\s*[\s\S]{0,300}?€\s*([\d.,]+)\s*per\s*hour/g;
     let m;
     const seen = new Set();
     while ((m = re.exec(flat))) {
@@ -228,7 +229,7 @@ async function hetznerAuction(fetchImpl, at, fx) {
     const r = await read(fetchImpl, url);
     if (r.status < 200 || r.status >= 300) return [];
     const flat = plainText(r.text);
-    const m = /from\s*~B~~B~\s*([\d.,]+)\s*per\s*month/i.exec(flat);
+    const m = /from\s*€\s*([\d.,]+)\s*per\s*month/i.exec(flat);
     if (!m) return [];
     const eur = num(String(m[1]).replace(',', '.'));
     const usd = toUsd(eur, fx);
@@ -361,12 +362,22 @@ async function serverRows({ fetchImpl, keys = {}, now = function () { return Dat
     live.push.apply(live, await hetznerAuction(fetchImpl, at, fx));
     live.push.apply(live, await digitaloceanPlans(fetchImpl, at, keys.digitalocean));
     live.push.apply(live, await upcloudPlans(fetchImpl, at, keys.upcloud, parts.upcloud));
+    // One row per host: the cheapest plan that fits an agent desktop. A host that sells no such plan (the
+    // Server Auction sells refurbished dedicated servers, and the page does not give their size) still belongs
+    // in the table: its own cheapest price is the answer for that host.
     const byProvider = new Map();
     for (const r of live) {
-        const best = desktopFit([...(byProvider.get(r.provider) || []), r]);
-        if (best) byProvider.set(r.provider, [best]);
+        const list = byProvider.get(r.provider) || [];
+        list.push(r);
+        byProvider.set(r.provider, list);
     }
-    const out = [...byProvider.values()].map((list) => list[0]);
+    const out = [];
+    for (const list of byProvider.values()) {
+        const best = desktopFit(list);
+        if (best) { out.push(best); continue; }
+        const cheapest = list.filter((r) => Number.isFinite(r.usd_per_month)).sort((a, b) => a.usd_per_month - b.usd_per_month)[0];
+        if (cheapest) out.push(cheapest);
+    }
     // The recorded servers (Oracle's free tier) join the live ones.
     for (const r of recordedRows()) {
         if (r.provider !== 'Oracle Cloud') continue;
