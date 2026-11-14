@@ -32,6 +32,14 @@ function createObservations({ db, registry, catalog, clock = { now: () => Date.n
     async function tick() {
         if (!enabled) return { skipped: 'disabled' };
         const now = clock.now(), end = Math.floor(now / HOUR) * HOUR;
+        // The catalogue is read before the transaction, never inside it (11-14): catalog.models() builds the Exchange
+        // catalogue (its reads, Bench's fidelity over HTTP, a rebuild other callers share). Called inside, the
+        // transaction sat idle while it ran; past Postgres's 60 s idle-in-transaction limit the connection was cut,
+        // and the cut crashed the service (20:16 UTC). A cheap check without a lock comes first, so the build only
+        // runs when the hour is due; the transaction checks again under its lock.
+        const due = await db.prepare('SELECT 1 AS due FROM exchange_observations_job WHERE id = 1 AND (next_due <= ?::timestamptz OR algorithm_version < 2)').get(iso(now));
+        if (!due) return { skipped: 'not_due' };
+        const snapshot = await catalog.models();
         return db.tx(async () => {
             const state = await db.prepare('SELECT * FROM exchange_observations_job WHERE id = 1 AND (next_due <= ?::timestamptz OR algorithm_version < 2) FOR UPDATE SKIP LOCKED').get(iso(now));
             if (!state) return { skipped: 'not_due' };
@@ -51,7 +59,6 @@ function createObservations({ db, registry, catalog, clock = { now: () => Date.n
                 (hour, provider, runs, success_rate, latency_p50_ms, latency_samples, computed_at) VALUES (?::timestamptz, ?, ?, ?, ?, ?, ?::timestamptz)`)
                 .run(c.hour, c.provider, c.runs, c.success_rate, c.latency_p50_ms, c.latency_samples, iso(now));
             const day = iso(now).slice(0, 10);
-            const snapshot = await catalog.models();
             let prices = 0;
             for (const model of snapshot.models || []) {
                 if (model.uncensored) continue;
