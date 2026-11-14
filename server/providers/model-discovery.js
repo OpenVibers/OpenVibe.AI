@@ -37,7 +37,10 @@ function findings(source, body, observedAt) {
     return [...new Set(matches)].slice(0, 100).map(model => add(model, source.url)).filter(Boolean);
 }
 
-function createModelDiscovery({ db, registry, fetchImpl = globalThis.fetch, clock = { now: Date.now }, sources = SOURCES, log = console }) {
+// Every hour (plan §AB.37; the owner, 11-14: "finds new stuff immediately … breaking news"): a model is on Exchange's
+// directory, and on News's wire through OpenVibe.Sources, within the hour it first shows up. It was once a day.
+const EVERY_MS = 3_600_000;
+function createModelDiscovery({ db, registry, fetchImpl = globalThis.fetch, clock = { now: Date.now }, sources = SOURCES, log = console, everyMs = EVERY_MS }) {
     let running = null;
     let timer = null;
     const at = () => new Date(clock.now()).toISOString();
@@ -94,7 +97,7 @@ function createModelDiscovery({ db, registry, fetchImpl = globalThis.fetch, cloc
     }
     async function tick() {
         const last = await db.prepare('SELECT started_at FROM model_discovery_runs ORDER BY id DESC LIMIT 1').get();
-        if (!last || clock.now() - Date.parse(last.started_at) >= 86_400_000) await run();
+        if (!last || clock.now() - Date.parse(last.started_at) >= everyMs) await run();
     }
     async function setStatus(id, status) {
         if (!['spotted', 'promoted', 'dismissed'].includes(status)) throw new RangeError('invalid spot status');
@@ -106,4 +109,4 @@ function createModelDiscovery({ db, registry, fetchImpl = globalThis.fetch, cloc
         async stop() { clearInterval(timer); timer = null; if (running) await running; },
     };
 }
-module.exports = { SOURCES, findings, createModelDiscovery };
+module.exports = { SOURCES, EVERY_MS, findings, createModelDiscovery };

@@ -13,7 +13,7 @@ t.test('official source adapters extract exact model ids without treating them a
     assert.deepEqual(findings({ provider: 'huggingface', kind: 'huggingface' }, JSON.stringify([{ id: 'google/gemma-4', createdAt: at }]), at).map(x => x.id), ['huggingface/google/gemma-4']);
 });
 
-t.test('daily refresh dedupes sightings, keeps sources and never adds a routable model', async () => {
+t.test('the hourly refresh dedupes sightings, keeps sources and never adds a routable model', async () => {
     h = await boot({ env: { AI_USER_MODULES: 'off' } });
     const sources = [{ id: 'official', provider: 'gemini', kind: 'text', url: 'https://example.com/notes' },
         { id: 'sdk', provider: 'gemini', kind: 'text', url: 'https://example.com/sdk' }];
@@ -26,7 +26,10 @@ t.test('daily refresh dedupes sightings, keeps sources and never adds a routable
     assert.equal(first.entries[0].sources.length, 2);
     assert.equal(await h.registry.getModel('gemini', 'gemini-9-pro'), null);
     await discovery.tick();
-    assert.equal((await h.db.prepare('SELECT COUNT(*) AS n FROM model_discovery_runs').get()).n, 1);
+    assert.equal((await h.db.prepare('SELECT COUNT(*) AS n FROM model_discovery_runs').get()).n, 1, 'not again within the hour');
+    now += 3_600_001;
+    await discovery.tick();
+    assert.equal((await h.db.prepare('SELECT COUNT(*) AS n FROM model_discovery_runs').get()).n, 2, 'again an hour later (plan §AB.37)');
     now += 86_400_001;
     assert.equal((await discovery.run()).spotted, 0);
     assert.equal((await discovery.list()).length, 1);
