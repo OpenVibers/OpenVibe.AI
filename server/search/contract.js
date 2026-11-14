@@ -30,6 +30,26 @@ const RECEIPT_FIELDS = {
             },
         },
     },
+    // Receipt v2 (plan §W.2 step 3): the rate card that priced the call, the terms that allowed it, the
+    // purpose it was made for, and the hold it reserved beside what it settled. The money is integer
+    // nano-USD as text, never a float.
+    rate_card: {
+        type: 'object', required: ['id', 'version'], additionalProperties: false,
+        properties: { id: { type: 'string', minLength: 1, maxLength: 100 }, version: { type: 'integer', minimum: 1 } },
+    },
+    terms: {
+        type: 'object', required: ['reviewed_on'], additionalProperties: false,
+        properties: { reviewed_on: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' } },
+    },
+    purpose: { type: 'string', minLength: 1, maxLength: 40 },
+    estimate: {
+        type: 'object', required: ['nano_usd'], additionalProperties: false,
+        properties: { nano_usd: { type: 'string', pattern: '^\\d+$' } },
+    },
+    actual: {
+        type: 'object', required: ['nano_usd'], additionalProperties: false,
+        properties: { nano_usd: { type: 'string', pattern: '^\\d+$' } },
+    },
 };
 const ATTEMPT_FIELDS = { class: { type: 'string', minLength: 1, maxLength: 40 } };
 const REASONS = [
@@ -38,6 +58,7 @@ const REASONS = [
     'terms_disallow_purpose',
     'privacy_incompatible',
     'retention_incompatible',
+    'no_rate_card',
 ];
 
 function contractOf(kind) {
@@ -66,6 +87,11 @@ function covered(out) {
     delete receipt.class;
     delete receipt.classes_allowed;
     delete receipt.not_considered;
+    delete receipt.rate_card;
+    delete receipt.terms;
+    delete receipt.purpose;
+    delete receipt.estimate;
+    delete receipt.actual;
     for (const attempt of receipt.attempts || []) {
         delete attempt.class;
         if (attempt.reason && REASONS.includes(attempt.reason)) delete attempt.reason;

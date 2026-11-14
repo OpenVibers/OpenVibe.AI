@@ -859,8 +859,45 @@ route('post', '/exchange/presets', { operationId: 'exchangeRequestPresetSave', s
 route('delete', '/exchange/presets/{name}', { operationId: 'exchangeRequestPresetDelete', summary: 'Delete your request preset', tags: ['exchange'], security: [{ bearer: [] }], parameters: [{ in: 'path', name: 'name', required: true, schema: str() }], responses: { 200: json('Deletion result', { type: 'object' }), ...errors([400, 401, 403]) } });
 route('get', '/exchange/search/engines', {
     operationId: 'exchangeSearchEngines', summary: 'The search engines behind web, image and icon search', tags: ['exchange'], security: [],
-    description: 'Public. Engine IDs, kinds (web, images, icons, reverse_image, fetch), the class of each engine (first_party_index, independent_index, serp_proxy, semantic, answer_engine, metasearch, page_reader, open_asset_catalog, provider_asset_catalog, web_image_discovery, icon_catalog, reverse_image, visual_web_detection, product_visual_search), availability of shared keys, BYOK support, health, supported freshness, price_per_1000 in USD (null when variable), pricing_note, included_allowance, onboarding, upstreams, filter support (native, local or unsupported per filter), source URL and checked_on date. Personal key availability is private. Tariffs exclude free allowances and volume discounts.',
+    description: 'Public. Engine IDs, kinds (web, images, icons, reverse_image, fetch), the class of each engine (first_party_index, independent_index, serp_proxy, semantic, answer_engine, metasearch, page_reader, open_asset_catalog, provider_asset_catalog, web_image_discovery, icon_catalog, reverse_image, visual_web_detection, product_visual_search), availability of shared keys, BYOK support, health, supported freshness, the engine\'s active rate cards (id, version, unit, price, ceiling, currency, included allowance, source page, the day it was read, and stale when it is older than ninety days), pricing_note, included_allowance, onboarding, upstreams, filter support (native, local or unsupported per filter) and the engine\'s source URL. Personal key availability is private. Tariffs exclude free allowances and volume discounts.',
     responses: { 200: json('The engines', { type: 'object', required: ['engines'], properties: { engines: arrayOf({ type: 'object' }) } }) },
+});
+const rateCard = {
+    type: 'object', required: ['id', 'engine', 'version', 'unit', 'price', 'ceiling', 'currency', 'read_on', 'status'],
+    properties: {
+        id: str({ pattern: '^src_[A-Za-z0-9_-]+$' }), engine: str(), version: integer({ minimum: 1 }),
+        unit: str({ enum: ['request', 'result', 'page', 'token_in', 'token_out', 'tool_call', 'feature_unit', 'credit'] }),
+        price: str({ pattern: '^[0-9]+(\\.[0-9]+)?$', description: 'The price of one unit, as decimal text, never a float' }),
+        ceiling: str({ pattern: '^[0-9]+(\\.[0-9]+)?$', description: 'What a hold reserves for one unit; at least the price' }),
+        currency: str(), included: nullable('string'), source_url: nullable('string'),
+        read_on: str({ format: 'date' }), status: str({ enum: ['draft', 'active', 'retired'] }),
+        reviewed_by: nullable('string'), created_at: nullable('string', { format: 'date-time' }),
+        age_days: integer({ minimum: 0 }), stale: { type: 'boolean', description: 'The card is older than ninety days' },
+    },
+};
+route('get', '/admin/search/rate-cards', {
+    operationId: 'listSearchRateCards', summary: 'Every search rate card', tags: ['admin'], security: SERVICE,
+    description: 'The owner only. Every card of every engine: the active one, the drafts waiting for the owner, and the retired ones. A card is never edited: a new price is a new version.',
+    responses: { 200: json('The cards', { type: 'object', required: ['rate_cards'], properties: { rate_cards: arrayOf(rateCard) } }), ...errors([401, 403]) },
+});
+route('post', '/admin/search/rate-cards', {
+    operationId: 'createSearchRateCard', summary: 'A new version of a rate card, as a draft', tags: ['admin'], security: SERVICE,
+    description: 'The owner only. Writes the next version of a card for an engine and a unit. The card is a draft: the search never uses it, so the price of today does not change until the owner activates it.',
+    requestBody: body({ type: 'object', required: ['engine', 'unit', 'price', 'ceiling'], properties: {
+        engine: str({ description: 'The engine id, as the engines list names it' }),
+        unit: str({ enum: ['request', 'result', 'page', 'token_in', 'token_out', 'tool_call', 'feature_unit', 'credit'] }),
+        price: str({ pattern: '^[0-9]+(\\.[0-9]+)?$', description: 'The price of one unit, as decimal text' }),
+        ceiling: str({ pattern: '^[0-9]+(\\.[0-9]+)?$', description: 'What a hold reserves for one unit; at least the price' }),
+        currency: str({ default: 'USD' }), included: nullable('string'), source_url: nullable('string', { format: 'uri' }),
+        read_on: str({ format: 'date', description: 'The day the price was read on the provider\'s page' }),
+    } }),
+    responses: { 201: json('The draft', { type: 'object', required: ['rate_card'], properties: { rate_card: rateCard } }), ...errors([401, 403, 422]) },
+});
+route('post', '/admin/search/rate-cards/{id}/activate', {
+    operationId: 'activateSearchRateCard', summary: 'Activate a rate card', tags: ['admin'], security: SERVICE,
+    description: 'The owner only. The draft becomes the one active card for its (engine, unit), and the card it replaces is retired. From now on the search holds and settles at the new card.',
+    parameters: [path('id', str({ pattern: '^src_[A-Za-z0-9_-]+$' }))],
+    responses: { 200: json('The activated card', { type: 'object', required: ['rate_card'], properties: { rate_card: rateCard } }), ...errors([401, 403, 404, 422]) },
 });
 route('get', '/own-endpoints', {
     operationId: 'listOwnEndpoints', summary: 'The caller\'s private endpoints', tags: ['exchange'], security: [{ bearer: [] }],

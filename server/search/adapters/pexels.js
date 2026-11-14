@@ -1,10 +1,10 @@
 'use strict';
 const { requestFor, query } = require('../transport');
 module.exports = {
-    id: 'pexels', byok: true, checked_on: '2026-11-09',
+    id: 'pexels', byok: true,
     kinds: ['images'], key_env: 'SEARCH_PEXELS_KEY', hosts: ['api.pexels.com'],
     class: 'provider_asset_catalog',
-    price_per_1000: 0, source: 'https://www.pexels.com/api/', freshness: [],
+    source: 'https://www.pexels.com/api/', freshness: [],
     pricing_note: 'No provider fee for existing keys; new key issuance is currently paused, so new keys are not offered.',
     onboarding: 'paused',
     upstreams: ['pexels'],

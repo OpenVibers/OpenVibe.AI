@@ -4,6 +4,17 @@ const { createSearch } = require('../server/search');
 const { redact, redactError } = require('../server/redact');
 const { sendError } = require('../server/util');
 const fixture = name => require('./fixtures/search/' + name + '.json');
+const seed = require('./fixtures/search/rate-cards.json');
+// The price of an engine is its active rate card now (plan §W.2 step 3).
+const rateOf = async (search, id) => {
+    const card = (await search.engines()).find(e => e.id === id);
+    assert.equal(card.rate_cards.length, 1, id + ' has one active card');
+    const rate = card.rate_cards[0];
+    assert.equal(rate.price, seed.adapters[id].price, id);
+    assert.equal(rate.unit, seed.adapters[id].unit, id);
+    assert.equal(rate.read_on, seed.adapters[id].checked_on, id);
+    return rate;
+};
 const KEY = 'fixture-search-key';
 const json = value => new Response(JSON.stringify(value), { status: 200 });
 const params = (url) => new URL(url).searchParams;
@@ -25,8 +36,7 @@ const params = (url) => new URL(url).searchParams;
         await search.search('web', { q: 'lantern', engine: 'mojeek', freshness: 'day' });
         assert.equal(seen.searchParams.get('since'), 'day', 'Mojeek takes its own since parameter');
         const card = (await search.engines()).find(e => e.id === 'mojeek');
-        assert.equal(card.price_per_1000, 2.65);
-        assert.equal(card.checked_on, '2026-11-13');
+        assert.equal((await rateOf(search, 'mojeek')).price, '0.00265');
         assert.equal(card.source, 'https://www.mojeek.com/services/search/web-search-api');
         assert.match(card.pricing_note, /GBP/);
     }
@@ -46,8 +56,7 @@ const params = (url) => new URL(url).searchParams;
         assert.equal(body.mode, 'fast');
         assert.equal(out.results[0].snippet, 'A new lantern');
         const card = (await search.engines()).find(e => e.id === 'parallel');
-        assert.equal(card.price_per_1000, 1);
-        assert.equal(card.checked_on, '2026-11-13');
+        assert.equal((await rateOf(search, 'parallel')).price, '0.001');
         assert.equal(card.source, 'https://docs.parallel.ai/getting-started/pricing');
     }
 
@@ -69,7 +78,7 @@ const params = (url) => new URL(url).searchParams;
         assert.equal(body.freshness, 'month');
         const card = (await search.engines()).find(e => e.id === 'you');
         assert.equal(card.manual_only, true, 'their terms forbid reselling the service: the key is the own one');
-        assert.equal(card.price_per_1000, 5);
+        assert.equal((await rateOf(search, 'you')).price, '0.005');
         assert.equal(card.source, 'https://you.com/docs/administration/billing');
     }
 
@@ -89,7 +98,7 @@ const params = (url) => new URL(url).searchParams;
         assert.equal(out.results[0].title, 'Lantern');
         assert.equal(out.results[0].published, null, 'a Google result carries no publication date');
         const card = (await search.engines()).find(e => e.id === 'dataforseo');
-        assert.equal(card.price_per_1000, 2);
+        assert.equal((await rateOf(search, 'dataforseo')).price, '0.002');
         assert.equal(card.source, 'https://dataforseo.com/pricing/google-serp/google-organic-serp-api');
     }
 
@@ -118,8 +127,7 @@ const params = (url) => new URL(url).searchParams;
         assert.equal(unknown.results[0].rights.family, 'unknown', 'rights the record does not clear stay unknown');
         assert.equal(unknown.results[0].rights.status, 'provider_claimed', 'the catalog claims a licence it does not clear');
         const card = (await search.engines()).find(e => e.id === 'europeana');
-        assert.equal(card.price_per_1000, 0);
-        assert.equal(card.checked_on, '2026-11-13');
+        assert.equal((await rateOf(search, 'europeana')).price, '0');
     }
 
     // ── NASA: a public catalog, no key, and public domain only for a NASA-created picture ────────────
@@ -145,8 +153,7 @@ const params = (url) => new URL(url).searchParams;
         assert.equal(unknown.results[0].license, null);
         assert.equal(unknown.results[0].rights.family, 'unknown', 'the rights of someone else\'s picture stay unknown');
         const card = (await search.engines()).find(e => e.id === 'nasa');
-        assert.equal(card.price_per_1000, 0);
-        assert.equal(card.checked_on, '2026-11-13');
+        assert.equal((await rateOf(search, 'nasa')).price, '0');
     }
 
     // ── DataForSEO images: a SERP proxy, so the rights of the picture are unknown ─────────────────────
@@ -166,7 +173,7 @@ const params = (url) => new URL(url).searchParams;
         assert.equal(row.rights.status, 'unknown', 'a discovery engine grants no rights');
         assert.equal(row.rights.family, 'third_party');
         const card = (await search.engines()).find(e => e.id === 'dataforseo-images');
-        assert.equal(card.price_per_1000, 2);
+        assert.equal((await rateOf(search, 'dataforseo-images')).price, '0.002');
         assert.equal(card.source, 'https://dataforseo.com/pricing/google-serp/google-images-serp-api');
     }
 
@@ -185,8 +192,7 @@ const params = (url) => new URL(url).searchParams;
         assert.equal(row.rights.family, 'public_domain', 'a record with a media file is a public domain object');
         assert.equal(row.rights.commercial_use, true);
         const card = (await search.engines()).find(e => e.id === 'smithsonian');
-        assert.equal(card.price_per_1000, 0);
-        assert.equal(card.checked_on, '2026-11-13');
+        assert.equal((await rateOf(search, 'smithsonian')).price, '0');
         assert.equal(card.source, 'https://www.si.edu/openaccess/devtools');
     }
 

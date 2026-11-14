@@ -2,7 +2,7 @@
 const { requestFor } = require('../transport');
 module.exports = {
     id: 'searxng',
-    price_per_1000: 0, byok: false, checked_on: '2026-11-09', source: 'https://docs.searxng.org/',
+    byok: false, source: 'https://docs.searxng.org/',
     freshness: ['day', 'month', 'year'],
     hosts: [],
     kinds: ['web'],

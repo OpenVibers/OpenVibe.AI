@@ -6,7 +6,7 @@ const { requestFor } = require('../transport');
 const HOST = 'search.openvibe.network';
 module.exports = {
     id: 'openvibe',
-    price_per_1000: 0, byok: false, checked_on: '2026-11-12', source: `https://${HOST}`,
+    byok: false, source: `https://${HOST}`,
     freshness: [],
     hosts: [HOST],
     kinds: ['web'],

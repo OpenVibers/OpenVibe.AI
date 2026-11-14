@@ -92,8 +92,10 @@ const json = (value, status = 200) => new Response(JSON.stringify(value), { stat
     // ── auto never ranks unlike engines by price alone ──
     // A cheap answer engine stands in for one: on a plain display it is never considered, and for an answer it is.
     const cheap = {
-        id: 'cheap-answer', class: 'answer_engine', kinds: ['web'], byok: false, price_per_1000: 0,
-        checked_on: '2026-11-13', source: 'https://example.org', freshness: [],
+        id: 'cheap-answer', class: 'answer_engine', kinds: ['web'], byok: false,
+        // An engine with no rate card of its own declares its own reserve (plan §W.2 step 3).
+        ceilingNano: () => 0n, estimateNano: () => 0n,
+        source: 'https://example.org', freshness: [],
         search: async () => [{ title: 'Answer', url: 'https://example.org/answer', snippet: 'An answer', published: null }],
     };
     adapters.push(cheap);

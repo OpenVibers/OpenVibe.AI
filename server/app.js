@@ -297,6 +297,9 @@ function createApp({ choices = null, searchFetch = null, config, db, registry, p
     app.use(setupRouter({ config, db, registry, pool, runs, auth, settings, search, env, clock, log, fetchImpl }));
     app.use(adminRouter({ config, db, registry, pool, quotas, cache, runs, auth, settings, ops, log }));
     app.use(require('./api/console-data').consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth, clock, fetchImpl, env, gpus, gpuMarket, supply, abuse, priceBook, modelSync, creditGrants, sessionCookies, vault, settings, config, log }));
+    // The owner's search rate cards (plan §W.2 step 3): a new price is a draft until the owner activates it,
+    // and activating it retires the card it replaces.
+    app.use(require('./api/search-rate-cards').searchRateCardsRouter({ db, registry, auth, clock, log }));
     // The operator console moved to OpenVibe.Exchange. Keep the legacy AI paths as permanent redirects;
     // run receipts still use the person-session routes below and the AI JSON admin APIs stay here.
     // Person sessions are separate, read-only and open one run receipt each (server/person-session.js).

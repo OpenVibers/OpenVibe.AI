@@ -4,6 +4,7 @@ const { createSearch, adapters, CHARGE } = require('../server/search');
 const searchContract = require('../server/search/contract');
 const { requestFor, publicTarget } = require('../server/search/transport');
 const fixture = name => require('./fixtures/search/' + name + '.json');
+const seed = require('./fixtures/search/rate-cards.json');
 const KEY = 'fixture-search-key';
 const json = value => new Response(JSON.stringify(value), { status: 200 });
 (async () => {
@@ -98,11 +99,17 @@ const json = value => new Response(JSON.stringify(value), { status: 200 });
             assert.equal(row.rank, 1, a.id);
         }
         const card = (await search.engines()).find(e => e.id === a.id);
-        assert.equal(card.price_per_1000, a.price_per_1000);
         assert.equal(card.source, a.source);
-        assert.equal(card.checked_on, ['serpapi-images', 'searchapi-images', 'serpapi-reverse', 'tineye', 'pixabay', 'unsplash',
-            'mojeek', 'parallel', 'you', 'dataforseo', 'europeana', 'nasa', 'dataforseo-images', 'smithsonian'].includes(a.id)
-            ? '2026-11-13' : a.id === 'openvibe' ? '2026-11-12' : ['meta', 'serper-images'].includes(a.id) ? '2026-11-10' : '2026-11-09');
+        // The price is the engine's active rate card now (plan §W.2 step 3): one active card per engine,
+        // at the price, unit and read day the adapter carried before the clean cut.
+        assert.equal(card.rate_cards.length, 1, a.id + ' has one active card');
+        const rate = card.rate_cards[0];
+        assert.equal(rate.version, 1, a.id);
+        assert.equal(rate.status, 'active', a.id);
+        assert.equal(rate.price, seed.adapters[a.id].price, a.id);
+        assert.equal(rate.ceiling, seed.adapters[a.id].ceiling, a.id);
+        assert.equal(rate.unit, seed.adapters[a.id].unit, a.id);
+        assert.equal(rate.read_on, seed.adapters[a.id].checked_on, a.id);
         if (a.byok) {
             assert.equal((await createSearch({ env: {} }).engines()).find(e => e.id === a.id).available, false);
             await assert.rejects(createSearch({ env: {}, fetchImpl: () => assert.fail('unconfigured engine called') }).search(kind, { q: 'x', engine: a.id }));

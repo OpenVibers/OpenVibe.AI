@@ -3,7 +3,7 @@ const { requestFor } = require('../transport');
 const plain = (s) => String(s || '').replace(/<[^>]*>/g, '');
 module.exports = {
     id: 'commons',
-    price_per_1000: 0, byok: false, checked_on: '2026-11-09', source: 'https://www.mediawiki.org/wiki/API:Main_page',
+    byok: false, source: 'https://www.mediawiki.org/wiki/API:Main_page',
     freshness: [],
     hosts: ['commons.wikimedia.org'],
     kinds: ['images'],

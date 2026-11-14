@@ -7,11 +7,10 @@ const ENGINES = { google: 'google_images', bing: 'bing_images', yandex: 'yandex_
 // One supplier (SearchAPI.io), three upstreams. The person picks `upstream`; every row names the one that
 // answered. Results carry no licence metadata, so a licence filter is refused for this engine.
 module.exports = {
-    id: 'searchapi-images', credential_id: 'searchapi', byok: true, checked_on: '2026-11-13',
+    id: 'searchapi-images', credential_id: 'searchapi', byok: true,
     kinds: ['images'], key_env: 'SEARCH_SEARCHAPI_KEY', hosts: ['www.searchapi.io'], freshness: [],
     class: 'web_image_discovery',
-    price_per_1000: 4, source: 'https://www.searchapi.io/docs/google-images',
-    included_allowance: '100 trial searches',
+    source: 'https://www.searchapi.io/docs/google-images',
     pricing_note: '$40/month for 10,000 searches; 100 trial searches. Search results do not establish reuse rights.',
     upstreams: ['google', 'bing', 'yandex'],
     filters: {

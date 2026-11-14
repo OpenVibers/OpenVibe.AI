@@ -4,10 +4,10 @@ const { requestFor, query } = require('../transport');
 // TinEye's own reverse-image index: an image URL or a multipart upload in, its matches and the pages that
 // carry them out. It is a reverse_image operation, never a keyword search, and it is explicit selection only.
 module.exports = {
-    id: 'tineye', byok: true, manual_only: true, checked_on: '2026-11-13',
+    id: 'tineye', byok: true, manual_only: true,
     kinds: ['reverse_image'], key_env: 'SEARCH_TINEYE_KEY', hosts: ['api.tineye.com'], freshness: [],
     class: 'reverse_image',
-    price_per_1000: 40, source: 'https://api.tineye.com/python/docs/',
+    source: 'https://api.tineye.com/python/docs/',
     pricing_note: 'Example bundle: $200 per 5,000 searches. Verify the current bundle before use.',
     uploads: true,
     filters: {},
@@ -55,7 +55,6 @@ module.exports = {
                     backlinks: pages,
                 };
             }),
-            cost: this.price_per_1000 / 1000,
         };
     },
 };

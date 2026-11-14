@@ -4,10 +4,10 @@ const { requestFor, query } = require('../transport');
 // Unsplash's photo search. The download event is deliberately not sent here: it is one server-side call when
 // a person chooses or imports a picture, through the idempotent trackDownload operation.
 module.exports = {
-    id: 'unsplash', byok: true, checked_on: '2026-11-13',
+    id: 'unsplash', byok: true,
     kinds: ['images'], key_env: 'SEARCH_UNSPLASH_KEY', hosts: ['api.unsplash.com'],
     class: 'provider_asset_catalog',
-    price_per_1000: 0, source: 'https://unsplash.com/documentation#search-photos', freshness: [],
+    source: 'https://unsplash.com/documentation#search-photos', freshness: [],
     pricing_note: 'No provider fee. Attribution, hotlinking and a download event when a picture is chosen are required.',
     filters: {
         license: 'local', commercial: 'local', format: 'local', orientation: 'native',

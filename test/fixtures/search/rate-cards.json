@@ -1,0 +1,243 @@
+{
+    "note": "What every search adapter carried before the clean cut (plan §W.2 step 3): its price per 1,000, the unit its rate card counts, the day its page was read, and the reserve a hold takes. The card's price is the price per 1,000 as a per-unit decimal (never a float). Meta and Perplexity published no flat price per 1,000 (null): their card carries the published price per query and their own reserve as the ceiling.",
+    "adapters": {
+        "openverse": {
+            "price_per_1000": 0,
+            "price": "0",
+            "unit": "result",
+            "checked_on": "2026-11-09",
+            "ceiling": "0"
+        },
+        "commons": {
+            "price_per_1000": 0,
+            "price": "0",
+            "unit": "result",
+            "checked_on": "2026-11-09",
+            "ceiling": "0"
+        },
+        "searxng": {
+            "price_per_1000": 0,
+            "price": "0",
+            "unit": "request",
+            "checked_on": "2026-11-09",
+            "ceiling": "0"
+        },
+        "openvibe": {
+            "price_per_1000": 0,
+            "price": "0",
+            "unit": "request",
+            "checked_on": "2026-11-12",
+            "ceiling": "0"
+        },
+        "iconify": {
+            "price_per_1000": 0,
+            "price": "0",
+            "unit": "result",
+            "checked_on": "2026-11-09",
+            "ceiling": "0"
+        },
+        "deepseek": {
+            "price_per_1000": 0.75,
+            "price": "0.00075",
+            "unit": "request",
+            "checked_on": "2026-11-09",
+            "ceiling": "0.00075"
+        },
+        "brave": {
+            "price_per_1000": 5,
+            "price": "0.005",
+            "unit": "request",
+            "checked_on": "2026-11-09",
+            "ceiling": "0.005"
+        },
+        "exa": {
+            "price_per_1000": 7,
+            "price": "0.007",
+            "unit": "request",
+            "checked_on": "2026-11-09",
+            "ceiling": "0.007"
+        },
+        "tavily": {
+            "price_per_1000": 8,
+            "price": "0.008",
+            "unit": "request",
+            "checked_on": "2026-11-09",
+            "ceiling": "0.008"
+        },
+        "serper": {
+            "price_per_1000": 1,
+            "price": "0.001",
+            "unit": "request",
+            "checked_on": "2026-11-09",
+            "ceiling": "0.001"
+        },
+        "serpapi": {
+            "price_per_1000": 25,
+            "price": "0.025",
+            "unit": "request",
+            "checked_on": "2026-11-09",
+            "ceiling": "0.025"
+        },
+        "jina": {
+            "price_per_1000": 0.5,
+            "price": "0.0005",
+            "unit": "request",
+            "checked_on": "2026-11-09",
+            "ceiling": "0.005"
+        },
+        "openvibe-egress": {
+            "price_per_1000": 0,
+            "price": "0",
+            "unit": "page",
+            "checked_on": "2026-11-09",
+            "ceiling": "0"
+        },
+        "perplexity": {
+            "price_per_1000": null,
+            "price": "0.0025",
+            "unit": "request",
+            "checked_on": "2026-11-09",
+            "ceiling": "0.1"
+        },
+        "kagi": {
+            "price_per_1000": 25,
+            "price": "0.025",
+            "unit": "request",
+            "checked_on": "2026-11-09",
+            "ceiling": "0.025"
+        },
+        "google": {
+            "price_per_1000": 5,
+            "price": "0.005",
+            "unit": "request",
+            "checked_on": "2026-11-09",
+            "ceiling": "0.005"
+        },
+        "unsplash": {
+            "price_per_1000": 0,
+            "price": "0",
+            "unit": "result",
+            "checked_on": "2026-11-13",
+            "ceiling": "0"
+        },
+        "pexels": {
+            "price_per_1000": 0,
+            "price": "0",
+            "unit": "result",
+            "checked_on": "2026-11-09",
+            "ceiling": "0"
+        },
+        "pixabay": {
+            "price_per_1000": 0,
+            "price": "0",
+            "unit": "result",
+            "checked_on": "2026-11-13",
+            "ceiling": "0"
+        },
+        "brave-images": {
+            "price_per_1000": 5,
+            "price": "0.005",
+            "unit": "request",
+            "checked_on": "2026-11-09",
+            "ceiling": "0.005"
+        },
+        "meta": {
+            "price_per_1000": null,
+            "price": "0.0025",
+            "unit": "request",
+            "checked_on": "2026-11-10",
+            "ceiling": "4"
+        },
+        "serper-images": {
+            "price_per_1000": 1,
+            "price": "0.001",
+            "unit": "request",
+            "checked_on": "2026-11-10",
+            "ceiling": "0.001"
+        },
+        "serpapi-images": {
+            "price_per_1000": 25,
+            "price": "0.025",
+            "unit": "request",
+            "checked_on": "2026-11-13",
+            "ceiling": "0.025"
+        },
+        "searchapi-images": {
+            "price_per_1000": 4,
+            "price": "0.004",
+            "unit": "request",
+            "checked_on": "2026-11-13",
+            "ceiling": "0.004"
+        },
+        "serpapi-reverse": {
+            "price_per_1000": 25,
+            "price": "0.025",
+            "unit": "request",
+            "checked_on": "2026-11-13",
+            "ceiling": "0.025"
+        },
+        "tineye": {
+            "price_per_1000": 40,
+            "price": "0.04",
+            "unit": "request",
+            "checked_on": "2026-11-13",
+            "ceiling": "0.04"
+        },
+        "mojeek": {
+            "price_per_1000": 2.65,
+            "price": "0.00265",
+            "unit": "request",
+            "checked_on": "2026-11-13",
+            "ceiling": "0.00265"
+        },
+        "parallel": {
+            "price_per_1000": 1,
+            "price": "0.001",
+            "unit": "request",
+            "checked_on": "2026-11-13",
+            "ceiling": "0.001"
+        },
+        "you": {
+            "price_per_1000": 5,
+            "price": "0.005",
+            "unit": "request",
+            "checked_on": "2026-11-13",
+            "ceiling": "0.005"
+        },
+        "dataforseo": {
+            "price_per_1000": 2,
+            "price": "0.002",
+            "unit": "request",
+            "checked_on": "2026-11-13",
+            "ceiling": "0.002"
+        },
+        "europeana": {
+            "price_per_1000": 0,
+            "price": "0",
+            "unit": "result",
+            "checked_on": "2026-11-13",
+            "ceiling": "0"
+        },
+        "nasa": {
+            "price_per_1000": 0,
+            "price": "0",
+            "unit": "result",
+            "checked_on": "2026-11-13",
+            "ceiling": "0"
+        },
+        "dataforseo-images": {
+            "price_per_1000": 2,
+            "price": "0.002",
+            "unit": "request",
+            "checked_on": "2026-11-13",
+            "ceiling": "0.002"
+        },
+        "smithsonian": {
+            "price_per_1000": 0,
+            "price": "0",
+            "unit": "result",
+            "checked_on": "2026-11-13",
+            "ceiling": "0"
+        }
+    }
+}

@@ -9,10 +9,10 @@ const images = new Map();
 // Pixabay requires a 24-hour response cache and forbids permanent hotlinking. Search rows point at this
 // service's short-lived proxy, never at Pixabay's CDN; the proxy serves the bytes from the cached lookup.
 module.exports = {
-    id: 'pixabay', byok: true, checked_on: '2026-11-13',
+    id: 'pixabay', byok: true,
     kinds: ['images'], key_env: 'SEARCH_PIXABAY_KEY', hosts: ['pixabay.com'], freshness: [],
     class: 'provider_asset_catalog',
-    price_per_1000: 0, source: 'https://pixabay.com/api/docs/',
+    source: 'https://pixabay.com/api/docs/',
     pricing_note: 'No provider fee. Responses are cached for 24 hours and pictures are proxied, as its terms require.',
     filters: {
         license: 'local', commercial: 'local', format: 'local', orientation: 'native',

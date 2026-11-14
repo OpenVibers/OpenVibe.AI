@@ -9,10 +9,9 @@ const pageAge = (value) => {
     return /^\d{4}-\d{2}-\d{2}T[\d:.]+$/.test(s) ? s + 'Z' : s;
 };
 module.exports = {
-    id: 'you', byok: true, manual_only: true, checked_on: '2026-11-13',
+    id: 'you', byok: true, manual_only: true,
     kinds: ['web'], key_env: 'SEARCH_YOU_KEY', hosts: ['ydc-index.io'],
     class: 'answer_engine',
-    price_per_1000: 5,
     source: 'https://you.com/docs/administration/billing',
     pricing_note: '$5.00 per 1,000 calls (up to 100 results per call). Full page extraction is $1.00 per 1,000 pages crawled live and is not requested here.',
     freshness: ['day', 'month', 'year'],

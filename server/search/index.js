@@ -5,6 +5,8 @@ const { publicTarget } = require('./transport');
 const { AiError, providerSecret } = require('../util');
 const searchClasses = require('./classes');
 const searchContract = require('./contract');
+const { createRateCards } = require('./rate-cards');
+const { parseCostUsd } = require('../credits');
 const net = require('node:net');
 const { createHash } = require('node:crypto');
 const { rankImages } = require('./image-rank');
@@ -29,6 +31,11 @@ const safeUrl = (s) => {
     } catch { return null; }
 };
 const credentialId = a => a.credential_id || a.id;
+// An amount as plain decimal text, never in exponent form: the billing routes parse money the same way.
+const plainDecimal = (value) => {
+    const text = String(value);
+    return /[eE]/.test(text) ? Number(value).toFixed(9) : text;
+};
 const dimension = n => Number.isInteger(n) && n > 0 ? n : null;
 function inputFor(kind, b) {
     if (!b || typeof b !== 'object' || Array.isArray(b)) throw invalid('A JSON object is required');
@@ -168,10 +175,13 @@ function createMemoryEvents() {
         async release(scope, provider, id) { seen.delete(key(scope, provider, id)); },
     };
 }
-function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () => Date.now(), credentials = null, registry = null, targetGuard = publicTarget, events = null, publicBase = process.env.AI_PUBLIC_URL || 'https://ai.openvibe.services', valkey = null } = {}) {
+function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () => Date.now(), credentials = null, registry = null, targetGuard = publicTarget, events = null, publicBase = process.env.AI_PUBLIC_URL || 'https://ai.openvibe.services', valkey = null, db = null } = {}) {
     // The breaker lives in Valkey when the service has one, so every process sees the same open circuit
     // (server/search/circuit.js); without one it is a Map in this process.
     const circuit = createCircuit({ valkey, now });
+    // The versioned rate cards (plan §W.2 step 3): what a unit of an engine costs, what a hold reserves, and
+    // the card a receipt names. A process without a database reads version 1 as it was seeded.
+    const rateCards = createRateCards({ db, clock: { now: () => now() } });
     const assetEvents = events || createMemoryEvents();
     const providerFor = (a, providers) => providers.find(p => p.metadata?.search_adapters?.includes(a.id));
     function binding(a, providers) {
@@ -215,13 +225,18 @@ function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () =>
         const providers = registry ? await registry.listProviders() : [];
         // The breaker lives in Valkey when the service has one: the card says whether the engine is healthy.
         const open = await Promise.all(adapters.map(a => circuit.openUntil('shared', a.id)));
+        // The active rate cards of every engine (plan §W.2 step 3): what a unit costs, what a hold reserves and
+        // the day the price was read. A card older than ninety days says so.
+        const cards = await rateCards.active();
         return adapters.map((a, i) => {
             const state = binding(a, providers);
-            return { id: a.id, kinds: a.kinds, class: a.class, price_per_1000: a.price_per_1000,
+            const own = cards.get(a.id) || [];
+            return { id: a.id, kinds: a.kinds, class: a.class,
+                rate_cards: own, pricing_stale: own.some(c => c.stale),
                 byok: a.byok, available: state.available, freshness: a.freshness, healthy: open[i] <= now(),
                 provider: state.provider?.key || null, manual_only: a.manual_only === true,
-                source: a.source, checked_on: a.checked_on, pricing_note: a.pricing_note || null,
-                included_allowance: a.included_allowance || null, onboarding: a.onboarding || null,
+                source: a.source, pricing_note: a.pricing_note || null,
+                included_allowance: own.find(c => c.included)?.included || null, onboarding: a.onboarding || null,
                 upstreams: a.upstreams || (a.upstream ? [a.upstream] : []),
                 uploads: a.uploads === true, filters: filtersFor(a), terms: searchTerms.termsOf(a.id) };
         });
@@ -235,6 +250,11 @@ function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () =>
         const skippedForFilters = new Set();
         const notConsidered = [];
         const providers = registry ? await registry.listProviders() : [];
+        // The active rate cards price every engine (plan §W.2 step 3): a card is never edited, and only the
+        // active one is used. The caller's own ceiling is an exact amount, never a float.
+        const cards = await rateCards.active();
+        const cardOf = (id) => (cards.get(id) || [])[0] || null;
+        const budgetNano = b.max_cost_usd == null ? null : parseCostUsd(plainDecimal(b.max_cost_usd));
         // The class gate (plan §W.2 step 4). A request may name the classes it wants; otherwise a web search uses
         // the classes a web search uses (an index, a proxy, OpenVibe's own services, a metasearch) and an answer
         // engine or a semantic engine joins only when the request asks for an answer or for research. A named engine
@@ -269,16 +289,34 @@ function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () =>
                     const t = searchTerms.termsOf(a.id);
                     throw new AiError(422, 'search.terms', `${a.id} cannot serve this request (${denied.replace(/_/g, ' ')})${t ? `: ${t.source}` : ': its terms are not reviewed yet'}`);
                 }
-                candidates.push({ a, key: null, own: false, scope: 'shared', engine: a.id, ceiling: 0, provider: null, managed: false, env, skipReason: denied });
+                candidates.push({ a, key: null, own: false, scope: 'shared', engine: a.id, ceilingNano: 0n, estimateNano: 0n, card: null, provider: null, managed: false, env, skipReason: denied });
                 continue;
             }
             const own = a.byok && subject && credentials ? await credentials.searchForRun(subject, credentialId(a)) : null;
             const state = binding(a, providers);
-            const ceiling = a.ceiling ? a.ceiling(b) : a.price_per_1000 / 1000;
+            // The hold is the card's ceiling × the units this call may use, and never less than the reserve the
+            // engine declares for itself. Both are integer nano-USD.
+            const card = cardOf(a.id);
+            const units = rateCards.unitsMayUse(card, b);
+            const cardCeilingNano = card ? rateCards.estimate(card, units) : null;
+            const declaredNano = a.ceilingNano ? a.ceilingNano(b) : null;
+            const ceilingNano = cardCeilingNano == null ? declaredNano
+                : declaredNano == null ? cardCeilingNano : (declaredNano > cardCeilingNano ? declaredNano : cardCeilingNano);
+            // The estimate is what the call is expected to cost: the engine's own estimate when it declares
+            // one, otherwise the card's price for the units it may use.
+            const estimateNano = a.estimateNano ? a.estimateNano(b)
+                : card ? rateCards.settle(card, units) : null;
+            if (ceilingNano == null || estimateNano == null) {
+                // An engine with no card and no reserve of its own has no price: it is never called.
+                if (b.engine && b.engine !== 'auto')
+                    throw new AiError(422, 'search.unsupported', `${a.id} has no rate card yet`);
+                candidates.push({ a, key: null, own: false, scope: 'shared', engine: a.id, ceilingNano: 0n, estimateNano: 0n, card: null, provider: null, managed: false, env, skipReason: 'no_rate_card' });
+                continue;
+            }
             if (!own && !state.available) {
                 // An owner-managed provider that is off stays in the plan so the receipt says why it was skipped.
                 if (state.managed && state.provider && state.configured)
-                    candidates.push({ a, key: state.key, own: false, scope: 'shared', engine: a.id, ceiling, provider: state.provider.key, managed: true, env: state.env, skipReason: 'disabled' });
+                    candidates.push({ a, key: state.key, own: false, scope: 'shared', engine: a.id, ceilingNano, estimateNano, card, provider: state.provider.key, managed: true, env: state.env, skipReason: 'disabled' });
                 continue;
             }
             const key = own?.apiKey || state.key;
@@ -291,8 +329,8 @@ function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () =>
             }
             // The breaker's scope says whose key failed: a person's own key is its own circuit.
             const scope = own ? 'k:' + createHash('sha256').update(key).digest('hex') : 'shared';
-            candidates.push({ a, key, own: Boolean(own), scope, engine: a.id, ceiling, provider: state.provider?.key || null, managed: state.managed, env: state.env || env,
-                skipReason: b.max_cost_usd != null && ceiling > b.max_cost_usd ? 'budget' : null });
+            candidates.push({ a, key, own: Boolean(own), scope, engine: a.id, ceilingNano, estimateNano, card, provider: state.provider?.key || null, managed: state.managed, env: state.env || env,
+                skipReason: budgetNano != null && ceilingNano > budgetNano ? 'budget' : null });
         }
         // Once the person has an eligible key, fallback stays within their keys (0% Exchange fee).
         const cohort = candidates.some(c => c.own) ? candidates.filter(c => c.own) : candidates;
@@ -302,8 +340,8 @@ function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () =>
             if (!c.skipReason && !(b.engine && b.engine !== 'auto') && (await circuit.openUntil(c.scope, c.engine)) > now()) c.skipReason = 'circuit_open';
             selected.push(c);
         }
-        const price = c => c.a.estimate ? c.a.estimate(b) : c.a.price_per_1000 == null ? c.ceiling : c.a.price_per_1000 / 1000;
-        selected.sort((a, b) => price(a) - price(b));
+        // The order is the estimate, in integer nano-USD: an exact comparison, never a float subtraction.
+        selected.sort((a, b) => (a.estimateNano < b.estimateNano ? -1 : a.estimateNano > b.estimateNano ? 1 : 0));
         const runnable = selected.filter(c => !c.skipReason);
         if (!runnable.length) {
             const requested = FILTER_KEYS.filter(k => b[k] != null && b[k] !== '' && b[k] !== false && !(k === 'type' && b.type === 'icon'));
@@ -323,28 +361,41 @@ function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () =>
         }
         // The classes this request was allowed to use, and the engines whose class kept them out of it.
         const classesAllowed = allowed || [adapters.find(a => a.id === b.engine)?.class].filter(Boolean);
-        return { kind, b, candidates: selected, notConsidered, classesAllowed,
-            ceiling: Math.min(b.max_cost_usd ?? Infinity, runnable.reduce((n, c) => n + (c.own ? 0 : c.ceiling), 0)) };
+        // What the call holds: every runnable engine's reserve, capped by the caller's own ceiling.
+        const held = runnable.reduce((n, c) => n + (c.own ? 0n : c.ceilingNano), 0n);
+        const ceilingNano = budgetNano == null ? held : (budgetNano < held ? budgetNano : held);
+        return { kind, b, candidates: selected, notConsidered, classesAllowed, ceilingNano,
+            ceiling: rateCards.usdOf(ceilingNano) };
     }
     // The receipt names the class of the engine that answered, the classes the request allowed, and the engines
-    // whose class kept them out of it (plan §W.2 step 4).
-    const receipt = (plan, engine, cost, start, attempts, engineClass) => ({
-        engine, cost_usd: cost, time_ms: Math.max(0, now() - start),
+    // whose class kept them out of it (plan §W.2 step 4). It also names the rate card that priced the call and
+    // the terms that allowed it (plan §W.2 step 3): the card {id, version}, the terms' review day, the purpose,
+    // the hold the call reserved and what it settled.
+    const receipt = (plan, engine, costNano, start, attempts, engineClass, card, estimateNano) => ({
+        engine, cost_usd: rateCards.usdOf(costNano), time_ms: Math.max(0, now() - start),
         ...(engineClass ? { class: engineClass } : {}),
         ...(plan.classesAllowed && plan.classesAllowed.length ? { classes_allowed: plan.classesAllowed } : {}),
         ...(plan.notConsidered && plan.notConsidered.length ? { not_considered: plan.notConsidered } : {}),
         ...(attempts ? { attempts } : {}),
+        ...(card ? { rate_card: { id: card.id, version: card.version } } : {}),
+        ...(searchTerms.termsOf(engine) ? { terms: { reviewed_on: searchTerms.termsOf(engine).reviewed_on } } : {}),
+        purpose: searchTerms.purposeOf(plan.b),
+        estimate: { nano_usd: String(estimateNano == null ? 0n : estimateNano) },
+        actual: { nano_usd: String(costNano) },
     });
     async function execute(plan, budget = Infinity) {
         const start = now();
-        let incurred = 0, charge = 0;
+        // The money is integer nano-USD from here on: what the call reserved, what it settled, what it charges.
+        let incurredNano = 0n, chargeNano = 0n;
+        const budgetNano = budget === Infinity ? null : BigInt(Math.max(0, Math.round(Number(budget) * 1e9)));
+        const capNano = plan.b.max_cost_usd == null ? null : parseCostUsd(plainDecimal(plan.b.max_cost_usd));
         const attempts = [];
         const attempt = (c, status, started, cost, reason) => ({ provider: c.provider || credentialId(c.a), engine: c.a.id, class: c.a.class, status,
             ...(reason ? { reason } : {}), time_ms: Math.max(0, now() - started), cost_usd: cost });
         for (const c of plan.candidates) {
             const attemptStart = now();
             if (c.skipReason) { attempts.push(attempt(c, 'skipped', attemptStart, 0, c.skipReason)); continue; }
-            if ((!c.own && c.ceiling + charge > budget + 1e-12) || c.ceiling + incurred > (plan.b.max_cost_usd ?? Infinity) + 1e-12) {
+            if ((!c.own && budgetNano != null && c.ceilingNano + chargeNano > budgetNano) || (capNano != null && c.ceilingNano + incurredNano > capNano)) {
                 attempts.push(attempt(c, 'skipped', attemptStart, 0, 'budget')); continue;
             }
             let attempted = false;
@@ -372,29 +423,35 @@ function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () =>
                 const raw = plan.kind === 'fetch' ? await c.a.read(plan.b, options)
                     : plan.kind === 'reverse_image' ? await c.a.reverse(plan.b, options)
                     : await c.a.search(plan.b, options);
-                const cost = raw.cost ?? c.a.price_per_1000 / 1000;
-                if (!Number.isFinite(cost) || cost < 0) throw new Error('Invalid engine cost');
+                // The settle is the card's price × the units the call used. An engine that reports what the
+                // provider charged (a token-priced reader, an answer engine) settles at that amount instead.
+                const rows = Array.isArray(raw) ? raw : raw.rows;
+                const reported = raw.cost;
+                if (reported != null && (!Number.isFinite(reported) || reported < 0)) throw new Error('Invalid engine cost');
+                const costNano = reported != null ? rateCards.nanoOfCost(reported)
+                    : c.card ? rateCards.settle(c.card, rateCards.unitsUsed(c.card, { results: (rows || []).length }))
+                        : (c.estimateNano == null ? 0n : c.estimateNano);
                 const out = plan.kind === 'fetch'
-                    ? { url: plan.b.url, text: String(raw.text || '').slice(0, 200000), receipt: receipt(plan, c.a.id, cost + incurred, start, [...attempts, attempt(c, 'ok', attemptStart, cost)], c.a.class) }
-                    : { results: normalize(Array.isArray(raw) ? raw : raw.rows, c.a.id, plan.kind, plan.b), receipt: receipt(plan, c.a.id, cost + incurred, start, [...attempts, attempt(c, 'ok', attemptStart, cost)], c.a.class) };
+                    ? { url: plan.b.url, text: String(raw.text || '').slice(0, 200000), receipt: receipt(plan, c.a.id, costNano + incurredNano, start, [...attempts, attempt(c, 'ok', attemptStart, rateCards.usdOf(costNano))], c.a.class, c.card, c.ceilingNano) }
+                    : { results: normalize(rows, c.a.id, plan.kind, plan.b), receipt: receipt(plan, c.a.id, costNano + incurredNano, start, [...attempts, attempt(c, 'ok', attemptStart, rateCards.usdOf(costNano))], c.a.class, c.card, c.ceilingNano) };
                 if (plan.kind !== 'fetch' && !searchContract.check(plan.kind === 'web' ? 'web' : 'images', out).valid) throw new Error('Invalid search response');
                 await circuit.clear(c.scope, c.engine);
-                Object.defineProperty(out, CHARGE, { value: charge + (c.own ? 0 : cost) });
+                Object.defineProperty(out, CHARGE, { value: rateCards.usdOf(chargeNano + (c.own ? 0n : costNano)) });
                 return out;
             } catch (error) {
                 // An upstream error can carry the request URL, and a request URL can carry the key.
                 redactError(error);
                 // A transport timeout or malformed successful response may already be billed.
                 // Keep its ceiling in both the fallback budget and receipt, rather than overspend.
-                const failedCost = attempted && !error.unbilled ? c.ceiling : 0;
+                const failedNano = attempted && !error.unbilled ? c.ceilingNano : 0n;
                 const reason = ['AbortError', 'TimeoutError'].includes(error.name) || error.code === 'provider.timeout' ? 'timeout'
                     : /usage is missing|Invalid engine cost|Invalid search response/.test(error.message || '') ? 'invalid_response' : 'upstream_error';
-                attempts.push(attempt(c, 'error', attemptStart, failedCost, reason));
-                if (failedCost) { incurred += failedCost; if (!c.own) charge += failedCost; }
+                attempts.push(attempt(c, 'error', attemptStart, rateCards.usdOf(failedNano), reason));
+                if (failedNano) { incurredNano += failedNano; if (!c.own) chargeNano += failedNano; }
                 await circuit.trip(c.scope, c.engine, now() + 60000);
             }
         }
-        throw Object.assign(new AiError(503, 'search.unavailable', 'The selected engines did not answer', { attempts }), { [CHARGE]: charge });
+        throw Object.assign(new AiError(503, 'search.unavailable', 'The selected engines did not answer', { attempts }), { [CHARGE]: rateCards.usdOf(chargeNano) });
     }
     async function search(kind, b, context = {}) {
         return execute(context.plan || await prepare(kind, b, context), context.budget);
