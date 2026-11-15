@@ -1060,7 +1060,14 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                 if (models.length) for (const m of models) await addOffer(p, m.model_key, caps);
                 else await addOffer(p, p.default_model || null, caps);
             } else {
-                await addOffer(p, (route.constraints && route.constraints.model) || p.default_model || null, caps);
+                const pinnedModel = route.constraints && route.constraints.model;
+                // A route that names its model is offered only by the providers that list it. A provider that lists
+                // its models but not this one would only answer an error: DeepSeek's API got "gpt-5-mini" 26 times a
+                // day after the creative route's own provider timed out (2026-11-15). A provider with no model list
+                // keeps the old reading.
+                if (pinnedModel && !(await registry.getModel(p.key, pinnedModel))
+                    && (await registry.listModels({ provider: p.key })).some((m) => m.status === 'active')) continue;
+                await addOffer(p, pinnedModel || p.default_model || null, caps);
             }
         }
         // A pinned candidate stays in the pool even when the provider's capability list is incomplete (migration):
