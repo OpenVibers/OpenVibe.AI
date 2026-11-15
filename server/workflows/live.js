@@ -395,11 +395,13 @@ const structured = [
         cache_mode: 'none',
     },
     {
+        // The Rundown's three are background writing (the desk, nobody waiting): 180 s, the background routes' own
+        // timeout. At 60 s and 30 s a quarter of them were cut off on gpt-5-mini (2026-11-15: 75 a day, ~1 min each).
         key: 'live.rundown.segment', name: "The Rundown: what a streamer talked about", namespace: 'live',
         description: "rundown/desk.js: a stretch of a stream's transcript lines (with the stream's title and category, the known topics and what came earlier) in; up to 4 segments out, each with a topic, headline, what, take, quip, score and verbatim quotes.",
         input_schema: TEXT_OUT({ streamer: STR(80), title: STR(200), category: STR(80), topics: { type: 'array', maxItems: 60, items: STR(120) }, earlier: STR(800), lines: { type: 'array', minItems: 1, maxItems: 400, items: { type: 'object', required: ['t', 'text'], additionalProperties: false, properties: { t: { type: 'number', minimum: 0 }, text: STR(1000) } } } }, ['streamer', 'lines']),
         output_schema: {"type": "object", "additionalProperties": false, "required": ["others", "segments"], "properties": {"others": {"type": "array", "maxItems": 400, "items": {"type": "number"}}, "segments": {"type": "array", "maxItems": 4, "items": {"type": "object", "additionalProperties": false, "required": ["start", "end", "topic", "kind", "title", "what", "take", "quip", "score", "quotes"], "properties": {"start": {"type": "number"}, "end": {"type": "number"}, "topic": {"type": "string"}, "kind": {"type": "string", "enum": ["news", "games", "tech", "life", "music", "sports", "money", "internet", "chat", "other"]}, "title": {"type": "string"}, "what": {"type": "string"}, "take": {"type": ["string", "null"]}, "quip": {"type": "string"}, "score": {"type": "integer", "minimum": 1, "maximum": 5}, "quotes": {"type": "array", "maxItems": 2, "items": {"type": "object", "additionalProperties": false, "required": ["t", "text", "en"], "properties": {"t": {"type": "number"}, "text": {"type": "string"}, "en": {"type": ["string", "null"]}}}}}}}}},
-        steps: [{ kind: 'llm', template: 'live.rundown.segment', operation: 'generate', output: 'json', prepare: 'live.rundown.segment', postprocess: 'live.rundown.segment', params: { max_tokens: 1400, temperature: 1.0, timeout_ms: 60000 } }],
+        steps: [{ kind: 'llm', template: 'live.rundown.segment', operation: 'generate', output: 'json', prepare: 'live.rundown.segment', postprocess: 'live.rundown.segment', params: { max_tokens: 1400, temperature: 1.0, timeout_ms: 180000 } }],
         cache_mode: 'none',
     },
     {
@@ -407,7 +409,7 @@ const structured = [
         description: "rundown/desk.js: a finished stream's facts and its segments in; an episode title, logline, recap and chapters out.",
         input_schema: TEXT_OUT({ streamer: STR(80), title: STR(200), category: STR(80), minutes: { type: 'integer', minimum: 0 }, peak_viewers: { type: ['integer', 'null'], minimum: 0 }, chat_messages: { type: ['integer', 'null'], minimum: 0 }, segments: { type: 'array', minItems: 1, maxItems: 40, items: { type: 'object', required: ['t', 'title', 'what'], additionalProperties: false, properties: { t: { type: 'number', minimum: 0 }, topic: STR(120), title: STR(120), what: STR(500), take: { type: ['string', 'null'], maxLength: 300 }, quotes: { type: 'array', maxItems: 2, items: STR(400) } } } } }, ['streamer', 'segments']),
         output_schema: {"type": "object", "additionalProperties": false, "required": ["title", "logline", "recap", "chapters"], "properties": {"title": {"type": "string"}, "logline": {"type": "string"}, "recap": {"type": "string"}, "chapters": {"type": "array", "maxItems": 10, "items": {"type": "object", "additionalProperties": false, "required": ["index", "title"], "properties": {"index": {"type": "integer", "minimum": 0}, "title": {"type": "string"}}}}}},
-        steps: [{ kind: 'llm', template: 'live.rundown.episode', operation: 'generate', output: 'json', prepare: 'live.rundown.episode', postprocess: 'live.rundown.episode', params: { max_tokens: 900, temperature: 1.0, timeout_ms: 60000 } }],
+        steps: [{ kind: 'llm', template: 'live.rundown.episode', operation: 'generate', output: 'json', prepare: 'live.rundown.episode', postprocess: 'live.rundown.episode', params: { max_tokens: 900, temperature: 1.0, timeout_ms: 180000 } }],
         cache_mode: 'none',
     },
     {
@@ -415,7 +417,7 @@ const structured = [
         description: "rundown/desk.js: a topic and every take on it in; a headline and summary out.",
         input_schema: TEXT_OUT({ topic: STR(120), takes: { type: 'array', minItems: 1, maxItems: 30, items: { type: 'object', required: ['streamer', 'what'], additionalProperties: false, properties: { streamer: STR(80), when: STR(40), what: STR(500), take: { type: ['string', 'null'], maxLength: 300 }, quote: { type: ['string', 'null'], maxLength: 400 } } } } }, ['topic', 'takes']),
         output_schema: {"type": "object", "additionalProperties": false, "required": ["headline", "summary"], "properties": {"headline": {"type": "string"}, "summary": {"type": "string"}}},
-        steps: [{ kind: 'llm', template: 'live.rundown.topic', operation: 'generate', output: 'json', prepare: 'live.rundown.topic', postprocess: 'live.rundown.topic', params: { max_tokens: 400, temperature: 1.0, timeout_ms: 30000 } }],
+        steps: [{ kind: 'llm', template: 'live.rundown.topic', operation: 'generate', output: 'json', prepare: 'live.rundown.topic', postprocess: 'live.rundown.topic', params: { max_tokens: 400, temperature: 1.0, timeout_ms: 180000 } }],
         cache_mode: 'none',
     },
     {
