@@ -34,6 +34,10 @@ async function executeChoice({ execute, registry, poolRates, maxAttempts = 1, ro
                 for (const row of rows) {
                     const provider = byKey.get(row.provider_key);
                     if (!provider || provider.status !== 'active' || row.status !== 'active') continue;
+                    // The stub writes synthetic text and costs nothing, so "the cheapest" was always the stub: Blog's
+                    // changelog tagger got synthetic tags 690 times in five days (2026-11-15). A dynamic choice is for
+                    // real answers; only a choice that names a stub model gets one.
+                    if (dynamic && (provider.kind === 'stub' || provider.key === 'stub')) continue;
                     if (isImage ? row.type !== 'image' : row.type === 'image') continue;
                     const id = canonicalOf(row, provider);
                     if (!dynamic && id !== picked.model && row.model_key !== picked.model) continue;

@@ -83,5 +83,18 @@ t.test('missing price under a cost ceiling never dispatches',async()=>{
  await assert.rejects(()=>executeChoice({execute:async()=>{dispatched=true;},registry:{listModels:async()=>[{provider_key:'a',model_key:'one',type:'chat',status:'active'}],listProviders:async()=>[{key:'a',status:'active'}],getProvider:async()=>({kind:'openai'})},poolRates:async()=>null,route:{},operation:'chat',req:{maxTokens:100},ctx:{taskChoice:{task:{name:'test'},choice:c('a/one'),fallbacks:[],max_cost_usd:0.01},choiceBudget:{used:0}}}),e=>e.code==='choice.cost_ceiling');
  assert.equal(dispatched,false);
 });
+t.test('the cheapest is never the stub: a dynamic choice answers with a real model (11-15: 690 synthetic changelog tags)',async()=>{
+ const card=(p)=>({in:{unit_price_usd:p},out:{unit_price_usd:p},cached:{unit_price_usd:0}});
+ const registry={listModels:async()=>[{provider_key:'stub',model_key:'stub-1',type:'chat',status:'active'},{provider_key:'pricey',model_key:'big',type:'chat',status:'active'},{provider_key:'cheap',model_key:'small',type:'chat',status:'active'}],
+  listProviders:async()=>[{key:'stub',kind:'stub',status:'active'},{key:'pricey',kind:'openai',status:'active'},{key:'cheap',kind:'openai',status:'active'}],getProvider:async(k)=>({key:k,kind:k==='stub'?'stub':'openai'})};
+ const rates={stub:card(0),pricey:card(5),cheap:card(0.1)};
+ let seen=null;
+ const plan={task:{name:'blog.changelog.tag'},choice:c('openvibe/cheapest'),fallbacks:[],why:'owner',max_cost_usd:null};
+ await executeChoice({registry,poolRates:async(p)=>rates[p]||null,route:{},operation:'chat',req:{},ctx:{taskChoice:plan,choiceBudget:{used:0}},execute:async(r,o,q,ctx)=>{seen=ctx.exact.offers.map(x=>x.provider);return {model:'small'};}});
+ assert.deepEqual(seen,['cheap','pricey'],'the stub is not an offer; the cheapest real one is first');
+ const named={...plan,choice:c('stub/stub-1')};
+ await executeChoice({registry,poolRates:async(p)=>rates[p]||null,route:{},operation:'chat',req:{},ctx:{taskChoice:named,choiceBudget:{used:0}},execute:async(r,o,q,ctx)=>{seen=ctx.exact.offers.map(x=>x.provider);return {model:'stub-1'};}});
+ assert.deepEqual(seen,['stub'],'a choice that names the stub still gets it');
+});
 t.test('finish',async()=>h.stop());
 t.run();
