@@ -61,6 +61,24 @@ const { createRoutingEvidence } = require('./evidence');
 const exchangeConstraints = require('../exchange/constraints');
 const exchangePrivacy = require('../exchange/privacy');
 const floor = require('../policy/floor');
+
+/**
+ * The floor on an answer. A transcript is what people said, not what a model wrote: it is delivered with the floor's
+ * finding on it (`result.floor`, for the caller's own moderation) and never dropped. 2026-11-15: the minors rule (a
+ * child word and a body word anywhere in the same text) read five minutes of stream speech at a time and dropped 17
+ * of 43 Live speech windows in a day, which hid what was said from moderation and lost it for captions and search.
+ * Everything a model writes still meets the floor, and a transcript that feeds a model meets it again as its input.
+ *   floorOnResult(operation, result) -> null (deliver) | the refusal ({ rule, detail })
+ */
+function floorOnResult(operation, result) {
+    const answer = floor.checkResult(result);
+    if (answer.ok) return null;
+    if (operation === 'transcribe' && result && typeof result === 'object') {
+        result.floor = { rule: answer.rule || null, detail: answer.detail || null };
+        return null;
+    }
+    return answer;
+}
 const tier = require('../policy/tier');
 
 /** Is this offer allowed under the request's content policy? Standard never runs an uncensored offer; the adult tier runs nothing else. */
@@ -1564,8 +1582,8 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             const asked = floor.checkRequest(req);
             if (!asked.ok) throw refuseFloor(asked);
             const out = await executeWithCredential(ctx.credential, operation, req, ctx);
-            const answer = floor.checkResult(out.result);
-            if (!answer.ok) throw refuseFloor(answer);
+            const answer = floorOnResult(operation, out.result);
+            if (answer) throw refuseFloor(answer);
             return out;
         }
         const features = [operation];
@@ -1648,8 +1666,8 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                 const key = paidByOf(cred);
                 try {
                     const out = await executeWithCredential(cred, operation, req, { ...ctx, defaultModel: pick.model });
-                    const answer = floor.checkResult(out.result);
-                    if (!answer.ok) throw refuseFloor(answer);
+                    const answer = floorOnResult(operation, out.result);
+                    if (answer) throw refuseFloor(answer);
                     const attempts = [...selfAttempts, { key, provider: cred.provider, model: pick.model, why: pick.why, status: 'ok', error: null }];
                     // L37: the preference was honoured when their own key for that provider answered.
                     if (preferState && prefer.provider && String(cred.provider) === prefer.provider) {
@@ -2178,8 +2196,8 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                     // The floor on the way out, over the answer's own shape (chat text, completion choices, tool
                     // arguments, a message's blocks): an answer that carries a breach never leaves this function.
                     if (floorGuard) floorGuard.finish();
-                    const floorOut = floor.checkResult(result);
-                    if (!floorOut.ok) throw new AiError(403, 'policy.floor_refused', floorOut.detail, { rule: floorOut.rule, policy: contentPolicy });
+                    const floorOut = floorOnResult(operation, result);
+                    if (floorOut) throw new AiError(403, 'policy.floor_refused', floorOut.detail, { rule: floorOut.rule, policy: contentPolicy });
                     // An answer with nothing in it is a failed attempt, not a success: the next offer answers instead, and
                     // the provider's record counts it (2026-11-10 to 11-13 a model answered "ok" with no text on most
                     // background calls, and every one of them was counted a success).
@@ -2320,4 +2338,4 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
     return { adapter, health, resetHealth, notifyOpenCircuits, execute, executeWithCredential, offers, benchView, priceFor, costOf, rateCardsFor, providerStates, stats, statFor, candidates, machines, routingEvidence };
 }
 
-module.exports = { createProviderPool, createFloorGuard, policyAllows, machineMessages, machineTools };
+module.exports = { createProviderPool, createFloorGuard, floorOnResult, policyAllows, machineMessages, machineTools };
