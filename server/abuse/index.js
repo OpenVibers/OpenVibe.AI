@@ -65,7 +65,8 @@ function createAbuse({ db, config, env = process.env, clock = { now: () => Date.
     }
     const keyed = (kind, value) => crypto.createHmac('sha256', salt).update(`${kind}:${value}`).digest('hex');
     const now = () => clock.now();
-    const baseTokens = Math.max(0, Math.floor(Number(cfg.dailyTokens) || 0));
+    // Read at each admission: the owner changes it on the AI setup page (ai.exchange free_daily_tokens, 2026-11-15).
+    const baseTokens = () => Math.max(0, Math.floor(Number(cfg.dailyTokens) || 0));
     const firstParty = new Set((cfg.firstPartyServices || ['exchange']).map((s) => String(s).trim().toLowerCase()).filter(Boolean));
     const asn = asnLib.createAsnTable({
         v4File: cfg.ip2asnV4 || '', v6File: cfg.ip2asnV6 || '', hostingAsns: cfg.hostingAsns || [], log,
@@ -269,7 +270,7 @@ function createAbuse({ db, config, env = process.env, clock = { now: () => Date.
                 try { kudos = Math.max(0, Number(await community.kudosBonus(subject)) || 0); } catch { kudos = 0; }
             }
         }
-        const tierInfo = trust.tierFor({ signals: account, kudos, hosting: network.hosting, base: baseTokens });
+        const tierInfo = trust.tierFor({ signals: account, kudos, hosting: network.hosting, base: baseTokens() });
         if (deviceHash && subject) await touchDevice(deviceHash, subject, tierInfo.allowance, at);
         const onDevice = deviceHash ? await accountsOn(deviceHash) : { accounts: 0, cap: null };
         const shared = onDevice.accounts > 3;

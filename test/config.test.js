@@ -85,6 +85,17 @@ t.test('an owner change applies live and is audited without a value', async () =
     assert.ok(rows.every((row) => !String(row.metadata).includes(SECRET)), 'never a value');
 });
 
+t.test('the free AI per person per day is the owner\'s, live (2026-11-15, plan §AD.9 step 4)', async () => {
+    const ns = (await cfgReq(h, 'GET', '/internal/config')).body.namespaces.find((n) => n.namespace === 'ai.exchange');
+    const f = ns.schema.properties.free_daily_tokens;
+    assert.ok(f && f['x-env'] === 'AI_FREE_DAILY_TOKENS' && f.title && f.description.length > 30, 'a field with words, pinned by its env');
+    const r = await cfgReq(h, 'POST', '/internal/config/ai.exchange', { body: { values: { free_daily_tokens: 50000 }, reason: 'more free use' } });
+    assert.strictEqual(r.status, 200, r.text);
+    assert.strictEqual(h.config.abuse.dailyTokens, 50000, 'the allowance follows at once');
+    const bad = await cfgReq(h, 'POST', '/internal/config/ai.exchange', { body: { values: { free_daily_tokens: -1 }, reason: 'below zero' } });
+    assert.ok(bad.status >= 400, 'never below zero');
+});
+
 t.test('a provider key is write-only, sealed, and never reaches a summary, a log or an error', async () => {
     const created = await request(h.base, 'POST', '/api/v1/providers', {
         tok: opsTok,
