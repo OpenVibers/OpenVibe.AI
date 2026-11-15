@@ -36,7 +36,41 @@
  *     there.
  */
 
-const { minorNude, classifyText } = require('./classifiers');
+const { MINOR, NUDE, MINOR_VISION, NUDE_VISION, SEX, NOT_A_BODY } = require('./classifiers');
+
+/**
+ * The first line reads a child and a bare body (or a sex act) together, within MINOR_NEAR characters of each other,
+ * the way the second line reads its cues near a sexual word. The house's classifiers ask the question of a whole
+ * text, which is right for a title or a caption; a summary's input is five to sixty minutes of a stream's speech and
+ * chat, and "what's up boys" in one minute with an adult body word in another refused it as sexual content involving
+ * minors (2026-11-15: 261 of 261 stream summaries and 75 of 75 streamer overviews in a day). Near, not the same
+ * sentence, so a text cannot split the two across a full stop; a short text is read whole, as before.
+ */
+const MINOR_NEAR = 300;
+const globalOf = (re) => new RegExp(re.source, re.flags.includes('g') ? re.flags : `${re.flags}g`);
+const NOT_A_BODY_G = globalOf(NOT_A_BODY);
+/** Body compounds that are not a body ("chicken breast") blanked out, the text's length kept so positions hold. */
+const bodyText = (t) => String(t || '').replace(NOT_A_BODY_G, (m) => ' '.repeat(m.length));
+function positions(re, text) {
+    const out = [];
+    const g = globalOf(re);
+    let m;
+    while ((m = g.exec(text)) && out.length < 2000) { out.push([m.index, m.index + m[0].length]); if (!m[0].length) g.lastIndex++; }
+    return out;
+}
+/** Is a match of `a` within `near` characters (gap between the two words) of a match of `b`? */
+function within(text, a, b, near = MINOR_NEAR) {
+    const pa = positions(a, text);
+    if (!pa.length) return false;
+    const pb = positions(b, text);
+    if (!pb.length) return false;
+    for (const [s1, e1] of pa) for (const [s2, e2] of pb) if (Math.max(s2 - e1, s1 - e2) <= near) return true;
+    return false;
+}
+/** Live's rule (a child and a bare body), read near. */
+const minorNude = (t) => within(bodyText(t), MINOR, NUDE);
+/** Vision's minor_sexual (a child with a bare body or a sex act), read near. */
+const minorSexual = (t) => { const b = bodyText(t); return within(b, MINOR_VISION, NUDE_VISION) || within(String(t || ''), MINOR_VISION, SEX); };
 
 /** Words for a child and sex together (the clearest form of the first line, and the house has no word for it). */
 const CSAM = /\b(?:child\s?(?:porn|porno|abuse|sexual)|cp\s(?:content|video|series)\b|kiddie\s?(?:porn|porno)|pedophile|pedophilia|paedophile|paedophilia)\b/i;
@@ -135,7 +169,7 @@ const PLAIN = {
 const CONTENT_RULES = [
     {
         rule: 'minors', label: 'sexual content involving minors',
-        test: (t) => classifyText(t).category === 'minor_sexual',
+        test: (t) => minorSexual(t),
     },
 ];
 
@@ -232,6 +266,6 @@ function checkAnswer(text) { return check(Array.isArray(text) ? text : [text]); 
 function checkResult(result) { return check(textsOfAnswer(result)); }
 
 module.exports = {
-    RULES, CONTENT_RULES, PLAIN, CSAM, NONCONSENSUAL, CONSENT_CUES, SEXUAL, nonConsensual, MASS_HARM, WEAPON_INTENT, ATTACK_INTENT,
+    RULES, CONTENT_RULES, PLAIN, MINOR_NEAR, minorNude, minorSexual, CSAM, NONCONSENSUAL, CONSENT_CUES, SEXUAL, nonConsensual, MASS_HARM, WEAPON_INTENT, ATTACK_INTENT,
     partsOf, textsOf, textsOfAnswer, check, checkRequest, checkAnswer, checkResult,
 };
