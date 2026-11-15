@@ -338,7 +338,7 @@ function createApp({ choices = null, searchFetch = null, config, db, registry, p
     // Community capacity (design: "Offer to the network"): the public offers Exchange lists and the seller's /sell
     // dashboard, an API for Exchange. Nothing here writes an offer; the offer belongs to Network and the Link owner.
     if (community) app.use('/api/v1', require('./api/community').communityRouter({ community, auth, log }));
-    app.use(setupRouter({ config, db, registry, pool, runs, auth, settings, search, env, clock, log, fetchImpl, decisionModels }));
+    app.use(setupRouter({ config, db, registry, pool, runs, auth, settings, search, env, clock, log, fetchImpl, decisionModels, choices }));
     app.use(adminRouter({ config, db, registry, pool, quotas, cache, runs, auth, settings, ops, log }));
     app.use(require('./api/console-data').consoleDataRouter({ db, registry, pool, quotas, cache, runs, ops, auth, clock, fetchImpl, env, gpus, gpuMarket, supply, abuse, priceBook, modelSync, creditGrants, sessionCookies, vault, settings, config, log }));
     // The owner's search rate cards (plan §W.2 step 3): a new price is a draft until the owner activates it,
