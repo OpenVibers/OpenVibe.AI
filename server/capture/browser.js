@@ -171,7 +171,9 @@ function createBrowserEngine({ config, log = console, allowLocal = false } = {})
                 executablePath: chrome, headless: true,
                 args: ['--disable-dev-shm-usage', '--disable-gpu', '--hide-scrollbars', '--force-color-profile=srgb', '--disable-background-networking', '--disable-sync'],
                 proxy: { server: proxyInfo.url, bypass: '' },
-                timeout: Math.min(20000, pageBudgetMs),
+                // 45 s at most: a loaded host or CI runner took over 20 s to start Chrome (11-15: capture.test.js
+                // failed AI #593 on browserType.launch), and a slow start is better waited out than failed.
+                timeout: Math.min(45000, pageBudgetMs),
             });
             const capturedAt = new Date().toISOString();
             const base = { runId, owner, sourceUrl: url, capturedAt };
