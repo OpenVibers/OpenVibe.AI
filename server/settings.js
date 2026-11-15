@@ -97,6 +97,11 @@ const EXCHANGE_SCHEMA = Object.freeze({
             minimum: 0, maximum: 1, 'x-example': 0.15,
             description: 'A challenger replaces the first model only when it scores at least this much better, from 0 to 1 (default 0.15, fifteen percent). Higher switches less often.',
         },
+        free_daily_tokens: {
+            type: 'integer', title: 'Free AI per person per day', 'x-group': 'Free use', 'x-env': 'AI_FREE_DAILY_TOKENS',
+            minimum: 0, maximum: 10000000, 'x-example': 20000,
+            description: 'How many tokens (about three quarters of a word each) a verified person may use free each day, counted in and out (default 20,000, about 15,000 words). A new account gets a quarter of it; 0 switches free AI off, so people use their own key or Credits.',
+        },
         expected_output_tokens: {
             type: 'integer', title: 'Expected answer length (tokens)', 'x-group': GROUP, 'x-env': 'AI_ROUTING_EVIDENCE_OUTPUT_TOKENS', 'x-advanced': true,
             minimum: 1, 'x-example': 512,
@@ -153,6 +158,8 @@ function applyExchange(config, values = {}) {
     for (const key of ['alpha', 'min_samples', 'success_floor', 'hysteresis_decisions', 'exploration_share', 'affinity_gain', 'min_gain', 'expected_output_tokens']) {
         if (has(key)) re[key] = Number(values[key]);
     }
+    // The free daily allowance (server/abuse reads it at each admission).
+    if (has('free_daily_tokens') && config.abuse) config.abuse.dailyTokens = Math.max(0, Math.floor(Number(values.free_daily_tokens) || 0));
 }
 
 /** The origin a provider key is bound to ('' when the base URL is missing or not http(s)). */
