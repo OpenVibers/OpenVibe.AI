@@ -22,6 +22,7 @@ async function executeChoice({ execute, registry, poolRates, maxAttempts = 1, ro
             // offer and a soft preference are all set aside for this step.
             const next = { ...ctx, taskChoice: null, selfCredentials: [], selfPreferences: null, communityOptIn: false, prefer: null, ...(onDelta ? { onDelta } : {}) };
             let offers = [];
+            const stubProviders = new Set();
 
             if (picked.source === 'machines') {
                 if (!ctx.onBehalfOf) throw new AiError(401, 'choice.sign_in', 'a machine choice needs a person');
@@ -31,9 +32,17 @@ async function executeChoice({ execute, registry, poolRates, maxAttempts = 1, ro
                 const [rows, providers] = await Promise.all([registry.listModels(), registry.listProviders()]);
                 const byKey = new Map(providers.map((p) => [p.key, p]));
                 const dynamic = picked.model.startsWith('openvibe/');
+                // The stub writes synthetic text and costs nothing, so "the cheapest" was always the stub: Blog's
+                // changelog tagger got synthetic tags 690 times in five days (2026-11-15). In a dynamic choice the stub
+                // comes after every real offer, whatever the prices: the last resort, as in the router, never the pick.
+                const stubOffers = [];
                 for (const row of rows) {
                     const provider = byKey.get(row.provider_key);
                     if (!provider || provider.status !== 'active' || row.status !== 'active') continue;
+                    if (dynamic && (provider.kind === 'stub' || provider.key === 'stub')) {
+                        if (!(isImage ? row.type !== 'image' : row.type === 'image')) { stubOffers.push({ provider: provider.key, model: row.model_key }); stubProviders.add(provider.key); }
+                        continue;
+                    }
                     if (isImage ? row.type !== 'image' : row.type === 'image') continue;
                     const id = canonicalOf(row, provider);
                     if (!dynamic && id !== picked.model && row.model_key !== picked.model) continue;
@@ -51,7 +60,7 @@ async function executeChoice({ execute, registry, poolRates, maxAttempts = 1, ro
                     const model = (offers.find((o) => o.provider === cred.provider) || {}).model || picked.model.slice(provider.length + 1);
                     next.credential = { ...cred, models: { chat: model } };
                 } else {
-                    if (!offers.length) throw new AiError(422, 'choice.unavailable', `no deployment of ${picked.model} is available`);
+                    if (!offers.length && !stubOffers.length) throw new AiError(422, 'choice.unavailable', `no deployment of ${picked.model} is available`);
                     if (picked.model === 'openvibe/cheapest') {
                         const priced = await Promise.all(offers.map(async (o) => {
                             const card = await poolRates(o.provider, o.model);
@@ -61,6 +70,7 @@ async function executeChoice({ execute, registry, poolRates, maxAttempts = 1, ro
                         }));
                         offers = priced.sort((a, b) => a.price - b.price).map((x) => x.o);
                     }
+                    offers.push(...stubOffers);
                     // openvibe/auto means the network's own router decides; every other choice pins exactly its model.
                     if (picked.model !== 'openvibe/auto') next.exact = { id: picked.model, offers };
                 }
@@ -92,7 +102,9 @@ async function executeChoice({ execute, registry, poolRates, maxAttempts = 1, ro
                     reserved += o.cost;
                 }
                 ctx.choiceBudget.used = (ctx.choiceBudget.used || 0) + reserved;
-                next.exact = { id: picked.model, offers: limited.sort((a, b) => a.cost - b.cost).map(({ provider, model }) => ({ provider, model })) };
+                // Cheapest first, and the stub (cost 0) still after every real offer.
+                const last = (o) => (stubProviders.has(o.provider) ? 1 : 0);
+                next.exact = { id: picked.model, offers: limited.sort((a, b) => (last(a) - last(b)) || (a.cost - b.cost)).map(({ provider, model }) => ({ provider, model })) };
             }
 
             const forwarded = onDelta && req.onDelta ? { ...req, onDelta: (...args) => { streamed = true; return req.onDelta(...args); } } : req;
