@@ -22,6 +22,7 @@ const { ProviderError, postJson, deadline, describeAbort, approxTokens, schemaIn
 const { sseEvents, createAccumulator } = require('./stream');
 const usageParser = require('./usage');
 const effortPolicy = require('../effort/providers');
+const { toStrict, fitAnswer } = require('./strict-schema');
 
 const DEFAULT_BASE_URL = 'https://api.openai.com/v1';
 const TEXT_OPS = ['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich'];
@@ -33,6 +34,11 @@ let lastEmptyLog = 0;
 /** At most one line a minute about empty answers (they came by the thousand when it went wrong). */
 function emptyLog(line) { const now = Date.now(); if (now - lastEmptyLog > 60000) { lastEmptyLog = now; console.warn(line); } }
 const REASONING_HEADROOM = 4096;
+
+/** A strict answer brought back to the caller's loose schema: optional nulls out, limits applied (./strict-schema.js). */
+function fitted(text, schema) {
+    try { return JSON.stringify(fitAnswer(JSON.parse(text), schema)); } catch { return text; }
+}
 
 /**
  * The provider routing object of an OpenRouter offer (2026-11-10): only the fields OpenRouter documents,
@@ -51,7 +57,7 @@ function buildBody(req, jsonMode) {
     const { model, system, messages, image, json, maxTokens, temperature, cacheKey, baseUrl, serviceTier, routing } = req;
     const msgs = [];
     // Stepped down from json_schema: the schema travels in the instructions instead.
-    const hint = json && jsonMode !== 'schema' ? schemaInstruction(json) : '';
+    const hint = json && jsonMode !== 'schema' && jsonMode !== 'strict' ? schemaInstruction(json) : '';
     const sysText = [...(system || []).map(x => x.text), hint].filter(Boolean).join('\n\n');
     if (sysText) msgs.push({ role: 'system', content: sysText });
     messages.forEach((m, i) => {
@@ -72,7 +78,11 @@ function buildBody(req, jsonMode) {
         body.max_tokens = maxTokens;
         if (temperature != null) body.temperature = temperature;
     }
-    if (json && jsonMode === 'schema') body.response_format = { type: 'json_schema', json_schema: { name: json.name || 'result', schema: json.schema, strict: json.strict !== false } };
+    // 'strict': a loose schema (strict: false) converted so the answer is decoded against it (./strict-schema.js); a
+    // small model only reading a loose schema answered with the schema itself (2026-11-15).
+    const strictSchema = json && jsonMode === 'strict' ? toStrict(json.schema) : null;
+    if (strictSchema) body.response_format = { type: 'json_schema', json_schema: { name: json.name || 'result', schema: strictSchema, strict: true } };
+    else if (json && (jsonMode === 'schema' || jsonMode === 'strict')) body.response_format = { type: 'json_schema', json_schema: { name: json.name || 'result', schema: json.schema, strict: json.strict !== false } };
     else if (json && jsonMode === 'object') body.response_format = { type: 'json_object' };
     if (cacheKey && /api\.openai\.com/i.test(baseUrl)) body.prompt_cache_key = String(cacheKey).slice(0, 64);
     // The service tier (BA1): a Flex tier is slower and cheaper, and the provider may refuse it. The tier
@@ -119,9 +129,16 @@ function createOpenAiProvider(record, { apiKey = '', fetchImpl = globalThis.fetc
     const headers = () => (apiKey ? { Authorization: `Bearer ${apiKey}` } : {});
     const caps = new Set(record.capabilities && record.capabilities.length ? record.capabilities : [...TEXT_OPS, 'json', 'vision', 'embed', 'transcribe', 'image']);
 
+    const noSchema = new Map();   // model -> the JSON mode it answered in after refusing json_schema ('object' or null)
+
     async function chat(req) {
-        let jsonMode = req.json ? 'schema' : null;
-        for (let attempt = 0; attempt < 3; attempt++) {
+        // A loose schema goes strict first; refused, it goes as the caller wrote it, then json_object, then prose. A
+        // model that refused json_schema altogether starts where it last answered, so a gateway without structured
+        // output (DeepSeek's API) costs no refused request after the first.
+        let jsonMode = req.json ? (req.json.strict === false && toStrict(req.json.schema) ? 'strict' : 'schema') : null;
+        if (jsonMode && noSchema.has(req.model)) jsonMode = noSchema.get(req.model);
+        let refused = false;
+        for (let attempt = 0; attempt < 4; attempt++) {
             const body = buildBody({ ...req, baseUrl }, jsonMode);
             try {
                 const j = await postJson(`${baseUrl}/chat/completions`, headers(), body, { signal: req.signal, timeoutMs: req.timeoutMs, fetchImpl });
@@ -134,11 +151,13 @@ function createOpenAiProvider(record, { apiKey = '', fetchImpl = globalThis.fetc
                     emptyLog(`[ai] ${req.model}: an empty answer (finish ${finish || '?'}, ${reasoning} reasoning of ${(j.usage && j.usage.completion_tokens) || 0} completion tokens); trying once with more room`);
                     if (finish === 'length' || reasoning > 0) return chat({ ...req, thinkRoom: REASONING_HEADROOM * 3, retryEffort: 'low' });
                 }
-                return { text, json: null, model: j.model || req.model, serviceTier: j.service_tier || null, usage: usageParser.openAiCompatibleUsage(j.usage || {}) };
+                if (refused && jsonMode !== 'strict' && jsonMode !== 'schema' && req.model && noSchema.size < 500) noSchema.set(req.model, jsonMode);
+                return { text: jsonMode === 'strict' ? fitted(text, req.json.schema) : text, json: null, model: j.model || req.model, serviceTier: j.service_tier || null, usage: usageParser.openAiCompatibleUsage(j.usage || {}) };
             } catch (e) {
                 // Gateways without structured-output support: schema -> json_object -> prose.
                 if (e instanceof ProviderError && e.status === 400 && jsonMode && /response_format|json_schema|schema|strict/i.test(e.message)) {
-                    jsonMode = jsonMode === 'schema' ? 'object' : null;
+                    jsonMode = jsonMode === 'strict' ? 'schema' : jsonMode === 'schema' ? 'object' : null;
+                    refused = true;
                     continue;
                 }
                 throw e;
@@ -297,4 +316,4 @@ function createOpenAiProvider(record, { apiKey = '', fetchImpl = globalThis.fetc
     return effortPolicy.wrapAdapter(adapter, { ...record, base_url: baseUrl });
 }
 
-module.exports = { createOpenAiProvider, buildBody, buildCompleteBody, DEFAULT_BASE_URL };
+module.exports = { createOpenAiProvider, buildBody, buildCompleteBody, fitted, DEFAULT_BASE_URL };
