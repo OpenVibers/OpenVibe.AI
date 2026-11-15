@@ -22,7 +22,8 @@ function createDeepDiveStore({ db, clock = { now: () => Date.now() }, log = cons
         return {
             id: r.id, run_id: r.run_id, owner: r.owner_type ? { type: r.owner_type, id: r.owner_id } : null,
             status: r.status, step: r.step, progress: Number(r.progress) || 0,
-            question: r.question, depth: r.depth, site_limit: r.site_limit, price_usd: Number(r.price_usd) || 0,
+            kind: r.kind || 'design', question: r.question, depth: r.depth, site_limit: r.site_limit, price_usd: Number(r.price_usd) || 0,
+            plan: parse(r.plan, null), reads: parse(r.reads, []),
             steps: parse(r.steps, []), candidates: parse(r.candidates, []), decision_at: iso(r.decision_at),
             captures: parse(r.captures, []), report: parse(r.report, null), gaps: parse(r.gaps, []),
             error: r.error_code ? { code: r.error_code, detail: r.error_detail } : null,
@@ -30,18 +31,18 @@ function createDeepDiveStore({ db, clock = { now: () => Date.now() }, log = cons
         };
     }
 
-    async function ensure({ runId, question, depth, siteLimit, priceUsd, owner = null }) {
+    async function ensure({ runId, question, depth, siteLimit, priceUsd, owner = null, kind = 'design' }) {
         const now = iso(clock.now());
-        await db.prepare(`INSERT INTO deep_dives (id, run_id, owner_type, owner_id, status, step, progress, question, depth, site_limit, price_usd, steps, created_at, updated_at)
-            VALUES (?, ?, ?, ?, 'queued', 'plan', 0, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING`)
-            .run(runId, runId, owner && owner.type || null, owner && owner.id || null, String(question).slice(0, 500), depth, siteLimit, priceUsd, JSON.stringify([]), now, now);
+        await db.prepare(`INSERT INTO deep_dives (id, run_id, owner_type, owner_id, status, step, progress, question, depth, site_limit, price_usd, steps, kind, created_at, updated_at)
+            VALUES (?, ?, ?, ?, 'queued', 'plan', 0, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING`)
+            .run(runId, runId, owner && owner.type || null, owner && owner.id || null, String(question).slice(0, 500), depth, siteLimit, priceUsd, JSON.stringify([]), kind === 'research' ? 'research' : 'design', now, now);
         return decode(await getRow(runId));
     }
 
     async function get(id) { return decode(await getRow(id)); }
 
     async function patch(id, fields) {
-        const cols = { status: 'status', step: 'step', progress: 'progress', steps: 'steps', candidates: 'candidates', decision_at: 'decision_at', captures: 'captures', report: 'report', gaps: 'gaps', error_code: 'error_code', error_detail: 'error_detail', finished_at: 'finished_at' };
+        const cols = { status: 'status', step: 'step', progress: 'progress', steps: 'steps', candidates: 'candidates', decision_at: 'decision_at', captures: 'captures', report: 'report', gaps: 'gaps', error_code: 'error_code', error_detail: 'error_detail', finished_at: 'finished_at', plan: 'plan', reads: 'reads' };
         const sets = []; const args = [];
         for (const [k, v] of Object.entries(fields || {})) {
             if (!cols[k]) continue;

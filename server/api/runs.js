@@ -46,10 +46,11 @@ function runsRouter({ choices = null, runs, registry, auth, config, log = consol
     /**
      * The service that owns a product workflow may run that workflow even when its Network grant names a narrower
      * namespace: Exchange has held ai.run.create on `ai.complete` since 0.235.0, and design.deep_dive is the deep
-     * dive its own /deep-dive page starts (the workflow's metadata.owner is exchange). This is the one such
-     * allowance, by key and by service id, not a wildcard; every other workflow keeps the namespace rule.
+     * dive its own /deep-dive page starts (the workflow's metadata.owner is exchange), as is research.deep_dive, the
+     * general deep dive its search starts. These allowances are by key and by service id, not a wildcard; every
+     * other workflow keeps the namespace rule.
      */
-    const WORKFLOW_OWNERS = Object.freeze({ 'design.deep_dive': 'exchange' });
+    const WORKFLOW_OWNERS = Object.freeze({ 'design.deep_dive': 'exchange', 'research.deep_dive': 'exchange' });
     function checkNamespace(req, workflowKey) {
         if (req.principal.kind === 'app') {
             if (!appMayRun(req.principal, workflowKey)) throw new AiError(403, 'capability.namespace_denied', `an app may only run its own app.${req.principal.projectKey}.* namespace, not ${workflowKey}`);
