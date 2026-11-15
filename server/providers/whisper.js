@@ -181,7 +181,11 @@ function createWhisperProvider(record, { config }) {
         return new Promise((resolve, reject) => {
             const wav = path.join(os.tmpdir(), `openvibe-ai-tx-${Date.now()}-${Math.floor(Math.random() * 1e6)}.wav`);
             // startSec: one window of a long recording (media.analyze), decoded from there only.
-            const args = ['-y', '-nostdin', ...(startSec > 0 ? ['-ss', String(startSec)] : []), '-i', src];
+            // A recording read over HTTP (Media's range requests) gives up on a stalled read after 15 s and reconnects,
+            // rather than holding whisper until the 10-minute kill (11-15: five windows a day ended "ffmpeg exited null").
+            // Measured: reconnects repeat a stall about five times, so a dead source fails in about 85 s, not 600.
+            const net = /^https?:\/\//i.test(String(src)) ? ['-rw_timeout', '15000000', '-reconnect', '1', '-reconnect_on_network_error', '1', '-reconnect_delay_max', '5'] : [];
+            const args = ['-y', '-nostdin', ...net, ...(startSec > 0 ? ['-ss', String(startSec)] : []), '-i', src];
             if (seconds > 0) args.push('-t', String(seconds));
             args.push('-vn', '-ac', '1', '-ar', '16000');
             // Recordings are loudness-normalised first, as Live's VOD transcripts were: a quiet streamer is still heard.
@@ -202,6 +206,7 @@ function createWhisperProvider(record, { config }) {
                     // The input itself could not be read (a 4xx from Media, not media, no audio): the caller's media, not
                     // whisper's health, so it is a 422 media.unreadable and does not open the circuit for everyone.
                     if (UNREADABLE.test(errTail)) return reject(new ProviderError(`ffmpeg could not read the media (exit ${code}): ${lastLine(errTail)}`, { status: 422, code: 'media.unreadable' }));
+                    if (code === null) return reject(new ProviderError(`ffmpeg was stopped after ${Math.round(timeoutMs / 1000)} s reading the media`, { code: 'provider.timeout' }));
                     return reject(new ProviderError(`ffmpeg exited ${code}`, { code: 'provider.error' }));
                 }
                 resolve(wav);
