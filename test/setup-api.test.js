@@ -144,6 +144,23 @@ t.test('a refused key is scrubbed from the test answer', async () => {
     } finally { seam.handler = original; }
 });
 
+t.test('free use: the pictures each person may make a day, read and set (plan §AD.9 step 4)', async () => {
+    let r = await request(h.base, 'GET', '/api/v1/setup', { tok: owner });
+    assert.deepStrictEqual(r.body.free, { pictures_per_day: 24, pictures_set: true, pictures_default: 24 }, 'the seeded picture setting: 24 a day');
+    r = await request(h.base, 'PUT', '/api/v1/setup/free/pictures', { tok: reader, body: { per_day: 5 } });
+    assert.strictEqual(r.status, 403, 'a write needs provider.manage');
+    r = await request(h.base, 'PUT', '/api/v1/setup/free/pictures', { tok: owner, body: { per_day: 2.5 } });
+    assert.strictEqual(r.status, 422, 'a whole number');
+    r = await request(h.base, 'PUT', '/api/v1/setup/free/pictures', { tok: owner, body: { per_day: 5 } });
+    assert.strictEqual(r.status, 200, r.text);
+    assert.deepStrictEqual(r.body.free, { pictures_per_day: 5, pictures_set: true, pictures_default: 24 });
+    const kept = (await h.choices.defaults())['image.picture'];
+    assert.strictEqual(kept.daily_cap, 5, 'stored as the picture task\'s daily cap');
+    assert.ok(Array.isArray(kept.search_engines) && kept.search_engines.length, 'the rest of the picture setting is kept');
+    r = await request(h.base, 'PUT', '/api/v1/setup/free/pictures', { tok: owner, body: { per_day: null } });
+    assert.deepStrictEqual(r.body.free, { pictures_per_day: 24, pictures_set: false, pictures_default: 24 }, 'null goes back to the default');
+});
+
 t.test('no key is required for the keyless steps', async () => {
     const whisper = await h.registry.getProvider('whisper');
     const r = await request(h.base, 'PUT', '/api/v1/setup/providers/whisper/key', { tok: owner, body: { key: 'anything-at-all' } });

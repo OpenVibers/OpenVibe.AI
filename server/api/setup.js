@@ -139,7 +139,7 @@ function scrub(text, secret) {
 /** Google's Decisions API model: answered directly by POST /api/v1/decisions, never a route's chat model. */
 const isDecisionModel = (m) => String(m || '') === 'gemini-decision-1';
 
-function setupRouter({ config = {}, db, registry, pool = null, runs = null, auth, settings = null, search = null, env = process.env, clock = { now: () => Date.now() }, log = console, fetchImpl = globalThis.fetch, decisionModels = null }) {
+function setupRouter({ config = {}, db, registry, pool = null, runs = null, auth, settings = null, search = null, env = process.env, clock = { now: () => Date.now() }, log = console, fetchImpl = globalThis.fetch, decisionModels = null, choices = null }) {
     const r = express.Router();
     const read = auth.requireCap(CAPS.providerManage, CAPS.usageRead);
     const write = auth.requireCap(CAPS.providerManage);
@@ -305,6 +305,18 @@ function setupRouter({ config = {}, db, registry, pool = null, runs = null, auth
         };
     }
 
+    // Pictures each person may make a day (plan §AD.9 step 4, "free usage for people"): the picture task's daily cap
+    // (image.picture daily_cap, per person per UTC day, server/workflows/pictures.js), or the server's default when the
+    // owner never set one. The same setting Exchange's console shows under Pictures.
+    const PICTURE_TASK = 'image.picture';
+    const pictureDefault = () => { const n = Number(config.pictures && config.pictures.defaultDailyCap); return Number.isFinite(n) ? n : null; };
+    async function freeOf() {
+        if (!choices) return null;
+        const d = (await choices.defaults().catch(() => ({})))[PICTURE_TASK] || null;
+        const set = d && d.daily_cap != null ? Number(d.daily_cap) : null;
+        return { pictures_per_day: set != null ? set : pictureDefault(), pictures_set: set != null, pictures_default: pictureDefault() };
+    }
+
     async function state() {
         const [providers, models, routes, health, searchEngines] = await Promise.all([
             providersOf(), modelsOf(), routesOf(), healthOf(),
@@ -319,6 +331,7 @@ function setupRouter({ config = {}, db, registry, pool = null, runs = null, auth
             // The owner's decisions settings (2026-11-14): the model, the ladder and the threshold of every kind.
             decisions: settings && settings.decisions ? settings.decisions.values() : null,
             decision_kinds: KINDS,
+            free: await freeOf(),
             defaults: steps.map((s) => ({
                 id: s.id, name: s.name, route: s.route, current: s.current, options: s.options,
                 estimated_month_usd: s.estimated_month_usd, month_usd: s.month_usd, calls_30d: s.spend.calls_30d,
@@ -328,6 +341,18 @@ function setupRouter({ config = {}, db, registry, pool = null, runs = null, auth
     }
 
     r.get('/api/v1/setup', read, wrap(async () => await state()));
+
+    // The pictures each person may make a day: the picture task's daily cap, everything else in its setting kept.
+    r.put('/api/v1/setup/free/pictures', write, wrap(async (req) => {
+        if (!choices) throw new AiError(503, 'config.unavailable', 'the task settings are not ready');
+        const raw = body(req).per_day;
+        const n = raw === null ? null : Number(raw);
+        if (n !== null && (!Number.isInteger(n) || n < 0 || n > 1000)) throw new AiError(422, 'setup.invalid', 'per_day is a whole number of pictures from 0 to 1000, or null for the default');
+        const current = (await choices.defaults())[PICTURE_TASK];
+        if (!current) throw new AiError(404, 'task.not_found', 'the picture task has no setting yet');
+        await choices.putDefaults({ defaults: [{ task: PICTURE_TASK, value: { ...current, daily_cap: n } }] }, actorId(req));
+        return { ok: true, free: await freeOf() };
+    }));
 
     r.put('/api/v1/setup/providers/:provider/key', write, wrap(async (req) => {
         const key = String((body(req).key) || '').trim();
