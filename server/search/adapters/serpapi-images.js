@@ -1,5 +1,5 @@
 'use strict';
-const { requestFor, query } = require('../transport');
+const { requestFor, query, recencyOf } = require('../transport');
 const { imageRow } = require('../image-row');
 
 // SerpApi's Google Images operation. The supplier is SerpApi; the upstream index is Google, and every row
@@ -13,11 +13,13 @@ module.exports = {
     upstreams: ['google'],
     filters: {
         license: 'unsupported', commercial: 'unsupported', format: 'local', orientation: 'local',
-        size: 'local', color: 'unsupported', after: 'unsupported', type: 'local', safe_search: 'unsupported',
+        size: 'local', color: 'unsupported', after: 'native', type: 'local', safe_search: 'unsupported',
     },
     async search(b, { fetchImpl, key }) {
         const out = await requestFor(this.hosts, fetchImpl)(query('https://serpapi.com/search.json', {
             engine: 'google_images', q: b.q, num: Math.min(b.limit, 100), api_key: key,
+            // Google's own time range (qdr: the past day, week, month or year) for an 'after' date.
+            ...(recencyOf(b.after) ? { tbs: `qdr:${{ day: 'd', week: 'w', month: 'm', year: 'y' }[recencyOf(b.after)]}` } : {}),
         }));
         return (out.images_results || []).map((r, i) => imageRow(r, {
             index: i, upstream: 'google', source_page: r.link,

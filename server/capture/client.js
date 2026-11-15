@@ -18,7 +18,7 @@ function createCaptureClient({ config = {}, env = process.env, fetchImpl = globa
             const res = await fetchImpl(`${url}/capture`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', Accept: 'application/json', ...(token ? { 'x-ov-capture-token': token } : {}) },
-                body: JSON.stringify({ url: args.url, runId: args.runId || null, owner: args.owner || null, extras: args.extras === true }),
+                body: JSON.stringify({ url: args.url, runId: args.runId || null, owner: args.owner || null, extras: args.extras === true, ...(Array.isArray(args.viewports) ? { viewports: args.viewports } : {}), ...(Array.isArray(args.themes) ? { themes: args.themes } : {}) }),
                 signal: args.signal ? AbortSignal.any([args.signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs),
             });
             const body = await res.json().catch(() => null);

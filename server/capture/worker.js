@@ -49,7 +49,7 @@ function createCaptureWorker({ config, env = process.env, log = console, capture
         if (body.owner != null && !/^usr_[0-9A-HJKMNP-TV-Z]{26}$/.test(String(body.owner))) return json(res, 422, { code: 'input.invalid', detail: 'owner must be a user subject id' });
         if (body.runId != null && !/^run_[0-9A-HJKMNP-TV-Z]{26}$/.test(String(body.runId))) return json(res, 422, { code: 'input.invalid', detail: 'runId must be a run id' });
         try {
-            const out = await cap.captureSite({ url: body.url, runId: body.runId || null, owner: body.owner || null, extras: body.extras === true });
+            const out = await cap.captureSite({ url: body.url, runId: body.runId || null, owner: body.owner || null, extras: body.extras === true, viewports: Array.isArray(body.viewports) ? body.viewports : null, themes: Array.isArray(body.themes) ? body.themes : null });
             return json(res, out.skipped && out.skipped !== 'cancelled' ? 200 : 200, out);
         } catch (err) {
             log.error(`[capture] ${String(err && err.stack || err).slice(0, 500)}`);

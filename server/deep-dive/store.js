@@ -23,7 +23,7 @@ function createDeepDiveStore({ db, clock = { now: () => Date.now() }, log = cons
             id: r.id, run_id: r.run_id, owner: r.owner_type ? { type: r.owner_type, id: r.owner_id } : null,
             status: r.status, step: r.step, progress: Number(r.progress) || 0,
             kind: r.kind || 'design', question: r.question, depth: r.depth, site_limit: r.site_limit, price_usd: Number(r.price_usd) || 0,
-            plan: parse(r.plan, null), reads: parse(r.reads, []),
+            plan: parse(r.plan, null), reads: parse(r.reads, []), image_sheets: parse(r.image_sheets, []),
             steps: parse(r.steps, []), candidates: parse(r.candidates, []), decision_at: iso(r.decision_at),
             captures: parse(r.captures, []), report: parse(r.report, null), gaps: parse(r.gaps, []),
             error: r.error_code ? { code: r.error_code, detail: r.error_detail } : null,
@@ -42,7 +42,7 @@ function createDeepDiveStore({ db, clock = { now: () => Date.now() }, log = cons
     async function get(id) { return decode(await getRow(id)); }
 
     async function patch(id, fields) {
-        const cols = { status: 'status', step: 'step', progress: 'progress', steps: 'steps', candidates: 'candidates', decision_at: 'decision_at', captures: 'captures', report: 'report', gaps: 'gaps', error_code: 'error_code', error_detail: 'error_detail', finished_at: 'finished_at', plan: 'plan', reads: 'reads' };
+        const cols = { status: 'status', step: 'step', progress: 'progress', steps: 'steps', candidates: 'candidates', decision_at: 'decision_at', captures: 'captures', report: 'report', gaps: 'gaps', error_code: 'error_code', error_detail: 'error_detail', finished_at: 'finished_at', plan: 'plan', reads: 'reads', image_sheets: 'image_sheets' };
         const sets = []; const args = [];
         for (const [k, v] of Object.entries(fields || {})) {
             if (!cols[k]) continue;

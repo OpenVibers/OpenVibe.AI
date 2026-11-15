@@ -57,7 +57,7 @@ function createCapture({ config = {}, env = process.env, clock = { now: () => Da
      * Capture one URL. Returns { url, title, final_url, combos, warnings, ms, skipped, reason }.
      * skipped: robots_disallowed | not_public | no_chrome | drill | busy.
      */
-    async function captureSite({ url, runId, owner, extras = false, signal = null, upload: uploadFn = upload, log: logFn = log } = {}) {
+    async function captureSite({ url, runId, owner, extras = false, viewports = null, themes = null, signal = null, upload: uploadFn = upload, log: logFn = log } = {}) {
         const target = cleanUrl(url, { upgrade: !allowLocal });
         if (!target) return { url: String(url || ''), combos: [], warnings: ['not a valid URL'], skipped: 'not_public', reason: 'not a valid http(s) URL', ms: 0 };
         if (!enabled) return { url: target, combos: [], warnings: ['capture is off under a drill'], skipped: 'drill', reason: 'capture is off under a drill', ms: 0 };
@@ -81,7 +81,7 @@ function createCapture({ config = {}, env = process.env, clock = { now: () => Da
             if (signal && signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'run.cancelled' });
             await gapFor(target);
             if (signal && signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'run.cancelled' });
-            const result = await browser.captureSite({ url: target, runId, owner, upload: uploadFn, signal, extras, log: logFn });
+            const result = await browser.captureSite({ url: target, runId, owner, upload: uploadFn, signal, extras, viewports, themes, log: logFn });
             return { url: target, skipped: null, reason: null, ...result };
         });
         tail = run.catch(() => {});
