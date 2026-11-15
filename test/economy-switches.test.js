@@ -1,4 +1,5 @@
 'use strict';
+const { bodyOf } = require('./helpers');
 /**
  * The owner's three economy switches act (the owner 2026-11-10):
  *
@@ -143,10 +144,10 @@ function batchStub() {
         req.on('end', () => {
             const p = new URL(req.url, 'http://x').pathname;
             let body = {};
-            try { body = raw ? JSON.parse(raw) : {}; } catch { body = {}; }
+            body = bodyOf(raw, req.headers['content-type']);
             state.calls.push({ path: p, method: req.method, body });
             const send = (status, out, type) => { res.writeHead(status, { 'Content-Type': type || 'application/json' }); res.end(typeof out === 'string' ? out : JSON.stringify(out)); };
-            if (p === '/v1/files' && req.method === 'POST') { const id = `file_${++state.seq}`; state.files.set(id, body.file || ''); return send(200, { id, object: 'file' }); }
+            if (p === '/v1/files' && req.method === 'POST') { if (!String(req.headers['content-type'] || '').startsWith('multipart/form-data')) return send(415, { error: { message: 'Invalid Content-Type header (application/json), expected multipart/form-data' } }); const id = `file_${++state.seq}`; state.files.set(id, body.file || ''); return send(200, { id, object: 'file' }); }
             if (p === '/v1/batches' && req.method === 'POST') { const id = `batch_${++state.seq}`; state.batches.set(id, { input_file_id: body.input_file_id, status: 'in_progress', output_file_id: null }); return send(200, { id, object: 'batch', status: 'in_progress' }); }
             if (p.startsWith('/v1/batches/')) { const b = state.batches.get(p.split('/')[3]); return b ? send(200, { id: p.split('/')[3], object: 'batch', status: b.status, output_file_id: b.output_file_id }) : send(404, { error: { message: 'no batch' } }); }
             if (p.startsWith('/v1/files/') && p.endsWith('/content')) return send(200, state.files.get(p.split('/')[3]) || '', 'application/x-ndjson');

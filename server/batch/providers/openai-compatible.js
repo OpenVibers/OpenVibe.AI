@@ -68,17 +68,18 @@ function createOpenAiCompatibleAdapter({ baseUrl, apiKey, fetchImpl = globalThis
     const maxBytes = Number(limits.maxBytes) > 0 ? Number(limits.maxBytes) : 100 * 1024 * 1024;
     const oneModelPerFile = limits.oneModelPerFile !== false;
 
-    async function call(method, path, { body = null, raw = false } = {}) {
+    async function call(method, path, { body = null, form = null, raw = false } = {}) {
         if (!base) throw new BatchProviderError('this provider has no base URL for its batch API');
         const headers = { Accept: 'application/json' };
         if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
-        if (body !== null) headers['Content-Type'] = 'application/json';
+        // A form sets its own multipart Content-Type (with the boundary); JSON says so.
+        if (body !== null && !form) headers['Content-Type'] = 'application/json';
         let res;
         try {
             res = await fetchImpl(`${base}${path}`, {
                 method,
                 headers,
-                ...(body !== null ? { body: JSON.stringify(body) } : {}),
+                ...(form ? { body: form } : body !== null ? { body: JSON.stringify(body) } : {}),
                 signal: AbortSignal.timeout(timeoutMs),
             });
         } catch (err) {
@@ -121,9 +122,13 @@ function createOpenAiCompatibleAdapter({ baseUrl, apiKey, fetchImpl = globalThis
         /** Upload the file and create the batch. → { batchId } */
         async submit({ items, completionWindow = COMPLETION_WINDOW, metadata = null } = {}) {
             const file = this.buildFile(items);
-            const uploaded = await call('POST', '/files', {
-                body: { purpose: 'batch', file: file.lines.join('\n') },
-            });
+            // The Files API takes the file as multipart/form-data (purpose + file). A JSON body was refused with 415
+            // ("expected multipart/form-data") on every batch, 112 times in two hours on 2026-11-15, and each one fell
+            // back to the full-price call.
+            const form = new FormData();
+            form.append('purpose', 'batch');
+            form.append('file', new Blob([file.lines.join('\n')], { type: 'application/jsonl' }), 'batch.jsonl');
+            const uploaded = await call('POST', '/files', { form });
             const fileId = uploaded && uploaded.id;
             if (!fileId) throw new BatchProviderError('the provider did not name the uploaded file');
             const created = await call('POST', '/batches', {

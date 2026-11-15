@@ -152,4 +152,26 @@ function suite(name) {
 
 const ALL = ['ai.run.create', 'ai.run.read', 'ai.workflow.manage', 'ai.provider.manage', 'ai.usage.read'];
 
-module.exports = { token, boot, request, seamServer, suite, tmpDir, silent, publicKey, privateKey, ISSUER, ALL, fixedClock };
+
+/**
+ * A stub provider's request body: multipart/form-data fields (OpenAI's Files API takes a file that way), or JSON.
+ * A multipart body comes back as its fields plus `multipart: true`.
+ */
+function bodyOf(raw, contentType = '') {
+    const ct = String(contentType || '');
+    const m = /^multipart\/form-data;\s*boundary=(?:"([^"]+)"|([^;]+))/i.exec(ct);
+    if (!m) { try { return raw ? JSON.parse(raw) : {}; } catch { return {}; } }
+    const boundary = `--${m[1] || m[2]}`;
+    const out = { multipart: true };
+    for (const part of String(raw).split(boundary)) {
+        const at = part.indexOf('\r\n\r\n');
+        if (at < 0) continue;
+        const head = part.slice(0, at);
+        const name = /name="([^"]+)"/i.exec(head);
+        if (!name) continue;
+        out[name[1]] = part.slice(at + 4).replace(/\r\n$/, '');
+    }
+    return out;
+}
+
+module.exports = { bodyOf, token, boot, request, seamServer, suite, tmpDir, silent, publicKey, privateKey, ISSUER, ALL, fixedClock };
