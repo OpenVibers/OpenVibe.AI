@@ -75,10 +75,11 @@ function platform({ db, auth, clock, log, searchFetch, credentials, registry, en
     r.get('/api/v1/exchange/search/engines', wrap(async () =>
         ({ engines: await search.engines() })),
     );
-    const allow = auth.appOrCap(CAPS.appRun, CAPS.runCreate);
+    // Exchange's search page searches as the signed-in person with their site session, forwarded from its server.
+    const allow = auth.appOrCap(CAPS.appRun, CAPS.runCreate, { exchangeSession: true });
     // The icon reference search takes one more first-party service capability: exchange.search.icons,
     // held by OpenVibe.Design. It opens only this route and never web, image or fetch search.
-    const allowIcons = auth.appOrCap(CAPS.appRun, CAPS.runCreate, CAPS.exchangeSearchIcons);
+    const allowIcons = auth.appOrCap(CAPS.appRun, CAPS.runCreate, CAPS.exchangeSearchIcons, { exchangeSession: true });
     const searchWindows = new Map();
     const searchLimit = (req, res, next) => {
         const id = req.principal?.subject?.id || req.principal?.sub;
