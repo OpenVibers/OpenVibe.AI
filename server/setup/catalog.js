@@ -76,6 +76,32 @@ function offer(provider, model, label, price, source, extra = {}) {
     return { provider, model, label, price, source, checked: CHECKED, ...extra };
 }
 
+// The web engines of the search step: [adapter and provider id, label, extra]. The price is the rate card's (what one
+// request costs, shown per 1,000) and its source; an engine's free allowance goes in the note.
+const SEARCH_ENGINES = [
+    ['deepseek', 'DeepSeek Search', { why: 'the same key as DeepSeek chat' }],
+    ['jina', 'Jina (search and page reading)', {}],
+    ['serper', 'Serper (Google results)', {}],
+    ['parallel', 'Parallel (for agents)', {}],
+    ['dataforseo', 'DataForSEO (Google results)', {}],
+    ['perplexity', 'Perplexity Search', {}],
+    ['mojeek', 'Mojeek (its own index)', {}],
+    ['brave', 'Brave Search (its own index)', {}],
+    ['you', 'You.com', {}],
+    ['exa', 'Exa (meaning, not keywords)', {}],
+    ['tavily', 'Tavily', {}],
+    ['kagi', 'Kagi', {}],
+    ['serpapi', 'SerpApi (Google results)', {}],
+    ['searxng', 'SearXNG (your own instance)', { keyless: true, note: 'Free: a metasearch you host. Give its address on the provider (Providers and keys), no key.' }],
+];
+function searchOffer(id, label, extra) {
+    const card = require('../search/rate-cards').SEED.find((c) => c.engine === id) || {};
+    const each = Number(card.price);
+    const price = Number.isFinite(each) && each > 0 ? searchPrice(Number((each * 1000).toFixed(2))) : FREE;
+    const note = extra.note || (card.included ? `Includes ${card.included}.` : undefined);
+    return offer(id, id, label, price, card.source_url || null, { ...extra, ...(note ? { note } : {}) });
+}
+
 /**
  * The steps, in the order the page walks them. `route` is the route products already use;
  * `search` has no route (OpenVibe.Search picks a working engine), and `test` says what one tiny
@@ -183,11 +209,11 @@ const STEPS = Object.freeze([
         what: 'Looks up the current web and brings back pages and snippets.',
         uses: 'Deep dives, research answers, and every product that needs today\'s web.',
         recommended: offer('openvibe', 'openvibe', 'OpenVibe Search', FREE, 'https://search.openvibe.network',
-            { why: 'included in the network', keyless: true, note: 'Our own index is free to query and needs no key; Brave and Tavily add the wider web.' }),
-        alternatives: [
-            offer('brave', 'brave', 'Brave Search', searchPrice(5), SOURCES.brave),
-            offer('tavily', 'tavily', 'Tavily', searchPrice(8), SOURCES.tavily),
-        ],
+            { why: 'included in the network', keyless: true, note: 'Our own index is free to query and needs no key. Any engine below adds the wider web; with several keys, Search picks a working one.' }),
+        // Every web engine Search can call, cheapest first, priced from Search's own rate cards (2026-11-15, the owner:
+        // "missing configuration for our tons of providers and different methods"; it listed Brave and Tavily only).
+        alternatives: SEARCH_ENGINES.map(([id, label, extra]) => searchOffer(id, label, extra))
+            .sort((a, b) => (a.price.per_1000_usd ?? 0) - (b.price.per_1000_usd ?? 0)),
     },
     {
         id: 'code', name: 'Code agents (plans)', short: 'Code', route: 'space.build', 'capability': 'chat', operation: 'chat', modelType: 'chat',

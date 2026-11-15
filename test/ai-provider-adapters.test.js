@@ -52,7 +52,7 @@ t.test('provider presets are OpenAI-compatible, with a base URL, a timeout, an a
     assert.deepStrictEqual(pool.PROVIDERS.slice(0, 23).map((p) => p.key),
         ['qwen', 'kimi', 'glm', 'minimax', 'deepinfra', 'novita', 'featherless', 'refuseless', 'abliteration', 'openrouter', 'venice', 'abliteratedmodels', 'uplinkswitch', 'chutes', 'siliconflow', 'nebius', 'together', 'fireworks', 'groq', 'cerebras', 'sambanova', 'baseten', 'hyperbolic']);
     assert.deepStrictEqual(pool.PROVIDER_KEYS, pool.PROVIDERS.map((p) => p.key));
-    assert.strictEqual(new Set(pool.PROVIDER_KEYS).size, 62, 'the six researched providers of 2026-11-13 joined the pool');
+    assert.strictEqual(new Set(pool.PROVIDER_KEYS).size, 68, 'the six researched providers of 2026-11-13 joined the pool, and six web search engines on 2026-11-15');
     assert.strictEqual(pool.byKey.get('meta').base_url, 'https://api.meta.ai/v1');
     assert.strictEqual(pool.byKey.get('perplexity').kind, 'responses');
     assert.strictEqual(require('../server/console/presets').credentialProvider('groq').model, 'openai/gpt-oss-20b', 'existing personal-key default is preserved');
