@@ -15,6 +15,8 @@
 const { ProviderError, postJson, schemaInstruction } = require('./common');
 const usageParser = require('./usage');
 const effortPolicy = require('../effort/providers');
+const { toStrict } = require('./strict-schema');
+const { fitted } = require('./openai');
 
 const DEFAULT_BASE_URL = 'https://api.openai.com/v1';
 const TEXT_OPS = ['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich'];
@@ -39,7 +41,7 @@ function buildBody(req, jsonMode) {
     });
     const body = { model, input };
     // Stepped down from json_schema: the schema travels in the instructions instead.
-    const hint = json && jsonMode !== 'schema' ? schemaInstruction(json) : '';
+    const hint = json && jsonMode !== 'schema' && jsonMode !== 'strict' ? schemaInstruction(json) : '';
     const sysText = [...(system || []).map(x => x.text), hint].filter(Boolean).join('\n\n');
     if (sysText) body.instructions = sysText;
     if (isReasoningModel(model)) {
@@ -49,7 +51,10 @@ function buildBody(req, jsonMode) {
         body.max_output_tokens = maxTokens;
         if (temperature != null) body.temperature = temperature;
     }
-    if (json && jsonMode === 'schema') body.text = { format: { type: 'json_schema', name: json.name || 'result', schema: json.schema, strict: json.strict !== false } };
+    // 'strict': a loose schema converted so the answer is decoded against it, as in ./openai.js.
+    const strictSchema = json && jsonMode === 'strict' ? toStrict(json.schema) : null;
+    if (strictSchema) body.text = { format: { type: 'json_schema', name: json.name || 'result', schema: strictSchema, strict: true } };
+    else if (json && (jsonMode === 'schema' || jsonMode === 'strict')) body.text = { format: { type: 'json_schema', name: json.name || 'result', schema: json.schema, strict: json.strict !== false } };
     else if (json && jsonMode === 'object') body.text = { format: { type: 'json_object' } };
     if (cacheKey && /api\.openai\.com/i.test(baseUrl)) body.prompt_cache_key = String(cacheKey).slice(0, 64);
     return effortPolicy.apply(body, req, { kind: 'responses', key: 'openai' });
@@ -82,16 +87,17 @@ function createResponsesProvider(record, { apiKey = '', fetchImpl = globalThis.f
     const caps = new Set(record.capabilities && record.capabilities.length ? record.capabilities : [...TEXT_OPS, 'json', 'vision']);
 
     async function chat(req) {
-        let jsonMode = req.json ? 'schema' : null;
-        for (let attempt = 0; attempt < 3; attempt++) {
+        let jsonMode = req.json ? (req.json.strict === false && toStrict(req.json.schema) ? 'strict' : 'schema') : null;
+        for (let attempt = 0; attempt < 4; attempt++) {
             const body = buildBody({ ...req, baseUrl }, jsonMode);
             try {
                 const j = await postJson(`${baseUrl}/responses`, headers(), body, { signal: req.signal, timeoutMs: req.timeoutMs, fetchImpl });
-                return { text: outputText(j), json: null, model: j.model || req.model, usage: usageParser.responsesUsage(j.usage || {}) };
+                const text = outputText(j);
+                return { text: jsonMode === 'strict' ? fitted(text, req.json.schema) : text, json: null, model: j.model || req.model, usage: usageParser.responsesUsage(j.usage || {}) };
             } catch (e) {
                 // Gateways without structured-output support: schema -> json_object -> prose.
                 if (e instanceof ProviderError && e.status === 400 && jsonMode && /text\.format|json_schema|json_object|schema|strict/i.test(e.message)) {
-                    jsonMode = jsonMode === 'schema' ? 'object' : null;
+                    jsonMode = jsonMode === 'strict' ? 'schema' : jsonMode === 'schema' ? 'object' : null;
                     continue;
                 }
                 throw scrubKey(e, apiKey);
