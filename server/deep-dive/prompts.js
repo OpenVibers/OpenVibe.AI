@@ -107,4 +107,87 @@ Rules: 5 to 10 patterns; 4 to 8 do and don't; 5 to 8 recommendations, each with 
     };
 }
 
-module.exports = { planPrompt, choosePrompt, domAnalysisPrompt, visionPrompt, synthesisPrompt };
+// ── The general deep dive (research.deep_dive): any question, researched and answered with its sources ──
+
+function researchPlanPrompt({ question, depth }) {
+    return {
+        system: 'You are an expert researcher planning a deep dive into a question for a curious, busy person. You ask what an expert would need to know to answer it well, and you plan searches that find primary sources, data, expert views, recent news and the strongest disagreement. Answer only with JSON.',
+        user: `The question: "${clean(question, 500)}"
+Depth: ${depth}.
+
+Rules:
+- questions: 4 to 9 sub-questions that together answer it well (definitions, how it works, the numbers, who says what, what changed lately, risks or criticism, what to do), each { "key": a short slug, "question": one sentence }.
+- searches: 3 to 8, each { "q": a search query, "kind": "web" or "projects" (code on GitHub, only when the question is about software) }. Vary them: the plain question, the data or statistics, the primary source (an official site, a paper, a standard), recent news (this year), expert analysis, criticism or problems, and comparisons where the question compares.
+- Do not answer the question yourself. JSON only:
+{"questions":[{"key":"basics","question":"..."}],"searches":[{"q":"...","kind":"web"}]}`,
+    };
+}
+
+function choosePagesPrompt({ question, questions, limit, sources }) {
+    const list = sources.map((s, i) => `${i + 1}. ${clean(s.title, 140)} — ${s.url}${s.snippet ? ` — ${clean(s.snippet, 240)}` : ''}`).join('\n');
+    const qs = questions.map((q, i) => `${i + 1}. ${clean(q.question, 200)}`).join('\n');
+    return {
+        system: 'You are an expert researcher choosing which pages a deep dive should read in full. You pick the pages that answer the questions best and that a careful expert would trust, and you say why. Answer only with JSON.',
+        user: `The question: "${clean(question, 500)}"
+What it needs answered:
+${qs}
+
+Choose at most ${limit} pages to read in full, from this list only:
+${list}
+
+Rules:
+- Prefer primary and authoritative sources (official sites, standards, papers, documentation, reputable reporting and expert analysis) and recent ones; cover different questions and different viewpoints, including the strongest criticism.
+- Avoid thin pages: search results, link lists, social posts, content farms, pages that need a sign-in, and several pages saying the same thing.
+- Every chosen URL must appear in the list above, exactly as given. Each reason is one sentence about what the page will answer.
+- JSON only: {"pages":[{"url":"https://...","reason":"..."}]}.`,
+    };
+}
+
+function readPagePrompt({ question, questions, page }) {
+    const qs = questions.map((q, i) => `${i + 1}. ${clean(q.question, 200)}`).join('\n');
+    return {
+        system: 'You read one web page for a deep dive and note only what it actually says that bears on the questions, the way a careful researcher takes notes: each point in your own words, with a short exact quote from the page when there is one. You never add what the page does not say. Answer only with JSON.',
+        user: `The question: "${clean(question, 500)}"
+The questions to answer:
+${qs}
+
+The page: ${clean(page.title || '', 200)} (${page.url})${page.site ? `, ${clean(page.site, 80)}` : ''}${page.published ? `, published ${page.published}` : ''}
+---
+${String(page.text || '').slice(0, 12000)}
+---
+
+Rules:
+- relevant: false when the page says nothing useful about the questions (then findings may be empty).
+- summary: two or three sentences: what this page is and what it contributes.
+- kind: primary (official, the original data or the maker's own page), reference (encyclopedia, documentation, a standard), news, opinion (analysis, a blog, a review), vendor (selling the thing), forum, or other.
+- findings: at most 8 points, each { "point": one sentence, "quote": at most 25 words copied exactly from the page, or null }. Numbers, dates and names exactly as written.
+JSON only: {"relevant":true,"summary":"...","kind":"reference","findings":[{"point":"...","quote":"..."}]}`,
+    };
+}
+
+function writePrompt({ question, questions, notes }) {
+    const qs = questions.map((q, i) => `${i + 1}. ${clean(q.question, 200)}`).join('\n');
+    const read = notes.map((n) => `[${n.n}] ${clean(n.title || n.url, 160)} — ${n.url}${n.site ? ` (${clean(n.site, 60)})` : ''}${n.published ? `, ${n.published}` : ''}${n.kind ? `, ${n.kind}` : ''}
+${clean(n.summary, 600)}
+${(n.findings || []).map((f) => `- ${clean(f.point, 300)}${f.quote ? ` "${clean(f.quote, 200)}"` : ''}`).join('\n')}`).join('\n\n');
+    return {
+        system: 'You write the answer to a deep dive from the notes on the pages that were read, for a smart reader who wants the real picture fast. Every claim cites the pages it comes from by their numbers. You say plainly where the sources disagree and what is still unknown, and you never state anything the notes do not support. Answer only with JSON.',
+        user: `The question: "${clean(question, 500)}"
+The questions it was broken into:
+${qs}
+
+The notes, one block per page read, numbered:
+${read}
+
+Write:
+- summary: the answer in 3 to 6 sentences, the most important first.
+- key_points: 4 to 10 points, each { "text": one or two sentences, "sources": [page numbers] }.
+- answers: one per question above, { "question": its number, "answer": a short paragraph, "confidence": "high" | "medium" | "low", "sources": [page numbers] }.
+- comparison: when the question compares options, a small table { "columns": [...], "rows": [[...]] }; otherwise null.
+- disagreements: where the pages disagree, { "what": "...", "sources": [page numbers] }.
+- open_questions: what the pages leave unanswered. next_steps: what the reader could do or check next.
+Cite only page numbers from the notes. JSON only.`,
+    };
+}
+
+module.exports = { planPrompt, choosePrompt, domAnalysisPrompt, visionPrompt, synthesisPrompt, researchPlanPrompt, choosePagesPrompt, readPagePrompt, writePrompt };

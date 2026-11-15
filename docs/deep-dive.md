@@ -4,7 +4,21 @@ The owner's 2026-11-11 design-research feature: one durable run that searches ev
 best sites at phone and computer sizes, reads them with a vision and a text model, and writes an `ai.deep-dive@1`
 report with its evidence and receipt. OpenVibe.Exchange shows it (`/deep-dive`); OpenVibe.Design calls the same API.
 
-## The run
+## Two kinds (11-15)
+
+- **research** (workflow `research.deep_dive`, report `ai.research@1`): any question, researched in general. Plan the
+  questions an expert would ask → search (MegaSource, the web engine on the question and on every planned search,
+  GitHub for software) → choose the pages worth reading → **read** them as text (`server/deep-dive/reader.js`: public
+  HTTPS only, every redirect checked, robots.txt, 1.5 MB, no browser) → analyse (notes per page, short exact quotes)
+  → **write** the answer: a summary, key points, an answer per question with its confidence, a comparison when the
+  question compares, where the sources disagree, what is open and what to do next; every claim cites the pages it
+  rests on. Quick reads 8 pages ($0.10, about a minute), Thorough 16 ($0.30), Expert 30 ($0.80). OpenVibe.Exchange's
+  search starts it (`POST /api/v1/deep-dives` with `kind: "research"`); its live state adds `plan` (the questions)
+  and `reads` (every page, read or skipped and why). No `ai.deep_dive.updated` event: its steps are the design dive's.
+- **design** (workflow `design.deep_dive`, report `ai.deep-dive@1`, the default for `POST /api/v1/deep-dives`):
+  OpenVibe.Design's design research below, which builds on the research core.
+
+## The run (design)
 
 Workflow `design.deep_dive` (`server/workflows/deep-dive.js`), one `deep_dive` step that runs
 `server/deep-dive/`. The steps, live on `GET /api/v1/deep-dives/:id/state`:

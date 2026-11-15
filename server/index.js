@@ -33,7 +33,7 @@ const { AiError } = require('./util');
 const { gracefulStop, telemetry } = require('openvibe-sdk/service');
 const { createPgTelemetrySink, startTelemetryRetention } = require('openvibe-sdk/telemetry');
 
-async function start({ searchFetch = null, config, db: givenDb = null, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, listen = true, credentialFetch = null, valkey = null, research = null, search: givenSearch = null, capture: givenCapture = null, deepDive: givenDeepDive = null, deepDiveFetch = null, machineModels = null, variantEvidence = null, community: givenCommunity = null, communityEndpoints: givenEndpoints = null, webhooks: givenWebhooks = null, abuse: givenAbuse = null, memoryTransport = null, memoryLookup = null, ownerNotify = null, mediaStore: givenMediaStore = null, videoAnalysis: givenVideoAnalysis = null, spawnImpl = null } = {}) {
+async function start({ searchFetch = null, config, db: givenDb = null, clock = { now: () => Date.now() }, fetchImpl = globalThis.fetch, env = process.env, log = console, listen = true, credentialFetch = null, valkey = null, research = null, search: givenSearch = null, capture: givenCapture = null, deepDive: givenDeepDive = null, deepDiveFetch = null, deepDiveReader = null, machineModels = null, variantEvidence = null, community: givenCommunity = null, communityEndpoints: givenEndpoints = null, webhooks: givenWebhooks = null, abuse: givenAbuse = null, memoryTransport = null, memoryLookup = null, ownerNotify = null, mediaStore: givenMediaStore = null, videoAnalysis: givenVideoAnalysis = null, spawnImpl = null } = {}) {
     config = config || load(env);
     schemas.configure(config.schemaCache);
     // PostgreSQL (ADR-035): opened and migrated here unless the caller (a test) hands in a migrated handle.
@@ -135,7 +135,7 @@ async function start({ searchFetch = null, config, db: givenDb = null, clock = {
     // this process (tests and a small install). Screenshots land in Media private to the run's owner.
     const localCapture = givenCapture || require('./capture').createCapture({ config, env, log, upload: (o) => mediaStore.put({ ...o, visibility: 'private' }) });
     const captureClient = givenCapture || require('./capture/client').createCaptureClient({ config, env, fetchImpl, log, local: localCapture });
-    const deepDive = givenDeepDive || require('./deep-dive').createDeepDive({ config, db, clock, log, registry, pool, research: researcher, search, capture: captureClient, mediaStore, fetcher, sourceFetch: deepDiveFetch });
+    const deepDive = givenDeepDive || require('./deep-dive').createDeepDive({ config, db, clock, log, registry, pool, research: researcher, search, capture: captureClient, mediaStore, fetcher, sourceFetch: deepDiveFetch, reader: deepDiveReader });
     // The video analysis (workflow video.analyze): ffprobe and ffmpeg on this host, the speech and vision routes,
     // and one model that writes the chapters, the summary and the named things with their times.
     const videoAnalysis = givenVideoAnalysis || require('./video-analysis').createVideoAnalysis({ config, db, clock, log, registry, pool, mediaStore, fetcher, spawnImpl, fetchImpl });

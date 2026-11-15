@@ -28,13 +28,15 @@ const { createLlm } = require('./llm');
 const { createSourceGatherer } = require('./sources');
 const { DEPTHS, STEPS, REPORT, PLAN_OUTPUT, CHOOSE_OUTPUT, ANALYSIS_OUTPUT, SYNTHESIS_OUTPUT } = require('./schema');
 const prompts = require('./prompts');
+const { createResearch } = require('./research');
+const { createReader } = require('./reader');
 
 const iso = (v) => (v ? new Date(v).toISOString() : null);
 const oneLine = (s, n) => String(s == null ? '' : s).replace(/\s+/g, ' ').trim().slice(0, n);
 const hostOf = (u) => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return null; } };
 const uniq = (list, n = 12) => [...new Set((list || []).map((x) => oneLine(x, 600)).filter(Boolean))].slice(0, n);
 
-function createDeepDive({ config = {}, db, clock = { now: () => Date.now() }, log = console, registry, pool, research = null, search = null, capture = null, mediaStore = null, fetcher = null, sourceFetch = null } = {}) {
+function createDeepDive({ config = {}, db, clock = { now: () => Date.now() }, log = console, registry, pool, research = null, search = null, capture = null, mediaStore = null, fetcher = null, sourceFetch = null, reader = null } = {}) {
     const cfg = config.deepDive || {};
     const ccfg = config.capture || {};
     const store = createDeepDiveStore({ db, clock, log });
@@ -44,6 +46,8 @@ function createDeepDive({ config = {}, db, clock = { now: () => Date.now() }, lo
     const maxSites = cfg.maxSites || { quick: 6, thorough: 15, expert: 30 };
     const maxSources = cfg.maxSources || { quick: 40, thorough: 80, expert: 140 };
     const maxOut = cfg.maxOutputTokens || 3000;
+    // The general deep dive (research.deep_dive): the same store, models and searches, pages read instead of captured.
+    const general = createResearch({ config, store, llm, sources, reader: reader || createReader({ log }), clock, log });
 
     function depths() {
         return [
@@ -53,8 +57,8 @@ function createDeepDive({ config = {}, db, clock = { now: () => Date.now() }, lo
         ];
     }
 
-    function priceOf(depth) { return Number(prices[depth]) || 0; }
-    function limitOf(depth) { return Math.min(Number(maxSites[depth]) || 6, ccfg.maxCaptures || 30); }
+    function priceOf(depth, kind = 'design') { return kind === 'research' ? general.priceOf(depth) : Number(prices[depth]) || 0; }
+    function limitOf(depth, kind = 'design') { return kind === 'research' ? general.limitOf(depth) : Math.min(Number(maxSites[depth]) || 6, ccfg.maxCaptures || 30); }
 
     async function emit(row, { step = null, status = null, error = null } = {}) {
         try {
@@ -154,6 +158,7 @@ function createDeepDive({ config = {}, db, clock = { now: () => Date.now() }, lo
 
     /** Run one deep dive for one run row. Returns { output, usage, cost, models } for the workflow step. */
     async function run({ run, input, ctx = {} }) {
+        if (input && input.kind === 'research') return general.run({ run, input, ctx });
         const question = oneLine(input.question, 500);
         const depth = input.depth;
         const siteLimit = limitOf(depth);
@@ -467,7 +472,7 @@ function createDeepDive({ config = {}, db, clock = { now: () => Date.now() }, lo
         }
     }
 
-    return { run, depths, priceOf, limitOf, store, capture, mediaStore, sources };
+    return { run, depths, researchDepths: general.depths, priceOf, limitOf, store, capture, mediaStore, sources, general };
 }
 
 function capidSafe(n, j) { return `${n + 1}_${j + 1}`; }

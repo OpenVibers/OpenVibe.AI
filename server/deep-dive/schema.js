@@ -232,8 +232,105 @@ const INPUT_SCHEMA = {
     type: 'object', additionalProperties: false, required: ['question', 'depth'],
     properties: {
         question: { type: 'string', minLength: 1, maxLength: 500 }, depth: { enum: DEPTHS },
+        // research: the general deep dive (ai.research@1, read pages); design (the default): sites captured too.
+        kind: { enum: ['research', 'design'] },
         sites: { type: 'array', maxItems: 30, items: { type: 'string', maxLength: 2048, pattern: '^https?://' } },
     },
 };
 
-module.exports = { DEPTHS, STEPS, EVIDENCE, REPORT, INPUT_SCHEMA, PLAN_OUTPUT, CHOOSE_OUTPUT, ANALYSIS_OUTPUT, SYNTHESIS_OUTPUT };
+// ── The general deep dive (workflow research.deep_dive; ai.research@1): any question, read like an expert would ──
+// Its steps, the pages chosen and read, and the answer: every claim cites the pages it rests on (by source id).
+const RESEARCH_STEPS = ['plan', 'search', 'choose', 'read', 'analyse', 'write'];
+const CITES = { type: 'array', maxItems: 8, items: { type: 'string', maxLength: 40 } };
+const NUMS = { type: 'array', maxItems: 8, items: { type: 'integer', minimum: 1, maximum: 60 } };
+
+const READ = {
+    type: 'object', additionalProperties: false, required: ['id', 'source_id', 'url', 'status', 'read_at'],
+    properties: {
+        id: STR(40), source_id: STR(40), url: STR(2048), final_url: NULLABLE(2048), title: NULLABLE(400), site: NULLABLE(200),
+        published: NULLABLE(40), read_at: STR(40), words: { type: 'integer', minimum: 0 }, status: { enum: ['read', 'skipped'] },
+        reason: NULLABLE(300), relevant: { type: ['boolean', 'null'] }, summary: NULLABLE(1500),
+        kind: { enum: ['primary', 'reference', 'news', 'opinion', 'vendor', 'forum', 'other', null] },
+        findings: { type: 'array', maxItems: 10, items: { type: 'object', additionalProperties: false, required: ['point'], properties: { point: STR(600), quote: NULLABLE(400) } } },
+    },
+};
+
+const RESEARCH_REPORT = {
+    type: 'object', additionalProperties: false,
+    required: ['id', 'schema', 'run_id', 'status', 'input', 'steps', 'questions', 'sources', 'reads', 'answer', 'receipt', 'gaps', 'created_at', 'updated_at'],
+    properties: {
+        id: STR(40), schema: { const: 'ai.research@1' }, run_id: STR(40),
+        status: { enum: ['queued', 'running', 'succeeded', 'failed', 'cancelled'] },
+        input: {
+            type: 'object', additionalProperties: false, required: ['question', 'depth', 'max_pages'],
+            properties: { question: STR(500), depth: { enum: DEPTHS }, max_pages: { type: 'integer', minimum: 1, maximum: 40 }, sites: { type: 'array', maxItems: 30, items: STR(2048) } },
+        },
+        steps: {
+            type: 'array', maxItems: 6,
+            items: {
+                type: 'object', additionalProperties: false, required: ['key', 'status'],
+                properties: { key: { enum: RESEARCH_STEPS }, status: { enum: ['pending', 'running', 'done', 'skipped', 'failed'] }, detail: NULLABLE(300), started_at: { type: ['string', 'null'] }, finished_at: { type: ['string', 'null'] } },
+            },
+        },
+        questions: { type: 'array', maxItems: 12, items: { type: 'object', additionalProperties: false, required: ['key', 'question'], properties: { key: STR(40), question: STR(400) } } },
+        sources: { type: 'array', maxItems: 200, items: SOURCE },
+        reads: { type: 'array', maxItems: 40, items: READ },
+        answer: {
+            type: 'object', additionalProperties: false, required: ['summary', 'key_points', 'answers', 'comparison', 'disagreements', 'open_questions', 'next_steps'],
+            properties: {
+                summary: STR(3000),
+                key_points: { type: 'array', maxItems: 12, items: { type: 'object', additionalProperties: false, required: ['text', 'sources'], properties: { text: STR(800), sources: CITES } } },
+                answers: { type: 'array', maxItems: 12, items: { type: 'object', additionalProperties: false, required: ['question', 'answer', 'confidence', 'sources'], properties: { question: STR(400), answer: STR(2000), confidence: { enum: ['high', 'medium', 'low'] }, sources: CITES } } },
+                comparison: { type: ['object', 'null'], additionalProperties: false, required: ['columns', 'rows'], properties: { columns: { type: 'array', maxItems: 8, items: STR(120) }, rows: { type: 'array', maxItems: 20, items: { type: 'array', maxItems: 8, items: STR(600) } } } },
+                disagreements: { type: 'array', maxItems: 10, items: { type: 'object', additionalProperties: false, required: ['what', 'sources'], properties: { what: STR(800), sources: CITES } } },
+                open_questions: { type: 'array', maxItems: 10, items: STR(400) },
+                next_steps: { type: 'array', maxItems: 10, items: STR(400) },
+            },
+        },
+        receipt: {
+            type: 'object', additionalProperties: false, required: ['price_usd', 'held_usd', 'cost_usd', 'models', 'pages_read', 'synthetic'],
+            properties: {
+                price_usd: { type: 'number', minimum: 0 }, held_usd: { type: 'number', minimum: 0 }, cost_usd: { type: 'number', minimum: 0 },
+                pages_read: { type: 'integer', minimum: 0 }, synthetic: { type: 'boolean' },
+                models: {
+                    type: 'array', maxItems: 200,
+                    items: { type: 'object', additionalProperties: false, required: ['step', 'provider', 'model', 'tokens_in', 'tokens_out', 'cost_usd', 'ms'], properties: {
+                        step: { enum: ['plan', 'choose', 'analyse', 'write'] }, provider: NULLABLE(80), model: NULLABLE(200),
+                        tokens_in: { type: 'integer', minimum: 0 }, tokens_out: { type: 'integer', minimum: 0 }, cost_usd: { type: 'number', minimum: 0 }, ms: { type: 'integer', minimum: 0 },
+                    } },
+                },
+            },
+        },
+        gaps: { type: 'array', maxItems: 40, items: STR(400) },
+        created_at: STR(40), updated_at: STR(40), finished_at: { type: ['string', 'null'] },
+    },
+};
+
+/** The general deep dive's model answers: which pages to read, one page read, and the answer. */
+const PAGES_OUTPUT = {
+    type: 'object', additionalProperties: true, required: ['pages'],
+    properties: { pages: { type: 'array', minItems: 1, maxItems: 40, items: { type: 'object', additionalProperties: true, required: ['url', 'reason'], properties: { url: STR(2048), reason: STR(600) } } } },
+};
+const PAGE_READ_OUTPUT = {
+    type: 'object', additionalProperties: true, required: ['relevant', 'summary', 'findings'],
+    properties: {
+        relevant: { type: 'boolean' }, summary: STR(1500),
+        kind: { enum: ['primary', 'reference', 'news', 'opinion', 'vendor', 'forum', 'other'] },
+        findings: { type: 'array', maxItems: 10, items: { type: 'object', additionalProperties: true, required: ['point'], properties: { point: STR(600), quote: NULLABLE(400) } } },
+    },
+};
+const WRITE_OUTPUT = {
+    type: 'object', additionalProperties: true, required: ['summary', 'key_points', 'answers'],
+    properties: {
+        summary: STR(3000),
+        key_points: { type: 'array', minItems: 1, maxItems: 12, items: { type: 'object', additionalProperties: true, required: ['text', 'sources'], properties: { text: STR(800), sources: NUMS } } },
+        answers: { type: 'array', maxItems: 12, items: { type: 'object', additionalProperties: true, required: ['question', 'answer', 'sources'], properties: { question: { type: 'integer', minimum: 1, maximum: 12 }, answer: STR(2000), confidence: { enum: ['high', 'medium', 'low'] }, sources: NUMS } } },
+        comparison: { type: ['object', 'null'], additionalProperties: true, properties: { columns: { type: 'array', maxItems: 8, items: STR(120) }, rows: { type: 'array', maxItems: 20, items: { type: 'array', maxItems: 8, items: STR(600) } } } },
+        disagreements: { type: 'array', maxItems: 10, items: { type: 'object', additionalProperties: true, required: ['what', 'sources'], properties: { what: STR(800), sources: NUMS } } },
+        open_questions: { type: 'array', maxItems: 10, items: STR(400) },
+        next_steps: { type: 'array', maxItems: 10, items: STR(400) },
+    },
+};
+
+module.exports = { DEPTHS, STEPS, EVIDENCE, REPORT, INPUT_SCHEMA, PLAN_OUTPUT, CHOOSE_OUTPUT, ANALYSIS_OUTPUT, SYNTHESIS_OUTPUT,
+    RESEARCH_STEPS, RESEARCH_REPORT, READ, PAGES_OUTPUT, PAGE_READ_OUTPUT, WRITE_OUTPUT };

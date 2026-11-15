@@ -554,16 +554,16 @@ const deepDive = { type: 'object', additionalProperties: true, required: ['id', 
     report: nullable('object'), gaps: arrayOf(str()), error: nullable('object'), owner: nullable('object'),
 } };
 route('get', '/deep-dives/depths', {
-    operationId: 'deepDiveDepths', summary: 'The three depths, their site counts, minutes and price', tags: ['deep-dives'], security: [],
-    description: 'Public: what a deep dive costs before anyone signs in. The price is the run estimate held on the tier budgets, not a charge.',
-    responses: { 200: json('The depths', { type: 'object', required: ['depths'], properties: { depths: arrayOf({ type: 'object', required: ['key', 'sites', 'price_usd'], properties: { key: str({ enum: ['quick', 'thorough', 'expert'] }), label: str(), sites: integer(), minutes: integer(), price_usd: { type: 'number' }, analysis: str() } }), capture: nullable('object') } }), ...errors([429]) },
+    operationId: 'deepDiveDepths', summary: 'The three depths, their site (or page) counts, minutes and price', tags: ['deep-dives'], security: [],
+    description: 'Public: what a deep dive costs before anyone signs in. ?kind=research: the general deep dive\'s depths (pages read); without it, the design deep dive\'s (sites captured). The price is the run estimate held on the tier budgets, not a charge.',
+    responses: { 200: json('The depths', { type: 'object', required: ['depths'], properties: { kind: str({ enum: ['research', 'design'] }), depths: arrayOf({ type: 'object', required: ['key', 'price_usd'], properties: { key: str({ enum: ['quick', 'thorough', 'expert'] }), label: str(), sites: integer(), pages: integer(), minutes: integer(), price_usd: { type: 'number' }, analysis: str() } }), capture: nullable('object') } }), ...errors([429]) },
 });
 route('post', '/deep-dives', {
-    operationId: 'startDeepDive', summary: 'Start a deep dive (workflow design.deep_dive)', tags: ['deep-dives'], security: SERVICE,
-    description: 'ai.run.create. The price is computed from the depth and held; a person is on_behalf_of. The run makes its progress on GET /deep-dives/{id}/state and writes ai.deep-dive@1.',
+    operationId: 'startDeepDive', summary: 'Start a deep dive (workflow research.deep_dive or design.deep_dive)', tags: ['deep-dives'], security: SERVICE,
+    description: 'ai.run.create. kind research: any question, its best pages read and answered with their sources (ai.research@1); kind design (the default): sites captured and read as a designer (ai.deep-dive@1). The price is computed from the kind and depth and held; a person is on_behalf_of. The run makes its progress on GET /deep-dives/{id}/state.',
     requestBody: body({ type: 'object', required: ['question', 'depth'], properties: {
         question: str({ minLength: 1, maxLength: 500 }), depth: str({ enum: ['quick', 'thorough', 'expert'] }),
-        sites: arrayOf(str({ format: 'uri' })), on_behalf_of: ref('SubjectRef'), idempotency_key: str({ minLength: 8, maxLength: 128 }),
+        kind: str({ enum: ['research', 'design'] }), sites: arrayOf(str({ format: 'uri' })), on_behalf_of: ref('SubjectRef'), idempotency_key: str({ minLength: 8, maxLength: 128 }),
         target: { type: 'object' }, attribution: { type: 'object' },
     } }),
     responses: { 202: json('Accepted', { type: 'object', required: ['deep_dive'], properties: { deep_dive: deepDive, price_usd: { type: 'number' }, held_usd: { type: 'number' } } }), ...errors() },

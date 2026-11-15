@@ -80,8 +80,8 @@ function createSourceGatherer({ config = {}, log = console, fetchImpl = guardedF
         } catch (err) { log.warn(`[deep-dive] component registry: ${String(err && err.message || err).slice(0, 160)}`); return { version: null, components: [] }; }
     }
 
-    async function github(question, limit = 5) {
-        const q = encodeURIComponent(`${question} design`);
+    async function github(question, limit = 5, { design = true } = {}) {
+        const q = encodeURIComponent(design ? `${question} design` : question);
         const url = `https://api.github.com/search/repositories?q=${q}&sort=stars&order=desc&per_page=${Math.max(1, Math.min(10, limit))}`;
         try {
             await publicTarget(url);
@@ -156,7 +156,63 @@ function createSourceGatherer({ config = {}, log = console, fetchImpl = guardedF
         return { sources, rules: rules.rules, components: comps.components, warnings };
     }
 
-    return { gather, titleOf, rulesRegister, componentsRegister, github };
+    /**
+     * The general deep dive's sources (research.deep_dive): MegaSource on the question, the web engine on the question
+     * and on each planned search, and GitHub for a planned "projects" search; no design registers, no pictures.
+     * The same numbered shape as gather. ctx.signal ends it early.
+     */
+    async function gatherGeneral({ question, searches = [], namedSites = [], signal = null, maxSources = 60 }) {
+        const at = new Date(now()).toISOString();
+        const sources = [];
+        const warnings = [];
+        const seen = new Set();
+        const add = (s) => {
+            const url = canon(s.url);
+            if (!url || !/^https?:/.test(url) || seen.has(url) || sources.length >= maxSources) return null;
+            seen.add(url);
+            const id = `src_${sources.length + 1}`;
+            sources.push({ id, kind: s.kind || 'web', title: ONE_LINE(s.title || HOST(url) || url, 400), url, publisher: s.publisher || HOST(url) || null, engine: s.engine || null, snippet: s.snippet ? ONE_LINE(s.snippet, 2000) : null, license: s.license ? ONE_LINE(s.license, 120) : null, read_at: s.read_at || at });
+            return id;
+        };
+        for (const raw of namedSites.slice(0, 30)) {
+            const url = canon(raw);
+            if (!url || !/^https?:/.test(url)) continue;
+            const info = await titleOf(url);
+            add({ kind: 'named', url, title: info.title, snippet: info.snippet });
+        }
+        const webQueries = [question, ...searches.filter((x) => x && x.q && (x.kind || 'web') === 'web').map((x) => x.q)].map((q) => ONE_LINE(q, 300)).filter(Boolean);
+        const uniqueQueries = [...new Set(webQueries.map((q) => q.toLowerCase()))].map((l) => webQueries.find((q) => q.toLowerCase() === l)).slice(0, 7);
+        const jobs = [];
+        if (research && typeof research.gather === 'function') {
+            jobs.push(research.gather({ query: question, max_sources: Math.min(14, maxSources), max_images: 0 }, { signal, allowPaid: true })
+                .then((mega) => {
+                    for (const x of (mega && mega.sources) || []) add({ kind: 'web', url: x.url, title: x.title, snippet: x.snippet || x.content, engine: x.provider || 'megasource', publisher: HOST(x.url), license: x.license });
+                    for (const p of mega && mega.providers ? Object.entries(mega.providers) : []) if (p[1] && p[1].ok === false) warnings.push(`${p[0]}: ${p[1].skipped || p[1].error || 'did not answer'}`);
+                })
+                .catch((err) => { warnings.push(`research: ${String(err && err.message || err).slice(0, 160)}`); }));
+        }
+        if (search && typeof search.search === 'function') {
+            for (const q of uniqueQueries) {
+                jobs.push(search.search('web', { q, limit: 8 }, {})
+                    .then((page) => {
+                        const engine = page && page.receipt ? page.receipt.engine : 'search';
+                        for (const r of (page && page.results) || []) add({ kind: 'web', url: r.url, title: r.title, snippet: r.snippet, engine, publisher: HOST(r.url) });
+                    })
+                    .catch((err) => { warnings.push(`web search "${q.slice(0, 60)}": ${redact(String(err && err.message || err)).slice(0, 160)}`); }));
+            }
+        }
+        const projects = searches.find((x) => x && x.kind === 'projects');
+        if (projects) {
+            jobs.push(github(projects.q || question, 5, { design: false }).then((gh) => {
+                if (gh.warning) warnings.push(gh.warning);
+                for (const p of gh.projects) add({ kind: 'project', url: p.url, title: p.name, snippet: `${p.description || ''}${p.stars ? ` · ${p.stars} stars` : ''}`.slice(0, 900), engine: 'github', publisher: 'github.com' });
+            }));
+        }
+        await Promise.all(jobs);
+        return { sources, warnings, queries: uniqueQueries };
+    }
+
+    return { gather, gatherGeneral, titleOf, rulesRegister, componentsRegister, github };
 }
 
 module.exports = { createSourceGatherer, DESIGN_PUBLISHERS };

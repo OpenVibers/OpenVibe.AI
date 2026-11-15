@@ -4,7 +4,11 @@
  * before Capture, cancel it, read the report, and read a private screenshot back.
  *
  *   GET    /api/v1/deep-dives/depths       public: the three depths, their site counts, minutes and price
- *   POST   /api/v1/deep-dives              ai.run.create: { question, depth, sites?, on_behalf_of? }; 202 with state
+ *                                          (?kind=research: the general deep dive's, pages read instead of sites)
+ *   POST   /api/v1/deep-dives              ai.run.create: { question, depth, kind?, sites?, on_behalf_of? }; 202 with
+ *                                          state. kind research (workflow research.deep_dive, report ai.research@1)
+ *                                          reads pages and answers any question; design (the default, design.deep_dive,
+ *                                          ai.deep-dive@1) captures sites too
  *   GET    /api/v1/deep-dives              ai.run.read: the caller's deep dives, newest first
  *   GET    /api/v1/deep-dives/:id          the whole state and, when it has ended, the ai.deep-dive@1 report
  *   GET    /api/v1/deep-dives/:id/state    just the live step progress, candidates and status (the page polls this)
@@ -33,7 +37,7 @@ function deepDivesRouter({ config, runs, auth, deepDive, store, capture = null, 
         return {
             id: dd.id, run_id: dd.run_id, status: run && ['failed', 'cancelled', 'succeeded'].includes(run.status) && dd.status === 'running' ? run.status : dd.status,
             step: dd.step, progress: dd.progress, steps: dd.steps, question: dd.question, depth: dd.depth, site_limit: dd.site_limit,
-            price_usd: dd.price_usd, candidates: dd.candidates, captures: dd.captures.map((c) => ({ id: c.id, source_id: c.source_id, url: c.url, viewport: c.viewport, theme: c.theme, captured_at: c.captured_at, skip: c.skip, cached: c.cached, crops: c.crops.map((x) => ({ id: x.id, y: x.y, height: x.height })) })),
+            price_usd: dd.price_usd, kind: dd.kind || 'design', plan: dd.plan || null, reads: dd.reads || [], candidates: dd.candidates, captures: dd.captures.map((c) => ({ id: c.id, source_id: c.source_id, url: c.url, viewport: c.viewport, theme: c.theme, captured_at: c.captured_at, skip: c.skip, cached: c.cached, crops: c.crops.map((x) => ({ id: x.id, y: x.y, height: x.height })) })),
             report, gaps: dd.gaps, error: dd.error || (run && run.error) || null,
             owner: dd.owner, created_at: dd.created_at, updated_at: dd.updated_at, finished_at: dd.finished_at,
             holding: dd.price_usd,
@@ -53,7 +57,8 @@ function deepDivesRouter({ config, runs, auth, deepDive, store, capture = null, 
 
     // Public: what a depth costs, before anyone signs in.
     r.get('/api/v1/deep-dives/depths', (req, res) => {
-        res.json({ depths: deepDive.depths(), capture: capture ? { enabled: capture.available ? capture.available() : true } : null });
+        if (req.query.kind === 'research' && typeof deepDive.researchDepths === 'function') return res.json({ kind: 'research', depths: deepDive.researchDepths() });
+        res.json({ kind: 'design', depths: deepDive.depths(), capture: capture ? { enabled: capture.available ? capture.available() : true } : null });
     });
 
     r.post('/api/v1/deep-dives', create, async (req, res) => {
@@ -62,24 +67,26 @@ function deepDivesRouter({ config, runs, auth, deepDive, store, capture = null, 
             // The same namespace rule every run has, with the one owner allowance: Exchange's long-standing
             // ai.run.create grant names ai.complete, and design.deep_dive is the workflow its /deep-dive page starts.
             const who = req.principal;
-            const owned = who.subject && who.subject.type === 'service' && who.subject.id === 'exchange';
-            if (!owned && !namespaceAllowed(who, 'design.deep_dive')) throw new AiError(403, 'capability.namespace_denied', 'this token may not run design.deep_dive');
             const body = req.body || {};
+            const kind = body.kind === 'research' ? 'research' : 'design';
+            const workflow = kind === 'research' ? 'research.deep_dive' : 'design.deep_dive';
+            const owned = who.subject && who.subject.type === 'service' && who.subject.id === 'exchange';
+            if (!owned && !namespaceAllowed(who, workflow)) throw new AiError(403, 'capability.namespace_denied', `this token may not run ${workflow}`);
             const { idempotency_key: idem, target, attribution, on_behalf_of: obo, ...raw } = body;
-            const input = { question: String(raw.question == null ? '' : raw.question).replace(/\s+/g, ' ').trim(), depth: raw.depth, ...(Array.isArray(raw.sites) && raw.sites.length ? { sites: raw.sites.slice(0, 30) } : {}) };
+            const input = { question: String(raw.question == null ? '' : raw.question).replace(/\s+/g, ' ').trim(), depth: raw.depth, ...(kind === 'research' ? { kind } : {}), ...(Array.isArray(raw.sites) && raw.sites.length ? { sites: raw.sites.slice(0, 30) } : {}) };
             if (obo != null && !(obo.type === 'user' && /^usr_[0-9A-HJKMNP-TV-Z]{26}$/.test(String(obo.id || '')))) throw new AiError(422, 'input.invalid', 'on_behalf_of must be a user subject');
             const schema = require('../schemas').validate(INPUT_SCHEMA, input);
             if (!schema.valid) throw new AiError(422, 'input.invalid', `a deep dive needs ${schema.errors.map((e) => `${e.path} ${e.message}`).join('; ')}`);
-            const price = deepDive.priceOf(input.depth);
+            const price = deepDive.priceOf(input.depth, kind);
             const created = await runs.create({
-                workflow: 'design.deep_dive', input,
+                workflow, input,
                 ...(idem ? { idempotency_key: idem } : {}),
                 ...(target ? { target } : {}), ...(attribution ? { attribution } : {}), ...(obo ? { on_behalf_of: obo } : {}),
                 options: { cache: 'none', hold: { usd: price, tokens: Math.round(price * 250000) } },
             }, req.principal, { trace: req.ov.traceId, requestId: req.ov.requestId });
             // The row exists before the first status is returned, so the page has something to read even while
             // the worker is still starting; the run's own step ensures the same row (ON CONFLICT DO NOTHING).
-            await store.ensure({ runId: created.run.id, question: input.question, depth: input.depth, siteLimit: deepDive.limitOf(input.depth), priceUsd: price, owner: obo || (req.principal.kind === 'user' ? req.principal.subject : null) });
+            await store.ensure({ runId: created.run.id, question: input.question, depth: input.depth, siteLimit: deepDive.limitOf(input.depth, kind), priceUsd: price, owner: obo || (req.principal.kind === 'user' ? req.principal.subject : null), kind });
             const dd = await store.get(created.run.id);
             res.setHeader('Location', `/api/v1/deep-dives/${created.run.id}`);
             res.status(202).json({ deep_dive: stateOf(dd, created.run), price_usd: price, held_usd: price });
@@ -89,10 +96,14 @@ function deepDivesRouter({ config, runs, auth, deepDive, store, capture = null, 
     r.get('/api/v1/deep-dives', read, async (req, res) => {
         const limit = Math.max(1, Math.min(100, Number(req.query.limit) || 30));
         const all = [];
-        for (const run of await runs.list(req.principal, { workflow: 'design.deep_dive', limit })) {
-            const dd = await store.get(run.id);
-            if (dd) all.push(stateOf(dd, run));
+        const kinds = req.query.kind === 'research' ? ['research.deep_dive'] : req.query.kind === 'design' ? ['design.deep_dive'] : ['research.deep_dive', 'design.deep_dive'];
+        for (const workflow of kinds) {
+            for (const run of await runs.list(req.principal, { workflow, limit })) {
+                const dd = await store.get(run.id);
+                if (dd) all.push(stateOf(dd, run));
+            }
         }
+        all.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
         res.json({ deep_dives: all.slice(0, limit) });
     });
 
@@ -108,13 +119,14 @@ function deepDivesRouter({ config, runs, auth, deepDive, store, capture = null, 
             const { dd, run } = await owned(req, req.params.id);
             const s = stateOf(dd, run);
             res.set('Cache-Control', 'no-store');
-            res.json({ deep_dive: { id: s.id, run_id: s.run_id, status: s.status, step: s.step, progress: s.progress, steps: s.steps, candidates: s.candidates, captures: s.captures, gaps: s.gaps, error: s.error, updated_at: s.updated_at, finished_at: s.finished_at } });
+            res.json({ deep_dive: { id: s.id, run_id: s.run_id, kind: s.kind, status: s.status, step: s.step, progress: s.progress, steps: s.steps, plan: s.plan, reads: s.reads, candidates: s.candidates, captures: s.captures, gaps: s.gaps, error: s.error, updated_at: s.updated_at, finished_at: s.finished_at } });
         } catch (err) { sendError(res, err, req.ov, log); }
     });
 
     r.post('/api/v1/deep-dives/:id/sites', create, async (req, res) => {
         try {
             const { dd, run } = await owned(req, req.params.id);
+            if (dd.kind === 'research') throw new AiError(409, 'deep_dive.not_choosing', 'a research deep dive chooses its own pages; it captures no sites');
             if (dd.decision_at || dd.status !== 'choosing') throw new AiError(409, 'deep_dive.not_choosing', `sites can be changed while the deep dive is choosing sites (this one is ${dd.status})`);
             const body = req.body || {};
             const add = (Array.isArray(body.add) ? body.add : []).map((u) => String(u).trim()).filter(Boolean).slice(0, 30);

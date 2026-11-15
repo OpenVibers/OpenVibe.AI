@@ -39,7 +39,7 @@ const TERMINAL = new Set(['succeeded', 'failed', 'cancelled', 'cached']);
 const QUEUE_RETRY_AFTER_S = 5;
 const newRunId = () => `run_${ids.ulid()}`;
 // The runs whose price the API route computes and the run holds on the tier budgets: a deep dive and a video analysis.
-const PRICED_RUNS = new Set(['design.deep_dive', 'video.analyze']);
+const PRICED_RUNS = new Set(['design.deep_dive', 'research.deep_dive', 'video.analyze']);
 
 /**
  * BA3: how long a batch-class run may wait for a provider's own batch API, in hours (1 to 72). The
