@@ -1,4 +1,5 @@
 'use strict';
+const { bodyOf } = require('./helpers');
 /**
  * BA3: a run whose latency class is 'batch' waits for a provider's own batch API.
  *
@@ -28,13 +29,13 @@ function stubProvider() {
         req.on('end', () => {
             const p = new URL(req.url, 'http://x').pathname;
             let body = {};
-            try { body = raw ? JSON.parse(raw) : {}; } catch { body = {}; }
+            body = bodyOf(raw, req.headers['content-type']);
             state.calls.push({ path: p, method: req.method, body });
             const send = (status, out, type) => {
                 res.writeHead(status, { 'Content-Type': type || 'application/json' });
                 res.end(typeof out === 'string' ? out : JSON.stringify(out));
             };
-            if (p === '/v1/files' && req.method === 'POST') {
+            if (p === '/v1/files' && req.method === 'POST') { if (!String(req.headers['content-type'] || '').startsWith('multipart/form-data')) return send(415, { error: { message: 'Invalid Content-Type header (application/json), expected multipart/form-data' } });
                 const id = `file_${++state.seq}`;
                 state.files.set(id, body.file || '');
                 return send(200, { id, object: 'file', bytes: (body.file || '').length });
@@ -105,7 +106,7 @@ async function fakeBilling() {
         req.on('end', () => {
             const p = new URL(req.url, 'http://x').pathname;
             let body = {};
-            try { body = raw ? JSON.parse(raw) : {}; } catch { body = {}; }
+            body = bodyOf(raw, req.headers['content-type']);
             const send = (status, out) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(out)); };
             if (p === '/internal/credits/holds') {
                 const want = BigInt(String(body.max_nano_usd || '0'));
