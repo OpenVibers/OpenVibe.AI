@@ -13,14 +13,13 @@ jobs:
       test: 'npm test'
   # ADR-035: the same files through PostgreSQL 18 + PgBouncer (transaction mode) + Valkey 9 (openvibe-sdk
   # scripts/test-services.sh), on a runner of its own so the two passes run at once (plan §AD.13 (3): CI took 31-53 min
-  # with both in one job, one file at a time). A pin-only pull request skips this pass; main always runs it.
+  # with both in one job, one file at a time). (The pinned shared workflow has no pin-only input: pin PRs run it too.)
   test-pg:
     uses: OpenVibers/OpenVibe.Shared/.github/workflows/test.yml@423fe519b5fe9594cc81b670e5ba5cb9f21f6176
     with:
       syntax-dirs: ''
       pin-drift: false
       test: 'eval "$(node_modules/openvibe-sdk/scripts/test-services.sh up)" && npm run test:pg'
-      pin-only-test: 'echo "pin-only: the PostgreSQL pass runs on main"'
   # Secret scan (gitleaks) and dependency audit, shared by every OpenVibers repo (Track Q).
   security:
     uses: OpenVibers/OpenVibe.Shared/.github/workflows/security.yml@8a353d9e7557bfeed2b43deb51271171f8e48fc6
