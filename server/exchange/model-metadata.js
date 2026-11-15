@@ -22,8 +22,25 @@ function indexMetadata(data) {
     return entries;
 }
 
+// The entries by their bare id, built once per entries list (2026-11-15: a filter over every models.dev entry for each
+// of ~700 offers, bare() on each, froze AI for over two minutes a rebuild, and Exchange with it).
+const BY_BARE = new WeakMap();
+function byBare(entries) {
+    let index = BY_BARE.get(entries);
+    if (!index) {
+        index = new Map();
+        for (const e of entries) {
+            const k = bare(e.id);
+            const list = index.get(k);
+            if (list) list.push(e); else index.set(k, [e]);
+        }
+        BY_BARE.set(entries, index);
+    }
+    return index;
+}
+
 function lookupMetadata(entries, id, provider) {
-    const matches = entries.filter((e) => bare(e.id) === bare(id));
+    const matches = (Array.isArray(entries) && entries.length ? byBare(entries).get(bare(id)) : null) || [];
     const found = matches.find((e) => e.provider === provider && e.id === id)
         || matches.find((e) => e.provider === provider)
         || matches.find((e) => e.id === id) || matches[0];

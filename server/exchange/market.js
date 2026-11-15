@@ -27,19 +27,36 @@ function buildOffers({ providers = [], rows = [], changes = [], catalogue = {}, 
     for (const row of rows) {
         if (publicKeys.has(row.provider_key) && (ownUrls.has(row.cost?.source) || ownUrls.has(row.metadata?.price_book?.source))) records.set(recordKey(row.provider_key, row.model_key), row);
     }
+    // The first record with the same provider and bare model, by a map kept current as records are added (it was a scan
+    // of every record with bare() on each, for each observation: quadratic, 2026-11-15).
+    const bareKey = (provider, model) => `${provider}\0${bare(model)}`;
+    const firstByBare = new Map();
+    for (const [k, r] of records) { const b = bareKey(r.provider_key, r.model_key); if (!firstByBare.has(b)) firstByBare.set(b, k); }
     for (const observed of observations) {
         const exactKey = recordKey(observed.provider_key, observed.model_key);
-        const key = records.has(exactKey) ? exactKey : [...records.keys()].find(k => {
-            const r = records.get(k);
-            return r.provider_key === observed.provider_key && bare(r.model_key) === bare(observed.model_key);
-        }) || recordKey(observed.provider_key, observed.model_key);
+        const key = records.has(exactKey) ? exactKey : firstByBare.get(bareKey(observed.provider_key, observed.model_key))
+            || recordKey(observed.provider_key, observed.model_key);
         const price = typeof observed.price === 'string' ? JSON.parse(observed.price) : observed.price;
         const old = records.get(key);
-        records.set(key, { ...old, provider_key: observed.provider_key, model_key: old?.model_key || observed.model_key,
+        const next = { ...old, provider_key: observed.provider_key, model_key: old?.model_key || observed.model_key,
             cost: { in_per_mtok: price.in, out_per_mtok: price.out, cached_per_mtok: price.cached,
-                source: observed.source, verified_at: observed.checked_at } });
+                source: observed.source, verified_at: observed.checked_at } };
+        records.set(key, next);
+        const b = bareKey(next.provider_key, next.model_key);
+        if (!firstByBare.has(b)) firstByBare.set(b, key);
     }
     const routed = (catalogue.models || []).flatMap(m => (m.offers || []).map(o => ({ ...o, canonical: m.canonical || m.slug })));
+    const routedSet = new Set(routed.map(o => `${o.provider}\0${String(o.model).toLowerCase()}`));
+    // The price changes of each provider and model, newest first, grouped once (it was a filter over every change for
+    // each offer).
+    const changesOf = new Map();
+    for (const c of changes) {
+        if (!ownUrls.has(c.source)) continue;
+        const k = `${c.provider_key}\0${c.model_key}`;
+        const list = changesOf.get(k);
+        if (list) list.push(c); else changesOf.set(k, [c]);
+    }
+    for (const list of changesOf.values()) list.sort((a,b) => String(b.checked_at).localeCompare(String(a.checked_at)));
     const offers = [];
     for (const [key, row] of records) {
         const seed = seeds.get(key);
@@ -55,7 +72,7 @@ function buildOffers({ providers = [], rows = [], changes = [], catalogue = {}, 
             provider_model: row.model_key, name: row.display_name || row.model_key, kind: kindOf(row),
             price: { in: num(row.cost?.in_per_mtok), out: num(row.cost?.out_per_mtok), cached: num(row.cost?.cached_per_mtok), currency: 'USD', per: '1M tokens' },
             price_source: webUrl(row.cost?.source), price_checked_at: row.cost?.verified_at || facts.checked || null,
-            routed: routed.some(o => o.provider === p.key && String(o.model).toLowerCase() === String(row.model_key).toLowerCase()),
+            routed: routedSet.has(`${p.key}\0${String(row.model_key).toLowerCase()}`),
             uncensored: seed?.m.uncensored === true || presets.find(preset => preset.key === p.key)?.uncensored === true,
             provider_access: p.provider_access || 'UNVERIFIED', field_sources: {},
             // The measured provider fidelity from Bench, when Bench has measured this exact endpoint;
@@ -64,8 +81,7 @@ function buildOffers({ providers = [], rows = [], changes = [], catalogue = {}, 
         };
         // Pending price changes are the latest observed own-page price, even before the router
         // approves charging it. Never publish the change log's actor, note or account data.
-        const observed = changes.filter(c => c.provider_key === p.key && c.model_key === row.model_key && ownUrls.has(c.source))
-            .sort((a,b) => String(b.checked_at).localeCompare(String(a.checked_at)));
+        const observed = changesOf.get(`${p.key}\0${row.model_key}`) || [];
         for (const [field, short] of [['in_per_mtok','in'], ['out_per_mtok','out'], ['cached_per_mtok','cached']]) {
             const change = observed.find(c => c.field === field);
             if (change && (!offer.price_checked_at || String(change.checked_at) >= String(offer.price_checked_at))) offer.price[short] = num(change.new_price);
