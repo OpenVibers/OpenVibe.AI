@@ -31,6 +31,14 @@ t.test('the page state: eight steps, owner only, key pages and spend', async () 
     assert.strictEqual(r.body.steps.find((s) => s.id === 'stt').state, 'ready', 'whisper.cpp on this host needs no key');
     assert.ok(r.body.steps.every((s) => s.key_page || s.id === 'stt' || s.id === 'embedding' || s.id === 'search'), 'a key page for every paid step');
     assert.ok(r.body.steps.find((s) => s.id === 'chat').recommended.price.text.includes('per 1M tokens'), 'price in plain numbers');
+    // Web search (the owner, 2026-11-15: "missing configuration for our tons of providers"; OpenVibe Search said "Key needed").
+    const search = r.body.steps.find((s) => s.id === 'search');
+    assert.strictEqual(search.recommended.configured, true, 'OpenVibe Search needs no key, so it never reads Key needed');
+    const engines = search.alternatives.map((o) => o.provider);
+    const wanted = ['deepseek', 'brave', 'exa', 'tavily', 'serper', 'serpapi', 'jina', 'perplexity', 'kagi', 'mojeek', 'parallel', 'you', 'dataforseo', 'searxng'];
+    assert.deepStrictEqual(wanted.filter((id) => !engines.includes(id)), [], 'every web engine Search can call is offered');
+    assert.strictEqual(search.alternatives.find((o) => o.provider === 'searxng').configured, false, 'SearXNG waits for its address');
+    assert.strictEqual(search.alternatives.find((o) => o.provider === 'exa').price.text, '$7 per 1,000 searches', 'priced from the rate card');
     assert.strictEqual(r.body.defaults.length, 9, 'one defaults row per kind');
     r = await request(h.base, 'GET', '/api/v1/setup', { tok: reader });
     assert.strictEqual(r.status, 200, 'a usage reader may read the page');

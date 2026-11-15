@@ -943,6 +943,20 @@ const PROVIDERS = [
         capabilities: ['image-search'], search_adapters: ['openverse'], docs_url: 'https://api.openverse.org/' },
     { key: 'commons', display_name: 'Wikimedia Commons', kind: 'http', base_url: 'https://commons.wikimedia.org/w/api.php', auth_mode: 'none', models_endpoint: null,
         capabilities: ['image-search'], search_adapters: ['commons'], docs_url: 'https://www.mediawiki.org/wiki/API:Search' },
+    // Every web engine Search can call takes its key here too (the owner on /admin/ai/setup, 2026-11-15: "missing
+    // configuration for our tons of providers"). The adapter does the auth and the key check runs one real search.
+    { key: 'serpapi', display_name: 'SerpApi', kind: 'http', base_url: 'https://serpapi.com', models_endpoint: null, keys_url: 'https://serpapi.com/manage-api-key',
+        capabilities: ['web-search'], search_adapters: ['serpapi'], docs_url: 'https://serpapi.com/search-api' },
+    { key: 'kagi', display_name: 'Kagi', kind: 'http', base_url: 'https://kagi.com/api/v0', models_endpoint: null, keys_url: 'https://kagi.com/settings?p=api',
+        capabilities: ['web-search'], search_adapters: ['kagi'], docs_url: 'https://help.kagi.com/kagi/api/search-legacy.html' },
+    { key: 'mojeek', display_name: 'Mojeek', kind: 'http', base_url: 'https://api.mojeek.com', models_endpoint: null,
+        capabilities: ['web-search'], search_adapters: ['mojeek'], docs_url: 'https://www.mojeek.com/services/search/web-search-api' },
+    { key: 'parallel', display_name: 'Parallel', kind: 'http', base_url: 'https://api.parallel.ai', auth_mode: 'x-api-key', models_endpoint: null, keys_url: 'https://platform.parallel.ai/',
+        capabilities: ['web-search'], search_adapters: ['parallel'], docs_url: 'https://docs.parallel.ai/search/search-quickstart' },
+    { key: 'you', display_name: 'You.com', kind: 'http', base_url: 'https://ydc-index.io', auth_mode: 'x-api-key', models_endpoint: null, keys_url: 'https://you.com/platform',
+        capabilities: ['web-search'], search_adapters: ['you'], docs_url: 'https://documentation.you.com/api-reference/search' },
+    { key: 'dataforseo', display_name: 'DataForSEO', kind: 'http', base_url: 'https://api.dataforseo.com', models_endpoint: null, keys_url: 'https://app.dataforseo.com/api-access',
+        capabilities: ['web-search'], search_adapters: ['dataforseo'], docs_url: 'https://docs.dataforseo.com/v3/serp/google/organic/live/advanced/' },
 
     // Cheap hosted inference (owner, 2026-11-10): every endpoint below was read and probed keyless today.
     // Each starts disabled with no key; the owner puts its key in the owner settings and syncs its model list.

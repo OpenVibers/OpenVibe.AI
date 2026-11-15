@@ -84,7 +84,9 @@ function viewOffer(step, offer, { providers, models, configured, recommended = f
         checked: offer.checked || null,
         recommended,
         keyless: Boolean(offer.keyless),
-        configured: Boolean(configured),
+        // A keyless offer (OpenVibe Search, a local model) is ready as it is: it never asks for a key. One that needs an
+        // address of yours (SearXNG) is ready once its provider has one.
+        configured: Boolean(configured) || (Boolean(offer.keyless) && (!provider || Boolean(provider.base_url))),
         key_page: offer.key_page || keyPageOf(provider),
         // What else this provider can do: SVG and icons for the icon studio, reranking for a search
         // that has too many candidates. A flag is a fact about the provider, never a promise the
