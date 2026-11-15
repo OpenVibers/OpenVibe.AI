@@ -511,7 +511,8 @@ function createEngine({ registry, pool, fetcher, quotas = null, config = {}, spa
                 ...(input.temperature != null ? { temperature: Number(input.temperature) } : {}),
                 timeoutMs: 3600000 }, { ...ctx, routeKey: route.key, routeVersion: route.version, promptHash: null });
             const r = exec.result;
-            return { output: { text: r.text || '', language: r.language || input.language || 'en', segments: r.segments || [] }, exec, route };
+            // A transcript the floor would have refused carries the finding for the caller's moderation (providers/index.js).
+            return { output: { text: r.text || '', language: r.language || input.language || 'en', segments: r.segments || [], ...(r.floor ? { floor: r.floor } : {}) }, exec, route };
         } finally {
             if (handle) handle.release();
             else { try { fs.unlinkSync(file); } catch { /* */ } }

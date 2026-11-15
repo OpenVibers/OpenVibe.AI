@@ -84,6 +84,7 @@ const workflows = [
         output_schema: OBJ({
             text: { type: 'string' },
             language: STR(8),
+            floor: { type: 'object', additionalProperties: false, properties: { rule: { type: ['string', 'null'] }, detail: { type: ['string', 'null'] } } },
             segments: { type: 'array', items: { type: 'object', required: ['start', 'end', 'text'], properties: { start: { type: 'number' }, end: { type: 'number' }, text: { type: 'string' } } } },
         }, ['text']),
         steps: [{ kind: 'transcribe', route: 'live.stt' }],

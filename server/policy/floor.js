@@ -12,6 +12,8 @@
  * A breach ends the account (the owner, 2026-11-06). The floor is checked twice: on the way in (the prompt, the
  * system prompt, the tool arguments) and on the way out (the answer). A request that trips it is refused before a
  * provider is called; an answer that trips it is never delivered.
+ * A transcript is the one exception on the way out: it is what people said, not what a model wrote, so it is
+ * delivered with the finding on it for the caller's moderation (server/providers/index.js floorOnResult, 2026-11-15).
  *
  * The lines are decided by the house's own text classifiers, not by a third set of words written here
  * (server/policy/classifiers.js):
