@@ -170,7 +170,9 @@ async function deepDiveUpdated({ runId, deepDiveId, status, step, progress, step
         status: status === 'queued' ? 'queued' : ['running', 'choosing', 'succeeded', 'failed', 'cancelled'].includes(status) ? status : 'running',
         step: step === 'done' ? 'done' : (['plan', 'search', 'choose', 'capture', 'analyse', 'synthesise', 'report'].includes(step) ? step : null),
         progress: Math.max(0, Math.min(1, Number(progress) || 0)),
-        steps: (steps || []).slice(0, 7).map((s) => ({ key: s.key, status: s.status })),
+        // The design dive's read step (11-15) is named by ai.deep_dive.updated@1 1.1.0 (Contracts 0.440.0); until AI
+        // pins that release, the payload keeps the seven steps 1.0.0 names.
+        steps: (steps || []).filter((x) => x && x.key !== 'read').slice(0, 7).map((x) => ({ key: x.key, status: x.status })),
         depth: ['quick', 'thorough', 'expert'].includes(depth) ? depth : 'quick',
         requester: requester && requester.type && requester.id ? { type: requester.type, id: String(requester.id) } : { type: 'service', id: 'ai' },
         on_behalf_of: on_behalf_of && on_behalf_of.type && on_behalf_of.id ? { type: on_behalf_of.type, id: String(on_behalf_of.id) } : null,

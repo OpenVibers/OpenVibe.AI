@@ -12,7 +12,8 @@
 
 const STR = (n) => ({ type: 'string', maxLength: n });
 const NULLABLE = (n) => ({ type: ['string', 'null'], maxLength: n });
-const STEPS = ['plan', 'search', 'choose', 'capture', 'analyse', 'synthesise', 'report'];
+// read (11-15): the general deep dive's core, the best write-ups read as text (ai.deep-dive@1 1.1.0, Contracts 0.440.0).
+const STEPS = ['plan', 'search', 'read', 'choose', 'capture', 'analyse', 'synthesise', 'report'];
 const DEPTHS = ['quick', 'thorough', 'expert'];
 
 const EVIDENCE = {
@@ -166,7 +167,7 @@ const REPORT = {
             properties: { question: STR(500), depth: { enum: DEPTHS }, max_sites: { type: 'integer', minimum: 1, maximum: 30 }, sites: { type: 'array', maxItems: 30, items: STR(2048) } },
         },
         steps: {
-            type: 'array', maxItems: 7,
+            type: 'array', maxItems: 8,
             items: {
                 type: 'object', additionalProperties: false, required: ['key', 'status'],
                 properties: { key: { enum: STEPS }, status: { enum: ['pending', 'running', 'done', 'skipped', 'failed'] }, detail: NULLABLE(300), started_at: { type: ['string', 'null'] }, finished_at: { type: ['string', 'null'] } },
@@ -217,7 +218,7 @@ const REPORT = {
                 models: {
                     type: 'array', maxItems: 500,
                     items: { type: 'object', additionalProperties: false, required: ['step', 'provider', 'model', 'tokens_in', 'tokens_out', 'cost_usd', 'ms'], properties: {
-                        step: { enum: ['plan', 'choose', 'analyse', 'synthesise'] }, provider: NULLABLE(80), model: NULLABLE(200),
+                        step: { enum: ['plan', 'read', 'choose', 'analyse', 'synthesise'] }, provider: NULLABLE(80), model: NULLABLE(200),
                         tokens_in: { type: 'integer', minimum: 0 }, tokens_out: { type: 'integer', minimum: 0 }, cost_usd: { type: 'number', minimum: 0 }, ms: { type: 'integer', minimum: 0 },
                     } },
                 },
@@ -330,6 +331,12 @@ const WRITE_OUTPUT = {
         open_questions: { type: 'array', maxItems: 10, items: STR(400) },
         next_steps: { type: 'array', maxItems: 10, items: STR(400) },
     },
+};
+
+// The design dive's research block: the general deep dive it is built on (its read step), in ai.research@1's shapes.
+REPORT.properties.research = {
+    type: 'object', additionalProperties: false, required: ['questions', 'reads', 'answer'],
+    properties: { questions: RESEARCH_REPORT.properties.questions, reads: { type: 'array', maxItems: 40, items: READ }, answer: RESEARCH_REPORT.properties.answer },
 };
 
 module.exports = { DEPTHS, STEPS, EVIDENCE, REPORT, INPUT_SCHEMA, PLAN_OUTPUT, CHOOSE_OUTPUT, ANALYSIS_OUTPUT, SYNTHESIS_OUTPUT,

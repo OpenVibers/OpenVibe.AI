@@ -16,7 +16,11 @@ report with its evidence and receipt. OpenVibe.Exchange shows it (`/deep-dive`);
   search starts it (`POST /api/v1/deep-dives` with `kind: "research"`); its live state adds `plan` (the questions)
   and `reads` (every page, read or skipped and why). No `ai.deep_dive.updated` event: its steps are the design dive's.
 - **design** (workflow `design.deep_dive`, report `ai.deep-dive@1`, the default for `POST /api/v1/deep-dives`):
-  OpenVibe.Design's design research below, which builds on the research core.
+  OpenVibe.Design's design research below, built on the research core: after Search, its **read** step runs the
+  general deep dive's core (`research.js` readPages, notePages, answerFrom) on the best design write-ups (3, 5 or 8
+  by depth, design publications first), and the synthesis builds on that answer; the report carries it as its
+  optional `research` block (`ai.deep-dive@1` 1.1.0, Contracts 0.440.0). Until AI pins that release, the
+  `ai.deep_dive.updated` payload leaves the read step out of its steps.
 
 ## The run (design)
 

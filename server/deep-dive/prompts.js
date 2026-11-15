@@ -70,7 +70,7 @@ Every claim must follow from what is visible in this image. JSON only.`,
     };
 }
 
-function synthesisPrompt({ question, depth, analyses, sources, rules, components, tokens }) {
+function synthesisPrompt({ question, depth, analyses, sources, rules, components, tokens, research = null }) {
     const siteList = analyses.map((a, i) => `${i + 1}. ${a.url} — ${clean(a.summary, 260)}`).join('\n');
     const ruleList = (rules || []).map((r) => `- ${r.id}: ${clean(r.rule, 300)} (${clean(r.area, 80)})`).join('\n') || '- (the rules register did not answer)';
     const compList = (components || []).map((c) => `- ${c.title || c.name}: ${clean(c.summary, 220)}`).join('\n') || '- (the component registry did not answer)';
@@ -80,7 +80,11 @@ function synthesisPrompt({ question, depth, analyses, sources, rules, components
 
 The sites, numbered for your citations:
 ${siteList}
-
+${research && research.answer && research.answer.summary ? `
+What the best write-ups on this say (read in full before the sites were chosen; use it to judge the sites, never as a site):
+${clean(research.answer.summary, 1200)}
+${(research.answer.key_points || []).slice(0, 8).map((k) => `- ${clean(k.text, 300)}`).join('\n')}
+` : ''}
 Their analyses (JSON; each has source_id, url, summary, strengths, weaknesses):
 ${JSON.stringify(analyses.map((a) => ({ source_id: a.source_id, url: a.url, summary: clean(a.summary, 800), first_impression: clean(a.first_impression, 500), hierarchy: clean(a.hierarchy, 500), density: clean(a.density, 400), type: clean(a.type, 400), colour: clean(a.colour, 400), motion: clean(a.motion, 300), words: clean(a.words, 300), strengths: a.strengths, weaknesses: a.weaknesses, accessibility: a.accessibility, speed: a.speed })), null, 1).slice(0, 30000)}
 
