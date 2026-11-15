@@ -175,12 +175,23 @@ function createAuth({ config, log = console }) {
      * allowance or Balance; their token must name audience openvibe.ai and must not act for anyone else. Service,
      * app, module, node and delegation tokens are never a person.
      */
-    async function personFor(token) {
+    /**
+     * Did this request come from Exchange's own server, forwarding the signed-in person's site session? The rule
+     * server/me.js applies to Exchange's writes: Exchange's Origin, and no cross-site fetch. Only the routes that opt in
+     * (appOrCap's { exchangeSession }: the search routes Exchange's search page calls) take such a token.
+     */
+    function fromExchange(req) {
+        const site = req.headers['sec-fetch-site'];
+        if (site && site !== 'same-origin' && site !== 'none') return false;
+        try { return Boolean(config.exchangeUrl) && new URL(String(req.headers.origin || '')).origin === new URL(config.exchangeUrl).origin; } catch { return false; }
+    }
+
+    async function personFor(token, { siteSession = false } = {}) {
         let claims;
         try {
             claims = await verifyUserToken(token, {
                 ...(config.networkPublicKey ? { publicKey: config.networkPublicKey } : { jwks: config.networkJwksUrl }),
-                issuer: config.issuer, audience: config.audience, now: Date.now(), log,
+                issuer: config.issuer, audience: siteSession ? [config.audience, 'openvibe.network'] : config.audience, now: Date.now(), log,
             });
         } catch { return null; }
         if (!claims || NON_PERSON.test(String(claims.sub || '')) || PRINCIPAL_TYPES.includes(claims.actor_type)) return null;
@@ -200,6 +211,10 @@ function createAuth({ config, log = console }) {
      * for themselves, and only their own allowance or Balance can pay.
      */
     function appOrCap(appCap, ...anyOf) {
+        // A trailing { exchangeSession: true }: the person's site session (audience openvibe.network) is taken too when
+        // Exchange's server forwards it (fromExchange). Exchange's search page searched as the person with that token
+        // and every search answered 401 token.wrong_audience until 2026-11-15.
+        const opts = anyOf.length && typeof anyOf[anyOf.length - 1] === 'object' ? anyOf.pop() : {};
         const appCaps = Array.isArray(appCap) ? appCap : [appCap];
         const serviceGuard = requireCap(...anyOf);
         return async function appOrCapGuard(req, res, next) {
@@ -209,7 +224,7 @@ function createAuth({ config, log = console }) {
             try {
                 const r = await verify(token, { acceptSandbox: true });
                 if (!r.ok) {
-                    const person = await personFor(token);
+                    const person = await personFor(token, { siteSession: opts.exchangeSession === true && fromExchange(req) });
                     if (person) { req.principal = person; return next(); }
                     return await serviceGuard(req, res, next);
                 }
