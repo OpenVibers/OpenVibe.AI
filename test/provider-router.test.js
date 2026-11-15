@@ -343,5 +343,21 @@ t.test('seeded text pools keep the shared provider as authority: a free local mo
     assert.strictEqual(down.selected, 'local:l', JSON.stringify(down.reasons));
 });
 
+t.test('a route that names its model is offered only by providers that list it (11-15: DeepSeek got gpt-5-mini 26 times a day)', async () => {
+    const ok = await seam();
+    await provider({ key: 'pinhost', base_url: ok.url, capabilities: ['classify'], default_model: 'pin-m' });
+    await model('pinhost', 'pin-m', 2);
+    await provider({ key: 'otherhost', base_url: ok.url, capabilities: ['classify'], default_model: 'other-m' });
+    await model('otherhost', 'other-m', 1);
+    await provider({ key: 'nolist', base_url: ok.url, capabilities: ['classify'], default_model: null });
+    const r = await route('test.pinned-model', { capability: 'classify', constraints: { objective: 'cheapest', model: 'pin-m' }, timeout_ms: 3000 });
+    const placed = await h.pool.candidates(r, ['classify'], 'classify');
+    const ids = placed.explain.candidates.map((c) => `${c.provider}:${c.model}`);
+    assert.ok(ids.includes('pinhost:pin-m'), `the provider that lists the model offers it (${ids})`);
+    assert.ok(!ids.some((id) => id.startsWith('otherhost:')), 'a provider that lists other models only is not offered the named one');
+    assert.ok(ids.includes('nolist:pin-m'), 'a provider with no model list keeps the old reading');
+    await ok.close();
+});
+
 t.test('shutdown', async () => { await h.stop(); });
 t.run();
