@@ -69,6 +69,97 @@ function createResearch({ config = {}, store, llm, sources, reader, clock = { no
         return store.patch(row.id, { steps, step: key, ...(progress != null ? { progress } : {}), ...(row.status === 'queued' ? { status: 'running' } : {}) });
     }
 
+    // ── The core: what the general deep dive runs as its read, analyse and write steps, and the design dive
+    //    (index.js) as its read step. Each reports its progress through a callback and never touches a row itself. ──
+
+    /** Read the chosen pages as text, three at a time; spares stand in for those that cannot be read. */
+    async function readPages({ chosen, target, ctx = {}, check = () => {}, onRead = null }) {
+        const reads = [];
+        const texts = new Map();
+        let readCount = 0;
+        const queue = chosen.slice();
+        const readOne = async (page) => {
+            check();
+            let got;
+            try { got = await reader.read(page.url, { signal: ctx.signal }); } catch (err) {
+                if (err && err.code === 'run.cancelled') throw err;
+                got = { status: 'skipped', url: page.url, reason: 'the page could not be read' };
+            }
+            const r = {
+                id: `read_${reads.length + 1}`, source_id: page.source_id, url: page.url, final_url: got.final_url || null,
+                title: oneLine(got.title || page.title || hostOf(page.url), 400) || null, site: got.site ? oneLine(got.site, 200) : hostOf(page.url),
+                published: got.published || null, read_at: iso(clock.now()), words: got.words || 0, status: got.status === 'read' ? 'read' : 'skipped',
+                reason: got.status === 'read' ? null : oneLine(got.reason || 'not read', 300), relevant: null, summary: null, kind: null, findings: [],
+            };
+            reads.push(r);
+            if (r.status === 'read') { texts.set(r.id, got.text); readCount += 1; }
+            if (onRead) await onRead(reads, readCount);
+            return r;
+        };
+        await pool(queue.splice(0, target), 3, readOne);
+        while (readCount < target && queue.length) await readOne(queue.shift());
+        return { reads, texts, readCount };
+    }
+
+    /** Notes on each page read (what it says, short exact quotes, the kind of source), three at a time, in budget. */
+    async function notePages({ reads, texts, question, questions, ctx = {}, check = () => {}, overBudget = () => false, warnings = [], addCall = () => {}, onNote = null }) {
+        let noted = 0;
+        let budgetGap = false;
+        await pool(reads.filter((r) => r.status === 'read'), 3, async (r) => {
+            check();
+            if (overBudget()) { budgetGap = true; return; }
+            try {
+                const notes = await llm.call({ routeKey: 'default.json', ...prompts.readPagePrompt({ question, questions, page: { title: r.title, url: r.final_url || r.url, site: r.site, published: r.published, text: texts.get(r.id) } }), schema: PAGE_READ_OUTPUT, schemaName: 'research_page', maxTokens: Math.min(1400, maxOut), signal: ctx.signal, ctx });
+                addCall(notes);
+                const j = notes.json || {};
+                r.relevant = j.relevant !== false;
+                r.summary = oneLine(j.summary, 1500) || null;
+                r.kind = ['primary', 'reference', 'news', 'opinion', 'vendor', 'forum', 'other'].includes(j.kind) ? j.kind : null;
+                r.findings = (j.findings || []).slice(0, 8).map((f) => ({ point: oneLine(f.point, 600), quote: f.quote ? oneLine(f.quote, 400) : null })).filter((f) => f.point);
+            } catch (err) {
+                if (err && err.code === 'run.cancelled') throw err;
+                warnings.push(`notes on ${hostOf(r.url) || r.url}: ${String((err && err.message) || err).slice(0, 160)}`);
+            }
+            noted += 1;
+            if (onNote) await onNote(reads, noted);
+        });
+        return { budgetGap };
+    }
+
+    /** The answer from the notes, every claim citing its pages by source id; assembled from the notes if the model fails. */
+    async function answerFrom({ question, questions, reads, ctx = {}, warnings = [], gaps = [], addCall = () => {} }) {
+        const noted = reads.filter((r) => r.status === 'read' && r.summary && r.relevant !== false);
+        const numbered = (noted.length ? noted : reads.filter((r) => r.status === 'read')).slice(0, 30);
+        const cite = (list) => [...new Set((Array.isArray(list) ? list : []).map((n) => numbered[(Number(n) || 0) - 1]).filter(Boolean).map((r) => r.source_id))].slice(0, 8);
+        let answer;
+        try {
+            const w = await llm.call({ routeKey: writeRoute, ...prompts.writePrompt({ question, questions, notes: numbered.map((r, i) => ({ n: i + 1, title: r.title, url: r.final_url || r.url, site: r.site, published: r.published, kind: r.kind, summary: r.summary || '', findings: r.findings })) }), schema: WRITE_OUTPUT, schemaName: 'research_answer', maxTokens: Math.min(5000, Math.max(3000, maxOut)), signal: ctx.signal, ctx });
+            addCall(w);
+            const j = w.json || {};
+            answer = {
+                summary: oneLine(j.summary, 3000),
+                key_points: (j.key_points || []).slice(0, 12).map((k) => ({ text: oneLine(k.text, 800), sources: cite(k.sources) })).filter((k) => k.text),
+                answers: (j.answers || []).slice(0, 12).map((a) => ({ question: (questions[(Number(a.question) || 0) - 1] || {}).question || '', answer: oneLine(a.answer, 2000), confidence: ['high', 'medium', 'low'].includes(a.confidence) ? a.confidence : 'medium', sources: cite(a.sources) })).filter((a) => a.question && a.answer),
+                comparison: j.comparison && Array.isArray(j.comparison.columns) && j.comparison.columns.length && Array.isArray(j.comparison.rows) && j.comparison.rows.length
+                    ? { columns: j.comparison.columns.slice(0, 8).map((c) => oneLine(c, 120)), rows: j.comparison.rows.slice(0, 20).map((r) => (Array.isArray(r) ? r : []).slice(0, 8).map((c) => oneLine(c, 600))) } : null,
+                disagreements: (j.disagreements || []).slice(0, 10).map((d) => ({ what: oneLine(d.what, 800), sources: cite(d.sources) })).filter((d) => d.what),
+                open_questions: (j.open_questions || []).slice(0, 10).map((x) => oneLine(x, 400)).filter(Boolean),
+                next_steps: (j.next_steps || []).slice(0, 10).map((x) => oneLine(x, 400)).filter(Boolean),
+            };
+            if (!answer.summary) throw new Error('the answer came back empty');
+        } catch (err) {
+            if (err && err.code === 'run.cancelled') throw err;
+            warnings.push(`writing: ${String((err && err.message) || err).slice(0, 240)}`);
+            gaps.push('The answer model did not answer; this answer is assembled from the notes on each page.');
+            answer = {
+                summary: oneLine(numbered.map((r) => r.summary).filter(Boolean).slice(0, 3).join(' '), 3000) || `The pages read about "${question}" are listed with what each says.`,
+                key_points: numbered.flatMap((r) => r.findings.slice(0, 1).map((f) => ({ text: f.point, sources: [r.source_id] }))).slice(0, 10),
+                answers: [], comparison: null, disagreements: [], open_questions: questions.map((q) => q.question).slice(0, 6), next_steps: [],
+            };
+        }
+        return { answer, numbered };
+    }
+
     /** One run of the general deep dive. Returns { output, usage, cost, models } for the workflow step. */
     async function run({ run: theRun, input, ctx = {} }) {
         const question = oneLine(input.question, 500);
@@ -152,34 +243,13 @@ function createResearch({ config = {}, store, llm, sources, reader, clock = { no
             row = await step(row, 'choose', 'done', { detail: `${Math.min(limit, chosen.length)} pages`, progress: 0.26 });
 
             // 4. Read: three at a time; a page that cannot be read gives its place to a spare.
-            row = await step(row, 'read', 'running', { detail: `0/${Math.min(limit, chosen.length)} pages`, progress: 0.28 });
-            const reads = [];
-            const texts = new Map();
-            let readCount = 0;
-            const queue = chosen.slice();
             const target = Math.min(limit, chosen.length);
-            const readOne = async (page) => {
-                check();
-                let got;
-                try { got = await reader.read(page.url, { signal: ctx.signal }); } catch (err) {
-                    if (err && err.code === 'run.cancelled') throw err;
-                    got = { status: 'skipped', url: page.url, reason: 'the page could not be read' };
-                }
-                const r = {
-                    id: `read_${reads.length + 1}`, source_id: page.source_id, url: page.url, final_url: got.final_url || null,
-                    title: oneLine(got.title || page.title || hostOf(page.url), 400) || null, site: got.site ? oneLine(got.site, 200) : hostOf(page.url),
-                    published: got.published || null, read_at: iso(clock.now()), words: got.words || 0, status: got.status === 'read' ? 'read' : 'skipped',
-                    reason: got.status === 'read' ? null : oneLine(got.reason || 'not read', 300), relevant: null, summary: null, kind: null, findings: [],
-                };
-                reads.push(r);
-                if (r.status === 'read') { texts.set(r.id, got.text); readCount += 1; }
-                row = await store.patch(row.id, { reads, progress: 0.28 + 0.24 * Math.min(1, readCount / Math.max(1, target)) });
-                row = await step(row, 'read', 'running', { detail: `${readCount}/${target} pages` });
-                return r;
-            };
-            await pool(queue.splice(0, target), 3, readOne);
-            // Spares stand in for what could not be read.
-            while (readCount < target && queue.length) await readOne(queue.shift());
+            row = await step(row, 'read', 'running', { detail: `0/${target} pages`, progress: 0.28 });
+            const { reads, texts, readCount } = await readPages({ chosen, target, ctx, check,
+                onRead: async (all, n) => {
+                    row = await store.patch(row.id, { reads: all, progress: 0.28 + 0.24 * Math.min(1, n / Math.max(1, target)) });
+                    row = await step(row, 'read', 'running', { detail: `${n}/${target} pages` });
+                } });
             if (!readCount) throw new AiError(502, 'source.unavailable', 'none of the chosen pages could be read');
             for (const r of reads.filter((x) => x.status === 'skipped')) warnings.push(`${hostOf(r.url) || r.url}: ${r.reason}`);
             row = await step(row, 'read', 'done', { detail: `${readCount} pages read${reads.length > readCount ? `, ${reads.length - readCount} could not be` : ''}`, progress: 0.52 });
@@ -187,27 +257,11 @@ function createResearch({ config = {}, store, llm, sources, reader, clock = { no
             // 5. Analyse: notes on each page read, three at a time, within the held price.
             const toAnalyse = reads.filter((r) => r.status === 'read');
             row = await step(row, 'analyse', 'running', { detail: `0/${toAnalyse.length} pages`, progress: 0.54 });
-            let analysed = 0;
-            let budgetGap = false;
-            await pool(toAnalyse, 3, async (r) => {
-                check();
-                if (overBudget()) { budgetGap = true; return; }
-                try {
-                    const notes = await llm.call({ routeKey: 'default.json', ...prompts.readPagePrompt({ question, questions, page: { title: r.title, url: r.final_url || r.url, site: r.site, published: r.published, text: texts.get(r.id) } }), schema: PAGE_READ_OUTPUT, schemaName: 'research_page', maxTokens: Math.min(1400, maxOut), signal: ctx.signal, ctx });
-                    addCall('analyse', notes);
-                    const j = notes.json || {};
-                    r.relevant = j.relevant !== false;
-                    r.summary = oneLine(j.summary, 1500) || null;
-                    r.kind = ['primary', 'reference', 'news', 'opinion', 'vendor', 'forum', 'other'].includes(j.kind) ? j.kind : null;
-                    r.findings = (j.findings || []).slice(0, 8).map((f) => ({ point: oneLine(f.point, 600), quote: f.quote ? oneLine(f.quote, 400) : null })).filter((f) => f.point);
-                } catch (err) {
-                    if (err && err.code === 'run.cancelled') throw err;
-                    warnings.push(`notes on ${hostOf(r.url) || r.url}: ${String((err && err.message) || err).slice(0, 160)}`);
-                }
-                analysed += 1;
-                row = await store.patch(row.id, { reads, progress: 0.54 + 0.3 * (analysed / Math.max(1, toAnalyse.length)) });
-                row = await step(row, 'analyse', 'running', { detail: `${analysed}/${toAnalyse.length} pages` });
-            });
+            const { budgetGap } = await notePages({ reads, texts, question, questions, ctx, check, overBudget, warnings, addCall: (r) => addCall('analyse', r),
+                onNote: async (all, n) => {
+                    row = await store.patch(row.id, { reads: all, progress: 0.54 + 0.3 * (n / Math.max(1, toAnalyse.length)) });
+                    row = await step(row, 'analyse', 'running', { detail: `${n}/${toAnalyse.length} pages` });
+                } });
             if (budgetGap) gaps.push('The held price was reached before every page was analysed; the answer rests on the pages that were.');
             const noted = reads.filter((r) => r.status === 'read' && r.summary && r.relevant !== false);
             row = await step(row, 'analyse', 'done', { detail: `${noted.length} pages with something to say`, progress: 0.85 });
@@ -215,34 +269,7 @@ function createResearch({ config = {}, store, llm, sources, reader, clock = { no
             // 6. Write: the answer, every claim citing its pages (by number here, by source id in the report).
             row = await step(row, 'write', 'running', { detail: 'writing the answer from the notes', progress: 0.87 });
             check();
-            const numbered = (noted.length ? noted : reads.filter((r) => r.status === 'read')).slice(0, 30);
-            const cite = (list) => [...new Set((Array.isArray(list) ? list : []).map((n) => numbered[(Number(n) || 0) - 1]).filter(Boolean).map((r) => r.source_id))].slice(0, 8);
-            let answer;
-            try {
-                const w = await llm.call({ routeKey: writeRoute, ...prompts.writePrompt({ question, questions, notes: numbered.map((r, i) => ({ n: i + 1, title: r.title, url: r.final_url || r.url, site: r.site, published: r.published, kind: r.kind, summary: r.summary || '', findings: r.findings })) }), schema: WRITE_OUTPUT, schemaName: 'research_answer', maxTokens: Math.min(5000, Math.max(3000, maxOut)), signal: ctx.signal, ctx });
-                addCall('write', w);
-                const j = w.json || {};
-                answer = {
-                    summary: oneLine(j.summary, 3000),
-                    key_points: (j.key_points || []).slice(0, 12).map((k) => ({ text: oneLine(k.text, 800), sources: cite(k.sources) })).filter((k) => k.text),
-                    answers: (j.answers || []).slice(0, 12).map((a) => ({ question: (questions[(Number(a.question) || 0) - 1] || {}).question || '', answer: oneLine(a.answer, 2000), confidence: ['high', 'medium', 'low'].includes(a.confidence) ? a.confidence : 'medium', sources: cite(a.sources) })).filter((a) => a.question && a.answer),
-                    comparison: j.comparison && Array.isArray(j.comparison.columns) && j.comparison.columns.length && Array.isArray(j.comparison.rows) && j.comparison.rows.length
-                        ? { columns: j.comparison.columns.slice(0, 8).map((c) => oneLine(c, 120)), rows: j.comparison.rows.slice(0, 20).map((r) => (Array.isArray(r) ? r : []).slice(0, 8).map((c) => oneLine(c, 600))) } : null,
-                    disagreements: (j.disagreements || []).slice(0, 10).map((d) => ({ what: oneLine(d.what, 800), sources: cite(d.sources) })).filter((d) => d.what),
-                    open_questions: (j.open_questions || []).slice(0, 10).map((x) => oneLine(x, 400)).filter(Boolean),
-                    next_steps: (j.next_steps || []).slice(0, 10).map((x) => oneLine(x, 400)).filter(Boolean),
-                };
-                if (!answer.summary) throw new Error('the answer came back empty');
-            } catch (err) {
-                if (err && err.code === 'run.cancelled') throw err;
-                warnings.push(`writing: ${String((err && err.message) || err).slice(0, 240)}`);
-                gaps.push('The answer model did not answer; this answer is assembled from the notes on each page.');
-                answer = {
-                    summary: oneLine(numbered.map((r) => r.summary).filter(Boolean).slice(0, 3).join(' '), 3000) || `The pages read about "${question}" are listed below with what each says.`,
-                    key_points: numbered.flatMap((r) => r.findings.slice(0, 1).map((f) => ({ text: f.point, sources: [r.source_id] }))).slice(0, 10),
-                    answers: [], comparison: null, disagreements: [], open_questions: questions.map((q) => q.question).slice(0, 6), next_steps: [],
-                };
-            }
+            const { answer, numbered } = await answerFrom({ question, questions, reads, ctx, warnings, gaps, addCall: (r) => addCall('write', r) });
             row = await step(row, 'write', 'done', { detail: `${answer.key_points.length} key points from ${numbered.length} pages`, progress: 0.98 });
 
             const nowIso = iso(clock.now());
@@ -272,7 +299,7 @@ function createResearch({ config = {}, store, llm, sources, reader, clock = { no
         }
     }
 
-    return { run, depths, priceOf, limitOf };
+    return { run, depths, priceOf, limitOf, readPages, notePages, answerFrom };
 }
 
 module.exports = { createResearch };

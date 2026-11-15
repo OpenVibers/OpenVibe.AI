@@ -11,7 +11,9 @@ const USER = `usr_${ALPHA}`;
 let media = 0;
 const med = () => { media += 1; return `med_${ALPHA.slice(0, 24)}${String(media).padStart(2, '0')}`; };
 const json = (body) => ({ ok: true, status: 200, async json() { return body; }, async text() { return JSON.stringify(body); } });
-const html = (title) => ({ ok: true, status: 200, async json() { throw new Error('not json'); }, async text() { return `<html><head><title>${title}</title><meta name="description" content="A design reference"></head><body><h1>${title}</h1></body></html>`; } });
+// A page with enough words to be read as a write-up (the design dive's read step, 11-15).
+const WORDS = Array.from({ length: 90 }, (_, i) => `panel${i % 9 === 0 ? '.' : ''}`).join(' ');
+const html = (title) => ({ ok: true, status: 200, headers: { get: (k) => (k.toLowerCase() === 'content-type' ? 'text/html; charset=utf-8' : null) }, async json() { throw new Error('not json'); }, async text() { return `<html><head><title>${title}</title><meta name="description" content="A design reference"></head><body><article><h1>${title}</h1><p>${WORDS}</p></article></body></html>`; } });
 
 function fixtures() {
     const sourceFetch = async (url) => {
@@ -128,7 +130,7 @@ async function waitForRun(h, id, tok, tries = 120) {
         const done = await waitFor(h, id, exchange, ['succeeded', 'failed', 'cancelled']);
         assert.strictEqual(done.status, 'succeeded', JSON.stringify(done.error));
         assert.strictEqual(done.progress, 1);
-        assert.strictEqual(done.steps.length, 7);
+        assert.strictEqual(done.steps.length, 8, 'plan, search, read (the general core), choose, capture, analyse, synthesise, report');
         assert.ok(done.steps.every((s) => s.status === 'done'), 'every step ended done');
 
         // The whole report: ai.deep-dive@1, its sources, captures, analysis, synthesis and receipt.
@@ -147,7 +149,12 @@ async function waitForRun(h, id, tok, tries = 120) {
         assert.ok(report.synthesis.patterns.length >= 1 && report.synthesis.patterns[0].evidence.length >= 1);
         assert.ok(report.recommendations.length >= 1 && report.recommendations[0].evidence.length >= 1);
         assert.ok(report.receipt.models.length >= 4, 'the receipt lists every model call');
-        for (const step of ['plan', 'choose', 'analyse', 'synthesise']) assert.ok(report.receipt.models.some((m) => m.step === step), `the receipt carries the ${step} call`);
+        for (const step of ['plan', 'read', 'choose', 'analyse', 'synthesise']) assert.ok(report.receipt.models.some((m) => m.step === step), `the receipt carries the ${step} call`);
+        // The general deep dive is its core: the write-ups read as text, with notes and an answer that cites them.
+        assert.ok(report.research && report.research.reads.some((r) => r.status === 'read'), 'the write-ups were read');
+        assert.ok(report.research.answer.summary.length > 0, 'and answered');
+        const sourceIds = new Set(report.sources.map((s) => s.id));
+        assert.ok(report.research.reads.every((r) => sourceIds.has(r.source_id)), 'every write-up read is a source the search found');
         assert.ok(report.receipt.captures_count >= 2);
         assert.deepStrictEqual(report.gaps.length >= 0, true);
 

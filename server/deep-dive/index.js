@@ -29,6 +29,7 @@ const { createSourceGatherer } = require('./sources');
 const { DEPTHS, STEPS, REPORT, PLAN_OUTPUT, CHOOSE_OUTPUT, ANALYSIS_OUTPUT, SYNTHESIS_OUTPUT } = require('./schema');
 const prompts = require('./prompts');
 const { createResearch } = require('./research');
+const { DESIGN_PUBLISHERS } = require('./sources');
 const { createReader } = require('./reader');
 
 const iso = (v) => (v ? new Date(v).toISOString() : null);
@@ -47,7 +48,10 @@ function createDeepDive({ config = {}, db, clock = { now: () => Date.now() }, lo
     const maxSources = cfg.maxSources || { quick: 40, thorough: 80, expert: 140 };
     const maxOut = cfg.maxOutputTokens || 3000;
     // The general deep dive (research.deep_dive): the same store, models and searches, pages read instead of captured.
-    const general = createResearch({ config, store, llm, sources, reader: reader || createReader({ log }), clock, log });
+    // A fetch handed in (deepDiveFetch: tests) reads the pages too, with no address or robots lookup of its own: nothing
+    // in a test reaches the internet. Production passes none and reads through the guarded fetch.
+    const pageReader = reader || createReader({ log, ...(sourceFetch ? { fetchImpl: sourceFetch, checkTarget: async () => {}, robots: { check: async () => ({ allowed: true, reason: null }) } } : {}) });
+    const general = createResearch({ config, store, llm, sources, reader: pageReader, clock, log });
 
     function depths() {
         return [
@@ -203,8 +207,35 @@ function createDeepDive({ config = {}, db, clock = { now: () => Date.now() }, lo
             if (!allSources.length) throw new AiError(502, 'source.unavailable', 'no search source answered for this question');
             row = await finishStep(row, 'search', 0.3, `${allSources.length} sources from ${new Set(allSources.map((s) => s.engine).filter(Boolean)).size} engines`);
 
+            // 2b. Read: the general deep dive's core (research.js; the owner, 11-15: the design deep dive "would leverage
+            // and use [Exchange's deep dive] for its core"). The best write-ups are read as text, noted against the
+            // plan's questions and answered with citations; the synthesis builds on that answer, and the report carries
+            // it as its research block. A write-up that cannot be read, or a model that fails, is a gap, never a stop.
+            let research = null;
+            const writeups = allSources.filter((s) => s.kind === 'web' && !/\/\/(www\.)?(github\.com|openvibe\.design)\//.test(s.url));
+            const ordered = [...writeups.filter((s) => DESIGN_PUBLISHERS.test(s.url)), ...writeups.filter((s) => !DESIGN_PUBLISHERS.test(s.url))];
+            const toRead = { quick: 3, thorough: 5, expert: 8 }[depth] || 3;
+            row = await startStep(row, 'read', `0/${Math.min(toRead, ordered.length)} write-ups`, 0.31);
+            if (ordered.length && !overBudget()) {
+                try {
+                    const questions = (plan.json.questions || []).slice(0, 9).map((q, i) => ({ key: String(q.key || `q${i + 1}`).slice(0, 40), question: String(q.question || '').replace(/\s+/g, ' ').trim().slice(0, 400) })).filter((q) => q.question);
+                    const chosenPages = ordered.slice(0, toRead + 2).map((s) => ({ url: s.url, title: s.title, source_id: s.id }));
+                    const target = Math.min(toRead, chosenPages.length);
+                    const got = await general.readPages({ chosen: chosenPages, target, ctx, check });
+                    if (got.readCount) {
+                        await general.notePages({ reads: got.reads, texts: got.texts, question, questions: questions.length ? questions : [{ key: 'q', question }], ctx, check, overBudget, warnings, addCall: (r) => addCall('read', r) });
+                        const { answer } = await general.answerFrom({ question, questions: questions.length ? questions : [{ key: 'q', question }], reads: got.reads, ctx, warnings, gaps, addCall: (r) => addCall('read', r) });
+                        research = { questions: questions.length ? questions : [{ key: 'q', question }], reads: got.reads.slice(0, 40), answer };
+                    } else gaps.push('No design write-up could be read; the sites alone carry this report.');
+                } catch (err) {
+                    if (err && err.code === 'run.cancelled') throw err;
+                    warnings.push(`reading the write-ups: ${String((err && err.message) || err).slice(0, 200)}`);
+                }
+            }
+            row = await finishStep(row, 'read', 0.33, research ? `${research.reads.filter((r) => r.status === 'read').length} write-ups read` : 'no write-up read');
+
             // 3. Choose
-            row = await startStep(row, 'choose', 'ranking the sites worth capturing', 0.32);
+            row = await startStep(row, 'choose', 'ranking the sites worth capturing', 0.34);
             check();
             let chosen = [];
             try {
@@ -390,7 +421,7 @@ function createDeepDive({ config = {}, db, clock = { now: () => Date.now() }, lo
             // report is assembled from the site analyses and names the missing synthesis as a gap.
             let s = null;
             try {
-                const synthCall = await llm.call({ routeKey: cfg.synthesisRoute || 'background.json', ...prompts.synthesisPrompt({ question, depth, analyses: analysis, sources: allSources, rules: gathered.rules || [], components: gathered.components || [], tokens }), schema: SYNTHESIS_OUTPUT, schemaName: 'deep_dive_synthesis', maxTokens: Math.min(5000, Math.max(4000, maxOut)), signal: ctx.signal, ctx });
+                const synthCall = await llm.call({ routeKey: cfg.synthesisRoute || 'background.json', ...prompts.synthesisPrompt({ question, depth, analyses: analysis, sources: allSources, rules: gathered.rules || [], components: gathered.components || [], tokens, research }), schema: SYNTHESIS_OUTPUT, schemaName: 'deep_dive_synthesis', maxTokens: Math.min(5000, Math.max(4000, maxOut)), signal: ctx.signal, ctx });
                 addCall('synthesise', synthCall);
                 s = synthCall.json || null;
             } catch (err) {
@@ -449,6 +480,7 @@ function createDeepDive({ config = {}, db, clock = { now: () => Date.now() }, lo
                 analysis,
                 synthesis,
                 recommendations,
+                ...(research ? { research } : {}),
                 receipt: { price_usd: price, held_usd: price, cost_usd: Math.round(cost * 1e6) / 1e6, models, captures_count: captures.filter((c) => !c.skip).length, synthetic: models.some((m) => !m.provider) },
                 gaps: [...new Set([...gaps, ...warnings])].slice(0, 40),
                 created_at: row.created_at, updated_at: nowIso, finished_at: nowIso,
