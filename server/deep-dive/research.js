@@ -161,6 +161,41 @@ function createResearch({ config = {}, store, llm, sources, reader, clock = { no
     }
 
     /** One run of the general deep dive. Returns { output, usage, cost, models } for the workflow step. */
+    /**
+     * Choose: a model picks the pages worth reading in full, with a reason each, and only from what the search found. The
+     * person's own pages come first; when too few are chosen, the search's own order fills the rest, one page per site
+     * first. Two more than the limit are kept as spares for pages that cannot be read. The general deep dive's step, and
+     * the design deep dive's read step uses it too (11-16: in search order it read Wikidata and a code file).
+     */
+    async function choosePages({ question, questions, sources: readable, limit, ctx = {}, warnings = [], addCall = () => {} }) {
+        let chosen = [];
+        try {
+            const pick = await llm.call({ routeKey: 'default.json', ...prompts.choosePagesPrompt({ question, questions, limit: limit + 2, sources: readable.slice(0, 70) }), schema: PAGES_OUTPUT, schemaName: 'research_pages', maxTokens: Math.min(1800, maxOut), signal: ctx.signal, ctx });
+            addCall(pick);
+            for (const p of (pick.json && pick.json.pages) || []) {
+                // A model may only choose what the search found: a URL that is not in the list is never read.
+                const src = readable.find((s) => same(s.url, p.url));
+                if (src && !chosen.some((c) => c.source_id === src.id)) chosen.push({ url: src.url, title: src.title, reason: oneLine(p.reason, 600), source_id: src.id });
+            }
+        } catch (err) {
+            if (err && err.code === 'run.cancelled') throw err;
+            warnings.push(`choosing: ${String((err && err.message) || err).slice(0, 200)}`);
+        }
+        for (const s of readable.filter((x) => x.kind === 'named').reverse()) if (!chosen.some((c) => c.source_id === s.id)) chosen.unshift({ url: s.url, title: s.title, reason: 'a page the person named', source_id: s.id });
+        if (chosen.length < Math.min(limit, readable.length)) {
+            const hosts = new Set(chosen.map((c) => hostOf(c.url)));
+            for (const pass of [0, 1]) {
+                for (const s of readable) {
+                    if (chosen.length >= limit + 2) break;
+                    if (chosen.some((c) => c.source_id === s.id) || (pass === 0 && hosts.has(hostOf(s.url)))) continue;
+                    hosts.add(hostOf(s.url));
+                    chosen.push({ url: s.url, title: s.title, reason: 'one of the search\'s best answers', source_id: s.id });
+                }
+            }
+        }
+        return chosen.slice(0, limit + 2);
+    }
+
     async function run({ run: theRun, input, ctx = {} }) {
         const question = oneLine(input.question, 500);
         const depth = input.depth;
@@ -211,34 +246,8 @@ function createResearch({ config = {}, store, llm, sources, reader, clock = { no
             row = await step(row, 'choose', 'running', { detail: 'picking the pages worth reading', progress: 0.22 });
             check();
             const readable = all.filter((s) => ['web', 'named', 'project'].includes(s.kind));
-            let chosen = [];
-            try {
-                const pick = await llm.call({ routeKey: 'default.json', ...prompts.choosePagesPrompt({ question, questions, limit: limit + 2, sources: readable.slice(0, 70) }), schema: PAGES_OUTPUT, schemaName: 'research_pages', maxTokens: Math.min(1800, maxOut), signal: ctx.signal, ctx });
-                addCall('choose', pick);
-                for (const p of pick.json.pages || []) {
-                    // A model may only choose what the search found: a URL that is not in the list is never read.
-                    const src = readable.find((s) => same(s.url, p.url));
-                    if (src && !chosen.some((c) => c.source_id === src.id)) chosen.push({ url: src.url, title: src.title, reason: oneLine(p.reason, 600), source_id: src.id });
-                }
-            } catch (err) {
-                if (err && err.code === 'run.cancelled') throw err;
-                warnings.push(`choosing: ${String((err && err.message) || err).slice(0, 200)}`);
-            }
-            for (const s of readable.filter((x) => x.kind === 'named').reverse()) if (!chosen.some((c) => c.source_id === s.id)) chosen.unshift({ url: s.url, title: s.title, reason: 'a page the person named', source_id: s.id });
-            // Too few chosen (or none): the search's own order fills the rest, one page per site first.
-            if (chosen.length < Math.min(limit, readable.length)) {
-                const hosts = new Set(chosen.map((c) => hostOf(c.url)));
-                for (const pass of [0, 1]) {
-                    for (const s of readable) {
-                        if (chosen.length >= limit + 2) break;
-                        if (chosen.some((c) => c.source_id === s.id) || (pass === 0 && hosts.has(hostOf(s.url)))) continue;
-                        hosts.add(hostOf(s.url));
-                        chosen.push({ url: s.url, title: s.title, reason: 'one of the search\'s best answers', source_id: s.id });
-                    }
-                }
-            }
-            // Two more than the limit are kept as spares for pages that cannot be read.
-            chosen = chosen.slice(0, limit + 2).map((c, i) => ({ ...c, id: `page_${i + 1}`, chosen: i < limit }));
+            let chosen = await choosePages({ question, questions, sources: readable, limit, ctx, warnings, addCall: (pick) => addCall('choose', pick) });
+            chosen = chosen.map((c, i) => ({ ...c, id: `page_${i + 1}`, chosen: i < limit }));
             row = await store.patch(row.id, { candidates: chosen });
             row = await step(row, 'choose', 'done', { detail: `${Math.min(limit, chosen.length)} pages`, progress: 0.26 });
 
@@ -299,7 +308,7 @@ function createResearch({ config = {}, store, llm, sources, reader, clock = { no
         }
     }
 
-    return { run, depths, priceOf, limitOf, readPages, notePages, answerFrom };
+    return { run, depths, priceOf, limitOf, choosePages, readPages, notePages, answerFrom };
 }
 
 module.exports = { createResearch };
