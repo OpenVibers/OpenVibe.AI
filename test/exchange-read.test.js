@@ -95,6 +95,9 @@ t.test('catalog groups the same model across providers, with prices, speed, upti
     assert.strictEqual(dear.cached_7d, 3);
     assert.deepStrictEqual(dear.speed, { p50_ms: 950, p95_ms: 1715 }, 'TTFT where recorded, else total');
     assert.strictEqual(dear.requests_today, 20);
+    // The rolling last day beside the week (the owner, 11-16: "1 day instead of 7 days"): the same attempts, all today.
+    assert.deepStrictEqual([dear.uptime_24h, dear.requests_24h], [0.9, 20], 'the last 24 hours, from the same attempts');
+    assert.deepStrictEqual([cheap.uptime_24h, cheap.requests_24h], [null, 0], 'no attempts in the day: unknown, not 0');
     assert.strictEqual(cheap.uptime, null, 'no data is unknown, not 0');
     assert.strictEqual(cheap.requests_7d, 0);
     assert.deepStrictEqual(cheap.speed, { p50_ms: null, p95_ms: null });

@@ -25,6 +25,10 @@
  * samples: 20 real attempts in the window. Below that both are null while `requests_7d` still says how
  * many attempts there were. No samples means null, not 0.
  * Nothing here is per person, and neither a prompt nor an answer is read.
+ *
+ * Beside the week, the last 24 hours (rolling, not the UTC day): `uptime_24h` and `requests_24h` (the owner, 11-16: "add 1
+ * day's errors, like 1 day instead of 7 days"). gpt-5-nano answered empty on half its calls from 11-10 to 11-13 and none
+ * since; its week read 50.6% while its day read 99%. The day says how it is now; the week still says what happened.
  */
 const DAY_MS = 86400000;
 const MIN_SAMPLES = 20;
@@ -136,16 +140,17 @@ function createObserved({ db, clock = { now: () => Date.now() } }) {
         const span = Math.max(1, Number(days) || 7);
         const from = new Date(now - span * DAY_MS).toISOString();
         const to = new Date(now).toISOString();
-        const [attempts, cached, latencies, tokens] = await Promise.all([
-            attemptRows.all(from, to), cachedRows.all(from, to), latencyRows.all(from, to), tokenRows.all(from, to),
+        const from24 = new Date(now - DAY_MS).toISOString();
+        const [attempts, cached, latencies, tokens, attempts24] = await Promise.all([
+            attemptRows.all(from, to), cachedRows.all(from, to), latencyRows.all(from, to), tokenRows.all(from, to), attemptRows.all(from24, to),
         ]);
-        return { from, to, today: dayOf(now), runs: [...attempts, ...cached], latencies, tokens };
+        return { from, to, today: dayOf(now), runs: [...attempts, ...cached], runs24: attempts24, latencies, tokens };
     }
 
     return { read };
 }
 
-const EMPTY = () => ({ succeeded: 0, failed: 0, cached: 0, succeeded_today: 0, failed_today: 0, cached_today: 0, tokens_in: 0, tokens_cached: 0, p50: null, p95: null });
+const EMPTY = () => ({ succeeded: 0, failed: 0, cached: 0, succeeded_today: 0, failed_today: 0, cached_today: 0, succeeded_24h: 0, failed_24h: 0, tokens_in: 0, tokens_cached: 0, p50: null, p95: null });
 
 /**
  * Fold the measured rows into the catalog's offers. `drafts` are `{ providerKey, modelKey, offer }`,
@@ -181,6 +186,15 @@ function fold(observed, drafts) {
             else if (row.status === 'cached') s.cached_today += n;
         }
     }
+    // The rolling last day, from the same attempt rows over the last 24 hours.
+    for (const row of observed.runs24 || []) {
+        const d = pick(row.provider_key, row.model_key);
+        if (!d) continue;
+        const s = stats.get(d);
+        const n = Number(row.n) || 0;
+        if (row.status === 'succeeded') s.succeeded_24h += n;
+        else if (row.status === 'failed') s.failed_24h += n;
+    }
     const samples = new Map(drafts.map((d) => [d, []]));
     for (const row of observed.latencies) {
         const d = pick(row.provider_key, row.model_key);
@@ -211,6 +225,9 @@ function fold(observed, drafts) {
         d.offer.uptime = enough ? s.succeeded / real : null;
         d.offer.requests_7d = real;
         d.offer.requests_today = s.succeeded_today + s.failed_today;
+        const real24 = s.succeeded_24h + s.failed_24h;
+        d.offer.uptime_24h = real24 >= MIN_SAMPLES ? s.succeeded_24h / real24 : null;
+        d.offer.requests_24h = real24;
         d.offer.cached_7d = s.cached;
         d.offer.cached_today = s.cached_today;
         // The share of the prompt tokens these attempts reported that the provider served from its own prompt cache
