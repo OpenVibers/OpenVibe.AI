@@ -120,7 +120,7 @@ function rightsOf(engine, license, r = {}) {
     return { ...claimed, family: 'unknown' };
 }
 
-function normalize(rows, engine, kind, b) {
+function normalize(rows, engine, kind, b, adapter = null) {
     const imageKind = kind !== 'web';
     let out = rows
         .map((r, i) => ({
@@ -147,7 +147,12 @@ function normalize(rows, engine, kind, b) {
         if (b.format) out = out.filter(r => r.format === b.format || new URL(r.url).pathname.toLowerCase().endsWith('.' + b.format));
         if (b.orientation) out = out.filter(r => r.width && r.height && (b.orientation === 'square' ? r.width === r.height : b.orientation === 'portrait' ? r.height > r.width : r.width > r.height));
         if (b.size) out = out.filter(r => r.width && r.height && (b.size === 'small' ? Math.max(r.width, r.height) < 800 : b.size === 'medium' ? Math.max(r.width, r.height) >= 800 && Math.max(r.width, r.height) < 2000 : Math.max(r.width, r.height) >= 2000));
-        if (b.after) out = out.filter(r => (r.published || r.indexed_on) && Date.parse(r.published || r.indexed_on) >= Date.parse(b.after));
+        // An engine that dates its own results (SearXNG's time range, Google's qdr) already kept only the recent ones, and
+        // web images carry no date of their own: filtering them again here dropped every one (a design deep dive's image
+        // sheets, 11-16). Only a local 'after' filters here.
+        const nativeAfter = adapter && adapter.filters && adapter.filters.after === 'native';
+        if (b.after && !nativeAfter) out = out.filter(r => (r.published || r.indexed_on) && Date.parse(r.published || r.indexed_on) >= Date.parse(b.after));
+        if (b.after && nativeAfter) out = out.filter(r => !(r.published || r.indexed_on) || !(Date.parse(r.published || r.indexed_on) < Date.parse(b.after)));
         if (b.type === 'vector') out = out.filter(r => r.format === 'svg' || new URL(r.url).pathname.toLowerCase().endsWith('.svg'));
         if (b.type === 'photo') out = out.filter(r => ['unsplash', 'pexels', 'pixabay'].includes(engine) || r.type === 'photo');
         if (b.type === 'illustration') out = out.filter(r => r.type === 'illustration');
@@ -467,7 +472,7 @@ function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () =>
                 const costNano = reported != null ? rateCards.nanoOfCost(reported)
                     : c.card ? rateCards.settle(c.card, rateCards.unitsUsed(c.card, { results: (rows || []).length }))
                         : (c.estimateNano == null ? 0n : c.estimateNano);
-                const results = plan.kind === 'fetch' ? null : normalize(rows, c.a.id, plan.kind, plan.b);
+                const results = plan.kind === 'fetch' ? null : normalize(rows, c.a.id, plan.kind, plan.b, c.a);
                 const rec = receipt(plan, c.a.id, costNano + incurredNano, start, [...attempts, attempt(c, 'ok', attemptStart, rateCards.usdOf(costNano))], c.a.class, c.card, c.ceilingNano, kept ? { hit: false } : null);
                 const out = plan.kind === 'fetch'
                     ? { url: plan.b.url, text: String(raw.text || '').slice(0, 200000), receipt: rec }
