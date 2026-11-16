@@ -34,6 +34,8 @@ function normalize(trust) {
         passkey: trust.passkey === true,
         linked_accounts: numberOf(trust.linked_accounts, 100),
         active_30d: trust.active_30d === true,
+        // The account's rank (Network 2026-11-16): the allowance grows with it (trust.js RANK_FACTORS). Only a known one.
+        rank: ['owner', 'admin', 'global_mod', 'streamer', 'user'].includes(trust.rank) ? trust.rank : 'user',
     };
 }
 

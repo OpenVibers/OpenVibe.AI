@@ -117,6 +117,34 @@ t.test('a hosting ASN is the new tier and a lower rate whatever Network says', a
     assert.strictEqual(home.allowance, 1000);
 });
 
+t.test('the owner is never refused for the daily allowance, from any network; a user still is (the owner\'s 402, 11-16)', async () => {
+    await clear();
+    const dir = tmpDir();
+    const v4 = path.join(dir, 'ip2asn-v4.tsv');
+    fs.writeFileSync(v4, '5.0.0.0\t5.255.255.255\t64500\tDE\tExample Hosting GmbH\n');
+    const rankOf = { [USER(1)]: 'owner', [USER(2)]: 'user' };
+    const fetchImpl = async (url) => {
+        const id = decodeURIComponent(/subject_id=([^&]+)/.exec(url)[1]);
+        return { ok: true, status: 200, json: async () => ({ subject: { type: 'user', id }, trust: { account_age_hours: 900, account_age_days: 37, verified: true, verified_by: ['passkey'], passkey: true, linked_accounts: 1, active_30d: true, rank: rankOf[id] } }) };
+    };
+    const abuse = make({ AI_ABUSE_NETWORK: '1', AI_IP2ASN_V4: v4, AI_IP2ASN_V6: '' }, { fetchImpl, tokens: { getToken: async () => 'service-token' } });
+    const exchange = { subject: { type: 'service', id: 'exchange' } };
+    const as = (n) => ({ principal: exchange, ctx: { requesterType: 'service', requesterId: 'exchange', onBehalfOf: USER(n) }, request: { explicitIp: '5.1.2.3', deviceHash: device(abuse, `rank-${n}`) }, free: true });
+    // Exchange calls from a data-centre address (the server's own): the owner's run is admitted with no cap.
+    const owner = await abuse.admit(as(1));
+    assert.strictEqual(owner.exempt, 'rank');
+    assert.strictEqual(owner.tier, 'owner');
+    await abuse.record({ admission: owner, tokens: 6414, inputHash: 'o1' });
+    const again = await abuse.admit(as(1));
+    assert.strictEqual(again.exempt, 'rank', 'still admitted after a day\'s worth of tokens');
+    // A plain account in the same place is still the new tier and is refused once its quarter is spent.
+    const user = await abuse.admit(as(2));
+    assert.strictEqual(user.tier, 'new');
+    assert.strictEqual(user.exempt, undefined);
+    await abuse.record({ admission: user, tokens: 300, inputHash: 'u1' });
+    await assert.rejects(() => abuse.admit(as(2)), (err) => err.status === 402 && err.code === 'ai.allowance_spent');
+});
+
 t.test('the rate limit is per device and per ASN; the hosting rate is lower', async () => {
     await clear();
     const abuse = make({ AI_ABUSE_RATE_PER_MIN: '2', AI_ABUSE_HOSTING_RATE_PER_MIN: '1' });

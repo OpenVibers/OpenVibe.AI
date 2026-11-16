@@ -181,6 +181,8 @@ function load(env = process.env) {
             enabled: bool(env.AI_ABUSE, true),
             // The full (verified) daily allowance in free tokens: input + output. Zero switches the free allowance off.
             dailyTokens: Math.max(0, int(env.AI_FREE_DAILY_TOKENS, 20000)),
+            // The allowance by rank (server/abuse/trust.js RANK_FACTORS): JSON, e.g. {"owner":"unlimited","admin":50}.
+            rankFactors: String(env.AI_FREE_RANK_FACTORS || '').trim(),
             // Network's trust signals (server/abuse/network.js). Off in tests unless a test opts in.
             network: bool(env.AI_ABUSE_NETWORK, nodeEnv !== 'test'),
             signalsTtlMs: Math.max(1000, int(env.AI_ABUSE_SIGNALS_TTL_MS, 300000)),

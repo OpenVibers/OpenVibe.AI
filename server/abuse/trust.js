@@ -26,6 +26,29 @@ const TIERS = Object.freeze({
     verified: Object.freeze({ factor: 1, label: 'Verified account' }),
 });
 
+// The daily allowance grows with rank (2026-11-16; the owner, after their own Actor task met the free allowance: "owner
+// rank should be able to use more tokens per day"). Network's trust facts carry `rank` (owner, admin, global_mod,
+// streamer, user). A factor multiplies the verified allowance; 'unlimited' lifts the daily cap (the rate limits still
+// apply). Staff ranks are trusted whatever network they call from; a streamer's factor applies on top of their tier.
+// AI_FREE_RANK_FACTORS overrides these, e.g. {"owner":"unlimited","admin":50,"streamer":3}.
+const RANK_FACTORS = Object.freeze({ owner: 'unlimited', admin: 'unlimited', global_mod: 10, streamer: 2, user: 1 });
+const STAFF = new Set(['owner', 'admin', 'global_mod']);
+
+/** The rank factors in force: the defaults with a JSON override from the config (bad entries are ignored). */
+function rankFactors(override) {
+    const out = { ...RANK_FACTORS };
+    let o = override;
+    if (typeof o === 'string' && o.trim()) { try { o = JSON.parse(o); } catch { o = null; } }
+    if (o && typeof o === 'object') {
+        for (const [rank, v] of Object.entries(o)) {
+            if (!Object.prototype.hasOwnProperty.call(RANK_FACTORS, rank)) continue;
+            if (v === 'unlimited') out[rank] = 'unlimited';
+            else if (Number.isFinite(Number(v)) && Number(v) >= 0) out[rank] = Number(v);
+        }
+    }
+    return out;
+}
+
 /** A whole, non-negative token count; anything unusable becomes 0. */
 function tokensOf(value) {
     const n = Math.floor(Number(value));
@@ -42,9 +65,17 @@ function tokensOf(value) {
  *
  * → { tier, allowance, base, kudos_bonus, reasons, hosting }
  */
-function tierFor({ signals = null, kudos = 0, hosting = false, base = 0 } = {}) {
+function tierFor({ signals = null, kudos = 0, hosting = false, base = 0, factors = null } = {}) {
     const full = tokensOf(base);
     const reasons = [];
+    const rank = signals && signals.available && typeof signals.rank === 'string' ? signals.rank : 'user';
+    const byRank = rankFactors(factors);
+    const rankFactor = Object.prototype.hasOwnProperty.call(byRank, rank) ? byRank[rank] : 1;
+    if (STAFF.has(rank)) {
+        // Staff: trusted from any network. Unlimited lifts the daily cap; a number multiplies the full allowance.
+        if (rankFactor === 'unlimited') return { tier: rank, allowance: null, unlimited: true, base: full, kudos_bonus: 0, reasons: [`${rank}: no daily cap`], hosting: Boolean(hosting), rank };
+        return { tier: rank, allowance: Math.floor(full * rankFactor), unlimited: false, base: full, kudos_bonus: 0, reasons: [`${rank}: ${rankFactor}× the full allowance`], hosting: Boolean(hosting), rank };
+    }
     let tier;
     if (hosting) {
         tier = 'new';
@@ -67,8 +98,13 @@ function tierFor({ signals = null, kudos = 0, hosting = false, base = 0 } = {}) 
         allowance += kudosBonus;
         reasons.push(`kudos add ${kudosBonus} tokens`);
     }
+    if (rank === 'streamer' && rankFactor !== 1) {
+        if (rankFactor === 'unlimited') return { tier, allowance: null, unlimited: true, base: full, kudos_bonus: kudosBonus, reasons: [...reasons, 'streamer: no daily cap'], hosting: Boolean(hosting), rank };
+        allowance = Math.floor(allowance * rankFactor);
+        reasons.push(`streamer: ${rankFactor}×`);
+    }
     if (!full) reasons.push('the free allowance is switched off (AI_FREE_DAILY_TOKENS=0)');
-    return { tier, allowance, base: full, kudos_bonus: kudosBonus, reasons, hosting: Boolean(hosting) };
+    return { tier, allowance, unlimited: false, base: full, kudos_bonus: kudosBonus, reasons, hosting: Boolean(hosting), rank };
 }
 
 /** The lower request rate a hosting ASN gets, whatever the account says (server/abuse/index.js). */
@@ -76,4 +112,4 @@ function rateFor({ hosting = false, normal = 60, hostingRate = 20 } = {}) {
     return hosting ? Math.max(1, Math.floor(Number(hostingRate) || 0)) : Math.max(1, Math.floor(Number(normal) || 0));
 }
 
-module.exports = { TIERS, HOUR, DAY, tierFor, rateFor, tokensOf };
+module.exports = { TIERS, HOUR, DAY, tierFor, rateFor, tokensOf, rankFactors, RANK_FACTORS };
