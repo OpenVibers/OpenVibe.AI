@@ -16,6 +16,8 @@
  * returns the answer and what it cost. Everything here needs ai.provider.manage; Network's service
  * token holds it.
  */
+const trust = require('../abuse/trust');
+const { FREE_RANKS } = require('../settings');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -332,6 +334,7 @@ function setupRouter({ config = {}, db, registry, pool = null, runs = null, auth
             decisions: settings && settings.decisions ? settings.decisions.values() : null,
             decision_kinds: KINDS,
             free: await freeOf(),
+            allowances: allowancesOf(),
             defaults: steps.map((s) => ({
                 id: s.id, name: s.name, route: s.route, current: s.current, options: s.options,
                 estimated_month_usd: s.estimated_month_usd, month_usd: s.month_usd, calls_30d: s.spend.calls_30d,
@@ -340,7 +343,47 @@ function setupRouter({ config = {}, db, registry, pool = null, runs = null, auth
         };
     }
 
+    /**
+     * The free AI each rank gets a day (2026-11-16): the verified allowance in tokens, and each rank's factor in force
+     * (code default, AI_FREE_RANK_FACTORS, then the owner's own), with whether the owner set it here.
+     */
+    function allowancesOf() {
+        const abuse = (config && config.abuse) || {};
+        const set = abuse.rankFactorsSet || {};
+        let fromEnv = abuse.rankFactors;
+        if (typeof fromEnv === 'string') { try { fromEnv = fromEnv.trim() ? JSON.parse(fromEnv) : {}; } catch { fromEnv = {}; } }
+        const inForce = trust.rankFactors({ ...(fromEnv || {}), ...set });
+        const base = Math.max(0, Math.floor(Number(abuse.dailyTokens) || 0));
+        return {
+            daily_tokens: base,
+            ranks: FREE_RANKS.map(([rank, label]) => {
+                const f = inForce[rank];
+                return { rank, label, factor: f, set: Object.prototype.hasOwnProperty.call(set, rank), tokens_per_day: f === 'unlimited' ? null : Math.floor(base * Number(f)) };
+            }),
+        };
+    }
+
     r.get('/api/v1/setup', read, wrap(async () => await state()));
+
+    // The free AI by rank (ai.free): { owner: 'unlimited', admin: 50, streamer: 3, user: 1 }; null clears a rank back
+    // to its default.
+    r.put('/api/v1/setup/allowances', write, wrap(async (req) => {
+        if (!settings || !settings.free) throw new AiError(503, 'config.unavailable', 'the free AI settings are not ready');
+        const b = body(req);
+        const current = settings.free.values();
+        const next = { ...current };
+        for (const [rank] of FREE_RANKS) {
+            if (!Object.prototype.hasOwnProperty.call(b, rank)) continue;
+            const v = b[rank];
+            if (v === null) { delete next[`rank_${rank}`]; continue; }
+            if (v === 'unlimited') { next[`rank_${rank}`] = 'unlimited'; continue; }
+            const n = Number(v);
+            if (!Number.isFinite(n) || n < 0 || n > 9999) throw new AiError(422, 'setup.invalid', `${rank}: unlimited, or a factor from 0 to 9999`);
+            next[`rank_${rank}`] = String(Math.round(n * 100) / 100);
+        }
+        await settings.free.store.apply(next, { actor: { type: 'service', id: 'network' }, reason: 'free AI by rank (the guided setup)' });
+        return { ok: true, allowances: allowancesOf() };
+    }));
 
     // The pictures each person may make a day: the picture task's daily cap, everything else in its setting kept.
     r.put('/api/v1/setup/free/pictures', write, wrap(async (req) => {

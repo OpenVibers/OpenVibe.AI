@@ -168,4 +168,27 @@ t.test('no key is required for the keyless steps', async () => {
     assert.ok(whisper.auth_mode === 'none');
 });
 
+t.test('free AI by rank: shown, set by the owner, applied live, cleared back (2026-11-16)', async () => {
+    let r = await request(h.base, 'GET', '/api/v1/setup', { tok: owner });
+    const ranks = Object.fromEntries(r.body.allowances.ranks.map((x) => [x.rank, x]));
+    assert.deepStrictEqual(Object.keys(ranks), ['owner', 'admin', 'global_mod', 'streamer', 'user']);
+    assert.strictEqual(ranks.owner.factor, 'unlimited', 'the owner has no daily cap by default');
+    assert.strictEqual(ranks.owner.tokens_per_day, null);
+    assert.strictEqual(ranks.user.tokens_per_day, r.body.allowances.daily_tokens, 'everyone else: the allowance itself');
+    assert.strictEqual(ranks.streamer.set, false);
+
+    r = await request(h.base, 'PUT', '/api/v1/setup/allowances', { tok: owner, body: { streamer: 3.5, admin: 'unlimited' } });
+    assert.strictEqual(r.status, 200, r.text);
+    const now = Object.fromEntries(r.body.allowances.ranks.map((x) => [x.rank, x]));
+    assert.deepStrictEqual([now.streamer.factor, now.streamer.set, now.streamer.tokens_per_day], [3.5, true, Math.floor(r.body.allowances.daily_tokens * 3.5)]);
+    assert.strictEqual(h.config.abuse.rankFactorsSet.streamer, 3.5, 'applied to the live checks at once');
+
+    assert.strictEqual((await request(h.base, 'PUT', '/api/v1/setup/allowances', { tok: owner, body: { user: -1 } })).status, 422);
+    assert.strictEqual((await request(h.base, 'PUT', '/api/v1/setup/allowances', { tok: owner, body: { user: 'lots' } })).status, 422);
+    assert.strictEqual((await request(h.base, 'PUT', '/api/v1/setup/allowances', { tok: reader, body: { user: 2 } })).status, 403, 'owner only');
+
+    r = await request(h.base, 'PUT', '/api/v1/setup/allowances', { tok: owner, body: { streamer: null } });
+    assert.strictEqual(Object.fromEntries(r.body.allowances.ranks.map((x) => [x.rank, x])).streamer.factor, 2, 'cleared back to its default');
+});
+
 t.run();
