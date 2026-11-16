@@ -23,6 +23,8 @@ function requestFor(hosts, fetchImpl = guardedFetch) {
 const post = (body, headers = {}) => ({ method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) });
 const bearer = (key) => ({ authorization: `Bearer ${key}` });
 const query = (base, params) => base + '?' + new URLSearchParams(Object.entries(params).filter(([, v]) => v != null));
+/** An images 'after' date as the nearest time range an engine knows: day, week, month or year (null: older). */
+const recencyOf = (after, now = Date.now()) => { const t = Date.parse(String(after || '')); if (!Number.isFinite(t)) return null; const d = (now - t) / 86400000; return d <= 1.5 ? 'day' : d <= 8 ? 'week' : d <= 32 ? 'month' : d <= 367 ? 'year' : null; };
 const since = (freshness, now = Date.now()) => new Date(now - ({ day: 1, month: 30, year: 365 }[freshness] || 0) * 86400000).toISOString();
 const web = (r, snippet = r.snippet, published = r.published) => ({ title: String(r.title || ''), url: r.url, snippet: String(snippet || ''), published: published == null ? null : String(published) });
 // Remote readers must pass the same public-address rule before receiving a target URL.
@@ -34,4 +36,4 @@ async function publicTarget(input) {
     await new Promise((resolve, reject) => safeLookup(url.hostname, { all: true }, (e) => e ? reject(e) : resolve()));
     return url.href;
 }
-module.exports = { requestFor, post, bearer, query, since, web, publicTarget };
+module.exports = { requestFor, post, bearer, query, since, web, publicTarget, recencyOf };

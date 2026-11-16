@@ -142,6 +142,10 @@ t.test('the offer hours are checked by the router too, in the owner time zone', 
     assert.ok(!withinHours({ hours: h }, at('2026-11-06T02:00:00Z')));
     assert.ok(withinHours({ hours: { start: '22:00', end: '06:00', tz: 'UTC' } }, at('2026-11-06T23:00:00Z')), 'overnight wraps');
     assert.ok(!withinHours({ hours: { start: '22:00', end: '06:00', tz: 'UTC' } }, at('2026-11-06T12:00:00Z')));
+    // "00:00 to 23:59" is the whole day: its last minute too (CI once ran at 23:59 UTC and found the endpoint shut).
+    assert.ok(withinHours({ hours: { start: '00:00', end: '23:59', tz: 'UTC' } }, at('2026-11-06T23:59:30Z')), 'the last minute of the day');
+    assert.ok(withinHours({ hours: { start: '18:00', end: '23:59', tz: 'UTC' } }, at('2026-11-06T23:59:30Z')));
+    assert.ok(!withinHours({ hours: { start: '09:00', end: '17:00', tz: 'UTC' } }, at('2026-11-06T17:00:30Z')), 'any other end is the minute it closes');
     assert.ok(withinHours({ hours: { start: '00:00', end: '00:00', tz: 'UTC' } }, at('2026-11-06T12:00:00Z')), 'start == end is all day');
 });
 

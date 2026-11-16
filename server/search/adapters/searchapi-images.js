@@ -1,5 +1,5 @@
 'use strict';
-const { requestFor, query } = require('../transport');
+const { requestFor, query, recencyOf } = require('../transport');
 const { imageRow } = require('../image-row');
 
 const ENGINES = { google: 'google_images', bing: 'bing_images', yandex: 'yandex_images' };
@@ -15,7 +15,7 @@ module.exports = {
     upstreams: ['google', 'bing', 'yandex'],
     filters: {
         license: 'unsupported', commercial: 'unsupported', format: 'local', orientation: 'local',
-        size: 'local', color: 'unsupported', after: 'unsupported', type: 'local', safe_search: 'unsupported',
+        size: 'local', color: 'unsupported', after: 'native', type: 'local', safe_search: 'unsupported',
     },
     async search(b, { fetchImpl, key }) {
         const upstream = b.upstream || 'google';
@@ -23,6 +23,7 @@ module.exports = {
         if (!engine) throw new Error('Unsupported SearchAPI upstream');
         const out = await requestFor(this.hosts, fetchImpl)(query('https://www.searchapi.io/api/v1/search', {
             engine, q: b.q, num: Math.min(b.limit, 100), api_key: key,
+            ...(recencyOf(b.after) ? { time_period: `last_${recencyOf(b.after)}` } : {}),
         }));
         return (out.images_results || []).map((r, i) => imageRow(r, {
             index: i, upstream, source_page: r.link,

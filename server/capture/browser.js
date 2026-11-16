@@ -156,7 +156,7 @@ function createBrowserEngine({ config, log = console, allowLocal = false } = {})
      * One URL, light and (when the site supports it) dark, at both viewports. upload: async ({bytes, mime,
      * filename, owner, metadata}) -> { media_id }. Returns { title, final_url, combos: [...], warnings }.
      */
-    async function captureSite({ url, runId, owner, upload, signal = null, extras = false, log: logFn = log }) {
+    async function captureSite({ url, runId, owner, upload, signal = null, extras = false, log: logFn = log, viewports = null, themes = null }) {
         const started = Date.now();
         const out = { title: null, final_url: null, combos: [], warnings: [], ms: 0 };
         if (!available()) throw Object.assign(new Error(`headless Chrome is not at ${chrome}`), { code: 'capture.no_chrome' });
@@ -179,8 +179,12 @@ function createBrowserEngine({ config, log = console, allowLocal = false } = {})
             const base = { runId, owner, sourceUrl: url, capturedAt };
             const schemes = ['light'];
             if ((await looksDark(browser, url, proxyInfo.url, Math.min(20000, pageBudgetMs), log))) schemes.push('dark');
-            for (const viewport of [VIEWPORTS.phone, VIEWPORTS.desktop]) {
-                for (const theme of schemes) {
+            // The viewports and themes the deep dive asked for (both by default; a theme the site does not change for is
+            // never shot twice).
+            const wantViews = Array.isArray(viewports) && viewports.length ? [VIEWPORTS.phone, VIEWPORTS.desktop].filter((v) => viewports.includes(v)) : [VIEWPORTS.phone, VIEWPORTS.desktop];
+            const wantThemes = Array.isArray(themes) && themes.length ? schemes.filter((t) => themes.includes(t)) : schemes;
+            for (const viewport of wantViews) {
+                for (const theme of (wantThemes.length ? wantThemes : ['light'])) {
                     if (signal && signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'run.cancelled' });
                     comboDeadline = deadline(pageBudgetMs);
                     const ctx = await browser.newContext({

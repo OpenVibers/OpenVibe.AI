@@ -101,8 +101,9 @@ function withinHours(offer, now = Date.now()) {
     } catch { return false; }
     const minute = Number(clock.slice(0, 2)) * 60 + Number(clock.slice(3, 5));
     const start = Number(h.start.slice(0, 2)) * 60 + Number(h.start.slice(3, 5));
-    const end = Number(h.end.slice(0, 2)) * 60 + Number(h.end.slice(3, 5));
-    if (start === end) return true;
+    // 23:59 is the end of the day: "00:00 to 23:59" is open all day, its last minute included.
+    const end = h.end === '23:59' ? 1440 : Number(h.end.slice(0, 2)) * 60 + Number(h.end.slice(3, 5));
+    if (start === end || (start === 0 && end === 1440)) return true;
     return start < end ? minute >= start && minute < end : minute >= start || minute < end;
 }
 

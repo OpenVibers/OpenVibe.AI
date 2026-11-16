@@ -31,6 +31,7 @@ const prompts = require('./prompts');
 const { createResearch } = require('./research');
 const { DESIGN_PUBLISHERS } = require('./sources');
 const { createReader } = require('./reader');
+const { createSheets } = require('./sheets');
 
 const iso = (v) => (v ? new Date(v).toISOString() : null);
 const oneLine = (s, n) => String(s == null ? '' : s).replace(/\s+/g, ' ').trim().slice(0, n);
@@ -52,6 +53,8 @@ function createDeepDive({ config = {}, db, clock = { now: () => Date.now() }, lo
     // in a test reaches the internet. Production passes none and reads through the guarded fetch.
     const pageReader = reader || createReader({ log, ...(sourceFetch ? { fetchImpl: sourceFetch, checkTarget: async () => {}, robots: { check: async () => ({ allowed: true, reason: null }) } } : {}) });
     const general = createResearch({ config, store, llm, sources, reader: pageReader, clock, log });
+    // Image search a page at a time (sheets.js); a fetch handed in (tests) draws the thumbnails too.
+    const sheets = createSheets({ search, mediaStore, fetcher, llm, log, now: () => clock.now(), ...(sourceFetch ? { fetchImpl: sourceFetch, checkTarget: async () => {} } : {}) });
 
     function depths() {
         return [
@@ -165,7 +168,13 @@ function createDeepDive({ config = {}, db, clock = { now: () => Date.now() }, lo
         if (input && input.kind === 'research') return general.run({ run, input, ctx });
         const question = oneLine(input.question, 500);
         const depth = input.depth;
-        const siteLimit = limitOf(depth);
+        // Fully configurable (11-15): every option has the depth's default.
+        const opts = (input && input.options && typeof input.options === 'object') ? input.options : {};
+        const siteLimit = Math.max(1, Math.min(limitOf(depth), Number(opts.sites) || limitOf(depth)));
+        const wantExtras = depth === 'expert' || opts.extras === true;
+        const shotViews = Array.isArray(opts.viewports) && opts.viewports.length ? opts.viewports : null;
+        const shotThemes = Array.isArray(opts.themes) && opts.themes.length ? opts.themes : null;
+        const imageOpts = (opts.images && typeof opts.images === 'object') ? opts.images : {};
         const price = priceOf(depth);
         const owner = run && run.on_behalf_of ? (typeof run.on_behalf_of === 'string' ? JSON.parse(run.on_behalf_of) : run.on_behalf_of) : null;
         const runId = run.id;
@@ -214,9 +223,9 @@ function createDeepDive({ config = {}, db, clock = { now: () => Date.now() }, lo
             let research = null;
             const writeups = allSources.filter((s) => s.kind === 'web' && !/\/\/(www\.)?(github\.com|openvibe\.design)\//.test(s.url));
             const ordered = [...writeups.filter((s) => DESIGN_PUBLISHERS.test(s.url)), ...writeups.filter((s) => !DESIGN_PUBLISHERS.test(s.url))];
-            const toRead = { quick: 3, thorough: 5, expert: 8 }[depth] || 3;
+            const toRead = opts.writeups != null ? Math.max(0, Math.min(12, Number(opts.writeups) || 0)) : ({ quick: 3, thorough: 5, expert: 8 }[depth] || 3);
             row = await startStep(row, 'read', `0/${Math.min(toRead, ordered.length)} write-ups`, 0.31);
-            if (ordered.length && !overBudget()) {
+            if (toRead > 0 && ordered.length && !overBudget()) {
                 try {
                     const questions = (plan.json.questions || []).slice(0, 9).map((q, i) => ({ key: String(q.key || `q${i + 1}`).slice(0, 40), question: String(q.question || '').replace(/\s+/g, ' ').trim().slice(0, 400) })).filter((q) => q.question);
                     const chosenPages = ordered.slice(0, toRead + 2).map((s) => ({ url: s.url, title: s.title, source_id: s.id }));
@@ -279,18 +288,38 @@ function createDeepDive({ config = {}, db, clock = { now: () => Date.now() }, lo
             const captures = [];
             const capturesBySite = new Map();
             const analysisSources = [];
+            // Image search, a page at a time: each query's recent results from each image engine laid out as one sheet
+            // and read whole by a vision model (sheets.js). On by default; its queries, engines, recency and page size
+            // are the person's to choose.
+            let imageSheets = [];
+            if (imageOpts.enabled !== false && search && !overBudget()) {
+                const planned = (plan.json.searches || []).filter((x) => x && x.kind === 'images' && x.q).map((x) => x.q);
+                const queries = (Array.isArray(imageOpts.queries) && imageOpts.queries.length ? imageOpts.queries : [question, ...planned]).slice(0, 4);
+                try {
+                    row = await store.patch(row.id, { steps: await stepsWith(row, { capture: { status: 'running', detail: 'image search, a page at a time' } }) });
+                    const made = await sheets.make({ queries, engines: Array.isArray(imageOpts.engines) ? imageOpts.engines : null, recency: imageOpts.recency || 'year', perSheet: imageOpts.per_sheet || 40,
+                        maxSheets: imageOpts.sheets || ({ quick: 2, thorough: 3, expert: 4 }[depth] || 2), owner: owner && owner.id, runId, question, signal: ctx.signal, ctx, overBudget,
+                        vision: depth === 'expert' ? 'background.vision' : 'default.json', onCall: (r) => addCall('images', r),
+                        onSheet: async (list) => { imageSheets = list; row = await store.patch(row.id, { image_sheets: list }); } });
+                    imageSheets = made.sheets;
+                    for (const n of made.notes) warnings.push(`image search: ${n}`);
+                } catch (err) {
+                    if (err && err.code === 'run.cancelled') throw err;
+                    warnings.push(`image search: ${String((err && err.message) || err).slice(0, 200)}`);
+                }
+            }
             for (const [i, site] of chosen.entries()) {
                 check();
                 const sourceId = site.source_id || `src_named_${i + 1}`;
                 if (!allSources.some((s) => s.id === sourceId)) allSources.push({ id: sourceId, kind: 'named', title: site.title || hostOf(site.url), url: site.url, publisher: hostOf(site.url), engine: null, snippet: null, license: null, read_at: iso(clock.now()) });
                 const siteCaps = [];
-                const extras = depth === 'expert';
+                const extras = wantExtras;
                 try {
                     const cachedLight = (await store.cacheGet(site.url, 1280, 'light', extras)) && (await store.cacheGet(site.url, 390, 'light', extras));
-                    if (!extras && cachedLight) {
+                    if (!extras && cachedLight && !shotViews && !shotThemes) {
                         for (const c of [await store.cacheGet(site.url, 390, 'light', extras), await store.cacheGet(site.url, 1280, 'light', extras)]) if (c) siteCaps.push({ ...c, cached: true });
                     } else if (capture) {
-                        const got = await capture.captureSite({ url: site.url, runId, owner: owner && owner.id, extras, signal: ctx.signal });
+                        const got = await capture.captureSite({ url: site.url, runId, owner: owner && owner.id, extras, signal: ctx.signal, ...(shotViews ? { viewports: shotViews } : {}), ...(shotThemes ? { themes: shotThemes } : {}) });
                         if (got && got.skipped) {
                             warnings.push(`${hostOf(site.url) || site.url}: ${got.reason || got.skipped}`);
                             captures.push({ id: `cap_${captures.length + 1}`, source_id: sourceId, url: site.url, final_url: null, title: site.title || null, captured_at: iso(clock.now()), viewport: 390, theme: 'light', full_page: false, media_id: null, width: null, height: null, crops: [], dom: null, extras: null, skip: String(got.skipped === 'robots_disallowed' ? 'robots_disallowed' : got.skipped).slice(0, 200), cached: false });
@@ -421,7 +450,7 @@ function createDeepDive({ config = {}, db, clock = { now: () => Date.now() }, lo
             // report is assembled from the site analyses and names the missing synthesis as a gap.
             let s = null;
             try {
-                const synthCall = await llm.call({ routeKey: cfg.synthesisRoute || 'background.json', ...prompts.synthesisPrompt({ question, depth, analyses: analysis, sources: allSources, rules: gathered.rules || [], components: gathered.components || [], tokens, research }), schema: SYNTHESIS_OUTPUT, schemaName: 'deep_dive_synthesis', maxTokens: Math.min(5000, Math.max(4000, maxOut)), signal: ctx.signal, ctx });
+                const synthCall = await llm.call({ routeKey: cfg.synthesisRoute || 'background.json', ...prompts.synthesisPrompt({ question, depth, analyses: analysis, sources: allSources, rules: gathered.rules || [], components: gathered.components || [], tokens, research, sheets: imageSheets }), schema: SYNTHESIS_OUTPUT, schemaName: 'deep_dive_synthesis', maxTokens: Math.min(5000, Math.max(4000, maxOut)), signal: ctx.signal, ctx });
                 addCall('synthesise', synthCall);
                 s = synthCall.json || null;
             } catch (err) {
@@ -481,6 +510,7 @@ function createDeepDive({ config = {}, db, clock = { now: () => Date.now() }, lo
                 synthesis,
                 recommendations,
                 ...(research ? { research } : {}),
+                ...(imageSheets.length ? { image_sheets: imageSheets } : {}),
                 receipt: { price_usd: price, held_usd: price, cost_usd: Math.round(cost * 1e6) / 1e6, models, captures_count: captures.filter((c) => !c.skip).length, synthetic: models.some((m) => !m.provider) },
                 gaps: [...new Set([...gaps, ...warnings])].slice(0, 40),
                 created_at: row.created_at, updated_at: nowIso, finished_at: nowIso,

@@ -70,7 +70,7 @@ Every claim must follow from what is visible in this image. JSON only.`,
     };
 }
 
-function synthesisPrompt({ question, depth, analyses, sources, rules, components, tokens, research = null }) {
+function synthesisPrompt({ question, depth, analyses, sources, rules, components, tokens, research = null, sheets = [] }) {
     const siteList = analyses.map((a, i) => `${i + 1}. ${a.url} — ${clean(a.summary, 260)}`).join('\n');
     const ruleList = (rules || []).map((r) => `- ${r.id}: ${clean(r.rule, 300)} (${clean(r.area, 80)})`).join('\n') || '- (the rules register did not answer)';
     const compList = (components || []).map((c) => `- ${c.title || c.name}: ${clean(c.summary, 220)}`).join('\n') || '- (the component registry did not answer)';
@@ -84,6 +84,9 @@ ${research && research.answer && research.answer.summary ? `
 What the best write-ups on this say (read in full before the sites were chosen; use it to judge the sites, never as a site):
 ${clean(research.answer.summary, 1200)}
 ${(research.answer.key_points || []).slice(0, 8).map((k) => `- ${clean(k.text, 300)}`).join('\n')}
+` : ''}${(sheets || []).filter((x) => x.reading).length ? `
+What pages of recent image search results show (each sheet read as a whole):
+${sheets.filter((x) => x.reading).slice(0, 6).map((x) => `- "${clean(x.query, 120)}" on ${clean(x.engine, 60)}${x.recency && x.recency !== 'any' ? `, past ${x.recency}` : ''}: ${clean(x.reading, 500)}`).join('\n')}
 ` : ''}
 Their analyses (JSON; each has source_id, url, summary, strengths, weaknesses):
 ${JSON.stringify(analyses.map((a) => ({ source_id: a.source_id, url: a.url, summary: clean(a.summary, 800), first_impression: clean(a.first_impression, 500), hierarchy: clean(a.hierarchy, 500), density: clean(a.density, 400), type: clean(a.type, 400), colour: clean(a.colour, 400), motion: clean(a.motion, 300), words: clean(a.words, 300), strengths: a.strengths, weaknesses: a.weaknesses, accessibility: a.accessibility, speed: a.speed })), null, 1).slice(0, 30000)}
@@ -194,4 +197,19 @@ Cite only page numbers from the notes. JSON only.`,
     };
 }
 
-module.exports = { planPrompt, choosePrompt, domAnalysisPrompt, visionPrompt, synthesisPrompt, researchPlanPrompt, choosePagesPrompt, readPagePrompt, writePrompt };
+function sheetPrompt({ question, query, engine, recency, count }) {
+    return {
+        system: 'You are a senior visual designer reading a whole page of image search results at once, the way a designer scans a results page for what is current. You describe what you can see, never guess what you cannot. Answer only with JSON.',
+        user: `This sheet is ${count} image results for "${clean(query, 200)}" from ${clean(engine, 80)}${recency && recency !== 'any' ? `, published in the past ${recency}` : ''}, in the engine's own order, read for this design question: "${clean(question, 400)}".
+
+Read the sheet as a whole:
+- reading: 3 to 5 sentences: what dominates, what feels current, what is overused.
+- patterns: up to 8 visual patterns that recur (layout, composition, framing, UI style, imagery), each one short sentence.
+- palette: up to 8 colours or colour moods that recur (name or hex).
+- styles: up to 8 styles you see (e.g. glassmorphism, flat illustration, 3D render, editorial photo).
+- outliers: up to 6 images that stand out and why (describe by position, e.g. "row 2, third").
+JSON only: {"reading":"...","patterns":["..."],"palette":["..."],"styles":["..."],"outliers":["..."]}`,
+    };
+}
+
+module.exports = { sheetPrompt, planPrompt, choosePrompt, domAnalysisPrompt, visionPrompt, synthesisPrompt, researchPlanPrompt, choosePagesPrompt, readPagePrompt, writePrompt };

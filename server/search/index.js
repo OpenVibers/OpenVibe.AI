@@ -454,7 +454,7 @@ function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () =>
                     c.key = providerSecret(current, env) || (c.a.key_env && env[c.a.key_env]);
                     if (c.a.key_env && !c.key) { attempts.push(attempt(c, 'skipped', attemptStart, 0, 'no_credentials')); continue; }
                 }
-                const options = { fetchImpl: boundFetch, key: c.key, env: c.env, now, publicBase };
+                const options = { fetchImpl: boundFetch, key: c.key, env: c.env, now, publicBase, kind: plan.kind };
                 attempted = true;
                 const raw = plan.kind === 'fetch' ? await c.a.read(plan.b, options)
                     : plan.kind === 'reverse_image' ? await c.a.reverse(plan.b, options)

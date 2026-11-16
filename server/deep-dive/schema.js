@@ -235,6 +235,29 @@ const INPUT_SCHEMA = {
         question: { type: 'string', minLength: 1, maxLength: 500 }, depth: { enum: DEPTHS },
         // research: the general deep dive (ai.research@1, read pages); design (the default): sites captured too.
         kind: { enum: ['research', 'design'] },
+        // The design dive, fully configurable (11-15): what is captured, how many sites and write-ups, the Expert
+        // extras, and image search a page at a time (its queries, engines, recency and page size).
+        options: {
+            type: 'object', additionalProperties: false,
+            properties: {
+                viewports: { type: 'array', minItems: 1, maxItems: 2, uniqueItems: true, items: { enum: [390, 1280] } },
+                themes: { type: 'array', minItems: 1, maxItems: 2, uniqueItems: true, items: { enum: ['light', 'dark'] } },
+                sites: { type: 'integer', minimum: 1, maximum: 30 },
+                writeups: { type: 'integer', minimum: 0, maximum: 12 },
+                extras: { type: 'boolean' },
+                images: {
+                    type: 'object', additionalProperties: false,
+                    properties: {
+                        enabled: { type: 'boolean' },
+                        queries: { type: 'array', maxItems: 4, items: { type: 'string', minLength: 1, maxLength: 200 } },
+                        engines: { type: 'array', maxItems: 8, items: { type: 'string', maxLength: 40, pattern: '^[a-z0-9-]+$' } },
+                        recency: { enum: ['any', 'day', 'week', 'month', 'year'] },
+                        per_sheet: { type: 'integer', minimum: 8, maximum: 60 },
+                        sheets: { type: 'integer', minimum: 1, maximum: 8 },
+                    },
+                },
+            },
+        },
         sites: { type: 'array', maxItems: 30, items: { type: 'string', maxLength: 2048, pattern: '^https?://' } },
     },
 };
@@ -333,6 +356,28 @@ const WRITE_OUTPUT = {
     },
 };
 
+// An image search page, laid out as one sheet and read at once (sheets.js).
+const SHEET = {
+    type: 'object', additionalProperties: false, required: ['id', 'media_id', 'query', 'engine', 'recency', 'count'],
+    properties: {
+        id: STR(40), media_id: { type: 'string', pattern: '^med_[0-9A-HJKMNP-TV-Z]{26}$' }, query: STR(200), engine: STR(120),
+        recency: { enum: ['any', 'day', 'week', 'month', 'year'] }, count: { type: 'integer', minimum: 0, maximum: 60 },
+        width: { type: ['integer', 'null'], minimum: 1 }, height: { type: ['integer', 'null'], minimum: 1 },
+        sources: { type: 'array', maxItems: 60, items: { type: 'object', additionalProperties: false, properties: { url: NULLABLE(2048), page: NULLABLE(2048), title: NULLABLE(160) } } },
+        reading: NULLABLE(1500), patterns: { type: 'array', maxItems: 8, items: STR(300) }, palette: { type: 'array', maxItems: 8, items: STR(80) },
+        styles: { type: 'array', maxItems: 8, items: STR(200) }, outliers: { type: 'array', maxItems: 6, items: STR(300) },
+    },
+};
+REPORT.properties.image_sheets = { type: 'array', maxItems: 8, items: SHEET };
+const SHEET_OUTPUT = {
+    type: 'object', additionalProperties: true, required: ['reading'],
+    properties: {
+        reading: STR(1500), patterns: { type: 'array', maxItems: 8, items: STR(300) }, palette: { type: 'array', maxItems: 8, items: STR(80) },
+        styles: { type: 'array', maxItems: 8, items: STR(200) }, outliers: { type: 'array', maxItems: 6, items: STR(300) },
+    },
+};
+REPORT.properties.receipt.properties.models.items.properties.step.enum.push('images');
+
 // The design dive's research block: the general deep dive it is built on (its read step), in ai.research@1's shapes.
 REPORT.properties.research = {
     type: 'object', additionalProperties: false, required: ['questions', 'reads', 'answer'],
@@ -340,4 +385,4 @@ REPORT.properties.research = {
 };
 
 module.exports = { DEPTHS, STEPS, EVIDENCE, REPORT, INPUT_SCHEMA, PLAN_OUTPUT, CHOOSE_OUTPUT, ANALYSIS_OUTPUT, SYNTHESIS_OUTPUT,
-    RESEARCH_STEPS, RESEARCH_REPORT, READ, PAGES_OUTPUT, PAGE_READ_OUTPUT, WRITE_OUTPUT };
+    RESEARCH_STEPS, RESEARCH_REPORT, READ, PAGES_OUTPUT, PAGE_READ_OUTPUT, WRITE_OUTPUT, SHEET, SHEET_OUTPUT };

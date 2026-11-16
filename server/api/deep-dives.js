@@ -37,7 +37,7 @@ function deepDivesRouter({ config, runs, auth, deepDive, store, capture = null, 
         return {
             id: dd.id, run_id: dd.run_id, status: run && ['failed', 'cancelled', 'succeeded'].includes(run.status) && dd.status === 'running' ? run.status : dd.status,
             step: dd.step, progress: dd.progress, steps: dd.steps, question: dd.question, depth: dd.depth, site_limit: dd.site_limit,
-            price_usd: dd.price_usd, kind: dd.kind || 'design', plan: dd.plan || null, reads: dd.reads || [], candidates: dd.candidates, captures: dd.captures.map((c) => ({ id: c.id, source_id: c.source_id, url: c.url, viewport: c.viewport, theme: c.theme, captured_at: c.captured_at, skip: c.skip, cached: c.cached, crops: c.crops.map((x) => ({ id: x.id, y: x.y, height: x.height })) })),
+            price_usd: dd.price_usd, kind: dd.kind || 'design', plan: dd.plan || null, reads: dd.reads || [], image_sheets: dd.image_sheets || [], candidates: dd.candidates, captures: dd.captures.map((c) => ({ id: c.id, source_id: c.source_id, url: c.url, viewport: c.viewport, theme: c.theme, captured_at: c.captured_at, skip: c.skip, cached: c.cached, crops: c.crops.map((x) => ({ id: x.id, y: x.y, height: x.height })) })),
             report, gaps: dd.gaps, error: dd.error || (run && run.error) || null,
             owner: dd.owner, created_at: dd.created_at, updated_at: dd.updated_at, finished_at: dd.finished_at,
             holding: dd.price_usd,
@@ -73,7 +73,8 @@ function deepDivesRouter({ config, runs, auth, deepDive, store, capture = null, 
             const owned = who.subject && who.subject.type === 'service' && who.subject.id === 'exchange';
             if (!owned && !namespaceAllowed(who, workflow)) throw new AiError(403, 'capability.namespace_denied', `this token may not run ${workflow}`);
             const { idempotency_key: idem, target, attribution, on_behalf_of: obo, ...raw } = body;
-            const input = { question: String(raw.question == null ? '' : raw.question).replace(/\s+/g, ' ').trim(), depth: raw.depth, ...(kind === 'research' ? { kind } : {}), ...(Array.isArray(raw.sites) && raw.sites.length ? { sites: raw.sites.slice(0, 30) } : {}) };
+            const input = { question: String(raw.question == null ? '' : raw.question).replace(/\s+/g, ' ').trim(), depth: raw.depth, ...(kind === 'research' ? { kind } : {}), ...(Array.isArray(raw.sites) && raw.sites.length ? { sites: raw.sites.slice(0, 30) } : {}),
+                ...(kind === 'design' && raw.options && typeof raw.options === 'object' ? { options: raw.options } : {}) };
             if (obo != null && !(obo.type === 'user' && /^usr_[0-9A-HJKMNP-TV-Z]{26}$/.test(String(obo.id || '')))) throw new AiError(422, 'input.invalid', 'on_behalf_of must be a user subject');
             const schema = require('../schemas').validate(INPUT_SCHEMA, input);
             if (!schema.valid) throw new AiError(422, 'input.invalid', `a deep dive needs ${schema.errors.map((e) => `${e.path} ${e.message}`).join('; ')}`);
@@ -119,7 +120,7 @@ function deepDivesRouter({ config, runs, auth, deepDive, store, capture = null, 
             const { dd, run } = await owned(req, req.params.id);
             const s = stateOf(dd, run);
             res.set('Cache-Control', 'no-store');
-            res.json({ deep_dive: { id: s.id, run_id: s.run_id, kind: s.kind, status: s.status, step: s.step, progress: s.progress, steps: s.steps, plan: s.plan, reads: s.reads, candidates: s.candidates, captures: s.captures, gaps: s.gaps, error: s.error, updated_at: s.updated_at, finished_at: s.finished_at } });
+            res.json({ deep_dive: { id: s.id, run_id: s.run_id, kind: s.kind, status: s.status, step: s.step, progress: s.progress, steps: s.steps, plan: s.plan, reads: s.reads, image_sheets: s.image_sheets, candidates: s.candidates, captures: s.captures, gaps: s.gaps, error: s.error, updated_at: s.updated_at, finished_at: s.finished_at } });
         } catch (err) { sendError(res, err, req.ov, log); }
     });
 
@@ -160,7 +161,8 @@ function deepDivesRouter({ config, runs, auth, deepDive, store, capture = null, 
         try {
             const { dd } = await owned(req, req.params.id);
             const cap = (dd.captures || []).find((c) => c.id === req.params.shot || (c.crops || []).some((x) => x.id === req.params.shot));
-            const id = cap && cap.id === req.params.shot ? cap.media_id : cap && cap.crops.find((x) => x.id === req.params.shot).media_id;
+            const sheet = (dd.image_sheets || []).find((x) => x && x.id === req.params.shot);
+            const id = sheet ? sheet.media_id : cap && cap.id === req.params.shot ? cap.media_id : cap && cap.crops.find((x) => x.id === req.params.shot).media_id;
             if (!id) throw new AiError(404, 'deep_dive.shot_not_found', 'no such screenshot');
             if (!mediaStore || typeof mediaStore.bytes !== 'function') throw new AiError(503, 'media.unavailable', 'Media is not configured on this service');
             let got;

@@ -48,13 +48,13 @@ function fakeCapture({ delayMs = 0, calls = [] } = {}) {
     return {
         calls,
         available: () => true,
-        async captureSite({ url, extras, signal }) {
-            calls.push({ url, at: Date.now() });
+        async captureSite({ url, extras, signal, viewports = null, themes = null }) {
+            calls.push({ url, at: Date.now(), viewports, themes, extras });
             if (delayMs) await new Promise((resolve) => { const t = setTimeout(resolve, delayMs); if (signal) signal.addEventListener('abort', () => { clearTimeout(t); resolve(); }, { once: true }); });
             if (signal && signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'run.cancelled' });
             n += 1;
             const combos = [];
-            for (const viewport of [390, 1280]) {
+            for (const viewport of [390, 1280].filter((v) => !viewports || viewports.includes(v))) {
                 const extrasData = extras && viewport === 1280
                     ? { a11y: { violations: [{ id: 'button-name', impact: 'critical', help: 'Buttons must have an accessible name', nodes: 1 }], passes: 5 }, metrics: { lcp_ms: 1200, cls: 0.02, inp_ms: 90, long_tasks: 2 }, menus: [], frames: [] }
                     : null;
@@ -193,6 +193,27 @@ async function waitForRun(h, id, tok, tries = 120) {
         const after = await waitFor(h, thorough, exchange, ['succeeded', 'failed', 'cancelled']);
         assert.strictEqual(after.status, 'succeeded', JSON.stringify(after.error));
         process.stdout.write('deep dive: choosing sites, add/drop and start ok\n');
+
+        // ── Fully configurable (11-15): one site, phone only, light only, Expert extras on Quick, no write-ups, no image
+        // search; each option reaches the capture and the report.
+        const before = capture.calls.length;
+        r = await request(h.base, 'POST', '/api/v1/deep-dives', { tok: exchange, body: { question: 'a pricing page', depth: 'quick', on_behalf_of: { type: 'user', id: USER },
+            options: { sites: 1, viewports: [390], themes: ['light'], extras: true, writeups: 0, images: { enabled: false } } } });
+        assert.strictEqual(r.status, 202, JSON.stringify(r.body));
+        const optId = r.body.deep_dive.id;
+        const optDone = await waitFor(h, optId, exchange, ['succeeded', 'failed', 'cancelled']);
+        assert.strictEqual(optDone.status, 'succeeded', JSON.stringify(optDone.error));
+        const optCalls = capture.calls.slice(before);
+        assert.strictEqual(optCalls.length, 1, 'one site');
+        assert.deepStrictEqual([optCalls[0].viewports, optCalls[0].themes, optCalls[0].extras], [[390], ['light'], true], 'the viewports, themes and extras asked for');
+        const optReport = (await request(h.base, 'GET', `/api/v1/deep-dives/${optId}`, { tok: exchange })).body.deep_dive.report;
+        assert.ok(optReport.captures.every((c) => c.viewport === 390), 'phone only');
+        assert.ok(!optReport.receipt.models.some((m) => m.step === 'read' || m.step === 'images'), 'no write-ups read, no image search');
+        assert.ok(!optReport.image_sheets && !optReport.research);
+        // An option outside its range is refused before a run exists.
+        r = await request(h.base, 'POST', '/api/v1/deep-dives', { tok: exchange, body: { question: 'x', depth: 'quick', options: { viewports: [800] } } });
+        assert.strictEqual(r.status, 422);
+        process.stdout.write('deep dive: options reach the capture and the report; bad options refused\n');
     } finally { await h.close(); }
 
     // ── Cancel stops the spend: a slow capture is interrupted and no later site is called ──
