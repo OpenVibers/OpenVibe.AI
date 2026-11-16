@@ -338,6 +338,7 @@ function createCatalog({ db, registry, pool, env = process.env, clock = { now: (
             if (p && Number(p.ttft_samples) >= 20) d.offer.speed.ttft_ms = Number(p.ttft_ms);
             if (p && Number(p.decode_samples) >= 20) d.offer.speed.tokens_per_second = Number(p.decode_tps);
             d.offer.error_rate = d.offer.uptime == null ? null : 1 - d.offer.uptime;
+            d.offer.error_rate_24h = d.offer.uptime_24h == null ? null : 1 - d.offer.uptime_24h;
         }
 
         const daysByModel = await db.prepare("SELECT model_key,substr(created_at,1,10) AS activity_day,COUNT(*)::int requests FROM runs WHERE created_at >= ? AND synthetic=0 AND status='succeeded' GROUP BY model_key,substr(created_at,1,10)").all(new Date(now-7*86400000).toISOString());
