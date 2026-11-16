@@ -139,6 +139,24 @@ const json = value => new Response(JSON.stringify(value), { status: 200 });
     assert.equal(openverseUrl.searchParams.get('category'), 'photograph');
     assert.equal((await openverse.search('images', { q: 'cat', engine: 'openverse', type: 'photo', after: '2026-12-01' })).results.length, 0);
     assert.equal((await openverse.search('images', { q: 'cat', engine: 'openverse', type: 'illustration' })).results.length, 0);
+    // An engine that dates its own results (after: native; SearXNG's time range) keeps the ones that carry no date: web
+    // images never do, and filtering them again here dropped a design deep dive's whole image sheet (11-16). A result
+    // whose own date is older is still dropped.
+    {
+        const realFetch = globalThis.fetch;
+        let sent = null;
+        globalThis.fetch = async (url) => { sent = new URL(url); return json({ results: [
+            { title: 'Dashboard A', url: 'https://dribbble.com/a', img_src: 'https://cdn.example.org/a.png', thumbnail_src: 'https://cdn.example.org/a-t.png', engines: ['bing images'] },
+            { title: 'Dashboard B', url: 'https://behance.net/b', img_src: 'https://cdn.example.org/b.png', engines: ['google cse images'] },
+            { title: 'Old', url: 'https://example.org/old', img_src: 'https://cdn.example.org/old.png', publishedDate: '2020-01-01T00:00:00Z', engines: ['bing images'] },
+        ] }); };
+        try {
+            const searx = createSearch({ env: { EXCHANGE_SEARXNG_URL: 'http://127.0.0.1:8888' } });
+            const recent = await searx.search('images', { q: 'robot app dashboard', engine: 'searxng', after: new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10) });
+            assert.equal(sent.searchParams.get('time_range'), 'month', 'the instance filters by date itself');
+            assert.deepEqual(recent.results.map((r) => r.title), ['Dashboard A', 'Dashboard B'], 'undated web images kept, the dated old one dropped');
+        } finally { globalThis.fetch = realFetch; }
+    }
     // Explicit SSRF targets are rejected before a network connection, including remote readers.
     for (const url of ['http://localhost', 'https://127.0.0.1', 'https://[::1]', 'https://user:pass@example.org']) {
         await assert.rejects(createSearch({ env: { SEARCH_JINA_KEY: KEY }, fetchImpl: () => assert.fail('unsafe call') }).read({ engine: 'jina', url }));
