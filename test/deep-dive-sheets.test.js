@@ -80,5 +80,9 @@ const { createSheets } = require('../server/deep-dive/sheets');
     const q = seen.pop().url;
     assert.ok(/categories=images/.test(q) && /time_range=week/.test(q), q);
     assert.deepStrictEqual(rows.map((r) => [r.url, r.thumbnail, r.source_page, r.upstream]), [['https://img.example/a.png', 'https://img.example/ta.png', 'https://page.example/a', 'google images']]);
-    process.stdout.write('deep dive sheets: dated engines only (with the date), one JPEG grid per engine page, private to the owner, notes not stops, the person\'s own engines; Google/Serper/SearchAPI/SearXNG time ranges\n');
+    // Every tile is numbered (11-16), and the model is told to cite outliers by number: "#14: …".
+    const prompt = require('../server/deep-dive/prompts').sheetPrompt({ question: 'A robot app', query: 'robot app', engine: 'SearXNG', recency: 'month', count: 38 });
+    assert.match(prompt.user, /Each image has its number \(1 to 38\) in its top-left corner/);
+    assert.match(prompt.user, /each starting with its number, e\.g\. "#14:/);
+    process.stdout.write('deep dive sheets: dated engines only (with the date), one JPEG grid per engine page, numbered, private to the owner, notes not stops, the person\'s own engines; Google/Serper/SearchAPI/SearXNG time ranges\n');
 })().catch((err) => { console.error(err); process.exit(1); });
