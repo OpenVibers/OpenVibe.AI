@@ -48,6 +48,9 @@ function memo(fn, ttlMs, clock) {
     };
 }
 
+// The windows a measured figure can cover, in days: the rolling day, the week (the default), 30 days and all time.
+const WINDOW_DAYS = Object.freeze({ '24h': 1, '7d': 7, '30d': 30, all: 3650 });
+
 function exchangeRouter({ db, registry, pool, quotas = null, env = process.env, clock = { now: () => Date.now() }, config = null, presets, receipts, auth, log = console, ownEndpoints = null, fetchImpl = globalThis.fetch, fidelity = null, share = null, modelSync = null }) {
     // Bench's provider-fidelity read (stage B5): optional and fail-soft. Off in tests, where no Bench runs.
     const fidelitySource = fidelity || require('../exchange/fidelity').createFidelitySource({
@@ -61,12 +64,20 @@ function exchangeRouter({ db, registry, pool, quotas = null, env = process.env, 
     const usage = createUsage({ db, clock });
     // The price book's log: what a price was, what it became and when it was read.
     const priceStore = require('../pricebook/store').createPriceStore({ db, clock });
-    // One cached read per kind (?kind=chat, screenshot, …); the unfiltered read is the full catalog.
+    // One cached read per kind (?kind=chat, screenshot, …) and window (?window=24h, 7d, 30d, all; the week by default);
+    // the unfiltered read of the week is the full catalog.
     const hits = new Map();
-    const allFor = (kind) => {
-        const key = kind || '';
-        if (!hits.has(key)) hits.set(key, memo(() => catalog.models({ days: 7, kind: kind || null }), CATALOG_MS, clock));
+    const allFor = (kind, window = '7d') => {
+        const key = `${kind || ''}|${window}`;
+        if (!hits.has(key)) hits.set(key, memo(() => catalog.models({ days: WINDOW_DAYS[window], kind: kind || null, window }), CATALOG_MS, clock));
         return hits.get(key)();
+    };
+    /** ?window= → its name, or a 422 (the owner, 11-16: "maybe 30 days, 7 days … all time … be transparent"). */
+    const windowOf = (req, res) => {
+        const w = req.query.window == null || req.query.window === '' ? '7d' : String(req.query.window).toLowerCase();
+        if (Object.prototype.hasOwnProperty.call(WINDOW_DAYS, w)) return w;
+        http.sendProblem(res, 422, 'exchange.window_invalid', { detail: `window must be one of ${Object.keys(WINDOW_DAYS).join(', ')}`, ctx: req.ov });
+        return null;
     };
     const all = () => allFor(null);
     const market = require('../exchange/market').createMarket({ db, registry, catalog: all, config, clock, fidelity: fidelitySource });
@@ -197,7 +208,9 @@ function exchangeRouter({ db, registry, pool, quotas = null, env = process.env, 
             if (kind && !catalogKinds.includes(kind)) {
                 return http.sendProblem(res, 422, 'exchange.kind_invalid', { detail: `kind must be one of ${catalogKinds.join(', ')}`, ctx: req.ov });
             }
-            res.json(await allFor(kind));
+            const window = windowOf(req, res);
+            if (!window) return undefined;
+            res.json(await allFor(kind, window));
         } catch (err) { next(err); }
     });
 
@@ -234,7 +247,9 @@ function exchangeRouter({ db, registry, pool, quotas = null, env = process.env, 
 
     r.get('/api/v1/exchange/models/:slug', publicCache(30), async (req, res, next) => {
         try {
-            const out = await all();
+            const window = windowOf(req, res);
+            if (!window) return undefined;
+            const out = await allFor(null, window);
             const slug = String(req.params.slug || '').toLowerCase();
             const found = out.models.find((m) => m.slug === slug);
             if (!found) return http.sendProblem(res, 404, 'exchange.model_not_found', { detail: `no model ${slug}`, ctx: req.ov });
@@ -244,7 +259,9 @@ function exchangeRouter({ db, registry, pool, quotas = null, env = process.env, 
 
     r.get('/api/v1/exchange/models/:org/:model', publicCache(30), async (req, res, next) => {
         try {
-            const out = await all();
+            const window = windowOf(req, res);
+            if (!window) return undefined;
+            const out = await allFor(null, window);
             const slug = `${String(req.params.org || '').toLowerCase()}/${String(req.params.model || '').toLowerCase()}`;
             const found = out.models.find((m) => m.slug === slug);
             if (!found) return http.sendProblem(res, 404, 'exchange.model_not_found', { detail: `no model ${slug}`, ctx: req.ov });

@@ -142,9 +142,12 @@ function createCatalog({ db, registry, pool, env = process.env, clock = { now: (
     /**
      * Every live offer, grouped by the model it serves.
      * days: the window the measured speed, uptime and request counts cover.
+     * window: its name (24h, 7d, 30d, all), said in the answer. The week's own fields (requests_7d, cached_7d,
+     *   cache_hit_share_7d) are there on the week only; every window has requests and cached.
      * kind: only models of this kind (chat, embedding, stt, image); null for every kind.
      */
-    async function models({ days = 7, kind = null } = {}) {
+    async function models({ days = 7, kind = null, window = null } = {}) {
+        const week = Number(days) === 7;
         const now = clock.now();
         const providers = await registry.listProviders();
         const byKey = new Map(providers.map((p) => [p.key, p]));
@@ -354,6 +357,8 @@ function createCatalog({ db, registry, pool, env = process.env, clock = { now: (
                 const pb = b.price ? b.price.in + b.price.out : Number.POSITIVE_INFINITY;
                 return pa - pb || a.provider.localeCompare(b.provider);
             });
+            m.requests = m.offers.reduce((n, o) => n + (o.requests || 0), 0);
+            m.cached = m.offers.reduce((n, o) => n + (o.cached || 0), 0);
             m.requests_7d = m.offers.reduce((n, o) => n + o.requests_7d, 0);
             m.requests_today = m.offers.reduce((n, o) => n + o.requests_today, 0);
             m.cached_7d = m.offers.reduce((n, o) => n + o.cached_7d, 0);
@@ -393,11 +398,18 @@ function createCatalog({ db, registry, pool, env = process.env, clock = { now: (
             k.offers += m.offers.length;
             kinds.set(m.kind, k);
         }
+        if (!week) {
+            for (const m of models) {
+                delete m.requests_7d; delete m.cached_7d; delete m.cache_hit_share_7d;
+                for (const o of m.offers) { delete o.requests_7d; delete o.cached_7d; delete o.cache_hit_share_7d; }
+            }
+        }
         return {
             generated_at: new Date(now).toISOString(),
             median_ttft_ms: firstTokens.length >= 20 ? firstTokens[Math.floor(firstTokens.length/2)] : null,
             median_reply_ms: replies.length >= 20 ? replies[Math.floor(replies.length / 2)] : null,
             window_days: days,
+            window: window || (week ? '7d' : `${days}d`),
             ...(kind ? { kind } : {}),
             count: models.length,
             // Whether any chat model can serve the free allowance right now (Exchange says "free paused" when not).
