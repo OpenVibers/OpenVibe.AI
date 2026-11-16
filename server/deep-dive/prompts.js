@@ -200,14 +200,14 @@ Cite only page numbers from the notes. JSON only.`,
 function sheetPrompt({ question, query, engine, recency, count }) {
     return {
         system: 'You are a senior visual designer reading a whole page of image search results at once, the way a designer scans a results page for what is current. You describe what you can see, never guess what you cannot. Answer only with JSON.',
-        user: `This sheet is ${count} image results for "${clean(query, 200)}" from ${clean(engine, 80)}${recency && recency !== 'any' ? `, published in the past ${recency}` : ''}, in the engine's own order, read for this design question: "${clean(question, 400)}".
+        user: `This sheet is ${count} image results for "${clean(query, 200)}" from ${clean(engine, 80)}${recency && recency !== 'any' ? `, published in the past ${recency}` : ''}, in the engine's own order, read for this design question: "${clean(question, 400)}". Each image has its number (1 to ${count}) in its top-left corner.
 
 Read the sheet as a whole:
 - reading: 3 to 5 sentences: what dominates, what feels current, what is overused.
 - patterns: up to 8 visual patterns that recur (layout, composition, framing, UI style, imagery), each one short sentence.
 - palette: up to 8 colours or colour moods that recur (name or hex).
 - styles: up to 8 styles you see (e.g. glassmorphism, flat illustration, 3D render, editorial photo).
-- outliers: up to 6 images that stand out and why (describe by position, e.g. "row 2, third").
+- outliers: up to 6 images that stand out and why, each starting with its number, e.g. "#14: a real photo of a kitchen among flat UI mockups".
 JSON only: {"reading":"...","patterns":["..."],"palette":["..."],"styles":["..."],"outliers":["..."]}`,
     };
 }

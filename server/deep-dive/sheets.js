@@ -44,7 +44,10 @@ function createSheets({ search, mediaStore, fetcher = null, llm, log = console, 
         } catch { return null; }
     }
 
-    /** The results laid out as one sheet: a grid in the engine's own order. → { buffer, width, height, used } | null */
+    /** Each tile's number in its top-left corner (11-16: the model named outliers by row and column, and got them wrong;
+     *  with a number it cites "#14", and the report links #14 to where that picture came from). */
+    const badge = (n) => Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${n >= 10 ? 32 : 24}" height="20"><rect width="100%" height="100%" rx="6" fill="#000" fill-opacity="0.74"/><text x="50%" y="14.5" text-anchor="middle" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="700" fill="#fff">${n}</text></svg>`);
+    /** The results laid out as one sheet: a grid in the engine's own order, each tile numbered. → { buffer, width, height, used } | null */
     async function compose(images, { cols = 8, cell = 200, gap = 6, signal = null } = {}) {
         if (!sharp) return null;
         const tiles = [];
@@ -59,7 +62,10 @@ function createSheets({ search, mediaStore, fetcher = null, llm, log = console, 
         const width = c * cell + (c + 1) * gap;
         const height = rows * cell + (rows + 1) * gap;
         const buffer = await sharp({ create: { width, height, channels: 3, background: { r: 17, g: 19, b: 25 } } })
-            .composite(tiles.map((t, k) => ({ input: t.buf, left: gap + (k % c) * (cell + gap), top: gap + Math.floor(k / c) * (cell + gap) })))
+            .composite([
+                ...tiles.map((t, k) => ({ input: t.buf, left: gap + (k % c) * (cell + gap), top: gap + Math.floor(k / c) * (cell + gap) })),
+                ...tiles.map((t, k) => ({ input: badge(k + 1), left: gap + (k % c) * (cell + gap) + 4, top: gap + Math.floor(k / c) * (cell + gap) + 4 })),
+            ])
             .jpeg({ quality: 84 }).toBuffer();
         return { buffer, width, height, used: tiles.map((t) => t.image) };
     }
