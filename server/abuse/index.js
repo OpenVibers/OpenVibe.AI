@@ -67,6 +67,13 @@ function createAbuse({ db, config, env = process.env, clock = { now: () => Date.
     const now = () => clock.now();
     // Read at each admission: the owner changes it on the AI setup page (ai.exchange free_daily_tokens, 2026-11-15).
     const baseTokens = () => Math.max(0, Math.floor(Number(cfg.dailyTokens) || 0));
+    // The rank factors in force: the code's defaults, then AI_FREE_RANK_FACTORS, then what the owner set in the guided
+    // setup (ai.free, settings.js applyFree), each later one winning for the ranks it names.
+    const factorsInForce = () => {
+        let fromEnv = cfg.rankFactors;
+        if (typeof fromEnv === 'string') { try { fromEnv = fromEnv.trim() ? JSON.parse(fromEnv) : {}; } catch { fromEnv = {}; } }
+        return { ...(fromEnv && typeof fromEnv === 'object' ? fromEnv : {}), ...(cfg.rankFactorsSet || {}) };
+    };
     const firstParty = new Set((cfg.firstPartyServices || ['exchange']).map((s) => String(s).trim().toLowerCase()).filter(Boolean));
     const asn = asnLib.createAsnTable({
         v4File: cfg.ip2asnV4 || '', v6File: cfg.ip2asnV6 || '', hostingAsns: cfg.hostingAsns || [], log,
@@ -270,7 +277,7 @@ function createAbuse({ db, config, env = process.env, clock = { now: () => Date.
                 try { kudos = Math.max(0, Number(await community.kudosBonus(subject)) || 0); } catch { kudos = 0; }
             }
         }
-        const tierInfo = trust.tierFor({ signals: account, kudos, hosting: network.hosting, base: baseTokens(), factors: cfg.rankFactors });
+        const tierInfo = trust.tierFor({ signals: account, kudos, hosting: network.hosting, base: baseTokens(), factors: factorsInForce() });
         if (deviceHash && subject) await touchDevice(deviceHash, subject, tierInfo.allowance, at);
         const onDevice = deviceHash ? await accountsOn(deviceHash) : { accounts: 0, cap: null };
         const shared = onDevice.accounts > 3;

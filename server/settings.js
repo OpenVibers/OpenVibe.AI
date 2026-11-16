@@ -30,6 +30,7 @@ const SERVICE = 'ai';
 const SELF = Object.freeze({ type: 'service', id: SERVICE });
 const GROUP = 'AI Exchange';
 const BATCHES_NAMESPACE = 'ai.batches';
+const FREE_NAMESPACE = 'ai.free';
 const PROVIDER_GROUP = 'Provider keys';
 const GPU_GROUP = 'OpenVibe GPUs';
 const SERVER_GROUP = 'Servers';
@@ -138,6 +139,53 @@ function applyBatches(config, values = {}) {
     if (Object.prototype.hasOwnProperty.call(values, 'loss_budget_usd_per_day') && values.loss_budget_usd_per_day !== undefined) {
         config.batches.lossBudgetUsdPerDay = Math.max(0, Number(values.loss_budget_usd_per_day) || 0);
     }
+}
+
+/**
+ * The ai.free store (2026-11-16; the owner: "owner rank should be able to use more tokens per day", then the guided
+ * setup "so I can set all that up"): how far each rank's free daily allowance stretches. Each key is "unlimited" or a
+ * factor of the verified allowance (2 is twice it). An unset key keeps the code's default (abuse/trust.js RANK_FACTORS)
+ * or AI_FREE_RANK_FACTORS; a set key wins over both.
+ */
+const FREE_RANKS = Object.freeze([
+    ['owner', 'Owner'], ['admin', 'Admins'], ['global_mod', 'Global moderators'], ['streamer', 'Streamers'], ['user', 'Everyone else'],
+]);
+const FREE_SCHEMA = Object.freeze({
+    $schema: 'https://json-schema.org/draft/2020-12/schema',
+    title: 'Free AI by rank',
+    type: 'object',
+    additionalProperties: false,
+    properties: Object.fromEntries(FREE_RANKS.map(([rank, label]) => [`rank_${rank}`, {
+        type: 'string', title: `${label}: free AI a day`, 'x-group': 'money',
+        pattern: '^(unlimited|[0-9]{1,4}(\\.[0-9]{1,2})?)$',
+        description: `How far ${label.toLowerCase()} stretch the free daily allowance: unlimited, or a factor (1 is the allowance, 2 twice it, 0 none).`,
+    }])),
+});
+
+/** The factors the owner set, by rank (only the ranks set): { owner: 'unlimited', streamer: 3 }. */
+function freeFactors(values = {}) {
+    const out = {};
+    for (const [rank] of FREE_RANKS) {
+        const v = values[`rank_${rank}`];
+        if (v === undefined || v === null || v === '') continue;
+        if (String(v) === 'unlimited') out[rank] = 'unlimited';
+        else if (Number.isFinite(Number(v)) && Number(v) >= 0) out[rank] = Number(v);
+    }
+    return out;
+}
+
+/** The ai.free values put into the live config: the abuse checks read config.abuse.rankFactorsSet on every run. */
+function applyFree(config, values = {}) {
+    if (!config.abuse) return;
+    config.abuse.rankFactorsSet = freeFactors(values);
+}
+
+async function createFreeSettings({ db, env, log, onChange, config }) {
+    const store = await createConfigStore({
+        db, service: SERVICE, namespace: FREE_NAMESPACE, schema: FREE_SCHEMA, env, log, onChange,
+        onActivate: (values) => applyFree(config, values),
+    });
+    return { store, proxy: store, namespace: FREE_NAMESPACE, values: () => store.get() || {} };
 }
 
 /** The ai.batches store: the owner's batch settings. */
@@ -681,6 +729,8 @@ async function createSettings({ db, config, registry, clock = { now: () => Date.
     await providerKeys.refresh();
     const batches = await createBatchesSettings({ db, env, log, onChange });
     applyBatches(config, batches.values());
+    const free = await createFreeSettings({ db, env, log, onChange, config });
+    applyFree(config, free.values());
     const gpus = await createGpuSettings({ db, env, log, onChange });
     const servers = await createServersSettings({ db, env, log, onChange });
     const accounts = await createAccountsSettings({ db, env, log, onChange });
@@ -688,11 +738,12 @@ async function createSettings({ db, config, registry, clock = { now: () => Date.
     const decisions = await createDecisionsSettings({ db, env, log, onChange });
     if (exchange.sealed) await exchange.reseal().catch((err) => log.warn(`[config] ${EXCHANGE_NAMESPACE}: reseal failed: ${err.message}`));
     if (providerKeys.sealed) await providerKeys.store.reseal().catch((err) => log.warn(`[config] ${PROVIDER_KEYS_NAMESPACE}: reseal failed: ${err.message}`));
-    return { exchange, providerKeys, gpus, servers, accounts, batches, decisions, onChange };
+    return { exchange, providerKeys, gpus, servers, accounts, batches, free, decisions, onChange };
 }
 
 module.exports = {
-    EXCHANGE_NAMESPACE, PROVIDER_KEYS_NAMESPACE, GPU_NAMESPACE, SERVERS_NAMESPACE, ACCOUNTS_NAMESPACE, BATCHES_NAMESPACE,
+    EXCHANGE_NAMESPACE, PROVIDER_KEYS_NAMESPACE, GPU_NAMESPACE, SERVERS_NAMESPACE, ACCOUNTS_NAMESPACE, BATCHES_NAMESPACE, FREE_NAMESPACE,
+    FREE_SCHEMA, FREE_RANKS, freeFactors, applyFree,
     SERVICE, SELF, EXCHANGE_SCHEMA, GPU_SCHEMA, GPU_ORIGINS, SERVERS_SCHEMA, ACCOUNTS_SCHEMA, BATCH_SCHEMA,
     applyExchange, applyBatches, originOf, providerKeysSchema, hostRows, accountRows,
     createGpuSettings, createServersSettings, createAccountsSettings, createBatchesSettings, createSettings,
