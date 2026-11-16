@@ -270,7 +270,7 @@ function createAbuse({ db, config, env = process.env, clock = { now: () => Date.
                 try { kudos = Math.max(0, Number(await community.kudosBonus(subject)) || 0); } catch { kudos = 0; }
             }
         }
-        const tierInfo = trust.tierFor({ signals: account, kudos, hosting: network.hosting, base: baseTokens() });
+        const tierInfo = trust.tierFor({ signals: account, kudos, hosting: network.hosting, base: baseTokens(), factors: cfg.rankFactors });
         if (deviceHash && subject) await touchDevice(deviceHash, subject, tierInfo.allowance, at);
         const onDevice = deviceHash ? await accountsOn(deviceHash) : { accounts: 0, cap: null };
         const shared = onDevice.accounts > 3;
@@ -286,6 +286,8 @@ function createAbuse({ db, config, env = process.env, clock = { now: () => Date.
         // L36 Y1: a run that may use the person's own provider key must never be held by the free allowance. The
         // admission is still returned, so a fallback to free capacity is recorded; the read only skips the refusal.
         if (selfKeys) return { ...admission, exempt: 'own_key' };
+        // A rank with no daily cap (the owner, admins by default): its usage is still counted, never refused for it.
+        if (tierInfo.unlimited) return { ...admission, exempt: 'rank' };
         const rateKey = deviceHash ? `device:${deviceHash}` : (network.prefixHash ? `prefix:${network.prefixHash}` : `key:${key}`);
         const limit = trust.rateFor({ hosting: network.hosting, normal: cfg.ratePerMin, hostingRate: cfg.hostingRatePerMin });
         if (!countRate(rateKey, limit, at) || (network.asnHash && !countRate(`asn:${network.asnHash}`, limit, at))) {

@@ -82,9 +82,27 @@ t.test('a missing dataset is empty, not a crash', () => {
 
 t.test('Network trust is normalised and never carries a private fact', () => {
     const n = normalize({ account_age_hours: 200, account_age_days: 8, verified: true, verified_by: ['passkey', 7], passkey: true, linked_accounts: 2, active_30d: false, email: 'x@example.com' });
-    assert.deepStrictEqual(n, { account_age_hours: 200, account_age_days: 8, verified: true, verified_by: ['passkey'], passkey: true, linked_accounts: 2, active_30d: false });
+    assert.deepStrictEqual(n, { account_age_hours: 200, account_age_days: 8, verified: true, verified_by: ['passkey'], passkey: true, linked_accounts: 2, active_30d: false, rank: 'user' });
+    assert.strictEqual(normalize({ rank: 'owner' }).rank, 'owner', 'a known rank is kept');
+    assert.strictEqual(normalize({ rank: 'emperor' }).rank, 'user', 'an unknown one is a user');
     assert.strictEqual(normalize(null), null);
     assert.strictEqual(normalize({ account_age_hours: -5 }).account_age_hours, 0);
+});
+
+t.test('the allowance grows with rank (the owner, 11-16: "owner rank should be able to use more tokens per day")', () => {
+    const at = (rank, extra = {}) => tierFor({ signals: { available: true, account_age_hours: 2, verified: false, rank }, base: 1000, ...extra });
+    const owner = at('owner', { hosting: true });
+    assert.strictEqual(owner.unlimited, true, 'the owner has no daily cap, from any network');
+    assert.strictEqual(owner.allowance, null);
+    assert.strictEqual(at('admin').unlimited, true, 'admins have none either, by default');
+    assert.deepStrictEqual(pick(at('global_mod')), { tier: 'global_mod', allowance: 10000 }, 'staff: ten full allowances');
+    assert.deepStrictEqual(pick(tierFor({ signals: { available: true, verified: true, rank: 'streamer' }, base: 1000 })), { tier: 'verified', allowance: 2000 }, 'a verified streamer: twice');
+    assert.deepStrictEqual(pick(at('streamer', { hosting: true })), { tier: 'new', allowance: 500 }, 'a streamer on a hosting network still starts from its tier');
+    assert.deepStrictEqual(pick(at('user')), { tier: 'new', allowance: 250 }, 'a user is unchanged');
+    // The override (AI_FREE_RANK_FACTORS): a number caps the owner too; unknown ranks and bad values are ignored.
+    assert.deepStrictEqual(pick(at('owner', { factors: '{"owner":50,"emperor":"unlimited","admin":-1}' })), { tier: 'owner', allowance: 50000 });
+    assert.strictEqual(at('admin', { factors: { owner: 50 } }).unlimited, true);
+    assert.strictEqual(at('owner', { signals: null }).tier, 'new', 'no Network answer: no rank');
 });
 
 function pick(out) { return { tier: out.tier, allowance: out.allowance }; }
