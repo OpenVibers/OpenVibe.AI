@@ -1116,3 +1116,9 @@ Part of the [OpenVibe network](https://openvibe.network). Built in the open by [
 ### Exchange search engines
 
 The web, image, icon, reverse-image, Unsplash download-event and fetch APIs, provider configuration, verified tariffs, personal keys and receipts are documented in [docs/search-engines.md](docs/search-engines.md). `GET /api/v1/exchange/search/engines` publishes the current adapter catalog; `/openapi.json` describes every search/fetch endpoint.
+
+<!-- versions:start -->
+- openvibe-contracts: v0.443.0
+- openvibe-sdk: v0.177.0
+- openvibe-shared: v4.288.0
+<!-- versions:end -->
