@@ -28,6 +28,9 @@ function fixtures() {
     };
     const research = { async gather() { return {
         sources: [
+            // Found first, never read as a write-up (11-16: a code file and a data record were): someone's app notes, a record.
+            { url: 'https://raw.githubusercontent.com/someone/app/main/DESIGN.md', title: 'My app: onboarding plan', snippet: 'NexusMind palette.', provider: 'megasource', license: null },
+            { url: 'https://www.wikidata.org/wiki/Q94', title: 'Android', snippet: 'A record.', provider: 'megasource', license: null },
             { url: 'https://example.org/robot-panel', title: 'A phone-first robot control panel', snippet: 'One thumb reaches every control.', provider: 'search_fabric', license: null },
             { url: 'https://example.org/dense-dashboard', title: 'A dense operations dashboard', snippet: 'Every robot in one screen.', provider: 'search_fabric' },
         ],
@@ -155,6 +158,7 @@ async function waitForRun(h, id, tok, tries = 120) {
         assert.ok(report.research.answer.summary.length > 0, 'and answered');
         const sourceIds = new Set(report.sources.map((s) => s.id));
         assert.ok(report.research.reads.every((r) => sourceIds.has(r.source_id)), 'every write-up read is a source the search found');
+        assert.ok(!report.research.reads.some((r) => /githubusercontent\.com|wikidata\.org/.test(r.url)), 'a code file or a data record is never read as a write-up');
         assert.ok(report.receipt.captures_count >= 2);
         assert.deepStrictEqual(report.gaps.length >= 0, true);
 

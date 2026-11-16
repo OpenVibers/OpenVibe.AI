@@ -221,14 +221,19 @@ function createDeepDive({ config = {}, db, clock = { now: () => Date.now() }, lo
             // plan's questions and answered with citations; the synthesis builds on that answer, and the report carries
             // it as its research block. A write-up that cannot be read, or a model that fails, is a gap, never a stop.
             let research = null;
-            const writeups = allSources.filter((s) => s.kind === 'web' && !/\/\/(www\.)?(github\.com|openvibe\.design)\//.test(s.url));
+            // Never a write-up: a repository or its raw files (someone's own app notes), a data record, our own registers.
+            const writeups = allSources.filter((s) => s.kind === 'web' && !/\/\/([a-z0-9-]+\.)*(github\.com|githubusercontent\.com|gitlab\.com|wikidata\.org|openvibe\.design)\//i.test(s.url));
             const ordered = [...writeups.filter((s) => DESIGN_PUBLISHERS.test(s.url)), ...writeups.filter((s) => !DESIGN_PUBLISHERS.test(s.url))];
             const toRead = opts.writeups != null ? Math.max(0, Math.min(12, Number(opts.writeups) || 0)) : ({ quick: 3, thorough: 5, expert: 8 }[depth] || 3);
             row = await startStep(row, 'read', `0/${Math.min(toRead, ordered.length)} write-ups`, 0.31);
             if (toRead > 0 && ordered.length && !overBudget()) {
                 try {
                     const questions = (plan.json.questions || []).slice(0, 9).map((q, i) => ({ key: String(q.key || `q${i + 1}`).slice(0, 40), question: String(q.question || '').replace(/\s+/g, ' ').trim().slice(0, 400) })).filter((q) => q.question);
-                    const chosenPages = ordered.slice(0, toRead + 2).map((s) => ({ url: s.url, title: s.title, source_id: s.id }));
+                    // The general deep dive's own choice: a model picks the write-ups worth reading, a reason each (in
+                    // search order it read Wikidata, Wikipedia's Android article and a code file, 11-16); the design
+                    // publishers first is only the fallback order.
+                    const chosenPages = (await general.choosePages({ question, questions: questions.length ? questions : [{ key: 'q', question }], sources: ordered, limit: toRead, ctx, warnings, addCall: (r) => addCall('read', r) }))
+                        .map((c) => ({ url: c.url, title: c.title, source_id: c.source_id }));
                     const target = Math.min(toRead, chosenPages.length);
                     const got = await general.readPages({ chosen: chosenPages, target, ctx, check });
                     if (got.readCount) {
