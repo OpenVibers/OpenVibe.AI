@@ -223,6 +223,10 @@ function fold(observed, drafts) {
         const enough = real >= MIN_SAMPLES;
         d.offer.speed = { p50_ms: enough ? s.p50 : null, p95_ms: enough ? s.p95 : null };
         d.offer.uptime = enough ? s.succeeded / real : null;
+        // 2026-11-16: the window's own counts, whatever the window (the catalog's ?window=); requests_7d and cached_7d
+        // keep their names on the default week and are left out on another window.
+        d.offer.requests = real;
+        d.offer.cached = s.cached;
         d.offer.requests_7d = real;
         d.offer.requests_today = s.succeeded_today + s.failed_today;
         const real24 = s.succeeded_24h + s.failed_24h;

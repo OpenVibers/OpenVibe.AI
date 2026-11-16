@@ -125,6 +125,36 @@ t.test('one model by slug, and a miss is a problem document', async () => {
     assert.strictEqual(miss.body.code, 'exchange.model_not_found');
 });
 
+t.test('the measured figures over a window: 24h, 7d (the default), 30d or all time', async () => {
+    // The owner, 11-16: "maybe 30 days, 7 days … all time … be transparent". 20 failed attempts 20 days ago: outside
+    // the day and the week, inside 30 days and all time.
+    for (let i = 0; i < 20; i++) {
+        const id = await insertRun({ status: 'failed', created: at(20) });
+        await insertRequest({ runId: id, provider: 'deepseek', model: 'deepseek-chat-2026-01-01', status: 'error', latency: 900, created: at(20) });
+    }
+    const offer = async (q) => {
+        const r = await request(h.base, 'GET', `/api/v1/exchange/catalog${q}`);
+        assert.strictEqual(r.status, 200, r.text);
+        const m = r.body.models.find((x) => x.slug === 'deepseek/deepseek-chat');
+        return { body: r.body, m, o: m.offers.find((x) => x.provider === 'deepseek') };
+    };
+    const week = await offer('');
+    assert.deepStrictEqual([week.body.window, week.body.window_days, week.o.requests, week.o.requests_7d, week.o.uptime], ['7d', 7, 20, 20, 0.9],
+        'the default is the week, its own fields unchanged, and requests beside them');
+    const day = await offer('?window=24h');
+    assert.deepStrictEqual([day.body.window, day.o.requests, day.o.uptime], ['24h', 20, 0.9]);
+    const month = await offer('?window=30d');
+    assert.deepStrictEqual([month.body.window, month.body.window_days, month.o.requests, month.o.uptime, month.m.requests], ['30d', 30, 40, 0.45, 40],
+        'thirty days see the old failures');
+    assert.ok(!('requests_7d' in month.o) && !('cached_7d' in month.o) && !('requests_7d' in month.m), 'nothing labelled 7d that is not');
+    const ever = await offer('?window=all');
+    assert.deepStrictEqual([ever.body.window, ever.o.requests, ever.o.uptime], ['all', 40, 0.45]);
+    const one = await request(h.base, 'GET', '/api/v1/exchange/models/deepseek/deepseek-chat?window=30d');
+    assert.strictEqual(one.body.offers.find((x) => x.provider === 'deepseek').requests, 40, 'one model over a window too');
+    const bad = await request(h.base, 'GET', '/api/v1/exchange/catalog?window=1y');
+    assert.deepStrictEqual([bad.status, bad.body.code], [422, 'exchange.window_invalid']);
+});
+
 t.test('usage: day, model and product aggregates from runs, and never an attribution', async () => {
     // The catalog test above recorded runs of its own in this database; usage is counted from a clean table.
     await h.db.prepare('DELETE FROM runs').run();
