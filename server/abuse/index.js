@@ -337,6 +337,32 @@ function createAbuse({ db, config, env = process.env, clock = { now: () => Date.
         return admission;
     }
 
+    /**
+     * A person's free allowance today, as the admission would see it from a normal network (plan §AD.17: the route and
+     * "Your AI" show what is left): the tier and its tokens, what today used, whether the rank has no cap, and when it
+     * resets. Read only: no device is touched, nothing is admitted. Null when the free tier is off or the id is not a
+     * person's.
+     */
+    async function allowanceOf(subject) {
+        if (!enabled || !USR.test(String(subject || ''))) return null;
+        const at = now();
+        const account = await signals.get(subject);
+        let kudos = 0;
+        if (community && typeof community.kudosBonus === 'function') {
+            try { kudos = Math.max(0, Number(await community.kudosBonus(subject)) || 0); } catch { kudos = 0; }
+        }
+        const tierInfo = trust.tierFor({ signals: account, kudos, hosting: false, base: baseTokens(), factors: factorsInForce() });
+        const day = iso(at).slice(0, 10);
+        const row = await db.prepare('SELECT COALESCE(tokens, 0) AS tokens FROM abuse_daily_usage WHERE subject = ? AND day = ?').get(`user:${subject}`, day);
+        const used = Number(row && row.tokens) || 0;
+        const tokens = Math.max(0, Number(tierInfo.allowance) || 0);
+        return {
+            tier: tierInfo.tier, unlimited: Boolean(tierInfo.unlimited), tokens, used,
+            left: tierInfo.unlimited ? null : Math.max(0, tokens - used),
+            resets_at: iso(Date.parse(`${day}T00:00:00.000Z`) + DAY_MS),
+        };
+    }
+
     /** Record what a finished free run spent: its allowance counter and the three velocity buckets. */
     async function record({ admission, tokens = 0, inputHash = null } = {}) {
         if (!enabled || !admission || !admission.key) return;
@@ -436,7 +462,7 @@ function createAbuse({ db, config, env = process.env, clock = { now: () => Date.
     }
 
     return {
-        enabled, middleware, admit, record, issueChallenge, overview, gaugeValues, router, prune,
+        enabled, middleware, admit, record, allowanceOf, issueChallenge, overview, gaugeValues, router, prune,
         // The tests and the docs use these; nothing else should.
         _test: { signDevice, verifyDevice, keyed, asn, signals, pow, cookieHeader, clientIp, velocityHit, deviceTable: db },
     };

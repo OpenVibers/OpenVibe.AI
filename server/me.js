@@ -69,7 +69,7 @@ function sameOrigin(req, config, { write = false } = {}) {
     return true;
 }
 
-function meRouter({ choices = null, credentials, preferences, grants, auth, registry, config, clock = { now: () => Date.now() }, log = console, personSessions = null, sessionCookies = null, sendError }) {
+function meRouter({ choices = null, credentials, preferences, grants, auth, registry, config, clock = { now: () => Date.now() }, log = console, personSessions = null, sessionCookies = null, sendError, abuse = null }) {
     const r = express.Router();
 
     /** Authenticate a person, never a principal. Sets req.principal = { kind: 'user', subject }. */
@@ -214,6 +214,9 @@ function meRouter({ choices = null, credentials, preferences, grants, auth, regi
             res.status(gone ? 204 : 404).end();
         } catch (err) { sendError(res, err, req.ov); }
     });
+    // The person's free allowance today (plan §AD.17): what the route and "Your AI" show as left. A read: a site's
+    // session token may ask it, like the other settings here.
+    r.get('/api/v1/me/allowance', guard, run(async (req) => ({ allowance: abuse && typeof abuse.allowanceOf === 'function' ? await abuse.allowanceOf(personOf(req)) : null })));
     r.get('/api/v1/me/ai/preferences', guard, run(async (req) => await preferences.get(personOf(req))));
     r.put('/api/v1/me/ai/preferences', guard, run(async (req) => {
         const out = await preferences.put(personOf(req), req.body || {});
