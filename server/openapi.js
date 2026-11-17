@@ -200,6 +200,14 @@ route('get', '/allowed-keys/{subject}', {
     responses: { 200: json('The provider names', ref('AllowedKeys')), 404: problem, ...errors([401, 403]) },
 });
 
+// ── A person's free allowance, for a first-party service acting for them (plan §AD.17) ──────────────
+route('get', '/allowance/{subject}', {
+    operationId: 'serviceAllowance', summary: 'A person\'s free allowance left today, for a service acting for them', tags: ['keys'], security: SERVICE,
+    description: 'ai.run.create, a first-party service only (an app is refused). The tier, its tokens, what today used, what is left (null when the rank has no cap) and when it resets: Actor checks a turn fits before it starts one on the free AI.',
+    parameters: [path('subject', str({ pattern: '^usr_[0-9A-HJKMNP-TV-Z]{26}$' }))],
+    responses: { 200: json('The person\'s allowance (null when the free tier is off)', { type: 'object', required: ['subject', 'allowance'], properties: { subject: str(), allowance: { type: ['object', 'null'] } } }), 404: problem, ...errors([401, 403]) },
+});
+
 // ── Memory (Memory M2a) ──────────────────────────────────────────────────────────────────────
 const memoryItem = ref('MemoryItem');
 const memoryBody = ref('MemoryWriteRequest');
