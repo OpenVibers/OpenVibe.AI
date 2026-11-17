@@ -37,6 +37,7 @@ const DOMAIN = {
     'inference-net': 'inference.net', 'atlas-cloud': 'atlascloud.ai', avian: 'avian.io',
     nanogpt: 'nano-gpt.com', infermatic: 'totalgpt.ai', arliai: 'arliai.com', friendli: 'friendli.ai', scaleway: 'scaleway.com', anthropic: 'claude.com',
     mistral: 'mistral.ai', cohere: 'cohere.com', gemini: 'google.dev',
+    tencent: 'tencent.com|tencentcloud.com',
     iteracompute: 'iteracompute.com', sable: 'sableapi.com', inception: 'inceptionlabs.ai', dosai: 'dos.ai', 'runpod-vllm': 'runpod.io', meta: 'meta.ai', altare: 'altare.global',
     fal: 'fal.ai', bfl: 'bfl.ai', recraft: 'recraft.ai', ideogram: 'ideogram.ai', deepgram: 'deepgram.com', voyage: 'voyageai.com',
 };
@@ -52,7 +53,11 @@ t.test('provider presets are OpenAI-compatible, with a base URL, a timeout, an a
     assert.deepStrictEqual(pool.PROVIDERS.slice(0, 23).map((p) => p.key),
         ['qwen', 'kimi', 'glm', 'minimax', 'deepinfra', 'novita', 'featherless', 'refuseless', 'abliteration', 'openrouter', 'venice', 'abliteratedmodels', 'uplinkswitch', 'chutes', 'siliconflow', 'nebius', 'together', 'fireworks', 'groq', 'cerebras', 'sambanova', 'baseten', 'hyperbolic']);
     assert.deepStrictEqual(pool.PROVIDER_KEYS, pool.PROVIDERS.map((p) => p.key));
-    assert.strictEqual(new Set(pool.PROVIDER_KEYS).size, 68, 'the six researched providers of 2026-11-13 joined the pool, and six web search engines on 2026-11-15');
+    assert.strictEqual(new Set(pool.PROVIDER_KEYS).size, 69, 'the six researched providers of 2026-11-13 joined the pool, six web search engines on 2026-11-15, and Tencent Hy on 2026-11-17');
+    const hy = pool.byKey.get('tencent');
+    assert.deepStrictEqual([hy.base_url, hy.default_model, hy.models.map((m) => [m.model_key, m.cost.in_per_mtok, m.cost.out_per_mtok, m.supports.vision])],
+        ['https://tokenhub-intl.tencentcloudmaas.com/v1', 'hy4-flash', [['hy4-flash', 0.07, 0.281, true], ['hy4', 0.9, 2.7, true]]], 'Hy4 flash and Hy4 at Tencent\'s list prices, with vision');
+    assert.strictEqual(require('../server/console/presets').credentialProvider('tencent').base_url, 'https://tokenhub-intl.tencentcloudmaas.com/v1', 'a person may bring their own TokenHub key');
     assert.strictEqual(pool.byKey.get('meta').base_url, 'https://api.meta.ai/v1');
     assert.strictEqual(pool.byKey.get('perplexity').kind, 'responses');
     assert.strictEqual(require('../server/console/presets').credentialProvider('groq').model, 'openai/gpt-oss-20b', 'existing personal-key default is preserved');

@@ -31,7 +31,7 @@ const byId = (id) => PRESETS.find((p) => p.id === id) || null;
 const CREDENTIAL_PRESET = {
     anthropic: 'anthropic', openai: 'openai', gemini: 'gemini', deepseek: 'deepseek-anthropic',
     mistral: 'mistral', xai: 'xai', groq: 'groq', cerebras: 'cerebras', together: 'together',
-    fireworks: 'fireworks', openrouter: 'openrouter', minimax: 'minimax-anthropic', custom: 'custom',
+    fireworks: 'fireworks', openrouter: 'openrouter', minimax: 'minimax-anthropic', tencent: 'tencent', custom: 'custom',
 };
 const CREDENTIAL_PROVIDERS = Object.keys(CREDENTIAL_PRESET);
 

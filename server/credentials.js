@@ -21,7 +21,7 @@
  *   POST   /api/v1/me/credentials/:provider/test
  *
  * A person may keep one credential per provider (the console presets: anthropic, openai, gemini, deepseek, mistral,
- * xai, groq, cerebras, together, fireworks, openrouter, minimax and a custom endpoint; plus node for the old routes),
+ * xai, groq, cerebras, together, fireworks, openrouter, minimax, tencent (Hy on TokenHub) and a custom endpoint; plus node for the old routes),
  * each with its own daily budget. The provider-less routes read and write the default one, which is the row a pre-C3
  * caller stored (migrations/0014).
  *
@@ -81,7 +81,7 @@ const DEFAULT_MODEL = {
     anthropic: 'claude-haiku-5-5', openai: 'gpt-4o-mini', gemini: 'gemini-2.5-flash', deepseek: 'deepseek-chat',
     mistral: 'mistral-small-latest', xai: 'grok-4-fast', groq: 'openai/gpt-oss-20b', cerebras: 'llama-3.3-70b',
     together: 'meta-llama/Llama-3.3-70B-Instruct-Turbo', fireworks: 'accounts/fireworks/models/llama-v3p3-70b-instruct',
-    openrouter: 'openrouter/auto', minimax: 'MiniMax-M2', custom: null,
+    openrouter: 'openrouter/auto', minimax: 'MiniMax-M2', tencent: 'hy4-flash', custom: null,
 };
 /** Providers that report a balance somewhere public (L36 Y1 "its balance where the provider reports one"). */
 const BALANCE_PROVIDERS = new Set(['openrouter', 'deepseek']);
