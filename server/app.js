@@ -351,7 +351,7 @@ function createApp({ choices = null, searchFetch = null, config, db, registry, p
     // The person's own AI settings (L36 Y1/Y3): their keys under owner `self`, and their routing preferences. Only
     // the person's Network token or their AI site session (same origin) reaches them; a service token is refused.
     if (credentials && preferences && grants) {
-        app.use(require('./me').meRouter({ choices, credentials, preferences, grants, auth, registry, config, clock, log, personSessions, sessionCookies, sendError: (res, err, ctx) => sendError(res, err, ctx, log) }));
+        app.use(require('./me').meRouter({ choices, credentials, preferences, grants, auth, registry, config, clock, log, personSessions, sessionCookies, abuse, sendError: (res, err, ctx) => sendError(res, err, ctx, log) }));
     }
     // The person's human settings moved to Exchange; keep the JSON API here for first-party clients.
     app.use('/you', (req, res) => res.redirect(301, `${config.exchangeUrl}/privacy/keys${req.originalUrl.includes('?') ? req.originalUrl.slice(req.originalUrl.indexOf('?')) : ''}`));
