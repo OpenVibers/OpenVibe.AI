@@ -167,10 +167,34 @@ t.test('the OpenAI-format adapter passes the request through as written', async 
     assert.deepStrictEqual(seen[0].body, { model: 'gpt-4.1-mini', messages, tools: [WEATHER], tool_choice: 'required', parallel_tool_calls: false, top_p: 0.9, max_tokens: 300, temperature: 0.2 });
     assert.deepStrictEqual([out.model, out.usage.input, out.usage.output, out.completion.choices[0].finish_reason], ['up-1', 12, 7, 'tool_calls']);
     await p.complete({ model: 'gpt-5-nano', maxTokens: 300, temperature: 0.2, openai: { messages, top_p: 0.9 } });
-    assert.deepStrictEqual(seen[1].body, { model: 'gpt-5-nano', messages, max_completion_tokens: 300 + 1024, reasoning_effort: 'low' }, 'a reasoning model: max_completion_tokens with room to think, low effort, no sampling knobs');
+    assert.deepStrictEqual(seen[1].body, { model: 'gpt-5-nano', messages, max_completion_tokens: 300 + 4096, reasoning_effort: 'minimal' }, 'a reasoning model: max_completion_tokens with room to think, minimal effort, no sampling knobs');
+    await p.complete({ model: 'gpt-5-nano', maxTokens: 300, openai: { messages, tools: [WEATHER] } });
+    assert.strictEqual(seen[2].body.reasoning_effort, 'low', 'with tools: low effort');
     const plain = createOpenAiProvider({ key: 'local', capabilities: ['chat'] }, { fetchImpl });
     assert.strictEqual(plain.supports('tools'), false, 'tools are declared, never assumed');
 });
+
+t.test('an empty answer cut off while thinking is asked once more, with room to finish (2026-11-17: Vision\'s UI reviews)', async () => {
+    const seen = [];
+    const fetchImpl = async (url, opts) => {
+        const body = JSON.parse(opts.body);
+        seen.push(body);
+        const empty = seen.length === 1;
+        return new Response(JSON.stringify({ model: 'gpt-5-nano', choices: [{ index: 0, message: { role: 'assistant', content: empty ? '' : '{"findings":[]}' }, finish_reason: empty ? 'length' : 'stop' }],
+            usage: { prompt_tokens: 647, completion_tokens: empty ? 4396 : 900, completion_tokens_details: { reasoning_tokens: empty ? 4396 : 600 } } }), { status: 200, headers: { 'content-type': 'application/json' } });
+    };
+    const p = createOpenAiProvider({ key: 'up', base_url: 'https://upstream.example/v1', capabilities: ['chat', 'tools'] }, { apiKey: 'k'.repeat(40), fetchImpl });
+    const out = await p.complete({ model: 'gpt-5-nano', maxTokens: 300, openai: { messages: [{ role: 'user', content: 'Review this page.' }] } });
+    assert.strictEqual(out.text, '{"findings":[]}');
+    assert.deepStrictEqual(seen.map((b) => [b.max_completion_tokens, b.reasoning_effort]), [[300 + 4096, 'minimal'], [300 + 4096 * 3, 'low']], 'once more with three times the room');
+    // An answer with text, or a stop that is not the cap, is never asked again.
+    seen.length = 0;
+    const fetchStop = async (url, opts) => { seen.push(JSON.parse(opts.body)); return new Response(JSON.stringify({ choices: [{ index: 0, message: { role: 'assistant', content: '' }, finish_reason: 'stop' }] }), { status: 200, headers: { 'content-type': 'application/json' } }); };
+    const q = createOpenAiProvider({ key: 'up', base_url: 'https://upstream.example/v1', capabilities: ['chat'] }, { apiKey: 'k'.repeat(40), fetchImpl: fetchStop });
+    await q.complete({ model: 'gpt-5-nano', maxTokens: 300, openai: { messages: [{ role: 'user', content: 'hi' }] } });
+    assert.strictEqual(seen.length, 1);
+});
+
 
 t.test('production\'s shape: an OpenAI-format provider declaring chat (not complete) answers it, no stub behind it', async () => {
     const calls = [];
