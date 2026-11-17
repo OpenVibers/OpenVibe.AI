@@ -112,7 +112,7 @@ function createLiveStream(res) {
         sentAny: () => any,
         finished: (i) => finishedIdx.has(i),
         fail(message, code) {
-            const status = code === 'ai.run_budget_reached' || code === 'ai.allowance_spent' || code === 'billing.insufficient_funds' || code === 'billing.payer_required' ? 402 : /^(input|validation)\./.test(code || '') ? 400 : /quota|allowance|budget/.test(code || '') ? 429 : 503;
+            const status = code === 'ai.run_budget_reached' || code === 'ai.allowance_spent' || code === 'ai.free_unavailable' || code === 'billing.insufficient_funds' || code === 'billing.payer_required' ? 402 : /^(input|validation)\./.test(code || '') ? 400 : /quota|allowance|budget/.test(code || '') ? 429 : 503;
             write({ error: { message: String(message || 'error').slice(0, 1000), type: status === 400 ? 'invalid_request_error' : status === 429 ? 'rate_limit_error' : status === 402 ? 'insufficient_quota' : 'api_error', code: code || null, param: null } });
             return out.done();
         },
@@ -270,7 +270,7 @@ function openaiRouter({ runs, auth, config, registry, presets = null, receipts =
         }
         if (run.status === 'failed' || run.status === 'cancelled') {
             const code = (run.error && run.error.code) || 'run.failed';
-            const status = code === 'ai.run_budget_reached' || code === 'ai.allowance_spent' || code === 'billing.insufficient_funds' || code === 'billing.payer_required' ? 402 : /^(input|validation)\./.test(code) ? 400 : /quota|allowance|budget/.test(code) ? 429
+            const status = code === 'ai.run_budget_reached' || code === 'ai.allowance_spent' || code === 'ai.free_unavailable' || code === 'billing.insufficient_funds' || code === 'billing.payer_required' ? 402 : /^(input|validation)\./.test(code) ? 400 : /quota|allowance|budget/.test(code) ? 429
                 : code === 'project_secret.refused' ? 403 : code === 'credential.endpoint_refused' ? 422
                 : code === 'policy.adult_required' || code === 'policy.uncensored_refused' || code === 'policy.floor_refused' ? 403
                 : code === 'policy.uncensored_needs_person' ? 400

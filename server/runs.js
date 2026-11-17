@@ -1217,7 +1217,14 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
             // never touched for a run they did not start themselves.
             const tried = err instanceof AiError && err.extra && Array.isArray(err.extra.tried) ? err.extra.tried : [];
             const payerSkipped = tried.some((t) => t && t.skipped === 'payer_required');
-            if (ctx.personPays === false && ctx.personSubject && !ctx.serviceBudgeted
+            // 11-17: when the free sources were skipped because none of them can do this run (it needs tools, say), the
+            // person's allowance is not spent: say what is true, still a 402 so products offer the other ways.
+            const freeIncapable = tried.some((t) => t && t.skipped === 'free_provider_not_allowed');
+            if (ctx.personPays === false && ctx.personSubject && !ctx.serviceBudgeted && freeIncapable && !payerSkipped
+                && code === 'provider.unavailable') {
+                code = 'ai.free_unavailable';
+                detail = 'No free model can take this run right now (the ones that can do what it needs are outside the free tier), and the calling service has no budget to cover it. Add a key for the person, use their own computer, or pick a model their Balance pays for.';
+            } else if (ctx.personPays === false && ctx.personSubject && !ctx.serviceBudgeted
                 && (code === 'billing.payer_required' || (code === 'provider.unavailable' && payerSkipped))) {
                 code = 'ai.allowance_spent';
                 detail = `The free AI allowance for ${ctx.personSubject} is spent, and the calling service has no budget to cover this run. Add a key for the person, or wait for the allowance to reset.`;
