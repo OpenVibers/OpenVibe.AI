@@ -37,4 +37,10 @@ assert.ok(!/log_format ovai_noquery '[^']*(\$request |\$request"|\$args|\$reques
 const prices = /location ~ \^\/api\/v1\/prices\/\(([a-z|]+)\)\$ \{([\s\S]*?)\n    \}/.exec(conf);
 assert.ok(prices && prices[1].split('|').sort().join(',') === 'gpus,servers', 'GET /api/v1/prices/{gpus,servers} reaches the app');
 assert.ok(/limit_except GET OPTIONS \{ deny all; \}/.test(prices[2]), 'GET only');
+// 2026-11-17: a service's per-person reads (Actor's fall back to the person's key, its check that a turn fits) answered
+// this host's /api/ 404: they pass, GET only, one person id each.
+const reads = /location ~ "\^\/api\/v1\/\(([a-z|-]+)\)\/usr_[^"]+" \{([\s\S]*?)\n    \}/.exec(conf);
+assert.ok(reads && reads[1].split('|').sort().join(',') === 'allowance,allowed-keys', 'GET /api/v1/{allowed-keys,allowance}/usr_… reaches the app');
+assert.ok(/limit_except GET \{ deny all; \}/.test(reads[2]) && /proxy_pass http:\/\/127\.0\.0\.1:4700;/.test(reads[2]), 'GET only, to the app');
+assert.ok(conf.indexOf('(allowed-keys|allowance)') < conf.indexOf('    location /api/ {'), 'before the /api/ 404');
 console.log('vhost catch-all: GET/HEAD reach the app (favicon, 404 page); other methods refused; /metrics refused; POST /release-metrics passes; POST /api/v1/decisions passes; the public price table passes');
