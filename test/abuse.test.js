@@ -115,6 +115,20 @@ t.test('a hosting ASN is the new tier and a lower rate whatever Network says', a
     assert.strictEqual(home.hosting, false);
     assert.strictEqual(home.tier, 'verified');
     assert.strictEqual(home.allowance, 1000);
+    // A service acting for a person that names no address of theirs (Actor through the loopback proxy, 11-17): its own
+    // server's hosting address is not the person's network, so the person keeps their own tier.
+    const actor = { subject: { type: 'service', id: 'actor' } };
+    const behalf = await abuse.admit({
+        principal: actor, ctx: { requesterType: 'service', requesterId: 'actor', onBehalfOf: USER(1) },
+        request: { loopback: true, reqIp: '5.1.2.3', deviceHash: device(abuse, 'behalf') }, free: true,
+    });
+    assert.deepStrictEqual([behalf.hosting, behalf.tier, behalf.allowance], [false, 'verified', 1000], 'the service\'s own address judges nothing');
+    // The person's own request from a hosting address is still judged by it.
+    const direct = await abuse.admit({
+        principal: { subject: { type: 'user', id: USER(1) } }, ctx: { requesterType: 'user', requesterId: USER(1) },
+        request: { loopback: true, reqIp: '5.1.2.3', deviceHash: device(abuse, 'direct') }, free: true,
+    });
+    assert.deepStrictEqual([direct.hosting, direct.tier], [true, 'new'], 'a person on a hosting network is still the new tier');
 });
 
 t.test('the owner is never refused for the daily allowance, from any network; a user still is (the owner\'s 402, 11-16)', async () => {
