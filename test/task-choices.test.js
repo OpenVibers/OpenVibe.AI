@@ -10,7 +10,7 @@ const user=role=>token('person',[],{actorType:'user',sub:subject,extra:{subject_
 const c=model=>({model,source:'openvibe'});
 t.test('catalogue, personal isolation and admin role gate',async()=>{
  h=await boot({dir:tmpDir()});
- let r=await request(h.base,'GET','/api/v1/tasks');assert.equal(r.status,200,r.text);assert(r.body.tasks.some(t=>t.name==='design.icon'));
+ let r=await request(h.base,'GET','/api/v1/tasks');assert.equal(r.status,200,r.text);assert(r.body.tasks.some(t=>t.name==='design.icon'));assert(r.body.tasks.some(t=>t.name==='design.name_effect'&&t.kind==='code'),'the name effect maker has its task');
  const changelogTask=r.body.tasks.find(t=>t.name==='blog.changelog.tag');assert.equal(changelogTask.workflow,'blog.changelog.tag');
  r=await request(h.base,'PUT','/api/v1/me/choices/design.icon',{tok:svc,body:c('a/b')});assert.equal(r.status,403);
  r=await request(h.base,'PUT','/api/v1/me/choices/design.icon',{tok:user('user'),body:c('a/b')});assert.equal(r.status,200,r.text);

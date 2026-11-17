@@ -232,7 +232,8 @@ async function waitForRun(h, id, tok, tries = 120) {
         const capturing = await waitFor(h2, id, exchange, ['running'], 40);
         assert.ok(capturing);
         // Wait until the first capture is under way, then cancel.
-        for (let i = 0; i < 40 && !slow.calls.length; i++) await new Promise((r2) => setTimeout(r2, 100));
+        // Up to 15 s (was 4): on the PostgreSQL run the first capture starts later (main went red on it, 11-17).
+        for (let i = 0; i < 150 && !slow.calls.length; i++) await new Promise((r2) => setTimeout(r2, 100));
         assert.ok(slow.calls.length >= 1, 'a capture started');
         const c = await request(h2.base, 'POST', `/api/v1/runs/${id}/cancel`, { tok: exchange, body: {} });
         assert.ok([200, 409].includes(c.status));

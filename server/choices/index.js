@@ -27,6 +27,8 @@ const SEEDS = [
     ['wiki.article.images', 'search', 'Find licensed pictures for a wiki article.', 'research.gather'],
     ['image.picture', 'image', 'Find a licensed picture or make one, stored in Media.', 'image.picture'],
     ['design.icon', 'code', 'Draw an original SVG icon.', 'ai.chat'],
+    // openvibe.design's name effect maker (plan §AD.15): a model writes one effect's CSS, which Design checks.
+    ['design.name_effect', 'code', 'Write a name effect: one class of CSS and its keyframes.', 'ai.chat'],
     ['pics.orientation', 'vision', 'Which way is up in a photograph: 0, 90, 180 or 270 degrees, with a confidence.', 'pics.orientation'],
     ['chat.reply', 'text', 'Answer a chat message.', 'ai.complete'],
     ['image.generate', 'image', 'Make an image from a description.', 'ai.image'],
