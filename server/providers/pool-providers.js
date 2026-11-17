@@ -1224,6 +1224,56 @@ const PROVIDERS = [
         ],
     },
 
+    // Tencent Hy on TokenHub (2026-11-17, the owner: "implement WorkBuddy into our models and API and Exchange"): the Hy4
+    // models WorkBuddy runs on, sold by the token through Tencent Cloud's TokenHub (OpenAI Chat Completions, Responses and
+    // Anthropic Messages formats; the international endpoint). Hy4 flash is the cheap everyday tier Tencent built for
+    // WorkBuddy's office tasks (a blind test put it at 2.79 of 4 against Claude Haiku 5.5's 2.81); Hy4 is the stronger one.
+    // The prices are Tencent's own list prices (its launch posts, read 2026-11-17); TokenHub sells both at half price for
+    // now (Hy4 flash to 30 November, Hy4 to 31 December), which a rate card may record when the owner's key is in.
+    // Reasoning is on by default (reasoning_effort none or high). Off until the owner puts a TokenHub key in
+    // ai.provider_keys; a person may bring their own (the console's credential presets).
+    {
+        key: 'tencent',
+        docs_url: 'https://www.tencentcloud.com/document/product/1300/80695',
+        keys_url: 'https://console.tencentcloud.com/tokenhub',
+        display_name: 'Tencent Hy (TokenHub)',
+        base_url: 'https://tokenhub-intl.tencentcloudmaas.com/v1',
+        default_model: 'hy4-flash',
+        timeout_ms: 90000,
+        capabilities: ['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich', 'json', 'tools', 'vision'],
+        provider_access: 'UNVERIFIED',
+        priority: 35,
+        privacy: privacy({
+            label: 'anonymized',
+            terms_url: 'https://www.tencentcloud.com/document/product/1300/80695',
+            wording: 'TokenHub\'s data processing protocol was not read for retention or training on 2026-11-17, so nothing here says zero retention or no training',
+        }),
+        data_policy: policy({
+            trains: null, retention: null, region: null,
+            retention_note: 'not read yet (TokenHub\'s Data Processing and Security Protocol)',
+            terms: 'https://www.tencentcloud.com/document/product/1300/80695',
+            resale: 'no resale clause verified',
+        }),
+        models: [
+            {
+                model_key: 'hy4-flash', display_name: 'Hy4 flash', family: 'hy', context_window: 1048576,
+                cost: { in_per_mtok: 0.070, cached_per_mtok: 0.003, out_per_mtok: 0.281 },
+                source: 'https://www.tencent.com/tencent-launches-hy4-flash-to-power-high-speed-cost-efficient-ai-deployment-for-everyday-workflows/', checked: '2026-11-17',
+                supports: { json: true, tools: true, streaming: true, vision: true },
+                quantization: null, refusal_rate: null,
+                note: '224B total, 12B active; 960K input and 64K output at most; half price on TokenHub to 30 November 2026, and free in WorkBuddy to then',
+            },
+            {
+                model_key: 'hy4', display_name: 'Hy4', family: 'hy', context_window: 1024000,
+                cost: { in_per_mtok: 0.90, cached_per_mtok: 0.045, out_per_mtok: 2.70 },
+                source: 'https://www.tencent.com/tencent-launches-hy4-joining-the-ranks-of-the-worlds-leading-open-source-ai-models/', checked: '2026-11-17',
+                supports: { json: true, tools: true, streaming: true, vision: true },
+                quantization: null, refusal_rate: null,
+                note: 'open weights; 64K output at most; half price on TokenHub to 31 December 2026',
+            },
+        ],
+    },
+
     // ── The researched providers of 2026-11-13 (the guided setup's Images, Voices, Speech in and
     // Embeddings steps). Each one is off until the owner puts its key in ai.provider_keys. Their
     // prices were read on their own pages on 2026-11-13 and live in the setup catalogue

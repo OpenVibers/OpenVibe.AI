@@ -22,14 +22,14 @@ const { offerStatus } = require('../providers/failure');
 
 const FAMILY_BY_PREFIX = [
     ['deepseek', 'DeepSeek'], ['qwen', 'Qwen'], ['qwq', 'Qwen'], ['kimi', 'Kimi'], ['moonshot', 'Kimi'],
-    ['glm', 'GLM'], ['zhipu', 'GLM'], ['minimax', 'MiniMax'], ['llama', 'Llama'], ['mistral', 'Mistral'],
+    ['glm', 'GLM'], ['zhipu', 'GLM'], ['minimax', 'MiniMax'], ['hy4', 'Hy'], ['hy3', 'Hy'], ['llama', 'Llama'], ['mistral', 'Mistral'],
     ['mixtral', 'Mistral'], ['gemma', 'Gemma'], ['gpt', 'GPT'], ['o1', 'GPT'], ['o3', 'GPT'], ['claude', 'Claude'],
     ['gemini', 'Gemini'], ['phi', 'Phi'], ['yi', 'Yi'], ['ernie', 'ERNIE'], ['hunyuan', 'Hunyuan'],
 ];
 const UNCENSORED = /abliterat|uncensor/i;
 // The org a family belongs to, so the same model served by several providers is one model with several offers.
 const ORG_BY_FAMILY = {
-    DeepSeek: 'deepseek', Qwen: 'qwen', Kimi: 'moonshot', GLM: 'zai', MiniMax: 'minimax',
+    DeepSeek: 'deepseek', Qwen: 'qwen', Kimi: 'moonshot', GLM: 'zai', MiniMax: 'minimax', Hy: 'tencent',
     Llama: 'meta-llama', Mistral: 'mistralai', Gemma: 'google', GPT: 'openai', Claude: 'anthropic',
     Gemini: 'google', Phi: 'microsoft', Yi: '01-ai', ERNIE: 'baidu', Hunyuan: 'tencent',
 };

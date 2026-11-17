@@ -40,6 +40,7 @@ const KEY_HOW = Object.freeze({
     anthropic: 'Create a key in the workspace that pays for it (Settings, API keys).',
     'deepseek-anthropic': 'Sign in, open API keys and create one. DeepSeek only answers while the account has a topped-up balance.',
     'minimax-anthropic': 'Open Account, Interface key, and create an API key for the pay-as-you-go plan.',
+    tencent: 'Activate TokenHub on a Tencent Cloud international account, open API Key Management and create a key; if you limit its scope, include hy4-flash and hy4.',
 });
 
 function originOf(url) {
