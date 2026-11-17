@@ -106,9 +106,12 @@ function buildCompleteBody(req = {}) {
         if (o[k] !== undefined && o[k] !== null) body[k] = o[k];
     }
     if (isReasoningModel(model)) {
-        // max_tokens is the answer the caller wants; a reasoning model thinks first, out of the same allowance.
-        if (maxTokens) body.max_completion_tokens = Math.max(maxTokens, 256) + 1024;
-        body.reasoning_effort = 'low';
+        // max_tokens is the answer the caller wants; a reasoning model thinks first, out of the same allowance. The same
+        // room and effort as chat() (buildBody): 1024 tokens of room and low effort left gpt-5-nano no text on a picture
+        // with a long question (2026-11-17: every Vision UI review answered "length" with 0 characters, even at 2000).
+        // A caller's own effort still wins (effortPolicy.apply below); with tools, low, as before.
+        if (maxTokens) body.max_completion_tokens = Math.max(maxTokens, 256) + (req.thinkRoom || REASONING_HEADROOM);
+        body.reasoning_effort = req.retryEffort || (/^gpt-5/i.test(model) && !body.tools ? 'minimal' : 'low');
         for (const k of ['top_p', 'presence_penalty', 'frequency_penalty']) delete body[k];
     } else {
         if (maxTokens) body.max_tokens = maxTokens;
@@ -234,6 +237,13 @@ function createOpenAiProvider(record, { apiKey = '', fetchImpl = globalThis.fetc
         if (!Array.isArray(j.choices) || !j.choices.length) throw new ProviderError('completion has no choices', { code: 'provider.output' });
         const msg = j.choices[0].message || {};
         const u = j.usage || {};
+        // A reasoning model that thought until the cap and said nothing: once more, with room to finish (as chat() does).
+        const said = typeof msg.content === 'string' ? msg.content.trim() : '';
+        if (!said && !(Array.isArray(msg.tool_calls) && msg.tool_calls.length) && j.choices[0].finish_reason === 'length' && isReasoningModel(req.model) && !req.thinkRoom && body.max_completion_tokens) {
+            const reasoning = (u.completion_tokens_details && u.completion_tokens_details.reasoning_tokens) || 0;
+            emptyLog(`[ai] ${req.model}: an empty completion (finish length, ${reasoning} reasoning of ${u.completion_tokens || 0} completion tokens); trying once with more room`);
+            return complete({ ...req, thinkRoom: REASONING_HEADROOM * 3, retryEffort: 'low' });
+        }
         return {
             completion: { choices: j.choices, system_fingerprint: j.system_fingerprint || null },
             text: typeof msg.content === 'string' ? msg.content : '',
