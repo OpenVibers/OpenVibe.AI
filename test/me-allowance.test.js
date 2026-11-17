@@ -42,5 +42,19 @@ t.test('a free run moves what is used', async () => {
     assert.strictEqual(a.left, Math.max(0, a.tokens - a.used));
 });
 
+t.test('a first-party service reads what a person has left (Actor checks a turn fits); an app cannot', async () => {
+    const svc = await request(h.base, 'GET', `/api/v1/allowance/${PERSON}`, { tok: service });
+    assert.strictEqual(svc.status, 200, svc.text);
+    assert.strictEqual(svc.body.subject, PERSON);
+    const mine = (await request(h.base, 'GET', '/api/v1/me/allowance', { tok: person })).body.allowance;
+    assert.deepStrictEqual(svc.body.allowance, mine, 'the same numbers the person reads');
+    const app = token('app', ['ai.run.create', 'ai.app.run'], { sub: 'app:app_01JAB2C3D4E5F6G7H8J9K0MNPQ', actorType: 'app', ns: ['prj_x', 'app.prj_x.*'], extra: { project_id: 'prj_x' } });
+    assert.ok([401, 403].includes((await request(h.base, 'GET', `/api/v1/allowance/${PERSON}`, { tok: app })).status), 'an app is refused');
+    const self = await request(h.base, 'GET', `/api/v1/allowance/${PERSON}`, { tok: person });
+    assert.ok([401, 403].includes(self.status), `a person reads their own at /me/allowance, not here (${self.status})`);
+    assert.strictEqual((await request(h.base, 'GET', '/api/v1/allowance/not-a-person', { tok: service })).status, 404);
+    assert.strictEqual((await request(h.base, 'GET', `/api/v1/allowance/${PERSON}`, {})).status, 401);
+});
+
 t.test('stop', async () => { await h.stop(); });
 t.run();

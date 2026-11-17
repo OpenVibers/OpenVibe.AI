@@ -8,7 +8,7 @@ const { createRelease } = require('openvibe-shared/release');
 const { createAiReadiness, registerAiGauges } = require('./observability');
 const { runsRouter } = require('./api/runs');
 const { actionsRouter } = require('./api/actions');
-const { sendError, providerSecret } = require('./util');
+const { AiError, sendError, providerSecret } = require('./util');
 const creations = require('./creations');
 const home = require('./home');
 const openapi = require('./openapi');
@@ -353,6 +353,20 @@ function createApp({ choices = null, searchFetch = null, config, db, registry, p
     if (credentials && preferences && grants) {
         app.use(require('./me').meRouter({ choices, credentials, preferences, grants, auth, registry, config, clock, log, personSessions, sessionCookies, abuse, sendError: (res, err, ctx) => sendError(res, err, ctx, log) }));
     }
+    // GET /api/v1/allowance/:subject (ai.run.create, a first-party service only): the free allowance a person has left
+    // today, for a service that acts for them. Actor checks a turn fits before it starts one on the free AI, so a turn
+    // that cannot finish never burns the person's tokens (plan §AD.17; 11-17: two probe turns spent 22k tokens, no answer).
+    // A third-party app, even with the capability, is refused: what a person used is not an app's to read.
+    app.get('/api/v1/allowance/:subject', auth.requireCap('ai.run.create'), async (req, res) => {
+        try {
+            const subj = req.principal && req.principal.subject;
+            if (!subj || subj.type !== 'service') throw new AiError(403, 'capability.denied', 'only a first-party service reads a person\'s allowance');
+            const subject = String(req.params.subject || '');
+            if (!/^usr_[0-9A-HJKMNP-TV-Z]{26}$/.test(subject)) throw new AiError(404, 'allowance.not_found', 'no allowance for that subject');
+            const allowance = abuse && typeof abuse.allowanceOf === 'function' ? await abuse.allowanceOf(subject) : null;
+            res.set('Cache-Control', 'no-store').json({ subject, allowance });
+        } catch (err) { sendError(res, err, req.ov, log); }
+    });
     // The person's human settings moved to Exchange; keep the JSON API here for first-party clients.
     app.use('/you', (req, res) => res.redirect(301, `${config.exchangeUrl}/privacy/keys${req.originalUrl.includes('?') ? req.originalUrl.slice(req.originalUrl.indexOf('?')) : ''}`));
     app.use('/console', (req, res) => res.redirect(301, `${config.exchangeUrl}${req.originalUrl}`));
