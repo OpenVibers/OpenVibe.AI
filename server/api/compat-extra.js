@@ -750,7 +750,7 @@ function compatExtra({ runs, auth, config, log }) {
         if (!['succeeded', 'cached'].includes(run.status)) {
             const code = (run.error && run.error.code) || (run.status === 'failed' ? 'run.failed' : 'run.timeout');
             const status = code === 'run.timeout' ? 504
-                : code === 'ai.run_budget_reached' || code === 'ai.allowance_spent' || code === 'billing.insufficient_funds' || code === 'billing.payer_required' ? 402
+                : code === 'ai.run_budget_reached' || code === 'ai.allowance_spent' || code === 'ai.free_unavailable' || code === 'billing.insufficient_funds' || code === 'billing.payer_required' ? 402
                 : /^(input|validation)\./.test(code) ? 400 : /quota|allowance|budget/.test(code) ? 429
                 : code === 'ai.model_not_found' ? 404 : code === 'ai.model_unavailable' ? 400 : 503;
             throw new AiError(status, code, (run.error && run.error.detail) || (code === 'run.timeout' ? `the run is still running; GET /api/v1/runs/${run.id}` : code));

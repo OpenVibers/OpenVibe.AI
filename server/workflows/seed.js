@@ -61,7 +61,9 @@ function deepseekProviderRecord(config, env) {
         status: config.deepseek.enabled && key ? 'active' : 'disabled',
         base_url: config.deepseek.baseUrl, auth_mode: 'bearer', secret_ref: config.deepseek.apiKeyRef,
         default_model: DEEPSEEK_MODELS[0].model_key,
-        capabilities: ['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich', 'json', 'vision'],
+        // tools (11-17): DeepSeek's chat completions call tools (its models say supports.tools, and the pool preset lists
+        // it). Without it every tool-using free run (Actor's loop) found no capable free source and failed as a 402.
+        capabilities: ['chat', 'generate', 'summarize', 'classify', 'extract', 'enrich', 'json', 'vision', 'tools'],
         timeout_ms: config.deepseek.timeoutMs, priority: 20, provider_access: 'OWN_DEPLOYMENT',
         metadata: { configured_by: 'DEEPSEEK_API_KEY', provider_name: 'deepseek', billing_profile: 'metered' },
     };

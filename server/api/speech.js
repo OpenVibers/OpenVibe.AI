@@ -80,7 +80,7 @@ function speechRouter({ runs, auth, config, presets = null, receipts = null, db 
         if (['succeeded', 'cached'].includes(run.status) || (['failed', 'cancelled'].includes(run.status) && run.usage.attempts === 0)) res.locals.inferenceCharge = Number(run.usage.cost_usd || 0);
         if (run.status === 'failed' || run.status === 'cancelled') {
             const code = (run.error && run.error.code) || 'run.failed';
-            const status = code === 'ai.run_budget_reached' || code === 'ai.allowance_spent' || code === 'billing.insufficient_funds' || code === 'billing.payer_required' ? 402 : /^(input|validation)\./.test(code) ? 400 : /quota|allowance|budget/.test(code) ? 429
+            const status = code === 'ai.run_budget_reached' || code === 'ai.allowance_spent' || code === 'ai.free_unavailable' || code === 'billing.insufficient_funds' || code === 'billing.payer_required' ? 402 : /^(input|validation)\./.test(code) ? 400 : /quota|allowance|budget/.test(code) ? 429
                 : code === 'ai.model_not_found' ? 404
                 : code === 'ai.model_unavailable' ? 400 : 503;
             return openaiError(res, status, (run.error && run.error.detail) || code, code);
