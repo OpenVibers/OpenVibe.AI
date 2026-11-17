@@ -153,11 +153,17 @@ function createAbuse({ db, config, env = process.env, clock = { now: () => Date.
         };
     }
 
-    /** The address a trust decision may use: a first-party service's header, or the loopback proxy's own answer. */
-    function clientIp(meta, principal) {
+    /**
+     * The address a trust decision may use: a first-party service's header, or the loopback proxy's own answer. A
+     * service acting for a person that names no address of theirs sends its own: our servers sit in a hosting ASN, so
+     * every person's Actor run was judged a data-centre client and given the new tier (11-17: 5,000 tokens where their
+     * own allowance was 20,000, and one Actor turn took 11,134). Then the person's network is unknown and judges nothing.
+     */
+    function clientIp(meta, principal, onBehalf = false) {
         if (!meta) return null;
         const service = principal && principal.subject && principal.subject.type === 'service' ? principal.subject.id : null;
         if (meta.explicitIp && service && firstParty.has(String(service).toLowerCase())) return meta.explicitIp;
+        if (service && onBehalf) return null;
         if (meta.loopback) return firstAddress(meta.reqIp);
         return null;
     }
@@ -171,8 +177,8 @@ function createAbuse({ db, config, env = process.env, clock = { now: () => Date.
         if (Math.random() < 0.01) await db.prepare('DELETE FROM abuse_network_seen WHERE expires_at < ?').run(ts).catch(() => {});
     }
 
-    async function networkOf(meta, principal) {
-        const ip = clientIp(meta, principal);
+    async function networkOf(meta, principal, onBehalf = false) {
+        const ip = clientIp(meta, principal, onBehalf);
         if (!ip) return { asn: null, hosting: false, prefixHash: null, asnHash: null };
         const look = asn.lookup(ip);
         const prefix = asnLib.prefixOf(ip);
@@ -268,7 +274,7 @@ function createAbuse({ db, config, env = process.env, clock = { now: () => Date.
         if (!free && !anonymous) return null;
         if (ctx.requesterType === 'app') return null;
 
-        const network = await networkOf(meta, principal);
+        const network = await networkOf(meta, principal, Boolean(ctx.onBehalfOf && USR.test(String(ctx.onBehalfOf))));
         let account = { available: false, reason: 'no account' };
         let kudos = 0;
         if (subject) {
