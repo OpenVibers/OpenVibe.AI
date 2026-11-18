@@ -7,8 +7,9 @@
  * AI's Network service token (run.job.submit, run.job.read on openvibe.run). The answer is parakeet-cli's own
  * per-token output, parsed by whisper.js as a local run's.
  *
- * Any failure answers { ok: false } and that piece decodes here; after a failure the next five minutes stay here,
- * so an outage costs one piece's wait, not every piece's.
+ * A miss is asked once more; a second miss answers { ok: false } and that piece decodes here, unless
+ * AI_ASR_LOCAL_FALLBACK=off (then the transcription fails as unavailable and is tried again later); after a failure the
+ * next five minutes stay off the node, so an outage costs one piece's wait, not every piece's.
  *
  *   createAsrRun({ config, env, fetchImpl, tokens, now, sleep, log }) → { configured(), decode(wavPath, { timeoutMs, signal }) }
  *   decode → { ok: true, stderr, ms, job } | { ok: false, error }
@@ -22,7 +23,12 @@ const MAX_WAV = 360 * 1024;
 const PIECE_SEC = 10;
 const POLL_MS = 250;
 const COOL_MS = 5 * 60 * 1000;
+const RETRY_MS = 2000;
 const DONE = new Set(['succeeded', 'failed', 'cancelled', 'expired']);
+
+/** May a piece the node missed decode on this host? AI_ASR_LOCAL_FALLBACK=off (production, 11-18: heavy work runs on the
+ *  shared node via Link) says no: the transcription fails as unavailable and its caller tries again later. */
+const localFallback = (config) => !(config && config.asrRun && config.asrRun.localFallback === false);
 
 function settingsOf(config) {
     const a = (config && config.asrRun) || {};
@@ -72,7 +78,8 @@ function createAsrRun({ config = {}, env = process.env, fetchImpl = globalThis.f
             return { status: res.status, doc: await res.json().catch(() => null) };
         };
         const t0 = now();
-        try {
+        // One job; its outcome (never the cooldown: decode decides that after a second ask).
+        const once = async () => { try {
             const sub = await call('POST', '/api/v1/jobs', {
                 class: 'linux', artifact: { name: 'openvibe-asr', version: '1.0.0' },
                 args: { audio_b64: wav.toString('base64'), threads: 4 }, egress: 'none',
@@ -82,27 +89,33 @@ function createAsrRun({ config = {}, env = process.env, fetchImpl = globalThis.f
                 idempotency_key: `ai-asr:${crypto.createHash('sha256').update(wav).digest('hex').slice(0, 32)}`,
             });
             const id = sub.doc && (sub.doc.id || (sub.doc.job && sub.doc.job.id));
-            if (!(sub.status === 200 || sub.status === 201) || !id) return fail(`Run answered ${sub.status}${sub.doc && sub.doc.code ? ` ${sub.doc.code}` : ''}`);
+            if (!(sub.status === 200 || sub.status === 201) || !id) return { ok: false, error: `Run answered ${sub.status}${sub.doc && sub.doc.code ? ` ${sub.doc.code}` : ''}` };
             for (;;) {
-                if (signal && signal.aborted) return { ok: false, error: 'cancelled' };
-                if (now() >= deadline) return fail(`no answer within ${Math.round(timeoutMs / 1000)} s`);
+                if (signal && signal.aborted) return { ok: false, error: 'cancelled', final: true };
+                if (now() >= deadline) return { ok: false, error: `no answer within ${Math.round(timeoutMs / 1000)} s`, final: true };
                 await sleep(POLL_MS);
                 const r = await call('GET', `/api/v1/jobs/${encodeURIComponent(id)}`);
                 const j = r.doc && (r.doc.state ? r.doc : r.doc.job);
                 if (!j || !DONE.has(j.state)) continue;
                 const result = j.result && typeof j.result === 'object' ? j.result : null;
                 if (j.state !== 'succeeded' || !result || result.code !== 0 || typeof result.stderr !== 'string') {
-                    return fail(`the job ended ${j.state}${j.error && j.error.code ? ` (${j.error.code})` : ''}${result && result.code ? `, exit ${result.code}` : ''}`);
+                    return { ok: false, error: `the job ended ${j.state}${j.error && j.error.code ? ` (${j.error.code})` : ''}${result && result.code ? `, exit ${result.code}` : ''}` };
                 }
-                lastNote = '';
                 return { ok: true, stderr: result.stderr, ms: now() - t0, job: id };
             }
         } catch (e) {
-            return fail(e && e.name === 'TimeoutError' ? 'Run did not answer in time' : `Run unreachable: ${(e && e.message) || e}`);
-        }
+            return { ok: false, error: e && e.name === 'TimeoutError' ? 'Run did not answer in time' : `Run unreachable: ${(e && e.message) || e}` };
+        } };
+        // A node that misses once (a reconnect, a worker restarting) is asked once more (11-18: the work runs on the shared
+        // node, not on production); a second miss is a failure, and the cooldown starts.
+        let r = await once();
+        if (!r.ok && !r.final && !(signal && signal.aborted) && now() + RETRY_MS < deadline) { await sleep(RETRY_MS); r = await once(); }
+        if (r.ok) { lastNote = ''; return r; }
+        if (r.error === 'cancelled') return { ok: false, error: 'cancelled' };
+        return fail(r.error);
     }
 
     return { configured, decode };
 }
 
-module.exports = { createAsrRun, settingsOf, MAX_WAV, PIECE_SEC, COOL_MS };
+module.exports = { createAsrRun, settingsOf, localFallback, MAX_WAV, PIECE_SEC, COOL_MS };

@@ -401,7 +401,10 @@ function load(env = process.env) {
         // Parakeet on the shared node (server/providers/asr-run.js, plan §AD.21b item 6): the node's Run function
         // openvibe-asr decodes each 10 s piece for this person (an owner of the project) on their own node. AI's
         // service token needs run.job.submit and run.job.read on openvibe.run. Unset, or any failure there, decodes here.
-        asrRun: { url: trimUrl(env.AI_ASR_RUN_URL || ''), subject: env.AI_ASR_RUN_SUBJECT || '', project: env.AI_ASR_RUN_PROJECT || '' },
+        // AI_ASR_LOCAL_FALLBACK=off: a piece the shared node misses never decodes on this host (11-18: heavy work runs on the
+        // node via Link); the transcription fails as unavailable and its caller tries again later. Default on (self-hosting).
+        asrRun: { url: trimUrl(env.AI_ASR_RUN_URL || ''), subject: env.AI_ASR_RUN_SUBJECT || '', project: env.AI_ASR_RUN_PROJECT || '',
+            localFallback: !/^(off|0|false|no)$/i.test(String(env.AI_ASR_LOCAL_FALLBACK || '').trim()) },
 
         // ── Quotas seeded at boot (admin API edits them afterwards) ──
         quotas: {
