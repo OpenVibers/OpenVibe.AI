@@ -145,9 +145,11 @@ function parseParakeet(stderr, offsetSec = 0, { words = false } = {}) {
 }
 const CHUNK_SEC = 30;
 const CHUNK_MAX_SEC = 45;
+const { createAsrRun, PIECE_SEC: NODE_PIECE_SEC } = require('./asr-run');
+const NODE_LANES = 3;
 const wavSeconds = (p) => { try { return Math.max(0, (fs.statSync(p).size - 44) / 32000); } catch { return 0; } };   // 16 kHz mono s16le
 
-function createWhisperProvider(record, { config }) {
+function createWhisperProvider(record, { config, asrRun = null }) {
     const HOME = os.homedir();
     const w = config.whisper;
     const bins = [w.bin, path.join(HOME, 'whisper.cpp/build/bin/whisper-cli'), path.join(HOME, 'whisper.cpp/build/bin/main'), path.join(HOME, 'whisper.cpp/main')].filter(Boolean);
@@ -164,6 +166,7 @@ function createWhisperProvider(record, { config }) {
     const parakeetOn = () => w.engine !== 'whisper' && exists(w.parakeetModel) && Boolean(parakeetBin());
     const engineFor = (language) => (parakeetOn() && PARAKEET_LANGS.has(String(language || 'en').slice(0, 2).toLowerCase()) ? 'parakeet' : 'whisper');
 
+    const node = asrRun || createAsrRun({ config });
     const lanes = { live: { max: 1, running: 0, waiters: [] }, batch: { max: w.maxConcurrent, running: 0, waiters: [] } };
     const acquire = (lane) => { const L = lanes[lane]; if (L.running < L.max) { L.running++; return Promise.resolve(); } return new Promise(r => L.waiters.push(r)); };
     const release = (lane) => { const L = lanes[lane]; const n = L.waiters.shift(); if (n) n(); else L.running = Math.max(0, L.running - 1); };
@@ -278,14 +281,18 @@ function createWhisperProvider(record, { config }) {
         });
     }
     // Parakeet on a whole WAV: in 30 s pieces past 45 s (PCM cut exactly, so a piece's times shift only by its start).
+    // With the shared node configured (./asr-run.js, plan §AD.21b item 6), in 10 s pieces past 10 s, three on the node
+    // at a time; a piece the node does not decode is decoded here, one at a time.
     async function decodeParakeet(wavPath, { language = 'en', live = false, lowPower = false, offsetSec = 0, words = false, signal, timeoutMs }) {
         const threads = live || lowPower ? Math.max(1, Math.min(2, w.threads)) : w.threads;
         const deadline = Date.now() + timeoutMs;
+        const onNode = node.configured();
+        const pieceSec = onNode ? NODE_PIECE_SEC : CHUNK_SEC;
         let pieces = [wavPath], dir = null;
-        if (wavSeconds(wavPath) > CHUNK_MAX_SEC) {
+        if (wavSeconds(wavPath) > (onNode ? NODE_PIECE_SEC : CHUNK_MAX_SEC)) {
             dir = fs.mkdtempSync(path.join(os.tmpdir(), 'openvibe-ai-pk-'));
             await new Promise((resolve, reject) => {
-                const ff = spawnTracked('nice', ['-n', '15', 'ffmpeg', '-nostdin', '-loglevel', 'error', '-y', '-i', wavPath, '-f', 'segment', '-segment_time', String(CHUNK_SEC), '-c', 'copy', path.join(dir, 'p%04d.wav')]);
+                const ff = spawnTracked('nice', ['-n', '15', 'ffmpeg', '-nostdin', '-loglevel', 'error', '-y', '-i', wavPath, '-f', 'segment', '-segment_time', String(pieceSec), '-c', 'copy', path.join(dir, 'p%04d.wav')]);
                 ff.on('close', (code) => (code === 0 ? resolve() : reject(new ProviderError(`ffmpeg split exited ${code}`, { code: 'provider.error' }))));
                 ff.on('error', (e) => reject(new ProviderError(e.message, { code: 'provider.unavailable' })));
             });
@@ -293,9 +300,32 @@ function createWhisperProvider(record, { config }) {
         }
         try {
             const raw = [];
-            for (let i = 0; i < pieces.length; i++) {
-                if (Date.now() >= deadline) throw new ProviderError('parakeet timed out', { code: 'provider.error' });
-                raw.push(...await parakeetOnce(pieces[i], { threads, offsetSec: offsetSec + i * CHUNK_SEC, words, signal, deadline }));
+            if (onNode) {
+                const parts = new Array(pieces.length);
+                let next = 0;
+                let localTurn = Promise.resolve();
+                const here = (i, off) => {
+                    const turn = localTurn.then(() => parakeetOnce(pieces[i], { threads, offsetSec: off, words, signal, deadline }));
+                    localTurn = turn.catch(() => {});
+                    return turn;
+                };
+                const lane = async () => {
+                    while (next < pieces.length) {
+                        const i = next++;
+                        if (Date.now() >= deadline) throw new ProviderError('parakeet timed out', { code: 'provider.error' });
+                        const off = offsetSec + i * pieceSec;
+                        const r = await node.decode(pieces[i], { timeoutMs: Math.max(1000, Math.min(60000, deadline - Date.now())), signal });
+                        if (signal && signal.aborted) throw new ProviderError('cancelled', { code: 'provider.cancelled' });
+                        parts[i] = r.ok ? parseParakeet(r.stderr, off, { words }) : await here(i, off);
+                    }
+                };
+                await Promise.all(Array.from({ length: Math.min(NODE_LANES, pieces.length) }, lane));
+                for (const p of parts) raw.push(...p);
+            } else {
+                for (let i = 0; i < pieces.length; i++) {
+                    if (Date.now() >= deadline) throw new ProviderError('parakeet timed out', { code: 'provider.error' });
+                    raw.push(...await parakeetOnce(pieces[i], { threads, offsetSec: offsetSec + i * CHUNK_SEC, words, signal, deadline }));
+                }
             }
             const segments = cleanSegments(raw, true);
             return { text: segments.map(s => s.text).join(' ').replace(/\s+/g, ' ').trim(), segments, language: String(language || 'en'), model: path.basename(w.parakeetModel) };
