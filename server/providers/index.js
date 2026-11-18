@@ -413,7 +413,12 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         const apiKey = providerSecret(p, env);
         switch (p.kind) {
             case 'stub': return createStubProvider(p, { stats: statFor(p.key) });
-            case 'openai': return createOpenAiProvider(p, { apiKey, fetchImpl });
+            case 'openai': {
+                const a = createOpenAiProvider(p, { apiKey, fetchImpl });
+                // The host's local models answered by a Link machine when one is named (plan §AD.23 step 2).
+                const lc = p.key === 'local' ? config.localLlm : p.key === 'local2' ? config.localLlm2 : null;
+                return lc && lc.machine ? require('./machine-backed').machineBacked(a, { machines, machine: lc.machine, subject: lc.machineSubject, model: lc.machineModel, log }) : a;
+            }
             case 'responses': return createResponsesProvider(p, { apiKey, fetchImpl });
             case 'anthropic': return createAnthropicProvider(p, { apiKey, fetchImpl });
             case 'gemini': return createGeminiProvider(p, { apiKey, fetchImpl });

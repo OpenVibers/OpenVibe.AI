@@ -264,6 +264,11 @@ function load(env = process.env) {
             // and a short answer unless a route already asked for less (server/providers/index.js).
             maxTokens: Math.max(1, int(env.AI_LOCAL_LLM_MAX_TOKENS, 512)),
             concurrency: Math.max(1, int(env.AI_LOCAL_LLM_CONCURRENCY, 1)),
+            // The same model on a Link machine (plan §AD.23 step 2, server/providers/machine-backed.js): a Bot machine
+            // (dev_…), its owner (usr_…) and the model's name there (an Ollama tag, e.g. qwen2.5:1.5b). Unset: the host.
+            machine: String(env.AI_LOCAL_LLM_MACHINE || '').trim(),
+            machineSubject: String(env.AI_LOCAL_LLM_MACHINE_SUBJECT || '').trim(),
+            machineModel: String(env.AI_LOCAL_LLM_MACHINE_MODEL || '').trim(),
         },
         // A second local chat server (its own llama.cpp process, another model family): the provider `local2`.
         // Same rules as `local`: no key, never paid, no JSON. Two local offers let a caller pin a match
@@ -272,6 +277,9 @@ function load(env = process.env) {
             url: trimUrl(env.AI_LOCAL_LLM2_URL),
             model: String(env.AI_LOCAL_LLM2_MODEL || '').trim(),
             timeoutMs: int(env.AI_LOCAL_LLM2_TIMEOUT_MS, 180000),
+            machine: String(env.AI_LOCAL_LLM2_MACHINE || '').trim(),
+            machineSubject: String(env.AI_LOCAL_LLM2_MACHINE_SUBJECT || env.AI_LOCAL_LLM_MACHINE_SUBJECT || '').trim(),
+            machineModel: String(env.AI_LOCAL_LLM2_MACHINE_MODEL || '').trim(),
         },
         // Image generation (POST /api/v1/image, workflow ai.image): off until AI_IMAGE_MODEL names the shared
         // provider's image model (dall-e-3, gpt-image-1); then boot seeds that model and route default.image.
