@@ -220,4 +220,23 @@ t.test('anomalous cached token counts cannot exceed a whole prompt', async () =>
     assert.strictEqual(body.models.find(x => x.slug === 'deepseek/deepseek-flash').cache_hit_share_7d, 1);
 });
 
+t.test('a week of latency rows folds in milliseconds: one registry match per (provider, model) pair (11-18)', async () => {
+    // Production's shape on 11-18: ~21,000 latency rows over 13 pairs, hundreds of registry models a provider. Matching
+    // every row against every model stalled AI's event loop 250-480 ms every few minutes (886 ms here before).
+    const { fold } = require('../server/exchange/observed');
+    const providers = ['shared', 'openai', 'anthropic'];
+    const drafts = [];
+    for (const p of providers) for (let i = 0; i < 300; i++) drafts.push({ providerKey: p, modelKey: `model-${i}`, offer: {} });
+    const pairs = Array.from({ length: 13 }, (_, i) => [providers[i % 3], `model-${i * 7}-2025-08-07`]);
+    const latencies = Array.from({ length: 21000 }, (_, i) => ({ provider_key: pairs[i % 13][0], model_key: pairs[i % 13][1], latency_ms: 100 + (i % 900), ttft_ms: i % 3 ? String(50 + (i % 400)) : null }));
+    const runs = pairs.map(([p, m]) => ({ provider_key: p, model_key: m, status: 'succeeded', n: 2000, day: '2026-11-18' }));
+    const t0 = Date.now();
+    fold({ runs, runs24: runs, latencies, tokens: [], today: '2026-11-18' }, drafts);
+    const ms = Date.now() - t0;
+    assert.ok(ms < 400, `fold took ${ms} ms`);
+    const d = drafts.find((x) => x.providerKey === 'shared' && x.modelKey === 'model-0');
+    assert.deepStrictEqual([d.offer.speed, d.offer.uptime], [{ p50_ms: 302, p95_ms: 863 }, 1], 'the same numbers as before');
+    assert.strictEqual(drafts.find((x) => x.modelKey === 'model-1').offer.uptime, null, 'a model with no rows stays unmeasured');
+});
+
 t.run();

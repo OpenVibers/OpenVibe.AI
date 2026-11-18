@@ -163,12 +163,18 @@ function fold(observed, drafts) {
         if (!byProvider.has(d.providerKey)) byProvider.set(d.providerKey, []);
         byProvider.get(d.providerKey).push(d);
     }
+    // Once per (provider, model) pair: a week holds ~21,000 latency rows over a dozen pairs, and matching each row against
+    // every registry model of its provider stalled the event loop 250-480 ms every few minutes (11-18, on ov-hil1).
+    const picked = new Map();
     const pick = (providerKey, modelKey) => {
+        const key = `${providerKey}\u0000${modelKey}`;
+        if (picked.has(key)) return picked.get(key);
         let best = null;
         for (const d of byProvider.get(providerKey) || []) {
             if (!modelMatches(d.modelKey, modelKey)) continue;
             if (!best || d.modelKey.length > best.modelKey.length) best = d;
         }
+        picked.set(key, best);
         return best;
     };
     const stats = new Map(drafts.map((d) => [d, EMPTY()]));
