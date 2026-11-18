@@ -1120,5 +1120,5 @@ The web, image, icon, reverse-image, Unsplash download-event and fetch APIs, pro
 <!-- versions:start -->
 - openvibe-contracts: v0.443.0
 - openvibe-sdk: v0.187.0
-- openvibe-shared: v4.317.0
+- openvibe-shared: v4.320.0
 <!-- versions:end -->
