@@ -99,5 +99,23 @@ t.test('the cheapest is never the stub: a dynamic choice answers with a real mod
  await executeChoice({registry,poolRates:async(p)=>rates[p]||null,route:{},operation:'chat',req:{},ctx:{taskChoice:named,choiceBudget:{used:0}},execute:async(r,o,q,ctx)=>{seen=ctx.exact.offers.map(x=>x.provider);return {model:'stub-1'};}});
  assert.deepEqual(seen,['stub'],'a choice that names the stub still gets it');
 });
+t.test('the model sheet keeps its catalogue 30 s and reads Report behind a stale answer (11-18: 4.8 s at p95)',async()=>{
+ let now=500000,builds=0,reads=0,slow=null;
+ const catalog={models:async()=>{builds++;return {models:[]};}};
+ const {createRatings}=require('../server/choices/ratings');
+ const ratings=createRatings({clock:{now:()=>now},fetchImpl:async()=>{reads++;if(slow)await slow;return {ok:true,json:async()=>({rows:[{id:'a/b',rating:{value:reads}}]})};}});
+ const store=createChoices({db:h.db,registry:h.registry,clock:{now:()=>now},preferences:{get:async()=>null},catalog,ratings});
+ await store.get('chat.reply');await store.get('chat.reply');
+ assert.equal(builds,1,'two sheets inside 30 s build the catalogue once');
+ now+=31000;await store.get('chat.reply');await new Promise((r)=>setImmediate(r));
+ assert.equal(builds,2,'past 30 s one rebuild runs behind the answer');
+ assert.equal(reads,1,'Report was read once');
+ now+=130000;let release;slow=new Promise((r)=>{release=r;});
+ const t0=Date.now();const rows=await ratings();
+ assert.ok(Date.now()-t0<200,'a stale read answers at once');
+ assert.equal(rows[0].rating.value,1,'with the rows it had');
+ release();await new Promise((r)=>setTimeout(r,20));
+ assert.equal((await ratings())[0].rating.value,2,'and the new rows once Report answers');
+});
 t.test('finish',async()=>h.stop());
 t.run();

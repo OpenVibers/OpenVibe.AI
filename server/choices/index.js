@@ -122,6 +122,15 @@ function defaultValue(value) {
 
 function createChoices({ db, registry, preferences, credentials, machines, catalog, adultStatus, ratings = async () => [], clock = { now: () => Date.now() } }) {
     let cached = null;
+    // The catalogue for the model sheet, kept 30 s and served stale while one rebuild runs behind it (the Exchange API's
+    // own memo). Every sheet rebuilt it (eight queries, a week of measurements): /api/v1/choices took 4.8 s at p95 and
+    // the menu's Vibe waited on it (11-18).
+    const { memo } = require('../api/exchange');
+    const catalogs = new Map();
+    const catalogFor = (kind) => {
+        if (!catalogs.has(kind)) catalogs.set(kind, memo(() => catalog.models({ kind }), 30_000, clock));
+        return catalogs.get(kind)();
+    };
     let cachedAt = 0;
 
     const decode = (r) => r && ({ name: r.name, service: r.service, kind: r.kind, sentence: r.sentence, default: JSON.parse(r.builtin), workflow: r.workflow });
@@ -281,7 +290,7 @@ function createChoices({ db, registry, preferences, credentials, machines, catal
         const [qualityRows, adult, raw, keys, own] = await Promise.all([
             ratings(),
             subject && adultStatus ? adultStatus.adultFor(subject).catch(() => false) : false,
-            catalog.models({ kind: resolved.task.kind === 'image' ? 'image' : 'chat' }),
+            catalogFor(resolved.task.kind === 'image' ? 'image' : 'chat'),
             subject && credentials ? credentials.listSelf(subject) : [],
             subject && machines ? machines.mine(subject).catch(() => []) : [],
         ]);
