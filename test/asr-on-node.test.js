@@ -20,7 +20,7 @@ const tokens = { getToken: async () => 'tok-run', invalidate() {} };
 const quiet = { warn() {} };
 
 /** A fake Run: each submitted piece gets a job; its answer names the piece by the order it was submitted. */
-function fakeRun({ failPiece = -1 } = {}) {
+function fakeRun({ failPiece = -1, failWhen = null } = {}) {
     const calls = [];
     const jobs = new Map();
     let n = 0;
@@ -36,7 +36,7 @@ function fakeRun({ failPiece = -1 } = {}) {
         const m = /\/api\/v1\/jobs\/(job_\d+)$/.exec(url);
         if (m && jobs.has(m[1])) {
             const j = jobs.get(m[1]);
-            if (j.n === failPiece) return { status: 200, json: async () => ({ id: m[1], state: 'failed', error: { code: 'run.job.exit_nonzero' } }) };
+            if (j.n === failPiece || (failWhen && failWhen(j.n))) return { status: 200, json: async () => ({ id: m[1], state: 'failed', error: { code: 'run.job.exit_nonzero' } }) };
             const stderr = `tok t0=  10 t1=  40 word_start=true "▁Node${j.n}."`;
             return { status: 200, json: async () => ({ id: m[1], state: 'succeeded', result: { code: 0, stderr, ms: 900 } }) };
         }
@@ -88,8 +88,28 @@ if (spawnSync('ffmpeg', ['-version']).status !== 0) {
         assert.deepStrictEqual([sub.headers.Authorization, sub.headers['X-OV-Subject'], sub.headers['X-OV-Project']], ['Bearer tok-run', SUBJECT, PROJECT]);
         assert.ok(run.calls.every((c) => Buffer.byteLength(JSON.stringify(c.body)) < 512 * 1024), 'every piece within Run\'s 512 KB args');
 
-        // One piece fails on the node: that piece is decoded here, the rest come from the node.
-        const bad = fakeRun({ failPiece: 1 });
+        // A piece the node misses once is asked again and answered there (11-18): nothing decoded here.
+        const blip = fakeRun({ failPiece: 1 });
+        const wb = make(createAsrRun({ config: { asrRun: ASR }, fetchImpl: blip.fetchImpl, tokens, sleep: async () => {}, log: quiet }));
+        fs.writeFileSync(log, '');
+        const rb = await wb.transcribe({ filePath: media, language: 'en' });
+        assert.strictEqual(rb.segments.length, 4, 'four pieces, all from the node');
+        assert.strictEqual(lines().length, 0, 'nothing decoded here after one miss');
+        assert.strictEqual(blip.calls.length, 5, 'the missed piece asked twice');
+
+        // AI_ASR_LOCAL_FALLBACK=off: a piece the node misses twice fails the transcription as unavailable; nothing here.
+        const off = fakeRun({ failWhen: (n) => n >= 1 });
+        const wo = createWhisperProvider({ key: 'whisper' }, { asrRun: createAsrRun({ config: { asrRun: ASR }, fetchImpl: off.fetchImpl, tokens, sleep: async () => {}, log: quiet }),
+            config: { asrRun: { ...ASR, localFallback: false }, whisper: { bin: whisperBin, model, threads: 2, beam: 1, maxConcurrent: 1, vad: false, parakeetModel: pk } } });
+        fs.writeFileSync(log, '');
+        await assert.rejects(wo.transcribe({ filePath: media, language: 'en' }), (e) => e.code === 'provider.unavailable' && e.nodeMiss === true);
+        assert.strictEqual(lines().length, 0, 'fallback off: no piece decoded here, and no whisper either');
+        await assert.rejects(wo.transcribe({ filePath: media, language: 'en' }), (e) => e.code === 'provider.unavailable', 'cooling down: unavailable at once, nothing here');
+        assert.strictEqual(lines().length, 0);
+
+        // A piece the node misses twice (every job from the second on fails): decoded here, the rest from the node.
+        fs.writeFileSync(log, '');
+        const bad = fakeRun({ failWhen: (n) => n >= 1 });
         const w2 = make(createAsrRun({ config: { asrRun: ASR }, fetchImpl: bad.fetchImpl, tokens, sleep: async () => {}, log: quiet }));
         const r2 = await w2.transcribe({ filePath: media, language: 'en' });
         const texts = r2.segments.map((s) => s.text);

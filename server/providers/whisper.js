@@ -145,7 +145,7 @@ function parseParakeet(stderr, offsetSec = 0, { words = false } = {}) {
 }
 const CHUNK_SEC = 30;
 const CHUNK_MAX_SEC = 45;
-const { createAsrRun, PIECE_SEC: NODE_PIECE_SEC } = require('./asr-run');
+const { createAsrRun, settingsOf, localFallback, PIECE_SEC: NODE_PIECE_SEC } = require('./asr-run');
 const NODE_LANES = 3;
 const wavSeconds = (p) => { try { return Math.max(0, (fs.statSync(p).size - 44) / 32000); } catch { return 0; } };   // 16 kHz mono s16le
 
@@ -287,6 +287,10 @@ function createWhisperProvider(record, { config, asrRun = null }) {
         const threads = live || lowPower ? Math.max(1, Math.min(2, w.threads)) : w.threads;
         const deadline = Date.now() + timeoutMs;
         const onNode = node.configured();
+        // The node is set up but cooling down after a miss, and this host may not decode (AI_ASR_LOCAL_FALLBACK=off):
+        // unavailable now, tried again later by the caller.
+        const hereOk = localFallback(config);
+        if (!onNode && !hereOk && settingsOf(config)) throw Object.assign(new ProviderError('the shared node missed a piece a moment ago; try again later', { code: 'provider.unavailable' }), { nodeMiss: true });
         const pieceSec = onNode ? NODE_PIECE_SEC : CHUNK_SEC;
         let pieces = [wavPath], dir = null;
         if (wavSeconds(wavPath) > (onNode ? NODE_PIECE_SEC : CHUNK_MAX_SEC)) {
@@ -316,6 +320,7 @@ function createWhisperProvider(record, { config, asrRun = null }) {
                         const off = offsetSec + i * pieceSec;
                         const r = await node.decode(pieces[i], { timeoutMs: Math.max(1000, Math.min(60000, deadline - Date.now())), signal });
                         if (signal && signal.aborted) throw new ProviderError('cancelled', { code: 'provider.cancelled' });
+                        if (!r.ok && !hereOk) throw Object.assign(new ProviderError(`the shared node did not decode a piece (${r.error}); try again later`, { code: 'provider.unavailable' }), { nodeMiss: true });
                         parts[i] = r.ok ? parseParakeet(r.stderr, off, { words }) : await here(i, off);
                     }
                 };
@@ -349,6 +354,8 @@ function createWhisperProvider(record, { config, asrRun = null }) {
                     try { r = await decodeParakeet(wav, opts); }
                     catch (e) {
                         if (e && e.code === 'provider.cancelled') throw e;
+                        // The node missed and this host may not decode: whisper here would be the same work on the host.
+                        if (e && e.nodeMiss) throw e;
                         // A Parakeet failure (a crash, a bad model file) must not leave a hole: whisper takes the same audio.
                         console.warn(`[whisper] parakeet failed (${e.message}); whisper takes this audio`);
                     }
