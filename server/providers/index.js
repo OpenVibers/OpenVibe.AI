@@ -417,7 +417,7 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
                 const a = createOpenAiProvider(p, { apiKey, fetchImpl });
                 // The host's local models answered by a Link machine when one is named (plan §AD.23 step 2).
                 const lc = p.key === 'local' ? config.localLlm : p.key === 'local2' ? config.localLlm2 : null;
-                return lc && lc.machine ? require('./machine-backed').machineBacked(a, { machines, machine: lc.machine, subject: lc.machineSubject, model: lc.machineModel, log }) : a;
+                return lc && lc.machine ? require('./machine-backed').machineBacked(a, { machines, machine: lc.machine, subject: lc.machineSubject, model: lc.machineModel, embedModel: lc.machineEmbedModel, log }) : a;
             }
             case 'responses': return createResponsesProvider(p, { apiKey, fetchImpl });
             case 'anthropic': return createAnthropicProvider(p, { apiKey, fetchImpl });

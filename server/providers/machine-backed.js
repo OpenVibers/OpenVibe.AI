@@ -8,16 +8,24 @@
  * the machine is theirs and that "Let my AI use this computer's models" is on). The host's own server answers when the
  * machine cannot, until it is turned off. Receipts, the local gate and the logs are the provider's, as before.
  *
- *   machineBacked(adapter, { machines, machine, subject, model, log }) → the adapter, with chat through the machine
+ * With `embedModel` (AI_LOCAL_EMBED_MACHINE_MODEL, 11-18) the provider's embeddings go to the same machine, in batches
+ * of EMBED_BATCH, asked twice before the host's own embedding server; the vectors keep the model name asked for (the
+ * node runs the host's own file, so a stored vector and a new one compare as before).
+ *
+ *   machineBacked(adapter, { machines, machine, subject, model, embedModel, log }) → the adapter, through the machine
  */
 const MACHINE_RE = /^dev_[0-9A-HJKMNP-TV-Z]{26}$/;
 const SUBJECT_RE = /^usr_[0-9A-HJKMNP-TV-Z]{26}$/;
 const RETRY_MS = Number(process.env.AI_LOCAL_LLM_MACHINE_RETRY_MS) >= 0 ? Number(process.env.AI_LOCAL_LLM_MACHINE_RETRY_MS) : 2500;
 
+const EMBED_BATCH = 32;   // Link takes 64 texts an answer, and 450 KB: 32 vectors of 384 numbers are about 125 KB
+
 const textOf = (content) => (Array.isArray(content) ? content.filter((p) => p && p.type === 'text').map((p) => p.text).join('\n') : String(content == null ? '' : content));
 
-function machineBacked(adapter, { machines, machine, subject, model, log = console } = {}) {
-    if (!adapter || !machines || !MACHINE_RE.test(String(machine || '')) || !SUBJECT_RE.test(String(subject || '')) || !model) return adapter;
+function machineBacked(adapter, { machines, machine, subject, model, embedModel = '', log = console } = {}) {
+    if (!adapter || !machines || !MACHINE_RE.test(String(machine || '')) || !SUBJECT_RE.test(String(subject || ''))) return adapter;
+    const embedHere = !!embedModel && typeof adapter.embed === 'function' && typeof machines.embed === 'function';
+    if (!model && !embedHere) return adapter;
     const lastWarn = new Map();   // per message, at most once a minute
     async function chat(req = {}) {
         // A picture, a tool call or JSON goes to the host's own server as before: the machine answers plain text.
@@ -51,6 +59,35 @@ function machineBacked(adapter, { machines, machine, subject, model, log = conso
             return adapter.chat(req);
         }
     }
+    async function embedOn(req = {}) {
+        const input = Array.isArray(req.input) ? req.input : [req.input];
+        const out = { vectors: [], model: req.model || embedModel, usage: { input: 0, output: 0, cached: 0 }, machine };
+        for (let i = 0; i < input.length; i += EMBED_BATCH) {
+            const part = input.slice(i, i + EMBED_BATCH);
+            const ask = () => machines.embed({ machine, subject, model: embedModel, input: part, signal: req.signal, timeoutMs: req.timeoutMs });
+            let r;
+            try {
+                r = await ask();
+            } catch (first) {
+                if (req.signal && req.signal.aborted) throw first;
+                warn(first, 'asking again');
+                await new Promise((ok) => setTimeout(ok, RETRY_MS));
+                r = await ask();
+            }
+            out.vectors.push(...r.vectors);
+            out.usage.input += (r.usage && r.usage.input) || 0;
+        }
+        return out;
+    }
+    async function embedOrHost(req = {}) {
+        try {
+            return await embedOn(req);
+        } catch (err) {
+            if (req.signal && req.signal.aborted) throw err;
+            warn(err, 'the host\'s own embedding server answers');
+            return adapter.embed(req);
+        }
+    }
     function warn(err, then) {
         const now = Date.now();
         if (now - (lastWarn.get(then) || 0) <= 60000) return;
@@ -58,7 +95,7 @@ function machineBacked(adapter, { machines, machine, subject, model, log = conso
         const say = `[ai] ${adapter.key} on ${machine}: ${String((err && (err.detail || err.message)) || err).slice(0, 200)}; ${then}`;
         if (log && typeof log.warn === 'function') log.warn(say); else console.warn(say);   // eslint-disable-line no-console
     }
-    return { ...adapter, chat: chatOrHost, machine };
+    return { ...adapter, ...(model ? { chat: chatOrHost } : {}), ...(embedHere ? { embed: embedOrHost } : {}), machine };
 }
 
 module.exports = { machineBacked };

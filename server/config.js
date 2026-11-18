@@ -269,6 +269,9 @@ function load(env = process.env) {
             machine: String(env.AI_LOCAL_LLM_MACHINE || '').trim(),
             machineSubject: String(env.AI_LOCAL_LLM_MACHINE_SUBJECT || '').trim(),
             machineModel: String(env.AI_LOCAL_LLM_MACHINE_MODEL || '').trim(),
+            // The embedding model on that machine (11-18: bge-small-en-v1.5:q8_0 on ov-node-01's Ollama, made from the
+            // host's own file, cosine 1.000000 against it): with it, `local`'s embeddings go there too. Unset: the host.
+            machineEmbedModel: String(env.AI_LOCAL_EMBED_MACHINE_MODEL || '').trim(),
         },
         // A second local chat server (its own llama.cpp process, another model family): the provider `local2`.
         // Same rules as `local`: no key, never paid, no JSON. Two local offers let a caller pin a match
