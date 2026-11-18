@@ -6,16 +6,18 @@
  */
 const assert = require('assert');
 const t = require('node:test');
+process.env.AI_LOCAL_LLM_MACHINE_RETRY_MS = '0';   // the second ask, at once
 const { machineBacked } = require('../server/providers/machine-backed');
 const { boot } = require('./helpers');
 
 const MACHINE = 'dev_01M78BBJ86HVWY7Y66DJ394GZC';
 const OWNER = 'usr_01KKT9AC60KM7CRTB3WN1Z8P56';
 
-function fakes({ fail = false } = {}) {
+function fakes({ fail = false, failTimes = 0 } = {}) {
+    let misses = failTimes;
     const asked = [];
     const host = [];
-    const machines = { chat: async (a) => { asked.push(a); if (fail) throw Object.assign(new Error('the machine did not answer: away'), { code: 'machine.failed' }); return { text: 'Paris.', model: a.model, machine: a.machine, usage: { input: 9, output: 2, cached: 0 } }; } };
+    const machines = { chat: async (a) => { asked.push(a); if (fail || misses-- > 0) throw Object.assign(new Error('the machine did not answer: away'), { code: 'machine.failed' }); return { text: 'Paris.', model: a.model, machine: a.machine, usage: { input: 9, output: 2, cached: 0 } }; } };
     const adapter = { key: 'local', kind: 'openai', supports: () => true, chat: async (req) => { host.push(req); return { text: 'from the host', json: null, model: 'qwen2.5-1.5b-instruct', usage: { input: 1, output: 1, cached: 0 } }; }, embed: async () => ({ vectors: [] }) };
     return { asked, host, machines, adapter };
 }
@@ -36,7 +38,8 @@ t.test('the host answers when the machine cannot, and for pictures, JSON and too
     const warned = [];
     const a = machineBacked(f.adapter, { machines: f.machines, machine: MACHINE, subject: OWNER, model: 'qwen2.5:1.5b', log: { warn: (m) => warned.push(m) } });
     assert.strictEqual((await a.chat({ messages: [{ role: 'user', content: 'hi' }] })).text, 'from the host');
-    assert.match(warned[0], /local on dev_.*away; the host's own server answers/);
+    assert.ok(warned.some((m) => /local on dev_.*away; asking again/.test(m)) && warned.some((m) => /local on dev_.*away; the host's own server answers/.test(m)), warned.join(' | '));
+    assert.strictEqual(f.asked.length, 2, 'the machine is asked twice before the host');
     const g = fakes();
     const b = machineBacked(g.adapter, { machines: g.machines, machine: MACHINE, subject: OWNER, model: 'qwen2.5:1.5b' });
     for (const req of [{ image: { base64: 'x' } }, { json: { schema: {} } }, { openai: { tools: [{}] } }]) await b.chat({ messages: [{ role: 'user', content: 'x' }], ...req });
@@ -44,6 +47,15 @@ t.test('the host answers when the machine cannot, and for pictures, JSON and too
     // Nothing named, or a malformed id: the host's adapter as it was.
     assert.strictEqual(machineBacked(g.adapter, { machines: g.machines, machine: 'nope', subject: OWNER, model: 'm' }), g.adapter);
     assert.strictEqual(machineBacked(g.adapter, { machines: g.machines, machine: MACHINE, subject: '', model: 'm' }), g.adapter);
+});
+
+t.test('a machine that drops for a moment is asked again, and answers; the host is not used (11-18)', async () => {
+    const f = fakes({ failTimes: 1 });
+    const warned = [];
+    const a = machineBacked(f.adapter, { machines: f.machines, machine: MACHINE, subject: OWNER, model: 'qwen2.5:1.5b', log: { warn: (m) => warned.push(m) } });
+    const out = await a.chat({ messages: [{ role: 'user', content: 'Capital of France?' }] });
+    assert.deepStrictEqual([out.text, out.machine, f.asked.length, f.host.length], ['Paris.', MACHINE, 2, 0]);
+    assert.ok(warned.length === 1 && /asking again/.test(warned[0]), 'the miss is said once');
 });
 
 t.test('in AI: the local provider is machine-backed when AI_LOCAL_LLM_MACHINE is set', async () => {
