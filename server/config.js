@@ -398,6 +398,10 @@ function load(env = process.env) {
             parakeetModel: env.PARAKEET_MODEL || null,
             engine: env.ASR_ENGINE === 'whisper' ? 'whisper' : 'auto',
         },
+        // Parakeet on the shared node (server/providers/asr-run.js, plan §AD.21b item 6): the node's Run function
+        // openvibe-asr decodes each 10 s piece for this person (an owner of the project) on their own node. AI's
+        // service token needs run.job.submit and run.job.read on openvibe.run. Unset, or any failure there, decodes here.
+        asrRun: { url: trimUrl(env.AI_ASR_RUN_URL || ''), subject: env.AI_ASR_RUN_SUBJECT || '', project: env.AI_ASR_RUN_PROJECT || '' },
 
         // ── Quotas seeded at boot (admin API edits them afterwards) ──
         quotas: {
