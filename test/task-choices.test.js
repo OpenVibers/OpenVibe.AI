@@ -117,5 +117,20 @@ t.test('the model sheet keeps its catalogue 30 s and reads Report behind a stale
  release();await new Promise((r)=>setTimeout(r,20));
  assert.equal((await ratings())[0].rating.value,2,'and the new rows once Report answers');
 });
+t.test('a Report that never answers in time holds no sheet up: 300 ms at most once, then nothing (11-18: 3 s on every sheet)',async()=>{
+ const {createRatings}=require('../server/choices/ratings');
+ let now=900000,reads=0;
+ const never=createRatings({clock:{now:()=>now},firstWaitMs:100,fetchImpl:async()=>{reads++;await new Promise((r)=>setTimeout(r,400));throw new Error('timeout');}});
+ let t0=Date.now();assert.deepEqual(await never(),[],'the first sheet waits a moment and goes on without ratings');
+ assert.ok(Date.now()-t0<300,`at most the first wait (${Date.now()-t0} ms)`);
+ await new Promise((r)=>setTimeout(r,450));
+ t0=Date.now();await never();await never();
+ assert.ok(Date.now()-t0<50,'a failed read is kept: the next sheets do not wait');
+ assert.equal(reads,1,'and Report is not asked again for two minutes');
+ now+=121000;t0=Date.now();await never();
+ assert.ok(Date.now()-t0<50,'past two minutes it answers at once and asks again behind');
+ const ok=createRatings({clock:{now:()=>now},firstWaitMs:300,fetchImpl:async()=>({ok:true,json:async()=>({rows:[{id:'a/b'}]})})});
+ assert.deepEqual((await ok()).map((r)=>r.id),['a/b'],'a quick Report is used at once');
+});
 t.test('finish',async()=>h.stop());
 t.run();
