@@ -106,6 +106,18 @@ function createMachineModels({ config, env = process.env, fetchImpl = globalThis
         const asked = community && !String(model).startsWith('community/') ? `community/${model}` : model;
         const value = { model: asked, messages, ...(maxTokens ? { max_tokens: Math.min(32768, Math.max(1, Math.round(maxTokens))) } : {}), ...(temperature != null ? { temperature: Math.min(2, Math.max(0, Number(temperature))) } : {}),
             ...(Array.isArray(tools) && tools.length ? { tools, ...(toolChoice === 'none' || toolChoice === 'auto' ? { tool_choice: toolChoice } : {}) } : {}) };
+        const body = await post(machine, subject, value, { signal, timeoutMs });
+        const d = body.data || {};
+        const u = d.usage || {};
+        const said = String((d.message && d.message.content) || '');
+        const calls = d.message && Array.isArray(d.message.tool_calls) && d.message.tool_calls.length ? d.message.tool_calls : null;
+        // The whole message too, for a chat completion: the calls the model asked for, if any (none ran on the machine).
+        const message = { role: 'assistant', content: calls && !said.trim() ? null : said, ...(calls ? { tool_calls: calls } : {}) };
+        return { text: said.trim(), message, finish: typeof d.finish_reason === 'string' ? d.finish_reason : (calls ? 'tool_calls' : 'stop'), model: d.model || model, usage: { input: u.prompt_tokens || 0, output: u.completion_tokens || 0, cached: 0 } };
+    }
+
+    /** One `ai` command to a machine through Bot as the person (X-OV-Subject) → Bot's ack body; a refusal or a miss throws. */
+    async function post(machine, subject, value, { signal = null, timeoutMs = 120000 } = {}) {
         const token = await tokenClient().getToken({ audience: 'openvibe.bot' });
         let res;
         try {
@@ -125,13 +137,25 @@ function createMachineModels({ config, env = process.env, fetchImpl = globalThis
             throw new AiError(res.status === 404 ? 404 : res.status === 403 ? 403 : 502, code, String(why).slice(0, 300));
         }
         if (!body || body.result !== 'ack') throw new AiError(502, 'machine.failed', `the machine did not answer: ${String((body && (body.reason || body.result)) || 'no answer').slice(0, 200)}`);
+        return body;
+    }
+
+    /**
+     * Vectors from a model on one named machine (contracts 0.448.0: bot.command@1's ai value { model, input }; Link
+     * v0.82.0 answers { model, embeddings, usage }). → { vectors, model, usage }, in the order of `input`.
+     */
+    async function embed({ machine, subject, model, input, signal = null, timeoutMs = 60000 } = {}) {
+        if (!enabled) throw new AiError(503, 'machine.unavailable', 'a person\'s own machine cannot be reached from this service (OV_BOT_INTERNAL_URL)');
+        if (!MACHINE_RE.test(String(machine)) || !SUBJECT_RE.test(String(subject)) || !model) throw new AiError(422, 'credential.invalid', 'an embedding on a machine names a dev_ machine of a usr_ person and a model');
+        const texts = (Array.isArray(input) ? input : [input]).map((x) => String(x == null ? '' : x));
+        if (!texts.length) return { vectors: [], model, usage: { input: 0, output: 0, cached: 0 } };
+        const body = await post(machine, subject, { model: String(model), input: texts }, { signal, timeoutMs });
         const d = body.data || {};
+        if (!Array.isArray(d.embeddings) || d.embeddings.length !== texts.length || !d.embeddings.every((v) => Array.isArray(v) && v.length)) {
+            throw new AiError(502, 'machine.failed', 'the machine gave no embeddings');
+        }
         const u = d.usage || {};
-        const said = String((d.message && d.message.content) || '');
-        const calls = d.message && Array.isArray(d.message.tool_calls) && d.message.tool_calls.length ? d.message.tool_calls : null;
-        // The whole message too, for a chat completion: the calls the model asked for, if any (none ran on the machine).
-        const message = { role: 'assistant', content: calls && !said.trim() ? null : said, ...(calls ? { tool_calls: calls } : {}) };
-        return { text: said.trim(), message, finish: typeof d.finish_reason === 'string' ? d.finish_reason : (calls ? 'tool_calls' : 'stop'), model: d.model || model, usage: { input: u.prompt_tokens || 0, output: u.completion_tokens || 0, cached: 0 } };
+        return { vectors: d.embeddings, model: d.model || model, usage: { input: u.prompt_tokens || u.total_tokens || 0, output: 0, cached: 0 } };
     }
 
     /**
@@ -148,7 +172,7 @@ function createMachineModels({ config, env = process.env, fetchImpl = globalThis
         }));
     }
 
-    return { enabled, chat, mine };
+    return { enabled, chat, embed, mine };
 }
 
 module.exports = { createMachineModels };
