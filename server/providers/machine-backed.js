@@ -12,12 +12,13 @@
  */
 const MACHINE_RE = /^dev_[0-9A-HJKMNP-TV-Z]{26}$/;
 const SUBJECT_RE = /^usr_[0-9A-HJKMNP-TV-Z]{26}$/;
+const RETRY_MS = Number(process.env.AI_LOCAL_LLM_MACHINE_RETRY_MS) >= 0 ? Number(process.env.AI_LOCAL_LLM_MACHINE_RETRY_MS) : 2500;
 
 const textOf = (content) => (Array.isArray(content) ? content.filter((p) => p && p.type === 'text').map((p) => p.text).join('\n') : String(content == null ? '' : content));
 
 function machineBacked(adapter, { machines, machine, subject, model, log = console } = {}) {
     if (!adapter || !machines || !MACHINE_RE.test(String(machine || '')) || !SUBJECT_RE.test(String(subject || '')) || !model) return adapter;
-    let lastWarn = 0;
+    const lastWarn = new Map();   // per message, at most once a minute
     async function chat(req = {}) {
         // A picture, a tool call or JSON goes to the host's own server as before: the machine answers plain text.
         if (req.image || req.json || (req.openai && req.openai.tools)) return adapter.chat(req);
@@ -26,17 +27,38 @@ function machineBacked(adapter, { machines, machine, subject, model, log = conso
             ...(sys ? [{ role: 'system', content: sys }] : []),
             ...(req.messages || []).map((m) => ({ role: m.role === 'assistant' ? 'assistant' : m.role === 'system' ? 'system' : 'user', content: textOf(m.content) })),
         ];
+        const ask = () => machines.chat({ machine, subject, model, messages, maxTokens: req.maxTokens, temperature: req.temperature, signal: req.signal, timeoutMs: req.timeoutMs });
+        const out = (r) => ({ text: r.text || '', json: null, model: r.model || model, usage: r.usage || { input: 0, output: 0, cached: 0 }, machine: r.machine || machine });
         try {
-            const r = await machines.chat({ machine, subject, model, messages, maxTokens: req.maxTokens, temperature: req.temperature, signal: req.signal, timeoutMs: req.timeoutMs });
-            return { text: r.text || '', json: null, model: r.model || model, usage: r.usage || { input: 0, output: 0, cached: 0 }, machine: r.machine || machine };
+            return out(await ask());
+        } catch (first) {
+            if (req.signal && req.signal.aborted) throw first;
+            // A Link machine that drops for a moment (an update, a reconnect) is asked once more before the host's own
+            // server, which is off when the work has moved to the node (11-18: a summary at 17:26 fell back to the
+            // analyser's measurements because both missed). The miss is logged either way.
+            warn(first, 'asking again');
+            await new Promise((ok) => setTimeout(ok, RETRY_MS));
+            return out(await ask());
+        }
+    }
+    async function chatOrHost(req = {}) {
+        if (req.image || req.json || (req.openai && req.openai.tools)) return adapter.chat(req);
+        try {
+            return await chat(req);
         } catch (err) {
             if (req.signal && req.signal.aborted) throw err;
-            const now = Date.now();
-            if (now - lastWarn > 60000) { lastWarn = now; if (log && log.warn) log.warn(`[ai] ${adapter.key} on ${machine}: ${String((err && (err.detail || err.message)) || err).slice(0, 200)}; the host's own server answers`); }
+            warn(err, 'the host\'s own server answers');
             return adapter.chat(req);
         }
     }
-    return { ...adapter, chat, machine };
+    function warn(err, then) {
+        const now = Date.now();
+        if (now - (lastWarn.get(then) || 0) <= 60000) return;
+        lastWarn.set(then, now);
+        const say = `[ai] ${adapter.key} on ${machine}: ${String((err && (err.detail || err.message)) || err).slice(0, 200)}; ${then}`;
+        if (log && typeof log.warn === 'function') log.warn(say); else console.warn(say);   // eslint-disable-line no-console
+    }
+    return { ...adapter, chat: chatOrHost, machine };
 }
 
 module.exports = { machineBacked };
