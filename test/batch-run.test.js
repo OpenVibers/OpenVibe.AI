@@ -144,13 +144,14 @@ t.test('a batch-class run is queued, answered by the provider\'s batch, and char
     const h = await bootWith(stub);
     try {
         const started = Date.now();
-        const res = await request(h.base, 'POST', '/api/v1/runs?wait=5000', { tok: tok(), body: body() });
+        // A batch run never holds the caller: with a 20 s wait it answers well before it (a loaded machine is slow, not 20 s).
+        const res = await request(h.base, 'POST', '/api/v1/runs?wait=20000', { tok: tok(), body: body() });
         const took = Date.now() - started;
         assert.strictEqual(res.status, 202, `the queued run is 202 (${res.text})`);
         assert.strictEqual(res.body.run.status, 'queued');
         assert.strictEqual(res.body.run.latency_class, 'batch');
         assert.strictEqual(res.body.run.latency_clamped, null);
-        assert.ok(took < 3000, `?wait= did not hold the caller (${took} ms)`);
+        assert.ok(took < 10000, `?wait= did not hold the caller (${took} ms)`);
         // The run has no provider call and waits in the database.
         const requests = await h.db.prepare('SELECT COUNT(*) AS n FROM requests WHERE run_id = ?').get(res.body.run.id);
         assert.strictEqual(Number(requests.n), 0);

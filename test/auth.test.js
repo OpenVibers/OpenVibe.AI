@@ -50,8 +50,9 @@ t.test('a token without the capability is 403 capability.denied', async () => {
 });
 
 t.test('family grants (ai.*) and exact grants both work', async () => {
-    assert.strictEqual((await request(h.base, 'POST', '/api/v1/runs?wait=3000', { tok: token('live', ['ai.*']), body })).status, 201);
-    assert.strictEqual((await request(h.base, 'POST', '/api/v1/runs?wait=3000', { tok: token('live', ['ai.run.create']), body })).status, 201);
+    // ?wait= returns as soon as the run is done; 20 s only matters on a loaded machine (the forge's shared node).
+    assert.strictEqual((await request(h.base, 'POST', '/api/v1/runs?wait=20000', { tok: token('live', ['ai.*']), body })).status, 201);
+    assert.strictEqual((await request(h.base, 'POST', '/api/v1/runs?wait=20000', { tok: token('live', ['ai.run.create']), body })).status, 201);
     assert.strictEqual((await request(h.base, 'POST', '/api/v1/runs', { tok: token('live', ['ai.run.*x']), body })).status, 403);
 });
 

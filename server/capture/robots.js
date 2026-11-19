@@ -62,7 +62,9 @@ function allowedBy(groups, path, ua = UA) {
     return best ? best.allow : true;
 }
 
-function createRobots({ fetchImpl = guardedFetch, now = () => Date.now(), log = console, timeoutMs = 8000 } = {}) {
+// `target` is the address check before the fetch (publicTarget: the host resolves only to public addresses); a test
+// with its own fetchImpl and no DNS passes its own.
+function createRobots({ fetchImpl = guardedFetch, target = publicTarget, now = () => Date.now(), log = console, timeoutMs = 8000 } = {}) {
     const cache = new Map();     // origin -> { at, robots }
 
     async function load(origin) {
@@ -71,7 +73,7 @@ function createRobots({ fetchImpl = guardedFetch, now = () => Date.now(), log = 
         const url = `${origin}/robots.txt`;
         let robots = { exists: false, groups: [] };
         try {
-            await publicTarget(url);
+            await target(url);
             const res = await fetchImpl(url, { redirect: 'error', signal: AbortSignal.timeout(timeoutMs), headers: { 'user-agent': `${UA}/1.0 (+https://openvibe.exchange/deep-dive)`, accept: 'text/plain' } });
             if (res.status === 401 || res.status === 403) robots = { exists: true, groups: [{ agents: ['*'], rules: [{ allow: false, path: '/' }] }] };
             else if (res.status === 404 || res.status === 410) robots = { exists: false, groups: [] };

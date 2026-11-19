@@ -54,7 +54,8 @@ function fixtureServer({ robots = 'User-agent: *\nAllow: /\n' } = {}) {
     assert.strictEqual(allowedBy(wild, '/a/b.pdf?x=1'), true);
     assert.strictEqual(allowedBy(wild, '/tmp/x'), false);
     assert.strictEqual(allowedBy([], '/'), true);
-    const robot = createRobots({ fetchImpl: async () => ({ ok: true, status: 200, text: async () => 'User-agent: *\nDisallow: /no\n' }) });
+    // No DNS here (the forge's test phase has no network): the address check is the test's own.
+    const robot = createRobots({ target: async () => {}, fetchImpl: async () => ({ ok: true, status: 200, text: async () => 'User-agent: *\nDisallow: /no\n' }) });
     assert.strictEqual((await robot.check('https://example.org/no/page')).allowed, false);
     assert.strictEqual((await robot.check('https://example.org/yes')).allowed, true);
     process.stdout.write('capture: robots.txt rules ok\n');
