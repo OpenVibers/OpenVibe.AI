@@ -171,6 +171,22 @@ const json = (body, status = 200) => new Response(JSON.stringify(body), { status
     assert.ok(std.receipt.reads.length >= 1);
     ok('depth standard: three engines, two rewrites, the top pages read, a sourced answer with numbered citations');
 
+    // stream: sources first. Round one's merged list goes out before the rewrites are searched, the read passages
+    // after, then the answer; the returned answer is the same as without stream.
+    asked.length = 0; llmCalls.length = 0;
+    const events = [];
+    const fresh = createSearch({ env, fetchImpl, llm, log: { warn() {}, log() {}, error() {} } });
+    const streamed = await fresh.search('web', { q: 'lantern makers Lisbon', depth: 'standard', output: 'answer', stream: true }, { onEvent: (event, data) => events.push([event, data, asked.length]) });
+    assert.deepEqual(events.map(([e, d]) => d.stage ? `${e}:${d.stage}` : e), ['results:first', 'results:merged', 'results:read', 'answer']);
+    assert.equal(events[0][2], 3, 'the first list goes out when the three engines answered, before any rewrite is searched');
+    assert.ok(events[0][1].results.length >= 1 && events[0][1].results.every((r) => r.url && r.engine), 'each result names an engine');
+    assert.ok(events[2][1].results.some((r) => r.excerpt && /1932/.test(r.excerpt)), 'the read stage carries the passages');
+    assert.equal(events[3][1].answer.text, streamed.answer.text);
+    assert.equal(streamed.answer.text, std.answer.text);
+    assert.throws(() => inputOf({ q: 'x', stream: 'yes' }), /stream must be true or false/);
+    assert.equal(isMulti({ q: 'x', stream: true }), true, 'stream alone is a v2 search');
+    ok('stream: the first merged list before the rewrites, then the merged list, the passages and the answer');
+
     asked.length = 0; llmCalls.length = 0;
     const deep = await s.search('web', { q: 'lantern makers Lisbon', depth: 'deep', output: 'structured', schema: { type: 'object', properties: { makers: { type: 'integer' }, since: { type: 'integer' } } } });
     assert.deepEqual(deep.queries.follow_ups, ['oldest lantern maker Alfama'], 'deep: a second round for what was missing');

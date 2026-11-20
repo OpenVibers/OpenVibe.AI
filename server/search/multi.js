@@ -15,6 +15,9 @@
  *   from              YYYY-MM-DD: nothing published before it (undated results stay, after the dated ones)
  *   excerpts          true | false: read the top pages and return the passage that answers the query (standard and
  *                     deep read by default)
+ *   stream            true: answered as Server-Sent Events, sources first (plan AD.34 item 4): `results` as soon as the
+ *                     first round is merged (again after a second round and after the reads, each a whole new list),
+ *                     `answer` or `structured` when written, then `done` with the whole answer and its receipt
  * Plus the v1 fields: limit, freshness, safe_search, max_cost_usd, purpose, private.
  *
  * Every engine call goes through the v1 planner and executor (prepare/execute): the same routing, rate cards, terms,
@@ -32,7 +35,7 @@ const DEPTHS = {
     deep: { engines: 3, variants: 3, followUps: 3, reads: 6, limit: 15, answerUsd: 0.03 },
 };
 const OUTPUTS = ['results', 'answer', 'structured'];
-const V2_FIELDS = ['depth', 'queries', 'output', 'engines', 'include_domains', 'exclude_domains', 'from', 'excerpts', 'schema'];
+const V2_FIELDS = ['depth', 'queries', 'output', 'engines', 'include_domains', 'exclude_domains', 'from', 'excerpts', 'schema', 'stream'];
 const HOST = /^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 // What a model step may cost at most (USD); the actual cost is charged.
 const STEP_USD = { variants: 0.003, follow_ups: 0.005 };
@@ -78,6 +81,7 @@ function inputOf(body) {
     const exclude = hostsOf(b.exclude_domains, 'exclude_domains');
     if (b.from != null && (!/^\d{4}-\d{2}-\d{2}$/.test(b.from) || !Number.isFinite(Date.parse(b.from)))) throw invalid('from must be a date in YYYY-MM-DD');
     if (b.excerpts != null && typeof b.excerpts !== 'boolean') throw invalid('excerpts must be true or false');
+    if (b.stream != null && typeof b.stream !== 'boolean') throw invalid('stream must be true or false');
     if (b.limit != null && (!Number.isInteger(b.limit) || b.limit < 1 || b.limit > 50)) throw invalid('limit must be 1–50');
     if (b.max_cost_usd != null && (!Number.isFinite(b.max_cost_usd) || b.max_cost_usd < 0)) throw invalid('max_cost_usd must be nonnegative');
     // What each engine is asked: the v1 fields only (an engine never sees the v2 ones).
@@ -156,8 +160,11 @@ function createMulti({ prepare, execute, llm = null, now = () => Date.now(), CHA
         };
     }
 
-    async function executeMulti(plan, budget = Infinity) {
+    async function executeMulti(plan, budget = Infinity, { onEvent = null } = {}) {
         const started = now();
+        // Sources first: each stage's list goes out as soon as it exists (a listener's failure never fails the search).
+        const emit = (event, data) => { if (onEvent) { try { onEvent(event, data); } catch (err) { log.warn(`[search] stream ${event}: ${(err && err.message) || err}`); } } };
+        const shown = (rows) => rows.slice(0, v.limit).map((r) => ({ ...r, title: decode(r.title), snippet: decode(r.snippet), engine: r.engines[0] }));
         const { v } = plan;
         const ctx = { subject: plan.subject };
         let limitNano = budget === Infinity ? plan.ceilingNano : BigInt(Math.max(0, Math.round(Number(budget) * 1e9)));
@@ -191,8 +198,11 @@ function createMulti({ prepare, execute, llm = null, now = () => Date.now(), CHA
         /** A model step within what is left; its real cost is charged. Never fails the search. */
         async function step(name, maxUsd, fn) {
             if (!llm) return null;
-            if (BigInt(Math.round(maxUsd * 1e9)) > left()) { steps.push({ step: name, status: 'skipped', reason: 'budget' }); return null; }
+            const ceiling = BigInt(Math.round(maxUsd * 1e9));
+            if (ceiling > left()) { steps.push({ step: name, status: 'skipped', reason: 'budget' }); return null; }
             const t0 = now();
+            // Held while it runs, so engine calls started alongside it cannot spend what it may cost.
+            held += ceiling;
             try {
                 const r = await fn();
                 charged += Number(r.cost_usd) || 0;
@@ -201,6 +211,8 @@ function createMulti({ prepare, execute, llm = null, now = () => Date.now(), CHA
             } catch (err) {
                 steps.push({ step: name, status: 'error', reason: (err && err.code) || 'model_error', time_ms: now() - t0 });
                 return null;
+            } finally {
+                held -= ceiling;
             }
         }
         const lists = [];
@@ -209,21 +221,24 @@ function createMulti({ prepare, execute, llm = null, now = () => Date.now(), CHA
             for (const g of got) if (g) lists.push(g);
         };
         const siteBound = v.include.slice(0, 3).map((h) => `${v.queries[0]} site:${h}`);
-        // Round one: every asked query on every engine, and the site searches on the cheapest.
-        await run([...v.queries.flatMap((q) => plan.engines.map((c) => [c, q])), ...siteBound.flatMap((q) => plan.cheap.map((c) => [c, q]))]);
-        // Rewrites (standard, deep): the question from other angles, on the cheapest engines.
-        let variants = [];
-        if (v.d.variants) {
-            const j = await step('variants', STEP_USD.variants, () => llm.call({
+        // Rewrites (standard, deep): the question from other angles, asked of the model while round one runs (they need
+        // only the question), then searched on the cheapest engines.
+        const asking = v.d.variants ? step('variants', STEP_USD.variants, () => llm.call({
                 routeKey: 'default.json', schemaName: 'search_variants', maxTokens: 400, temperature: 0.4,
                 system: `You write web search queries. Given what a person searched for, write ${v.d.variants} different short queries (2 to 10 words) that would find what they want from other angles: the words the answering page would use, a synonym, a narrower or more specific one. Never repeat the original. Answer JSON {"queries": ["…"]}.`,
                 user: `Searched for: ${v.queries.join(' | ')}`,
                 schema: { type: 'object', required: ['queries'], properties: { queries: { type: 'array', items: { type: 'string', minLength: 2, maxLength: 200 }, maxItems: 6 } } },
-            }));
+            })) : null;
+        // Round one: every asked query on every engine, and the site searches on the cheapest.
+        await run([...v.queries.flatMap((q) => plan.engines.map((c) => [c, q])), ...siteBound.flatMap((q) => plan.cheap.map((c) => [c, q]))]);
+        let variants = [];
+        if (asking) {
+            if (onEvent && lists.length) emit('results', { stage: 'first', results: shown(fuseNow().rows), queries: { asked: v.queries } });
+            const j = await asking;
             variants = (j && j.queries ? j.queries : []).map((x) => String(x).trim()).filter((x) => x && !v.queries.includes(x)).slice(0, v.d.variants);
             await run(variants.flatMap((q) => plan.cheap.map((c) => [c, q])));
         }
-        const fuseNow = () => {
+        function fuseNow() {
             const fused = fuse(lists, { limit: Math.max(v.limit * 3, 30) });
             let rows = fused.results;
             if (v.exclude.length) rows = rows.filter((r) => !v.exclude.some((h) => siteOf(r.url) === h || hostOf(r.url).endsWith(`.${h}`) || hostOf(r.url) === h));
@@ -238,8 +253,9 @@ function createMulti({ prepare, execute, llm = null, now = () => Date.now(), CHA
                 rows = [...dated.filter((r) => Date.parse(r.published) >= from), ...rows.filter((r) => !dated.includes(r))];
             }
             return { rows, duplicates: fused.duplicates, total: fused.total };
-        };
+        }
         let merged = fuseNow();
+        if (lists.length) emit('results', { stage: 'merged', results: shown(merged.rows), queries: { asked: v.queries, variants } });
         // Deep: a second round for what the first did not cover.
         let followUps = [];
         if (v.d.followUps && merged.rows.length) {
@@ -251,7 +267,11 @@ function createMulti({ prepare, execute, llm = null, now = () => Date.now(), CHA
                 schema: { type: 'object', required: ['queries'], properties: { queries: { type: 'array', items: { type: 'string', minLength: 2, maxLength: 200 }, maxItems: 5 } } },
             }));
             followUps = (j && j.queries ? j.queries : []).map((x) => String(x).trim()).filter((x) => x && !v.queries.includes(x) && !variants.includes(x)).slice(0, v.d.followUps);
-            if (followUps.length) { await run(followUps.flatMap((q) => plan.cheap.map((c) => [c, q]))); merged = fuseNow(); }
+            if (followUps.length) {
+                await run(followUps.flatMap((q) => plan.cheap.map((c) => [c, q])));
+                merged = fuseNow();
+                emit('results', { stage: 'second_round', results: shown(merged.rows), queries: { asked: v.queries, variants, follow_ups: followUps } });
+            }
         }
         let results = merged.rows.slice(0, v.limit).map((r) => ({ ...r, title: decode(r.title), snippet: decode(r.snippet) }));
         // Reads: the top pages, and the passage on each that answers the question.
@@ -274,6 +294,7 @@ function createMulti({ prepare, execute, llm = null, now = () => Date.now(), CHA
                     reads.push({ url: r.url, status: 'error', reason: (err && err.code) || 'read_failed', time_ms: now() - t0 });
                 } finally { held -= ceiling; }
             }));
+            if (reads.some((x) => x.status === 'ok')) emit('results', { stage: 'read', results: results.map((r) => ({ ...r, engine: r.engines[0] })) });
         }
         // The answer, or the structured output, from the numbered sources only.
         let answer = null, structured = null;
@@ -293,6 +314,7 @@ function createMulti({ prepare, execute, llm = null, now = () => Date.now(), CHA
                     // A model that listed its sources but left the marks out of the text: the marks go after the answer.
                     const text = inline.length || !cited.length ? String(j.answer) : `${String(j.answer).trim()} ${cited.map((n) => `[${n}]`).join('')}`;
                     answer = { text, citations: cited.map((n) => ({ n, title: results[n - 1].title, url: results[n - 1].url })) };
+                    emit('answer', { answer });
                 }
             } else {
                 const j = await step('structured', v.d.answerUsd, () => llm.call({
@@ -301,7 +323,7 @@ function createMulti({ prepare, execute, llm = null, now = () => Date.now(), CHA
                     user: `Question: ${v.queries.join(' | ')}\n\nSchema:\n${JSON.stringify(v.schema)}\n\nSources:\n${sources}`,
                     schema: v.schema,
                 }));
-                if (j) structured = j;
+                if (j) { structured = j; emit('structured', { structured }); }
             }
         }
         const okCalls = calls.filter((c) => c.status === 'ok');
