@@ -7,7 +7,7 @@ const { claimRequest } = require('./idempotency');
 const { createSearch, CHARGE } = require('../search');
 const { usdOf } = require('../search/rate-cards');
 const { createAssetEvents } = require('../search/events');
-function platform({ db, auth, clock, log, searchFetch, credentials, registry, env = process.env, publicBase, valkey = null }) {
+function platform({ db, auth, clock, log, searchFetch, credentials, registry, env = process.env, publicBase, valkey = null, llm = null }) {
     const keys = createKeys({ db, clock });
     const presets = require('../exchange/compat-presets').createCompatPresets(db);
     const search = createSearch({
@@ -19,6 +19,8 @@ function platform({ db, auth, clock, log, searchFetch, credentials, registry, en
         ...(valkey ? { valkey } : {}),
         // The versioned rate cards live in the database (plan §W.2 step 3).
         db,
+        // Search v2's model steps (query rewrites, follow-ups, sourced answers): the deep dive's JSON model client.
+        llm, log,
     });
     const r = express.Router();
     const wrap = (fn) => async (req, res) => {
