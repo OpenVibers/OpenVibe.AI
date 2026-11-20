@@ -77,6 +77,11 @@ function platform({ db, auth, clock, log, searchFetch, credentials, registry, en
     r.get('/api/v1/exchange/search/engines', wrap(async () =>
         ({ engines: await search.engines() })),
     );
+    // Public, like the engines: what each depth does and what its last 200 searches really cost and took.
+    r.get('/api/v1/exchange/search/depths', wrap(async (req, res) => {
+        res.set('Cache-Control', 'public, max-age=60');
+        return search.depths();
+    }));
     // Exchange's search page searches as the signed-in person with their site session, forwarded from its server.
     const allow = auth.appOrCap(CAPS.appRun, CAPS.runCreate, { exchangeSession: true });
     // The icon reference search takes one more first-party service capability: exchange.search.icons,
