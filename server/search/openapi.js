@@ -44,6 +44,7 @@ for (const kind of ['web', 'images', 'icons']) {
                 exclude_domains: { type: 'array', maxItems: 20, items: { type: 'string' }, description: 'Sites never returned.' },
                 from: { type: 'string', format: 'date', description: 'Nothing published before this day; undated results follow the dated ones.' },
                 excerpts: { type: 'boolean', description: 'Read the top pages and return the passage that answers the query (on by default at standard and deep).' },
+                stream: { type: 'boolean', description: 'Answer as Server-Sent Events, sources first: `results` (stage first, merged, second_round, read; each a whole list), `answer` or `structured`, then `done` with the whole answer and its receipt, or `error`. A bad request is still a plain 422.' },
             } : {}),
             ...(kind === 'web' ? {} : {
                 license: { type: 'string', description: 'Exact licence filter; cc-by and by are equivalent. Unknown licences never pass commercial=true.' },

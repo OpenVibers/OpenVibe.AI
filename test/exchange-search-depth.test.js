@@ -43,7 +43,22 @@ const json = (body) => new Response(JSON.stringify(body));
         const bad = await request(h.base, 'POST', '/v1/search', { tok: made.secret, body: { q: 'lantern', depth: 'bottomless' } });
         assert.equal(bad.status, 422);
         assert.match(JSON.stringify(bad.body), /depth must be one of/);
-        console.log('exchange-search-depth: 3 checks passed');
+        // stream: Server-Sent Events, and the key is charged what the calls cost, as with JSON.
+        const before = await month();
+        const res = await fetch(`${h.base}/v1/search`, { method: 'POST', headers: { authorization: `Bearer ${made.secret}`, 'content-type': 'application/json' }, body: JSON.stringify({ q: 'lantern', depth: 'fast', stream: true }) });
+        assert.equal(res.status, 200);
+        assert.match(res.headers.get('content-type'), /^text\/event-stream/);
+        const text = await res.text();
+        const events = text.split('\n\n').filter(Boolean).map((block) => ({ event: (block.match(/^event: (.+)$/m) || [])[1], data: JSON.parse((block.match(/^data: (.+)$/m) || [])[1]) }));
+        assert.deepEqual(events.map((e) => e.event), ['results', 'done']);
+        assert.equal(events[0].data.stage, 'merged');
+        assert.equal(events[1].data.receipt.engine, 'multi');
+        let after = null;
+        for (let i = 0; i < 50; i++) { after = await month(); if (Number(after.reserved) === 0 && Number(after.spent) > Number(before.spent)) break; await new Promise((r) => setTimeout(r, 20)); }
+        assert.ok(Math.abs((Number(after.spent) - Number(before.spent)) - events[1].data.receipt.cost_usd) < 1e-9, 'the streamed search settles at its cost');
+        const badStream = await request(h.base, 'POST', '/v1/search', { tok: made.secret, body: { q: 'lantern', depth: 'bottomless', stream: true } });
+        assert.equal(badStream.status, 422, 'a bad streamed request is still a plain 422');
+        console.log('exchange-search-depth: 4 checks passed');
     } finally {
         await h.close();
     }

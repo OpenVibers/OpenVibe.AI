@@ -125,11 +125,34 @@ function platform({ db, auth, clock, log, searchFetch, credentials, registry, en
         iconWindows.set(id, entry);
         next();
     };
+    // stream: true (search v2): Server-Sent Events, sources first. The request is checked before the stream opens, so a
+    // bad one is still a plain 422; after that, a failure is an `error` event. The charge settles the key's hold as
+    // the JSON answer's does.
+    const { inputOf: checkMulti } = require('../search/multi');
+    async function streamSearch(req, res) {
+        try { checkMulti(req.body); } catch (e) { return sendError(res, e, req.ov, log); }
+        res.status(200).set({ 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no' });
+        res.flushHeaders();
+        let open = true;
+        // The response's close (a client that hung up), never the request's: the body was read before this ran.
+        res.on('close', () => { open = false; });
+        const send = (event, data) => { if (open && !res.writableEnded) res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); };
+        try {
+            const out = await search.search('web', req.body, { ...searchContext(req), onEvent: send });
+            res.locals.searchCharge = out[CHARGE];
+            send('done', out);
+        } catch (e) {
+            if (e[CHARGE] != null) res.locals.searchCharge = e[CHARGE];
+            send('error', { status: e.status || 500, code: e.code || 'ai.error', detail: e instanceof AiError ? String(e.message).slice(0, 300) : 'The search failed' });
+        }
+        res.end();
+    }
     for (const kind of ['web', 'images'])
         r.post(
             '/v1/search' + (kind === 'web' ? '' : '/' + kind),
             allow,
             searchLimit,
+            (req, res, next) => (kind === 'web' && req.body && req.body.stream === true ? streamSearch(req, res).catch(next) : next()),
             wrap(async (req) => search.search(kind, req.body || {}, searchContext(req))),
         );
     r.post(

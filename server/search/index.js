@@ -508,7 +508,7 @@ function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () =>
     }
     async function search(kind, b, context = {}) {
         const plan = context.plan || await prepare(kind, b, context);
-        return plan.multi ? multi.executeMulti(plan, context.budget) : execute(plan, context.budget);
+        return plan.multi ? multi.executeMulti(plan, context.budget, { onEvent: context.onEvent || null }) : execute(plan, context.budget);
     }
     async function read(body, context = {}) {
         const b = typeof body === 'string' ? { url: body } : body;
