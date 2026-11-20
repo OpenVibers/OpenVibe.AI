@@ -42,7 +42,7 @@ module.exports = {
                 r = await fetchImpl(url.href, { signal, redirect: 'manual', headers: { accept: 'text/html,text/plain;q=0.9,*/*;q=0.5', 'accept-language': 'en;q=0.9,*;q=0.5', 'user-agent': UA } });
             } catch (err) {
                 // The guard refusing an address, or a page past the size cap, is the page's doing; anything else is the reader's.
-                if (err && (err.code === 'EADDRNOTPUBLIC' || /too large/.test(err.message || ''))) throw pageRefused(err.message);
+                if (err && (err.code === 'EADDRNOTPUBLIC' || err.code === 'EBADSTATUS' || /too large/.test(err.message || ''))) throw pageRefused(err.message);
                 throw err;
             }
             if (REDIRECTS.has(r.status)) {

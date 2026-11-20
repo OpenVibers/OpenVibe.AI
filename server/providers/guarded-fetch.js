@@ -17,6 +17,22 @@ function refuse(message) {
     return e;
 }
 
+/**
+ * The Response for what the server sent, or a thrown error the caller rejects with. A status a Response may not carry
+ * (LinkedIn answers 999), a header value the Fetch API refuses, or a body on a no-body status (205, 304) used to throw
+ * inside the socket's callback, outside any promise, and that took the whole process down (AI restarted twice on
+ * 11-20 at 22:47 and 22:48, from search v2 reading result pages).
+ */
+function responseOf(status, body, headers) {
+    if (!Number.isInteger(status) || status < 200 || status > 599) throw Object.assign(new Error(`the server answered status ${status}`), { code: 'EBADSTATUS' });
+    const h = new Headers();
+    for (const [k, v] of Object.entries(headers || {})) {
+        if (v == null) continue;
+        try { h.set(k, Array.isArray(v) ? v.join(', ') : String(v)); } catch { /* a header the Fetch API refuses is left out */ }
+    }
+    return new Response([204, 205, 304].includes(status) ? null : body, { status, headers: h });
+}
+
 function guardedFetch(input, init = {}) {
     return new Promise((resolve, reject) => {
         let url;
@@ -48,18 +64,14 @@ function guardedFetch(input, init = {}) {
                     },
                     cancel() { res.destroy(); req.destroy(); },
                 });
-                const h = new Headers();
-                for (const [k, v] of Object.entries(res.headers)) if (v != null) h.set(k, Array.isArray(v) ? v.join(', ') : String(v));
-                return resolve(new Response(body, { status: res.statusCode, headers: h }));
+                try { return resolve(responseOf(res.statusCode, body, res.headers)); } catch (err) { res.destroy(); return reject(err); }
             }
             const chunks = []; let bytes = 0;
             res.on('data', (c) => { bytes += c.length; if (bytes > MAX_BYTES) { res.destroy(); req.destroy(); reject(new Error('response too large')); } else chunks.push(c); });
             res.on('error', reject);
             res.on('end', () => {
                 if (signal) signal.removeEventListener('abort', onAbort);
-                const h = new Headers();
-                for (const [k, v] of Object.entries(res.headers)) if (v != null) h.set(k, Array.isArray(v) ? v.join(', ') : String(v));
-                resolve(new Response(res.statusCode === 204 ? null : Buffer.concat(chunks), { status: res.statusCode, headers: h }));
+                try { resolve(responseOf(res.statusCode, Buffer.concat(chunks), res.headers)); } catch (err) { reject(err); }
             });
         });
         if (init.body != null) req.write(init.body);
@@ -67,4 +79,4 @@ function guardedFetch(input, init = {}) {
     });
 }
 
-module.exports = { guardedFetch, MAX_BYTES };
+module.exports = { guardedFetch, responseOf, MAX_BYTES };
