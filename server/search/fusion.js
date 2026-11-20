@@ -115,21 +115,53 @@ function fuse(lists, { k = 60, limit = 10, perSite = 2, nearDuplicate = 0.8, agr
     return { results: out, duplicates: total - byKey.size + folded, total };
 }
 
-/** The passage of a page that answers the query best: paragraphs scored by the query's words, up to `max` characters. */
-function excerpt(text, query, { max = 900 } = {}) {
+const ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', '#39': "'", '#x27': "'", '#8217': '’', '#8216': '‘', '#8220': '“', '#8221': '”', '#8211': '–', '#8212': '—', hellip: '…', mdash: '—', ndash: '–', rsquo: '’', lsquo: '‘', ldquo: '“', rdquo: '”' };
+const decode = (t) => String(t || '').replace(/&(#?[a-z0-9]+);/gi, (m, e) => ENTITIES[e.toLowerCase()] || (/^#\d+$/.test(e) ? String.fromCodePoint(Number(e.slice(1))) : m));
+// A sentence, not page chrome: enough words, most of them lower-case prose, not a run of menu labels.
+function prose(s) {
+    const w = s.split(/\s+/).filter(Boolean);
+    if (w.length < 6) return false;
+    const capped = w.filter((x) => /^[\p{Lu}]/u.test(x)).length / w.length;
+    return capped < 0.6 && /[.!?:;)]$|[,;]/.test(s.trim());
+}
+/**
+ * The passage of a page that answers the query best (11-20: a whole navigation blob was returned once): the page is cut
+ * into sentences, menus and other chrome left out, and the best window of up to three sentences is scored by the
+ * query's words. Up to `max` characters; entities decoded.
+ */
+function excerpt(text, query, { max = 600 } = {}) {
     const q = words(query);
     if (!q.size) return '';
-    const paras = String(text || '').split(/\n{2,}|(?<=[.!?])\s{2,}/).map((p) => p.replace(/\s+/g, ' ').trim()).filter((p) => p.length >= 60 && p.length <= 4000);
+    const sentences = decode(text).replace(/\r/g, '').split(/\n+|(?<=[.!?])\s+(?=[\p{Lu}\d“"(])/u)
+        .map((x) => x.replace(/\s+/g, ' ').trim()).filter((x) => x.length >= 25 && x.length <= 900 && prose(x));
     let best = null;
-    for (const p of paras) {
-        const w = words(p);
-        let hit = 0;
-        for (const x of q) if (w.has(x)) hit++;
-        const score = hit / q.size + Math.min(0.2, p.length / 10000);
-        if (!best || score > best.score) best = { p, score };
+    for (let i = 0; i < sentences.length; i++) {
+        for (let n = 1; n <= 3 && i + n <= sentences.length; n++) {
+            const p = sentences.slice(i, i + n).join(' ');
+            if (p.length > max * 1.4) break;
+            const w = words(p);
+            let hit = 0;
+            for (const x of q) if (w.has(x)) hit++;
+            const score = hit / q.size - (n - 1) * 0.04 + Math.min(0.1, p.length / 6000);
+            if (!best || score > best.score) best = { p, score };
+        }
     }
-    if (!best || best.score < 0.25) return '';
+    if (!best || best.score < 0.3) return '';
     return best.p.length > max ? `${best.p.slice(0, max).replace(/\s+\S*$/, '')}…` : best.p;
 }
 
-module.exports = { canonicalUrl, siteOf, similar, fuse, excerpt, words, TRACKING };
+/**
+ * Does a result talk about the question at all? At least two of the question's words (or two in five, for a long one)
+ * in its title, snippet or passage. One shared word is not enough: a search for a tile museum's hours matched a dress
+ * and a Bluetooth tracker named "Tile" (11-20). Questions of one or two words are not judged.
+ */
+function onTopic(r, query) {
+    const q = words(query);
+    if (q.size < 3) return true;
+    const w = words(`${r.title} ${r.snippet} ${r.excerpt || ''} ${r.url}`);
+    let hit = 0;
+    for (const x of q) if (w.has(x)) hit++;
+    return hit >= Math.min(q.size, Math.max(2, Math.ceil(q.size * 0.4)));
+}
+
+module.exports = { canonicalUrl, siteOf, similar, fuse, excerpt, onTopic, decode, words, TRACKING };
