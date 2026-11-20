@@ -52,7 +52,11 @@ function cosine(a, b) {
 // A page read is cut at 5 s (11-20 on production: one slow page held a standard answer back 9 s, the answer came at
 // 13.9 s while the merged list was out at 2.9 s); the answer uses the passages that arrived and the snippets for the rest.
 const READ_TIMEOUT_MS = 5000;
-const CLASS_ORDER = ['independent_index', 'serp_proxy', 'metasearch', 'semantic', 'answer_engine', 'first_party_index'];
+const CLASS_ORDER = ['independent_index', 'serp_proxy', 'metasearch', 'reference', 'semantic', 'answer_engine', 'first_party_index'];
+// Reference engines: an encyclopedia's own search over its articles (Wikipedia). Free, so by price alone it would always
+// be picked first; instead it only fills a place no web engine is left for (shared search on 11-20 had two web engines,
+// so standard's third), never in place of a web engine.
+const REFERENCE = new Set(['wikipedia']);
 // OpenVibe's own index only knows OpenVibe's pages: auto asks it only when a query is about OpenVibe (plan AD.34 item 7;
 // on 11-20 it filled the third place of a search for the Louvre's hours).
 const ABOUT_OPENVIBE = /open\s?vibe|\bopenvibe\.[a-z]+|\bovx_/i;
@@ -127,10 +131,12 @@ function createMulti({ prepare, execute, llm = null, now = () => Date.now(), CHA
         // Web engines first, by kind: an independent index, a search-results proxy, a metasearch; OpenVibe's own
         // network index (first_party_index) joins after them, and only for a query about OpenVibe, as it only knows
         // OpenVibe's own pages. Within a kind, the planner's order (cheapest first) holds.
-        const rank = (c) => { const i = CLASS_ORDER.indexOf(c.a.class); return i === -1 ? CLASS_ORDER.length : i; };
+        const kindOf = (c) => (REFERENCE.has(c.a.id) ? 'reference' : c.a.class);
+        const rank = (c) => { const i = CLASS_ORDER.indexOf(kindOf(c)); return i === -1 ? CLASS_ORDER.length : i; };
         const ordered = runnable.map((c, i) => ({ c, i })).sort((x, y) => rank(x.c) - rank(y.c) || x.i - y.i).map((x) => x.c);
         const out = [], classes = new Set();
-        for (const c of ordered) if (out.length < n && !classes.has(c.a.class)) { out.push(c); classes.add(c.a.class); }
+        // One of each web kind first; a reference engine only fills a place no web engine is left for.
+        for (const c of ordered) if (out.length < n && kindOf(c) !== 'reference' && !classes.has(kindOf(c))) { out.push(c); classes.add(kindOf(c)); }
         for (const c of ordered) if (out.length < n && !out.includes(c)) out.push(c);
         return out;
     }

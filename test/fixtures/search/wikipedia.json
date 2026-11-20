@@ -1,0 +1,27 @@
+{
+ "response": {
+  "batchcomplete": true,
+  "query": {
+   "searchinfo": {
+    "totalhits": 1
+   },
+   "search": [
+    {
+     "ns": 0,
+     "title": "Lantern",
+     "pageid": 1,
+     "snippet": "A new <span class=\"searchmatch\">lantern</span>"
+    }
+   ]
+  }
+ },
+ "request": {
+  "host": "en.wikipedia.org",
+  "path": "/w/api.php",
+  "method": "GET"
+ },
+ "expected": {
+  "title": "Lantern - Wikipedia",
+  "cost": 0
+ }
+}

@@ -80,6 +80,20 @@ const TERMS = Object.freeze({
             + 'improve its products; (e): no reselling, leasing or sublicensing the Services without consent; (f): no using '
             + 'the Services or Output to develop a competing product. Zero data retention is an enterprise agreement.',
     },
+    wikipedia: {
+        reviewed_on: '2026-11-20',
+        source: 'https://foundation.wikimedia.org/wiki/Policy:Terms_of_Use',
+        storage: 'allowed',
+        query_retention: 'retained',
+        ai_use: true,
+        resale: 'allowed',
+        cache: { scope: 'shared', ttl_s: 86400 },
+        cache_clause: 'The articles are CC BY-SA 4.0 and the search results are public: kept a day for anyone, each result '
+            + 'linking its article (the attribution the licence asks for).',
+        clauses: 'Terms of Use §7: text is CC BY-SA 4.0, reusable for any purpose, commercial included, with attribution and '
+            + 'share-alike; the API asks for a descriptive User-Agent and one request at a time (mediawiki.org API:Etiquette). '
+            + 'Wikimedia keeps request logs under its privacy policy.',
+    },
     mojeek: {
         reviewed_on: '2026-11-13',
         source: 'https://www.mojeek.com/about/legal/api-terms.html',

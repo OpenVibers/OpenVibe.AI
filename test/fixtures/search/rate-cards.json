@@ -15,6 +15,13 @@
             "checked_on": "2026-11-09",
             "ceiling": "0"
         },
+        "wikipedia": {
+            "price_per_1000": 0,
+            "price": "0",
+            "unit": "request",
+            "checked_on": "2026-11-20",
+            "ceiling": "0"
+        },
         "searxng": {
             "price_per_1000": 0,
             "price": "0",

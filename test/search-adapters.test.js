@@ -45,9 +45,10 @@ const json = value => new Response(JSON.stringify(value), { status: 200 });
         assert.equal(searchContract.check(kind === 'web' ? 'web' : 'images', out).valid, true, a.id);
         assert.ok(!JSON.stringify(out).includes(KEY));
         if (kind === 'web') {
-            assert.equal(out.results[0].url, 'https://example.org/article');
+            // Wikipedia's results are its articles: the address is the article's, and an article has no publication date.
+            assert.equal(out.results[0].url, a.id === 'wikipedia' ? 'https://en.wikipedia.org/wiki/Lantern' : 'https://example.org/article');
             assert.equal(out.results[0].snippet, 'A new lantern', a.id);
-            assert.equal(out.results[0].published, ['google', 'meta', 'dataforseo'].includes(a.id) ? null : '2026-11-08T12:00:00Z');
+            assert.equal(out.results[0].published, ['google', 'meta', 'dataforseo', 'wikipedia'].includes(a.id) ? null : '2026-11-08T12:00:00Z');
         } else if (kind === 'images' || kind === 'reverse_image') {
             const row = out.results[0];
             if (kind === 'reverse_image') {
