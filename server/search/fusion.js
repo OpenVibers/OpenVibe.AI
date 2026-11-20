@@ -21,11 +21,16 @@ const TRACKING = /^(utm_[a-z_]+|fbclid|gclid|gclsrc|dclid|msclkid|yclid|mc_cid|m
 // Two-part public suffixes common enough to matter for the per-site cap (example.co.uk is one site, not co.uk).
 const SECOND_LEVEL = new Set(['co.uk', 'org.uk', 'ac.uk', 'gov.uk', 'com.au', 'net.au', 'org.au', 'co.nz', 'co.jp', 'ne.jp', 'or.jp', 'co.kr', 'com.br', 'com.cn', 'com.mx', 'com.tr', 'co.in', 'co.za', 'com.sg', 'com.hk', 'com.tw', 'github.io', 'gitlab.io', 'pages.dev', 'vercel.app', 'netlify.app', 'herokuapp.com', 'blogspot.com', 'substack.com', 'medium.com', 'wordpress.com']);
 
+// A public web host: dotted, ending in a real top-level domain. "http://go/v1/…" (an engine's internal redirect, seen
+// on 11-20), localhost and bare addresses are not pages anyone can open.
+const PUBLIC_HOST = /^(?=.{4,253}$)([a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,63}|xn--[a-z0-9-]{1,59})$/;
+
 function canonicalUrl(raw) {
     let u;
     try { u = new URL(String(raw)); } catch { return null; }
     if (!/^https?:$/.test(u.protocol)) return null;
     let host = u.hostname.toLowerCase().replace(/\.$/, '');
+    if (!PUBLIC_HOST.test(host) || u.username || u.password) return null;
     host = host.replace(/^(www\d*|m|mobile|amp)\./, '');
     const params = [...u.searchParams.entries()].filter(([k]) => !TRACKING.test(k)).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
     let path = u.pathname.replace(/\/{2,}/g, '/');
@@ -34,6 +39,10 @@ function canonicalUrl(raw) {
     try { path = decodeURI(path); } catch { /* keep it encoded */ }
     const query = params.length ? '?' + params.map(([k, v]) => `${k}=${v}`).join('&') : '';
     return `${host}${path === '/' ? '' : path}${query}`.toLowerCase();
+}
+
+function hostOf(raw) {
+    try { return new URL(String(raw)).hostname.toLowerCase().replace(/^(www\d*|m|mobile|amp)\./, ''); } catch { return ''; }
 }
 
 function siteOf(raw) {
@@ -94,7 +103,11 @@ function fuse(lists, { k = 60, limit = 10, perSite = 2, nearDuplicate = 0.8, agr
     const kept = [];
     let folded = 0;
     for (const r of sorted) {
-        const twin = kept.find((x) => x.title && r.title && similar(x, r) >= nearDuplicate);
+        // A mirror is another site's whole host inside this one (louvre.fr.a.global.clara.net, a CDN copy of
+        // louvre.fr, 11-20): it folds into that site's page with the same path, or the site's best page.
+        const host = hostOf(r.url);
+        const mirrorOf = kept.find((x) => { const h = hostOf(x.url); return h && host !== h && host.startsWith(`${h}.`); });
+        const twin = mirrorOf || kept.find((x) => x.title && r.title && similar(x, r) >= nearDuplicate);
         if (twin) {
             folded++;
             twin.score += r.score * 0.5;

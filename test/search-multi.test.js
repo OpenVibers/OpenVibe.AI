@@ -6,7 +6,7 @@
 const assert = require('node:assert/strict');
 const { createSearch, CHARGE } = require('../server/search');
 const { canonicalUrl, siteOf, fuse, excerpt } = require('../server/search/fusion');
-const { isMulti, inputOf } = require('../server/search/multi');
+const { isMulti, inputOf, createMulti } = require('../server/search/multi');
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status });
 
@@ -22,6 +22,18 @@ const json = (body, status = 200) => new Response(JSON.stringify(body), { status
     assert.equal(siteOf('https://news.bbc.co.uk/x'), 'bbc.co.uk');
     assert.equal(siteOf('https://docs.github.com/x'), 'github.com');
     ok('one key per page: no tracking, no www/m/amp, sorted parameters, no fragment or trailing slash; sites by registrable domain');
+
+    // 11-20 on production: an engine's internal redirect ("http://go/v1/…") and a CDN mirror of the museum's own site.
+    for (const bad of ['http://go/v1/AQS8suVF', 'https://localhost/x', 'https://127.0.0.1/x', 'https://user:pw@example.com/']) assert.equal(canonicalUrl(bad), null, bad);
+    const mirrored = fuse([{ engine: 'a', query: 'q', results: [
+        { title: 'Hours and admission', url: 'https://www.louvre.fr/en/visit/hours-admission', snippet: 'Open 9:00 to 18:00' },
+        { title: 'Visit the Louvre', url: 'https://www.louvre.fr.a.global.clara.net/en/visit', snippet: 'Plan your visit' },
+        { title: 'Go', url: 'http://go/v1/AQS8suVF', snippet: 'redirect' },
+        { title: 'Louvre tickets', url: 'https://paristickets.com/louvre', snippet: 'Tickets' },
+    ] }]);
+    assert.deepEqual(mirrored.results.map((r) => r.url), ['https://www.louvre.fr/en/visit/hours-admission', 'https://paristickets.com/louvre']);
+    assert.deepEqual(mirrored.results[0].also, ['https://www.louvre.fr.a.global.clara.net/en/visit']);
+    ok('no page without a public host; a mirror host (site.cdn.example) folds into the site it copies');
 
     const A = { engine: 'a', query: 'q', results: [
         { title: 'Lantern makers in Lisbon', url: 'https://example.org/lisbon?utm_source=a', snippet: 'Five lantern makers in Lisbon open their workshops to visitors this winter' },
@@ -69,6 +81,16 @@ const json = (body, status = 200) => new Response(JSON.stringify(body), { status
     assert.throws(() => inputOf({ queries: ['a', 'b', 'c', 'd', 'e', 'f'] }), /at most 5 queries/);
     assert.deepEqual(inputOf({ queries: ['a', 'b'], include_domains: ['https://www.Example.com/path'] }).include, ['example.com']);
     ok('the v2 fields are checked in words; q may be left out when queries are given');
+
+    // OpenVibe's own index joins auto only for a question about OpenVibe (11-20: it took a place in a Louvre search).
+    const { chooseEngines } = createMulti({ prepare: async () => ({}), execute: async () => ({}), CHARGE: Symbol('c'), usdOf: () => 0n });
+    const cand = (id, cls) => ({ a: { id, class: cls }, ceilingNano: 1n });
+    const pool = [cand('openvibe', 'first_party_index'), cand('searxng', 'metasearch'), cand('deepseek', 'answer_engine')];
+    assert.deepEqual(chooseEngines(pool, ['auto'], 3, ['louvre museum opening hours']).map((c) => c.a.id), ['searxng', 'deepseek']);
+    assert.deepEqual(chooseEngines(pool, ['auto'], 3, ['how do OpenVibe agents learn a task']).map((c) => c.a.id), ['searxng', 'deepseek', 'openvibe']);
+    assert.deepEqual(chooseEngines(pool, ['auto'], 3, ['pricing on openvibe.exchange']).map((c) => c.a.id), ['searxng', 'deepseek', 'openvibe']);
+    assert.deepEqual(chooseEngines(pool, ['openvibe'], 1, ['louvre']).map((c) => c.a.id), ['openvibe'], 'named, it is always asked');
+    ok("auto asks OpenVibe's own index only for a question about OpenVibe; named, always");
 
     // ── The pipeline, over three fake engines ──
     const asked = [];
