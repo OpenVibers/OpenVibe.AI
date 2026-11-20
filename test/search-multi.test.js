@@ -23,6 +23,18 @@ const json = (body, status = 200) => new Response(JSON.stringify(body), { status
     assert.equal(siteOf('https://docs.github.com/x'), 'github.com');
     ok('one key per page: no tracking, no www/m/amp, sorted parameters, no fragment or trailing slash; sites by registrable domain');
 
+    // 11-20 on production: an engine's internal redirect ("http://go/v1/…") and a CDN mirror of the museum's own site.
+    for (const bad of ['http://go/v1/AQS8suVF', 'https://localhost/x', 'https://127.0.0.1/x', 'https://user:pw@example.com/']) assert.equal(canonicalUrl(bad), null, bad);
+    const mirrored = fuse([{ engine: 'a', query: 'q', results: [
+        { title: 'Hours and admission', url: 'https://www.louvre.fr/en/visit/hours-admission', snippet: 'Open 9:00 to 18:00' },
+        { title: 'Visit the Louvre', url: 'https://www.louvre.fr.a.global.clara.net/en/visit', snippet: 'Plan your visit' },
+        { title: 'Go', url: 'http://go/v1/AQS8suVF', snippet: 'redirect' },
+        { title: 'Louvre tickets', url: 'https://paristickets.com/louvre', snippet: 'Tickets' },
+    ] }]);
+    assert.deepEqual(mirrored.results.map((r) => r.url), ['https://www.louvre.fr/en/visit/hours-admission', 'https://paristickets.com/louvre']);
+    assert.deepEqual(mirrored.results[0].also, ['https://www.louvre.fr.a.global.clara.net/en/visit']);
+    ok('no page without a public host; a mirror host (site.cdn.example) folds into the site it copies');
+
     const A = { engine: 'a', query: 'q', results: [
         { title: 'Lantern makers in Lisbon', url: 'https://example.org/lisbon?utm_source=a', snippet: 'Five lantern makers in Lisbon open their workshops to visitors this winter' },
         { title: 'Only on A', url: 'https://only-a.com/', snippet: 'x' },
