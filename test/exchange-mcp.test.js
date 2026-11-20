@@ -43,6 +43,23 @@ function fakeExchange() {
                     x_openvibe: { run_id: 'run_1', cost_usd: 0, receipt_id: 'rcpt_1' },
                 });
             }
+            if (req.url === '/v1/search') {
+                if (req.headers.authorization !== `Bearer ${TOKEN}`) return send(401, { detail: 'bad token' });
+                return send(200, {
+                    results: [
+                        { title: 'Museum hours', url: 'https://museum.example/hours', snippet: 'Open 10-18', excerpt: 'The museum opens at 10:00 every day.', engines: ['brave', 'exa'], engine: 'brave', score: 0.03 },
+                        { title: 'Visit', url: 'https://city.example/visit', snippet: 'Plan a visit', engines: ['brave'], engine: 'brave', score: 0.01 },
+                    ],
+                    answer: { text: 'It opens at 10:00 [1].', citations: [{ n: 1, title: 'Museum hours', url: 'https://museum.example/hours' }] },
+                    queries: { asked: [body.q], variants: [], follow_ups: [], sites: [] },
+                    receipt: { id: 'rcpt_s1', engine: 'multi', depth: body.depth, output: body.output, cost_usd: 0.0009, time_ms: 1800, engines: ['brave', 'exa'], found: 14, duplicates_removed: 5,
+                        calls: [{ engine: 'brave', status: 'ok' }, { engine: 'exa', status: 'ok' }, { engine: 'tavily', status: 'skipped', reason: 'budget' }] },
+                });
+            }
+            if (req.url === '/v1/fetch') {
+                if (req.headers.authorization !== `Bearer ${TOKEN}`) return send(401, { detail: 'bad token' });
+                return send(200, { url: body.url, text: 'x'.repeat(70000), receipt: { id: 'rcpt_f1', cost_usd: 0 } });
+            }
             if (req.url.startsWith('/api/v1/exchange/me/usage')) {
                 if (req.headers.authorization !== `Bearer ${TOKEN}`) return send(401, { detail: 'bad token' });
                 return send(200, { requester: `user:${PERSON}`, usage: [{ day: '2026-11-07', requests: 2, tokens_in: 10, tokens_out: 5, cost_usd: 0.000004 }] });
@@ -68,7 +85,7 @@ t.test('initialize and tools/list', async () => {
     assert.strictEqual(init.result.protocolVersion, '2024-11-05');
     assert.strictEqual(init.result.serverInfo.name, 'openvibe-exchange');
     const list = await mcp.handle({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
-    assert.deepStrictEqual(list.result.tools.map((x) => x.name).sort(), ['exchange_chat', 'exchange_models', 'exchange_usage']);
+    assert.deepStrictEqual(list.result.tools.map((x) => x.name).sort(), ['exchange_chat', 'exchange_fetch', 'exchange_models', 'exchange_search', 'exchange_usage']);
     assert.strictEqual(await mcp.handle({ jsonrpc: '2.0', method: 'notifications/initialized' }), null);
     assert.strictEqual((await mcp.handle({ jsonrpc: '2.0', id: 3, method: 'nope' })).error.code, -32601);
 });
@@ -135,6 +152,55 @@ t.test('an invalid tool argument is refused, not sent', async () => {
     const out = await call(9, 'exchange_chat', { model: 'openvibe', messages: [] });
     assert.strictEqual(out.result.isError, true);
     assert.match(out.result.content[0].text, /messages/);
+    assert.strictEqual(fake.calls.length, before);
+});
+
+t.test('search: a depth and an answer, merged results with their passages, and what was left out', async () => {
+    const before = fake.calls.length;
+    const out = await call(10, 'exchange_search', { q: 'tile museum hours', depth: 'standard', output: 'answer', include_domains: ['museum.example'], from: '2026-01-01', max_cost_usd: 0.01 });
+    assert.ok(!out.result.isError, JSON.stringify(out));
+    const data = JSON.parse(out.result.content[0].text);
+    assert.strictEqual(data.answer.text, 'It opens at 10:00 [1].');
+    assert.deepStrictEqual(data.results[0], { n: 1, title: 'Museum hours', url: 'https://museum.example/hours', snippet: 'Open 10-18', passage: 'The museum opens at 10:00 every day.', engines: ['brave', 'exa'] });
+    assert.strictEqual(data.results[1].engines, undefined, 'one engine is not an agreement');
+    assert.strictEqual(data.receipt.duplicates_removed, 5);
+    assert.deepStrictEqual(data.receipt.missed, [{ engine: 'tavily', status: 'skipped', reason: 'budget' }]);
+    const sent = fake.calls[before];
+    assert.strictEqual(sent.url, '/v1/search');
+    assert.strictEqual(sent.headers.authorization, `Bearer ${TOKEN}`);
+    assert.deepStrictEqual(sent.body, { q: 'tile museum hours', depth: 'standard', output: 'answer', include_domains: ['museum.example'], from: '2026-01-01', max_cost_usd: 0.01 });
+});
+
+t.test('search: the default depth is fast, and bad input costs nothing', async () => {
+    const before = fake.calls.length;
+    const ok = await call(11, 'exchange_search', { queries: ['a', 'b'] });
+    assert.ok(!ok.result.isError, JSON.stringify(ok));
+    assert.deepStrictEqual(fake.calls[before].body, { queries: ['a', 'b'], depth: 'fast' });
+    for (const [args, re] of [
+        [{}, /needs q/],
+        [{ q: 'x', depth: 'deeper' }, /depth is/],
+        [{ q: 'x', output: 'structured' }, /schema/],
+        [{ q: 'x', queries: ['1', '2', '3', '4', '5', '6'] }, /at most 5/],
+        [{ q: 'x', from: '20 Nov' }, /YYYY-MM-DD/],
+        [{ q: 'x', limit: 99 }, /limit/],
+    ]) {
+        const bad = await call(12, 'exchange_search', args);
+        assert.strictEqual(bad.result.isError, true, JSON.stringify(args));
+        assert.match(bad.result.content[0].text, re);
+    }
+    assert.strictEqual(fake.calls.length, before + 1, 'only the good call was sent');
+});
+
+t.test('fetch: https only, text cut for the model, the receipt kept', async () => {
+    const out = await call(13, 'exchange_fetch', { url: 'https://museum.example/hours' });
+    assert.ok(!out.result.isError, JSON.stringify(out));
+    const data = JSON.parse(out.result.content[0].text);
+    assert.strictEqual(data.text.length, 60000);
+    assert.strictEqual(data.cut, true);
+    assert.strictEqual(data.receipt.id, 'rcpt_f1');
+    const before = fake.calls.length;
+    const bad = await call(14, 'exchange_fetch', { url: 'http://museum.example/' });
+    assert.strictEqual(bad.result.isError, true);
     assert.strictEqual(fake.calls.length, before);
 });
 

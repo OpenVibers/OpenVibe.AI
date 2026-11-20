@@ -10,6 +10,9 @@
  *   exchange_chat    POST /v1/chat/completions -- the person's allowance, or their own stored provider key when the
  *                    request names a provider (x-openvibe-credential), exactly as the SDK's buyer side does
  *   exchange_usage   GET /api/v1/exchange/me/usage -- the person's own requests, tokens and spend by day and model
+ *   exchange_search  POST /v1/search -- search v2 (plan AD.34): a depth (instant, fast, standard, deep), up to five more
+ *                    queries merged and deduplicated, a sourced answer or JSON shaped by a schema, sites and a date
+ *   exchange_fetch   POST /v1/fetch -- one public page as text, for reading a result in full
  *
  * The server never stores a key, a prompt or an answer, and it does not answer a tool call without a token: a
  * missing token is refused before any request, and a 401 from the Exchange is refused back as the tool's error.
@@ -20,6 +23,12 @@ const MCP_PROTOCOL = '2024-11-05';
 const DEFAULT_BASE = 'https://api.openvibe.exchange';
 const DEFAULT_TIMEOUT_MS = 30000;
 const CHAT_TIMEOUT_MS = 180000;
+// Search waits as long as the Exchange page does for each depth, plus a margin (Exchange server/http/search.js).
+const SEARCH_TIMEOUT_MS = { instant: 20000, fast: 25000, standard: 50000, deep: 60000 };
+const DEPTHS = ['instant', 'fast', 'standard', 'deep'];
+const OUTPUTS = ['results', 'answer', 'structured'];
+const FETCH_TIMEOUT_MS = 45000;
+const FETCH_TEXT_MAX = 60000;
 const MAX_BODY = 8 * 1024 * 1024;
 const MAX_MESSAGES = 200;
 const MAX_CONTENT = 200000;
@@ -67,6 +76,34 @@ const TOOLS = [
                 max_tokens: { type: 'integer', minimum: 1, maximum: 32768, description: 'Default 512' },
                 temperature: { type: 'number', minimum: 0, maximum: 2 },
                 credential: { type: 'string', description: "A provider whose key the person stored on OpenVibe (for example deepseek), instead of the router's own capacity" },
+            },
+        },
+    },
+    {
+        name: 'exchange_search',
+        description: "Search the live web through OpenVibe.Exchange on the person's account. depth: instant (one engine, about 1 s), fast (two engines merged, the default), standard (three engines, rewritten queries, the best pages read for the passage that answers), deep (plus a second round for what is missing). output: results (a merged, deduplicated list; each result names the engines that agreed), answer (a short answer citing [n] results), structured (JSON shaped by `schema`, from the sources only). Cost is held up front and capped by max_cost_usd; the receipt says what was charged.",
+        inputSchema: {
+            type: 'object', properties: {
+                q: { type: 'string', maxLength: 500, description: 'The question or query' },
+                queries: { type: 'array', maxItems: 5, items: { type: 'string', maxLength: 500 }, description: 'Up to 5 more queries searched with q and merged into one list' },
+                depth: { type: 'string', enum: DEPTHS, description: 'How hard to look (default fast)' },
+                output: { type: 'string', enum: OUTPUTS, description: 'results (default), answer or structured' },
+                schema: { type: 'object', description: 'For output structured: the JSON schema the answer must fit' },
+                include_domains: { type: 'array', maxItems: 20, items: { type: 'string' }, description: 'Only results from these sites (example.com)' },
+                exclude_domains: { type: 'array', maxItems: 20, items: { type: 'string' }, description: 'Never results from these sites' },
+                from: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$', description: 'Nothing published before this day, YYYY-MM-DD' },
+                limit: { type: 'integer', minimum: 1, maximum: 50, description: 'How many results (each depth has its own default)' },
+                max_cost_usd: { type: 'number', minimum: 0, description: 'Never spend more than this on the call' },
+            },
+        },
+    },
+    {
+        name: 'exchange_fetch',
+        description: 'Read one public https page as plain text (for a search result worth reading in full). Free through OpenVibe egress unless the person chose a paid reader; the text is cut at 60,000 characters.',
+        inputSchema: {
+            type: 'object', required: ['url'], properties: {
+                url: { type: 'string', maxLength: 8192, description: 'The https address' },
+                max_cost_usd: { type: 'number', minimum: 0 },
             },
         },
     },
@@ -155,6 +192,82 @@ function createExchangeMcp({ token = null, baseUrl = DEFAULT_BASE, fetchImpl = g
         return { body, credential: a.credential == null ? null : text(a.credential).trim().slice(0, 64) };
     }
 
+    /** The search request: only the fields the Exchange knows, checked here so a bad call costs nothing. */
+    function checkSearch(args) {
+        const a = args && typeof args === 'object' ? args : {};
+        const body = {};
+        const q = a.q == null ? '' : text(a.q).trim();
+        if (q) body.q = q.slice(0, 500);
+        if (a.queries != null) {
+            if (!Array.isArray(a.queries) || a.queries.length > 5) throw new McpError('queries is at most 5 queries', 'input.invalid');
+            const more = a.queries.map((x) => text(x).trim()).filter(Boolean).map((x) => x.slice(0, 500));
+            if (more.length) body.queries = more;
+        }
+        if (!body.q && !body.queries) throw new McpError('exchange_search needs q (or queries)', 'input.invalid');
+        const depth = a.depth == null ? 'fast' : text(a.depth);
+        if (!DEPTHS.includes(depth)) throw new McpError(`depth is ${DEPTHS.join(', ')}`, 'input.invalid');
+        body.depth = depth;
+        if (a.output != null) {
+            if (!OUTPUTS.includes(text(a.output))) throw new McpError(`output is ${OUTPUTS.join(', ')}`, 'input.invalid');
+            body.output = text(a.output);
+        }
+        if (body.output === 'structured') {
+            if (!a.schema || typeof a.schema !== 'object' || Array.isArray(a.schema)) throw new McpError('output structured needs a JSON schema in schema', 'input.invalid');
+            body.schema = a.schema;
+        }
+        for (const k of ['include_domains', 'exclude_domains']) {
+            if (a[k] == null) continue;
+            if (!Array.isArray(a[k]) || a[k].length > 20) throw new McpError(`${k} is at most 20 sites`, 'input.invalid');
+            body[k] = a[k].map((h) => text(h).trim()).filter(Boolean);
+        }
+        if (a.from != null) {
+            const v = text(a.from);
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) throw new McpError('from is YYYY-MM-DD', 'input.invalid');
+            body.from = v;
+        }
+        if (a.limit != null) {
+            const n = Number(a.limit);
+            if (!Number.isInteger(n) || n < 1 || n > 50) throw new McpError('limit is an integer from 1 to 50', 'input.invalid');
+            body.limit = n;
+        }
+        if (a.max_cost_usd != null) {
+            const c = Number(a.max_cost_usd);
+            if (!Number.isFinite(c) || c < 0) throw new McpError('max_cost_usd is a number of at least 0', 'input.invalid');
+            body.max_cost_usd = c;
+        }
+        return body;
+    }
+
+    /** What an agent needs from a search answer, without the per-call plumbing. */
+    function compactSearch(data) {
+        const d = data && typeof data === 'object' ? data : {};
+        const out = {
+            results: (Array.isArray(d.results) ? d.results : []).map((r, i) => {
+                const row = { n: i + 1, title: r.title, url: r.url };
+                if (r.snippet) row.snippet = r.snippet;
+                if (r.excerpt) row.passage = r.excerpt;
+                if (r.published) row.published = r.published;
+                if (Array.isArray(r.engines) && r.engines.length > 1) row.engines = r.engines;
+                return row;
+            }),
+        };
+        if (d.answer) out.answer = d.answer;
+        if (d.structured !== undefined) out.structured = d.structured;
+        const r = d.receipt || null;
+        if (r) {
+            out.receipt = {
+                id: r.id || r.receipt_id || null, engine: r.engine || null, depth: r.depth || null,
+                cost_usd: r.cost_usd == null ? null : r.cost_usd, time_ms: r.time_ms == null ? null : r.time_ms,
+                engines: Array.isArray(r.engines) ? r.engines : undefined,
+                duplicates_removed: r.duplicates_removed == null ? undefined : r.duplicates_removed,
+            };
+            // A call the budget or an engine left out is named, so an agent knows the list may be short.
+            const missed = (Array.isArray(r.calls) ? r.calls : []).filter((c) => c && c.status !== 'ok').map((c) => ({ engine: c.engine, status: c.status, reason: c.reason || null }));
+            if (missed.length) out.receipt.missed = missed;
+        }
+        return out;
+    }
+
     async function runTool(name, args) {
         if (name === 'exchange_models') {
             const a = args && typeof args === 'object' ? args : {};
@@ -168,6 +281,27 @@ function createExchangeMcp({ token = null, baseUrl = DEFAULT_BASE, fetchImpl = g
             const headers = {};
             if (credential) headers['x-openvibe-credential'] = credential;
             return await call('/v1/chat/completions', { method: 'POST', body, headers, timeout: CHAT_TIMEOUT_MS });
+        }
+        if (name === 'exchange_search') {
+            const body = checkSearch(args);
+            const data = await call('/v1/search', { method: 'POST', body, timeout: SEARCH_TIMEOUT_MS[body.depth] });
+            return compactSearch(data);
+        }
+        if (name === 'exchange_fetch') {
+            const a = args && typeof args === 'object' ? args : {};
+            const url = text(a.url).trim();
+            let parsed = null;
+            try { parsed = new URL(url); } catch { parsed = null; }
+            if (!parsed || parsed.protocol !== 'https:') throw new McpError('url is an https address', 'input.invalid');
+            const body = { url: parsed.href };
+            if (a.max_cost_usd != null) {
+                const c = Number(a.max_cost_usd);
+                if (!Number.isFinite(c) || c < 0) throw new McpError('max_cost_usd is a number of at least 0', 'input.invalid');
+                body.max_cost_usd = c;
+            }
+            const data = await call('/v1/fetch', { method: 'POST', body, timeout: FETCH_TIMEOUT_MS });
+            const full = text(data && data.text);
+            return { url: (data && data.url) || parsed.href, text: full.slice(0, FETCH_TEXT_MAX), cut: full.length > FETCH_TEXT_MAX, receipt: data && data.receipt ? { id: data.receipt.id || null, cost_usd: data.receipt.cost_usd == null ? null : data.receipt.cost_usd } : null };
         }
         if (name === 'exchange_usage') {
             const a = args && typeof args === 'object' ? args : {};
@@ -221,7 +355,7 @@ function createExchangeMcp({ token = null, baseUrl = DEFAULT_BASE, fetchImpl = g
                 protocolVersion: MCP_PROTOCOL,
                 capabilities: { tools: { listChanged: false } },
                 serverInfo: { name: 'openvibe-exchange', version },
-                instructions: 'Tools for OpenVibe.Exchange: list live models and prices, run a chat completion on the signed-in person\'s allowance or their own provider key, and read their usage. Set OPENVIBE_EXCHANGE_TOKEN to a Network developer key.',
+                instructions: 'Tools for OpenVibe.Exchange: list live models and prices, run a chat completion on the signed-in person\'s allowance or their own provider key, search the live web at a chosen depth (a merged list, a cited answer or JSON), read a page, and read their usage. Set OPENVIBE_EXCHANGE_TOKEN to a Network developer key.',
             });
         }
         if (!method || method.startsWith('notifications/')) return null;
@@ -242,7 +376,7 @@ function createExchangeMcp({ token = null, baseUrl = DEFAULT_BASE, fetchImpl = g
         return fail(-32601, `method not found: ${method}`);
     }
 
-    return { handle, tools: TOOLS, baseUrl: base, hasToken: Boolean(authToken), _test: { compactModels, checkChat } };
+    return { handle, tools: TOOLS, baseUrl: base, hasToken: Boolean(authToken), _test: { compactModels, checkChat, checkSearch, compactSearch } };
 }
 
 module.exports = { createExchangeMcp, McpError, TOOLS, MCP_PROTOCOL };

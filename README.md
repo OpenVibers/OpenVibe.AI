@@ -802,9 +802,13 @@ fails it at once. The worker is off in test mode and in `NODE_ENV=test`.
 
 The tools are `exchange_models` (the live catalog: price in/out per million, measured p50/p95, uptime, health and the
 data policy), `exchange_chat` (one completion on the person's allowance, or their own stored provider key when
-`credential` names a provider) and `exchange_usage` (the person's own requests, tokens and spend by day and model,
-from `GET /api/v1/exchange/me/usage`). `exchange_models` is public; the other two refuse a call without a token
-before any request, and a 401 from the Exchange is refused back as the tool's error. The token is never printed,
+`credential` names a provider), `exchange_search` (search v2: `depth` instant/fast/standard/deep, up to five more
+`queries` merged and deduplicated, `output` results/answer/structured, sites and a date; each result names the engines
+that agreed and carries the passage that answers, and the receipt names any call the budget left out),
+`exchange_fetch` (one public https page as text, cut at 60,000 characters) and `exchange_usage` (the person's own
+requests, tokens and spend by day and model, from `GET /api/v1/exchange/me/usage`). `exchange_models` is public; the
+others refuse a call without a token before any request, and a 401 from the Exchange is refused back as the tool's
+error. A bad search argument is refused before anything is spent. The token is never printed,
 logged or stored.
 
 ### The CLI
