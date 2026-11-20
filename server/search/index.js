@@ -185,6 +185,27 @@ function createMemoryEvents() {
         async release(scope, provider, id) { seen.delete(key(scope, provider, id)); },
     };
 }
+// The words a search engine does not need from a question: articles, auxiliaries, interrogatives.
+const QUERY_STOP = new Set(['a', 'an', 'the', 'of', 'in', 'on', 'at', 'to', 'for', 'with', 'and', 'or', 'by', 'from', 'as', 'into',
+    'did', 'does', 'do', 'was', 'were', 'is', 'are', 'be', 'been', 'being', 'has', 'have', 'had', 'what', 'which', 'who', 'whom', 'whose',
+    'when', 'where', 'how', 'why', 'that', 'this', 'these', 'those', 'his', 'her', 'their', 'its', 'it', 'he', 'she', 'they', 'there']);
+/**
+ * A question shortened to fit an engine's query limit: punctuation at the end and the words above dropped, then cut at a
+ * word boundary. Null when nothing useful is left.
+ */
+function shortQuery(q, max) {
+    const s = String(q || '').replace(/[?!.]+\s*$/, '').replace(/\s+/g, ' ').trim();
+    if ([...s].length <= max) return s || null;
+    const kept = s.split(' ').filter((w) => !QUERY_STOP.has(w.toLowerCase().replace(/[^\p{L}\p{N}']/gu, '')));
+    let out = '';
+    for (const w of kept) {
+        const next = out ? `${out} ${w}` : w;
+        if ([...next].length > max) break;
+        out = next;
+    }
+    return out.length >= 8 ? out.replace(/[,;:]+$/, '') : null;
+}
+
 function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () => Date.now(), credentials = null, registry = null, targetGuard = publicTarget, events = null, publicBase = process.env.AI_PUBLIC_URL || 'https://ai.openvibe.services', valkey = null, db = null, llm = null, log = console } = {}) {
     // The breaker lives in Valkey when the service has one, so every process sees the same open circuit
     // (server/search/circuit.js); without one it is a Map in this process.
@@ -269,6 +290,7 @@ function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () =>
         if (kind === 'reverse_image' && (!b.engine || b.engine === 'auto'))
             throw new AiError(422, 'search.invalid', 'Choose an engine for a reverse image search');
         const candidates = [];
+        const shortFor = new Map();
         const skippedForFilters = new Set();
         const notConsidered = [];
         const providers = registry ? await registry.listProviders() : [];
@@ -294,7 +316,13 @@ function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () =>
             if (!a.kinds.includes(kind)) continue;
             if (explicit && b.engine !== a.id) continue;
             if (b.freshness && !a.freshness.includes(b.freshness) || (a.requires || []).some(k => !env[k])) continue;
-            if (kind !== 'fetch' && a.max_query && [...b.q].length + (b.freshness ? 17 : 0) > a.max_query) continue;
+            // An engine with a short query limit (DeepSeek: 128) is asked a shortened question rather than left out: a
+            // long question used to leave a standard search with one engine, and that engine found nothing (11-20).
+            if (kind !== 'fetch' && a.max_query && [...b.q].length + (b.freshness ? 17 : 0) > a.max_query) {
+                const short = shortQuery(b.q, a.max_query - (b.freshness ? 17 : 0));
+                if (!short) continue;
+                shortFor.set(a.id, short);
+            }
             const unsupported = unsupportedFor(a, kind, b);
             if (unsupported.length) {
                 if (b.engine && b.engine !== 'auto' && b.engine === a.id)
@@ -354,6 +382,7 @@ function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () =>
             candidates.push({ a, key, own: Boolean(own), scope, engine: a.id, ceilingNano, estimateNano, card, provider: state.provider?.key || null, managed: state.managed, env: state.env || env,
                 skipReason: budgetNano != null && ceilingNano > budgetNano ? 'budget' : null });
         }
+        for (const c of candidates) if (shortFor.has(c.a.id)) c.q = shortFor.get(c.a.id);
         // Once the person has an eligible key, fallback stays within their keys (0% Exchange fee).
         const cohort = candidates.some(c => c.own) ? candidates.filter(c => c.own) : candidates;
         // A cooldown is a skip in the receipt, not a disappearance; an explicit engine may still retry.
@@ -473,7 +502,7 @@ function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () =>
                 attempted = true;
                 const raw = plan.kind === 'fetch' ? await c.a.read(plan.b, options)
                     : plan.kind === 'reverse_image' ? await c.a.reverse(plan.b, options)
-                    : await c.a.search(plan.b, options);
+                    : await c.a.search(c.q ? { ...plan.b, q: c.q } : plan.b, options);
                 // The settle is the card's price × the units the call used. An engine that reports what the
                 // provider charged (a token-priced reader, an answer engine) settles at that amount instead.
                 const rows = Array.isArray(raw) ? raw : raw.rows;
@@ -572,4 +601,4 @@ function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () =>
     multi = createMulti({ prepare: prepareOne, execute, llm, now, CHARGE, usdOf: rateCards.usdOf, log });
     return { engines, depths, search, read, prepare, trackDownload, pixabayImage };
 }
-module.exports = { createSearch, adapters, credentialId, CHARGE, rightsOf };
+module.exports = { createSearch, adapters, credentialId, CHARGE, rightsOf, shortQuery };
