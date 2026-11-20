@@ -52,5 +52,19 @@ const page = (status, body = '', headers = {}) => new Response(status >= 300 && 
     down = false;
     await assert.rejects(s.read({ url: 'https://www.example.org/final' }), (err) => err.code === 'search.unavailable', 'a reader that failed itself rests for a minute');
     console.log('  ✓ the service: a refusing page leaves the breaker shut; a failing reader still opens it');
-    console.log('search-reader: 2 checks passed');
+    // v2 reads an http:// result over https (11-20 on production: such a read failed at once with ai.invalid).
+    const pages = [];
+    const v2fetch = async (url, init) => {
+        const host = new URL(url).hostname;
+        if (host === 'api.search.brave.com') return new Response(JSON.stringify({ web: { results: [{ title: 'Lantern makers in Lisbon', url: 'http://example.org/lisbon', description: 'Five lantern makers in Lisbon open their workshops' }] } }));
+        if (host === 'example.org') { pages.push(url); return page(200, '<p>Five lantern makers in Lisbon open their workshops to visitors this winter.</p>'); }
+        return new Response('{}', { status: 503 });
+    };
+    const v2 = createSearch({ env: { SEARCH_BRAVE_KEY: 'k' }, fetchImpl: v2fetch, log: { warn() {}, log() {}, error() {} } });
+    const out = await v2.search('web', { q: 'lantern makers Lisbon', depth: 'fast', excerpts: true });
+    assert.deepEqual(pages, ['https://example.org/lisbon'], 'read over https');
+    assert.ok(out.receipt.reads.every((r) => r.status === 'ok'), JSON.stringify(out.receipt.reads));
+    assert.match(out.results[0].excerpt, /Five lantern makers/);
+    console.log('  ✓ v2 reads an http:// result over https');
+    console.log('search-reader: 3 checks passed');
 })().catch((e) => { console.error(e); process.exit(1); });
