@@ -49,7 +49,16 @@ const json = (body, status = 200) => new Response(JSON.stringify(body), { status
     const page = 'Lisbon\n\nThe city has many shops.\n\nFive lantern makers in Lisbon open their workshops to visitors this winter; the oldest has made lanterns since 1932 in Alfama.\n\nContact us.';
     assert.match(excerpt(page, 'lantern makers Lisbon'), /since 1932/);
     assert.equal(excerpt(page, 'quantum chromodynamics'), '');
-    ok('a read page gives back the passage that answers the query, or nothing');
+    // 11-20 on production: a page's navigation came back as the passage, with &amp; in it.
+    const chrome = 'Player Turismo de Lisboa Logo Search Profile EN PT ES FR DE IT Visit Lisboa Convention Bureau About Us Traveller Information Photo Gallery Turismo de Lisboa Logo Culture &amp; Outdoors See &amp; Do Stay &amp; Plan Museums &amp; Monuments National Tile Museum\n\nThe National Tile Museum is set in the Madre de Deus Convent, founded in 1509. It is closed for renovation works until further notice.\n\nContact';
+    const passage = excerpt(chrome, 'National Tile Museum opening hours');
+    assert.match(passage, /^The National Tile Museum is set in the Madre de Deus Convent/, `sentences, not the menu (${passage})`);
+    assert.ok(!/&amp;|Logo Search/.test(passage));
+    const { onTopic } = require('../server/search/fusion');
+    assert.equal(onTopic({ title: 'Embroidered Tile Amelia Dress', snippet: '$139.23 at zappos.com', url: 'https://openvibe.deals/x' }, 'Lisbon tile museum opening hours'), false, 'one shared word is not the question');
+    assert.equal(onTopic({ title: 'National Tile Museum | Visit Lisboa', snippet: 'The museum is set in Madre de Deus', url: 'https://visitlisboa.com/x' }, 'Lisbon tile museum opening hours'), true);
+    assert.equal(onTopic({ title: 'Anything', snippet: '', url: 'https://x.com' }, 'tiles'), true, 'a one-word question is not judged');
+    ok('a read page gives back the sentences that answer the query, never its menus; a result sharing one word is off the question');
 
     // ── The request ──
     assert.equal(isMulti({ q: 'x' }), false, 'the v1 call is untouched');
@@ -168,6 +177,13 @@ const json = (body, status = 200) => new Response(JSON.stringify(body), { status
     assert.ok(capped.receipt.cost_usd <= 0.004 + 1e-9, `never past the cap (${capped.receipt.cost_usd})`);
     assert.ok(capped.receipt.calls.some((c) => c.status === 'skipped' && c.reason === 'budget') || capped.receipt.steps?.some((x) => x.reason === 'budget'), 'what the cap cannot cover is skipped, and the receipt says so');
     ok('the hold is the sum of every step; max_cost_usd caps it, and nothing past it is called');
+
+    // A model that names its sources but leaves the marks out of the text (production, 11-20): the marks are added.
+    const bare = createSearch({ env, fetchImpl, log: { warn() {}, log() {}, error() {} }, llm: { call: async (req) => (req.schemaName === 'search_variants' ? { json: { queries: [] }, cost_usd: 0 } : { json: { answer: 'Five makers open this winter.', cited: [1] }, model: 'fake', cost_usd: 0.001 }) } });
+    const marked = await bare.search('web', { q: 'lantern makers Lisbon', depth: 'standard', output: 'answer', excerpts: false });
+    assert.equal(marked.answer.text, 'Five makers open this winter. [1]');
+    assert.equal(marked.answer.citations[0].n, 1);
+    ok('an answer always carries its marks: added after it when the model listed sources without them');
 
     const down = createSearch({ env, llm, fetchImpl: async () => json({}, 503), log: { warn() {}, log() {}, error() {} } });
     await assert.rejects(down.search('web', { q: 'x', depth: 'fast' }), (err) => err.status === 503 && /No engine answered/.test(err.message));
