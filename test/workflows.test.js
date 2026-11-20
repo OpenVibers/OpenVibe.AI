@@ -33,6 +33,7 @@ const EXAMPLES = {
     'live.media.transcribe': { media_url: '__MEDIA__/v/1', language: 'en' },
     'media.analyze': { media_url: '__MEDIA__/fixture.mp4', language: 'en' },
     'network.site_copy': { sites: [{ id: 'live', name: 'OpenVibe.Live', what: 'live streaming' }], links: [{ id: 'tools', name: 'Tools', about: 'online tools' }] },
+    'network.guest_answer': { question: 'How do I go live from my browser?', context: 'The Go live page', site: 'live' },
     'ai.chat': { messages: [{ role: 'user', content: 'hello' }] },
     'ai.complete': { messages: [{ role: 'user', content: 'hello' }], tools: [{ type: 'function', function: { name: 'lookup', parameters: { type: 'object', properties: { q: { type: 'string' } } } } }] },
     'ai.generate': { prompt: 'Write a haiku about SQLite.' },
@@ -144,7 +145,7 @@ t.test('boot seeds every required workflow key', async () => {
     const keys = (await h.registry.listWorkflows()).map(w => w.key);
     for (const k of ['content.wiki', 'wiki.generate_space', 'wiki.generate_page', 'blog.draft_post', 'blog.write_digest', 'blog.write_satire', 'news.summarize_story', 'news.compare_perspectives', 'reviews.summarize_entity', 'deals.enrich_deal',
         'coupons.extract_coupon', 'trade.summarize_market_context', 'codes.generate_docs', 'games.generate_lore', 'moderation.classify', 'tools.describe', 'food.suggest_recipes', 'food.read_pantry_photo', 'pics.describe_image', 'rent.screen_listing', 'chat.member.reply', 'chat.member.turn', 'chat.vibe.listen', 'chat.persona.image',
-        'live.translate', 'live.stream.describe_frame', 'live.stream.summarize', 'live.viewers.reply', 'live.chat.insight', 'live.hero.slogans', 'live.stream.recap', 'network.site_copy']) {
+        'live.translate', 'live.stream.describe_frame', 'live.stream.summarize', 'live.viewers.reply', 'live.chat.insight', 'live.hero.slogans', 'live.stream.recap', 'network.site_copy', 'network.guest_answer']) {
         assert.ok(keys.includes(k), `missing ${k}`);
     }
     for (const k of ['default.chat', 'default.json', 'default.embedding', 'default.image', 'wiki.generate', 'blog.draft', 'news.summarize', 'reviews.summarize', 'deals.enrich', 'coupons.extract', 'trade.summarize', 'codes.generate_docs', 'games.generate_lore', 'tools.describe', 'moderation.classify', 'food.suggest', 'food.vision', 'rent.screen', 'chat.member']) {

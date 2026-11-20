@@ -25,6 +25,7 @@ const research = require('./research');
 const deepDive = require('./deep-dive');
 const video = require('./video');
 const meme = require('./meme');
+const networkGuest = require('./network-guest');
 const changelog = require('./changelog');
 const pictures = require('./pictures');
 const uiLayout = require('./ui-layout');
@@ -275,6 +276,8 @@ async function seed({ registry, quotas, config, env = process.env, db }) {
     await registry.seedVersioned('route', 'default.json', pool(60000, { options: { temperature: 0.3 }, max_output_tokens: 2400, response_format: 'json' }));
     // Meme captions need fluency, not factual precision; choose the cheapest eligible JSON route by default.
     await registry.seedVersioned('route', 'meme.caption', pool(30000, { constraints: { objective: 'cheapest', latency_class: 'interactive' }, options: { temperature: 0.85 }, max_output_tokens: 700, response_format: 'json' }));
+    // A signed-out visitor's question from the menu (network-guest.js): the cheapest interactive model, 450 tokens at most.
+    await registry.seedVersioned('route', 'network.guest', pool(networkGuest.ROUTE.timeoutMs, networkGuest.ROUTE.settings));
     // A layout suggestion is a small JSON arrangement, not a conversation: the cheapest structured-output
     // offer that is healthy, with room for every part of a surface (make your own controls, 2026-11-11).
     await registry.seedVersioned('route', 'ui.layout.suggest', pool(60000, { constraints: { objective: 'cheapest', latency_class: 'interactive' }, options: { temperature: 0.2 }, max_output_tokens: 4000, response_format: 'json' }));
@@ -338,11 +341,11 @@ async function seed({ registry, quotas, config, env = process.env, db }) {
     await registry.seedVersioned('route', 'chat.member', { primary: { provider: 'shared', model: null }, fallbacks: [], options: {}, max_output_tokens: 600, response_format: 'text', timeout_ms: null, alias_of: 'default.chat' });
 
     // Templates, then workflows (workflows reference templates)
-    for (const t of [...live.templates, ...core.templates, ...products.templates, ...devblog.templates, ...media.templates, ...chat.templates, ...space.templates, ...research.templates, ...meme.templates, ...changelog.templates, ...pictures.templates, ...uiLayout.templates, ...decide.templates]) {
+    for (const t of [...live.templates, ...core.templates, ...products.templates, ...devblog.templates, ...media.templates, ...chat.templates, ...space.templates, ...research.templates, ...meme.templates, ...networkGuest.templates, ...changelog.templates, ...pictures.templates, ...uiLayout.templates, ...decide.templates]) {
         const { key, ...def } = t;
         await registry.seedVersioned('template', key, { description: null, default_route: null, owner: 'ai', visibility: 'internal', metadata: {}, ...def });
     }
-    for (const w of [...live.workflows, ...core.workflows, ...products.workflows, ...devblog.workflows, ...media.workflows, ...chat.workflows, ...space.workflows, ...research.workflows, ...deepDive.workflows, ...video.workflows, ...meme.workflows, ...changelog.workflows, ...pictures.workflows, ...uiLayout.workflows, ...decide.workflows]) {
+    for (const w of [...live.workflows, ...core.workflows, ...products.workflows, ...devblog.workflows, ...media.workflows, ...chat.workflows, ...space.workflows, ...research.workflows, ...deepDive.workflows, ...video.workflows, ...meme.workflows, ...networkGuest.workflows, ...changelog.workflows, ...pictures.workflows, ...uiLayout.workflows, ...decide.workflows]) {
         const { key, ...def } = w;
         await registry.seedVersioned('workflow', key, { description: null, default_route: null, cache_ttl_sec: null, metadata: {}, ...def });
     }
