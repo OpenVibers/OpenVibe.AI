@@ -1329,6 +1329,7 @@ function openapi() {
                     explain: nullable('object'), citations_count: nullable('integer'), grounding: nullable('object'),
                     choice: nullable('object', { description: 'the choice the run was started with (a task run or an explicit choice)' }),
                     answered: nullable('object', { description: '{ model, source, machine? }: what actually answered' }),
+                    receipt: nullable('object', { description: 'Auto\'s receipt, a succeeded run only: { chose, why }, what answered and why in one plain sentence' }),
                     retry_of: nullable('string'), idempotency_key: nullable('string'), trace_id: nullable('string'),
                     created_at: str({ format: 'date-time' }), started_at: nullable('string', { format: 'date-time' }), finished_at: nullable('string', { format: 'date-time' }),
                 } },

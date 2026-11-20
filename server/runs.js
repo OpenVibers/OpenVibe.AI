@@ -142,6 +142,12 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
     const agentDefaults = effortDefaults.createDefaults({ db, registry, clock });
     function decode(r) {
         if (!r) return null;
+        const run = decodeRow(r);
+        // Auto's receipt (plan §V.1 routing item 4): what answered and why, in one sentence (receipt-why.js).
+        run.receipt = run.status === 'succeeded' ? require('./receipt-why').receiptOf(run) : null;
+        return run;
+    }
+    function decodeRow(r) {
         return {
             id: r.id, status: r.status,
             ...receiptEffort(r, parseJson(r.explain, null)),
