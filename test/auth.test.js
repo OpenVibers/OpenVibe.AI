@@ -77,6 +77,10 @@ t.test('namespaces fail closed: a token without ns runs nothing (C-22/C-23 retir
     const live = token('live', ['ai.run.create'], { ns: ['live.*', 'network.site_copy', 'media.analyze'] });
     assert.strictEqual((await request(h.base, 'POST', '/api/v1/runs?wait=3000', { tok: live, body: { workflow: 'live.translate', input: { text: 'bonjour tout le monde', from: 'fr', to: 'en' } } })).status, 201);
     assert.notStrictEqual((await run(live, 'network.site_copy', { sites: [], links: [] })).status, 403, 'svc:live -> network.site_copy');
+    // A signed-out visitor's question (network-guest.js) is Network's to run: its own token (ns network.*), not Live's.
+    denied(await run(live, 'network.guest_answer', { question: 'hi' }), 'svc:live -> network.guest_answer');
+    const networkSvc = token('network', ['ai.run.create'], { ns: ['network.*'] });
+    assert.notStrictEqual((await run(networkSvc, 'network.guest_answer', { question: 'How do I go live?', site: 'live' })).status, 403, 'svc:network -> network.guest_answer');
     denied(await run(live, 'ai.generate', { prompt: 'hi' }), 'svc:live -> ai.generate');
     denied(await run(live, 'network.other', {}), 'svc:live -> network.other');
     denied(await request(h.base, 'POST', '/api/v1/generate', { tok: live, body: { prompt: 'hi' } }), 'direct operations are ai.* runs');
