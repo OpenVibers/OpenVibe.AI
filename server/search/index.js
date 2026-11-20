@@ -217,7 +217,7 @@ function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () =>
     // service has one, a Map in this process otherwise; never PostgreSQL (server/search/cache.js).
     const searchCache = createSearchCache({ valkey, now });
     // What each v2 depth really costs and takes, from its last 200 receipts (plan AD.34 item 5).
-    const depthStats = require('./depth-stats').createDepthStats({ valkey, now, log });
+    const depthStats = require('./depth-stats').createDepthStats({ db, valkey, now, log });
     const assetEvents = events || createMemoryEvents();
     const providerFor = (a, providers) => providers.find(p => p.metadata?.search_adapters?.includes(a.id));
     function binding(a, providers) {

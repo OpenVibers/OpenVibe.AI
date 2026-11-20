@@ -64,5 +64,22 @@ const json = (body) => new Response(JSON.stringify(body));
     } finally {
         await h.close();
     }
-    console.log('search-depth-stats: 2 checks passed');
+    // In the database (production: AI starts without a Valkey client, and the process's lists emptied on every deploy):
+    // what one process recorded, the next reads, and only the newest 200 per depth and output stay.
+    const testdb = await require('./db').testDb();
+    try {
+        let t = Date.parse('2026-11-20T23:00:00Z');
+        const first = createDepthStats({ db: testdb.db, now: () => ++t });
+        for (let i = 1; i <= KEEP + 5; i++) await first.record('standard', 'answer', { cost_usd: i / 1e6, time_ms: 4000 + i });
+        const second = createDepthStats({ db: testdb.db, now: () => ++t });
+        const std = (await second.summary()).depths.find((d) => d.depth === 'standard' && d.output === 'answer');
+        assert.equal(std.n, KEEP, 'a restarted process reads what the last one recorded, the newest 200');
+        assert.deepEqual(std.time_ms, { p50: 4106, p90: 4185 });
+        const rows = await testdb.db.prepare("SELECT COUNT(*) AS n FROM search_depth_samples WHERE depth = 'standard' AND output = 'answer'").all();
+        assert.equal(Number(rows[0].n), KEEP, 'older rows are deleted as new ones come');
+    } finally {
+        await testdb.close();
+    }
+    console.log('  ✓ kept in the database: across restarts, the newest 200 per depth and output');
+    console.log('search-depth-stats: 3 checks passed');
 })().catch((e) => { console.error(e); process.exit(1); });
