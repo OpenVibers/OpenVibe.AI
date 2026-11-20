@@ -614,6 +614,45 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
             last_error: prev.last_error || null, last_success_at: clock.now(), last_failure_at: prev.last_failure_at || null, notified_at: null,
         });
         await syncProviderHealth(key);
+        countAnswer(key, modelKey, false);
+    }
+
+    // ── The empty-answer breaker (plan §V.1 item 6a: "above 20% empty answers in 15 minutes a model leaves the route
+    // for an hour, and the operator is alerted") ──
+    // An empty answer already fails over to the next offer at once (AI #525/#527), and three in a row open the
+    // circuit; a model that answers with nothing on one call in three never trips that. Here every answer of an offer
+    // is counted for 15 minutes; past 20% empty (10 answers at least) its circuit opens for an hour with the class
+    // 'empty', and the owner hears it once. In memory per process: a restart starts the window again.
+    const EMPTY_WINDOW_MS = 15 * 60000, EMPTY_MIN_ANSWERS = 10, EMPTY_RATE = 0.2, EMPTY_OFF_MS = 60 * 60000;
+    const answerWindows = new Map();   // provider|model → [{ at, empty }]
+    /** Counts one answer; → { answers, empty } when this one put the offer past the rate, else null. */
+    function countAnswer(key, model, empty) {
+        const k = `${key}|${model || ''}`, now = clock.now();
+        const w = (answerWindows.get(k) || []).filter((x) => now - x.at < EMPTY_WINDOW_MS);
+        w.push({ at: now, empty: !!empty });
+        answerWindows.set(k, w);
+        if (!empty || w.length < EMPTY_MIN_ANSWERS) return null;
+        const n = w.filter((x) => x.empty).length;
+        if (n / w.length <= EMPTY_RATE) return null;
+        answerWindows.delete(k);
+        return { answers: w.length, empty: n };
+    }
+    /** Takes an offer off the routes for an hour after too many empty answers, and tells the owner once. */
+    async function emptyBreak(key, modelKey, counted, current, row) {
+        const now = clock.now();
+        await putCircuit.run({
+            provider_key: key, model_key: modelKey, state: 'open', failure_class: 'empty',
+            consecutive_failures: (Number(row && row.consecutive_failures) || 0), opened_at: now, retry_at: now + EMPTY_OFF_MS,
+            backoff_ms: EMPTY_OFF_MS, key_stamp: current,
+            last_error: `empty on ${counted.empty} of ${counted.answers} answers in 15 minutes`,
+            last_success_at: row && row.last_success_at != null ? Number(row.last_success_at) : null, last_failure_at: now, notified_at: null,
+        });
+        await registry.audit('system', 'provider.circuit_opened', 'provider', key, {
+            metadata: { failure_class: 'empty', model: modelKey, answers: counted.answers, empty: counted.empty },
+        });
+        await syncProviderHealth(key);
+        await announceOnce(key, modelKey, 'empty', now, counted);
+        return { opened: true, state: 'open', opened_at: now, retry_at: now + EMPTY_OFF_MS, backoff_ms: EMPTY_OFF_MS };
     }
 
     /**
@@ -628,6 +667,17 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
         // Our own policy refusing an answer is not the provider failing: it produced one.
         const counts = err && err.code !== 'policy.floor_refused';
         if (counts) await putFailureCount.run({ provider_key: key, failure_class: failure.class, updated_at: now });
+        // An empty answer is a 'request' failure (it moves this request on); it also counts toward the empty-answer
+        // breaker, which may take the offer off the routes for an hour.
+        if (err && err.code === 'provider.empty') {
+            const counted = countAnswer(key, String(model || ''), true);
+            if (counted) {
+                const current = stamp !== undefined ? stamp : await keyStamp(key);
+                await resetForNewKey(key, current);
+                const row = await getCircuit.get(key, String(model || '')) || {};
+                return { ...failure, class: 'empty', ...(await emptyBreak(key, String(model || ''), counted, current, row)) };
+            }
+        }
         if (!['balance', 'auth', 'transient'].includes(failure.class)) return { ...failure, opened: false };
 
         const modelKey = String(model || '');
@@ -683,19 +733,23 @@ function createProviderPool({ db, registry, config, clock = { now: () => Date.no
      * Announce an open circuit at most once: the database row is claimed before the push, so two
      * requests that fail together cannot both send. A failed push releases the claim for a later try.
      */
-    async function announceOnce(key, model, failureClass, at = clock.now()) {
+    async function announceOnce(key, model, failureClass, at = clock.now(), counted = null) {
         const claimed = await db.prepare('UPDATE provider_circuits SET notified_at = ? WHERE provider_key = ? AND model_key = ? AND notified_at IS NULL')
             .run(at, key, String(model || ''));
         if (!claimed || !claimed.changes) return false;
-        if (await alertOwner(key, model, failureClass)) return true;
+        if (await alertOwner(key, model, failureClass, counted)) return true;
         await db.prepare('UPDATE provider_circuits SET notified_at = NULL WHERE provider_key = ? AND model_key = ? AND notified_at = ?')
             .run(key, String(model || ''), at);
         return false;
     }
 
     /** One owner message per open balance/auth circuit, with the provider's own class, never a request body. */
-    async function alertOwner(key, model, failureClass) {
+    async function alertOwner(key, model, failureClass, counted = null) {
         const offer = model ? `${key}/${model}` : key;
+        if (failureClass === 'empty') {
+            const said = counted ? ` on ${counted.empty} of its last ${counted.answers} answers` : '';
+            return await notifyOwner({ title: 'A model keeps answering with nothing', message: `${offer} answered with nothing${said} in 15 minutes. OpenVibe.AI took it off every route for an hour and is answering with the next offers.` });
+        }
         const title = failureClass === 'balance' ? 'A provider is out of credit' : 'A provider key was refused';
         const message = failureClass === 'balance'
             ? `${offer} says its account is out of credit. OpenVibe.AI is using the other offers until it is topped up.`
