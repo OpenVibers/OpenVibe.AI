@@ -70,7 +70,14 @@ function percentile(values, p) {
     return Math.round(v);
 }
 
-function createObserved({ db, clock = { now: () => Date.now() } }) {
+// runs.created_at is text, written as toISOString() (every one of 119,679 rows on 11-20), so the window compares as text
+// and idx_runs_status (status, created_at) serves it; a cast to timestamptz on each row made every read a sequential
+// scan of runs (four such reads, in parallel workers, every catalog rebuild: 0.5-0.9 s each in the slow-query log).
+// A window's read is shared for READ_TTL_MS by every catalog that asks (per kind, per window, Decisions): a week's
+// uptime and speed do not move in five minutes. One read of a window at a time.
+const READ_TTL_MS = 5 * 60 * 1000;
+function createObserved({ db, clock = { now: () => Date.now() }, ttlMs = READ_TTL_MS }) {
+    const reads = new Map();   // days -> { at, value } | { at, pending }
     // One sample per real provider attempt: ok with output is a success; error, timeout, an empty run
     // and a text attempt that spent every token are failures. Skipped and cancelled rows are not samples
     // (no provider was tried, or the caller left). The run's own provider and model are not used here: a
@@ -92,7 +99,7 @@ function createObserved({ db, clock = { now: () => Date.now() } }) {
           AND r.status IN ('succeeded', 'failed')
           AND r.synthetic = 0
           AND COALESCE(r.service_tier, '') <> 'flex'
-          AND r.created_at::timestamptz >= ?::timestamptz AND r.created_at::timestamptz <= ?::timestamptz
+          AND r.created_at >= ? AND r.created_at <= ?
         GROUP BY 1, 2, 3, 4`);
     // A cached answer called no provider; it follows the run it reused (`cached_from`).
     const cachedRows = db.prepare(`SELECT to_char(r.created_at::timestamptz AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day,
@@ -103,7 +110,7 @@ function createObserved({ db, clock = { now: () => Date.now() } }) {
         FROM runs r
         LEFT JOIN runs src ON src.id = r.cached_from
         WHERE r.status = 'cached' AND r.synthetic = 0
-          AND r.created_at::timestamptz >= ?::timestamptz AND r.created_at::timestamptz <= ?::timestamptz
+          AND r.created_at >= ? AND r.created_at <= ?
         GROUP BY 1, 2, 3, 4`);
     // The prompt tokens provider attempts reported, and how many of them the provider served from its own prompt
     // cache (server/providers/*.js record usage.cached per attempt). Only attempts that reached the provider count;
@@ -116,7 +123,7 @@ function createObserved({ db, clock = { now: () => Date.now() } }) {
         WHERE q.status = 'ok'
           AND r.status IN ('succeeded', 'failed')
           AND r.synthetic = 0
-          AND r.created_at::timestamptz >= ?::timestamptz AND r.created_at::timestamptz <= ?::timestamptz
+          AND r.created_at >= ? AND r.created_at <= ?
         GROUP BY 1, 2`);
     const latencyRows = db.prepare(`SELECT q.provider_key AS provider_key,
             q.model_key AS model_key,
@@ -132,12 +139,22 @@ function createObserved({ db, clock = { now: () => Date.now() } }) {
           AND NOT (q.operation IN ('chat', 'generate', 'summarize', 'classify', 'extract', 'enrich', 'complete', 'messages')
                    AND COALESCE(q.tokens_out, 0) = 0
                    AND (q.output_hash IS NULL OR q.output_hash = '${EMPTY_OUTPUT_HASH}'))
-          AND r.created_at::timestamptz >= ?::timestamptz AND r.created_at::timestamptz <= ?::timestamptz`);
+          AND r.created_at >= ? AND r.created_at <= ?`);
 
-    /** The real attempts and cached answers of the window, and the UTC day that is "today". */
+    /** The real attempts and cached answers of the window, and the UTC day that is "today" (shared for ttlMs). */
     async function read({ days = 7 } = {}) {
-        const now = clock.now();
         const span = Math.max(1, Number(days) || 7);
+        const hit = reads.get(span);
+        if (hit && clock.now() - hit.at < ttlMs) return hit.pending || hit.value;
+        const entry = { at: clock.now() };
+        entry.pending = readFresh(span).then((value) => { reads.set(span, { at: entry.at, value }); return value; },
+            (err) => { if (reads.get(span) === entry) reads.delete(span); throw err; });
+        reads.set(span, entry);
+        return entry.pending;
+    }
+
+    async function readFresh(span) {
+        const now = clock.now();
         const from = new Date(now - span * DAY_MS).toISOString();
         const to = new Date(now).toISOString();
         const from24 = new Date(now - DAY_MS).toISOString();
