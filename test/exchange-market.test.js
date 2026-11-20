@@ -75,6 +75,9 @@ t.test('unregistered pricebook rows survive and the public route is cached and p
     const nginx=fs.readFileSync(path.join(__dirname,'../deploy/nginx/api.openvibe.exchange.conf'),'utf8');
     assert(nginx.includes('location ^~ /api/v1/exchange/'));
     assert(nginx.includes('location = /v1/search/icons'), 'the Exchange icon search reaches OpenVibe.AI from the public API host');
+    // Search for everyone with a key (11-20): the web (v1 and v2), pictures and one page's text, POST only.
+    assert(nginx.includes('location ~ ^/v1/(search|search/images|fetch)$ {'), 'web search, pictures and fetch reach OpenVibe.AI from the public API host');
+    assert(/\/v1\/search, \/v1\/search\/images, \/v1\/search\/icons, \/v1\/fetch/.test(nginx), 'the 404 names them');
     let time=100; let reads=0;
     const market=createMarket({db:h.db,registry:{listProviders:async()=>{reads++;return[];},listModels:async()=>[]},catalog:async()=>({models:[]}),clock:{now:()=>time},metadata:{read:async()=>({entries:[],checked_at:null,stale:true})}});
     await Promise.all([market.read({limit:1}),market.read({limit:2})]); assert.strictEqual(reads,1);
