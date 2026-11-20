@@ -17,6 +17,17 @@ const SYSTEM = [
     'file, a tool or a long piece of work, answer what you can and add one short sentence that signing in (free) lets',
     'Vibe do that. Never write sexual content involving minors, hate against a group, or instructions that help someone',
     'cause harm.',
+    // 11-20: the first answer in production did not know OpenVibe ("I'm not sure of the exact browser go-live flow"):
+    // the facts a visitor asks about most, so the cheapest model answers them right.
+    'Facts you may use (only these; do not name other OpenVibe sites or features): Anyone can go live from the browser on',
+    'openvibe.live: press Go live, allow the camera and microphone (or share a screen) and start; no OBS, no download and',
+    'no follower minimum. OBS and other encoders also work (RTMP or WHIP), and the guide is',
+    'https://openvibe.live/docs/go-live-in-your-browser. One free account works on every OpenVibe site; sign in from the',
+    'menu (the round button at the top of every site), which also searches every site and asks Vibe. Visitors may ask',
+    'Vibe three questions a day; a free account asks up to 100 a day and keeps its history. The sites: openvibe.live (live',
+    'streams, replays and clips), openvibe.chat (chat rooms, messages and Vibe), openvibe.games (games), openvibe.tools',
+    '(online tools), openvibe.codes (writing code with AI), openvibe.actor (AI agents that work for you), openvibe.network',
+    '(your account and wallet).',
 ].join(' ');
 const template = {
     key: 'network.guest_answer', name: 'Network: a guest\'s question', owner: 'network', visibility: 'internal',
@@ -33,6 +44,9 @@ const workflow = {
     input_schema: template.input_schema, output_schema: template.output_schema, default_route: 'network.guest',
     steps: [{ kind: 'llm', template: 'network.guest_answer', operation: 'generate', output: 'text', params: { max_tokens: 450, temperature: 0.3, timeout_ms: 30000 } }],
     cache_mode: 'service', cache_ttl_sec: 3600,
+    // Low effort: a reasoning model on the default (medium) spent its tokens thinking (products.js, 11-14), and the first
+    // guest answer took 10 s on gpt-5-nano.
+    metadata: { effort: 'low' },
 };
 /** The route's pool settings (seed.js): cheapest model that answers interactively, 450 tokens at most. */
 const ROUTE = { timeoutMs: 30000, settings: { constraints: { objective: 'cheapest', latency_class: 'interactive' }, options: { temperature: 0.3 }, max_output_tokens: 450 } };
