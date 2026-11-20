@@ -39,9 +39,11 @@ const V2_FIELDS = ['depth', 'queries', 'output', 'engines', 'include_domains', '
 const HOST = /^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 // What a model step may cost at most (USD); the actual cost is charged.
 const STEP_USD = { variants: 0.003, follow_ups: 0.005, rerank: 0.0005 };
-// The model that writes answers and fills shapes from the sources (plan AD.34; measured 11-20 on 40 SimpleQA questions
-// against the default pick, gpt-5-nano): a soft preference the router honours when it can, never a pin.
-const ANSWER_PREFER = 'openai/gpt-4.1-mini';
+// The model that writes answers and fills shapes from the sources: a soft preference the router honours when the offer
+// is healthy and able, never a pin. Measured 11-20 on the same sources for 40 SimpleQA questions: deepseek-flash 85%
+// correct, median 2.1 s, $0.0005 an answer; the default pick (gpt-5-nano, the shared provider's only model) 80%, 9.8 s,
+// $0.0001. (gpt-4.1-mini could not be measured: the platform-paid shared provider serves gpt-5-nano only.)
+const ANSWER_PREFER = 'deepseek/deepseek-flash';
 // Rerank (plan AD.34 item 3): the merged top results by meaning, not only by where engines placed them. The question and
 // each result's title and snippet are embedded; the order blends the merged rank with that similarity, half each, so
 // a result every engine agreed on stays high and one off the question sinks before the pages are read.
