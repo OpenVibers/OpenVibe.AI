@@ -499,11 +499,14 @@ function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () =>
                 // A transport timeout or malformed successful response may already be billed.
                 // Keep its ceiling in both the fallback budget and receipt, rather than overspend.
                 const failedNano = attempted && !error.unbilled ? c.ceilingNano : 0n;
-                const reason = ['AbortError', 'TimeoutError'].includes(error.name) || error.code === 'provider.timeout' ? 'timeout'
-                    : /usage is missing|Invalid engine cost|Invalid search response/.test(error.message || '') ? 'invalid_response' : 'upstream_error';
+                const reason = error.target ? 'page_refused'
+                    : ['AbortError', 'TimeoutError'].includes(error.name) || error.code === 'provider.timeout' ? 'timeout'
+                        : /usage is missing|Invalid engine cost|Invalid search response/.test(error.message || '') ? 'invalid_response' : 'upstream_error';
                 attempts.push(attempt(c, 'error', attemptStart, rateCards.usdOf(failedNano), reason));
                 if (failedNano) { incurredNano += failedNano; if (!c.own) chargeNano += failedNano; }
-                await circuit.trip(c.scope, c.engine, now() + 60000);
+                // A page that refused a reader (its status, its redirects, its size) says nothing about the reader: only
+                // the reader's own failures open its breaker (11-20: one picky site switched page reading off for all).
+                if (!error.target) await circuit.trip(c.scope, c.engine, now() + 60000);
             }
         }
         throw Object.assign(new AiError(503, 'search.unavailable', 'The selected engines did not answer', { attempts }), { [CHARGE]: rateCards.usdOf(chargeNano) });
