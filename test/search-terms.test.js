@@ -41,7 +41,8 @@ const json = (value) => new Response(JSON.stringify(value), { status: 200 });
         (e) => e.status === 422 && /terms disallow purpose/.test(e.message) && /brave\.com/.test(e.message));
     await assert.rejects(search.search('web', { engine: 'brave', q: 'cats', private: true }),
         (e) => e.status === 422 && /privacy incompatible/.test(e.message));
-    await assert.rejects(search.search('web', { q: 'cats', purpose: 'public_benchmark' }),
+    // Wikipedia's licence allows a benchmark, but Wikimedia keeps request logs: a private benchmark has no engine left.
+    await assert.rejects(search.search('web', { q: 'cats', purpose: 'public_benchmark', private: true }),
         (e) => e.status === 422 && /terms allow this request/.test(e.message), 'auto with no permitted engine says so');
     assert.equal(calls, before, 'a refused engine is never called: the key is never sent');
 

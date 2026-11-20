@@ -18,7 +18,7 @@ const adapters = ['openverse', 'commons', 'searxng', 'openvibe', 'iconify',
     'deepseek', 'brave', 'exa', 'tavily', 'serper', 'serpapi', 'jina',
     'openvibe-egress', 'perplexity', 'kagi', 'google', 'unsplash', 'pexels', 'pixabay', 'brave-images',
     'meta', 'serper-images', 'serpapi-images', 'searchapi-images', 'serpapi-reverse', 'tineye',
-    'mojeek', 'parallel', 'you', 'dataforseo', 'europeana', 'nasa', 'dataforseo-images', 'smithsonian']
+    'mojeek', 'parallel', 'you', 'dataforseo', 'europeana', 'nasa', 'dataforseo-images', 'smithsonian', 'wikipedia']
     .map(n => require('./adapters/' + n));
 // Every adapter says what class of engine it is (plan §W.2 step 4); an adapter without a known class is refused
 // here, because an engine that cannot be compared with another one may never be routed to.

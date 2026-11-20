@@ -46,6 +46,7 @@ const SEED = Object.freeze([
     { engine: 'commons', unit: 'result', price: '0', ceiling: '0', currency: USD, included: null, source_url: 'https://www.mediawiki.org/wiki/API:Main_page', read_on: '2026-11-09' },
     { engine: 'searxng', unit: 'request', price: '0', ceiling: '0', currency: USD, included: null, source_url: 'https://docs.searxng.org/', read_on: '2026-11-09' },
     { engine: 'openvibe', unit: 'request', price: '0', ceiling: '0', currency: USD, included: null, source_url: 'https://search.openvibe.network', read_on: '2026-11-12' },
+    { engine: 'wikipedia', unit: 'request', price: '0', ceiling: '0', currency: USD, included: null, source_url: 'https://www.mediawiki.org/wiki/API:Search', read_on: '2026-11-20' },
     { engine: 'iconify', unit: 'result', price: '0', ceiling: '0', currency: USD, included: null, source_url: 'https://iconify.design/docs/api/', read_on: '2026-11-09' },
     { engine: 'deepseek', unit: 'request', price: '0.00075', ceiling: '0.00075', currency: USD, included: null, source_url: 'https://api-docs.deepseek.com/guides/search/', read_on: '2026-11-09' },
     { engine: 'brave', unit: 'request', price: '0.005', ceiling: '0.005', currency: USD, included: '$5 monthly credit', source_url: 'https://api-dashboard.search.brave.com/app/plans', read_on: '2026-11-09' },
