@@ -49,7 +49,9 @@ function cosine(a, b) {
     for (let i = 0; i < a.length; i++) { dot += a[i] * b[i]; x += a[i] * a[i]; y += b[i] * b[i]; }
     return x && y ? dot / Math.sqrt(x * y) : 0;
 }
-const READ_TIMEOUT_MS = 9000;
+// A page read is cut at 5 s (11-20 on production: one slow page held a standard answer back 9 s, the answer came at
+// 13.9 s while the merged list was out at 2.9 s); the answer uses the passages that arrived and the snippets for the rest.
+const READ_TIMEOUT_MS = 5000;
 const CLASS_ORDER = ['independent_index', 'serp_proxy', 'metasearch', 'semantic', 'answer_engine', 'first_party_index'];
 // OpenVibe's own index only knows OpenVibe's pages: auto asks it only when a query is about OpenVibe (plan AD.34 item 7;
 // on 11-20 it filled the third place of a search for the Louvre's hours).
