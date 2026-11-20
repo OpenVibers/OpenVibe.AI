@@ -34,6 +34,12 @@ module.exports = {
             ...(range ? { time_range: range } : {}),
         }).toString();
         const out = await get(url);
+        // No result because the instance's own engines refused it (rate limits, CAPTCHAs: every one of them on 11-20) is
+        // a failure of this engine, not an empty web: search falls back to another engine and the breaker rests it.
+        const refused = Array.isArray(out.unresponsive_engines) ? out.unresponsive_engines : [];
+        if (!(out.results || []).length && refused.length) {
+            throw Object.assign(new Error(`SearXNG's engines did not answer (${refused.map((e) => (Array.isArray(e) ? e[0] : e)).slice(0, 6).join(', ')})`), { unbilled: true });
+        }
         if (images) {
             return (out.results || []).filter((r) => r && (r.img_src || r.thumbnail_src)).slice(0, Math.max(1, b.limit || 40)).map((r, i) => ({
                 title: String(r.title || ''), url: r.img_src || null, snippet: '', published: r.publishedDate || null,
