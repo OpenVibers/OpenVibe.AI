@@ -23,7 +23,7 @@ function createLlm({ registry, pool, config = {}, log = console, clock = { now: 
      * call({ routeKey, system, user, image, schema, schemaName, maxTokens, temperature, signal, ctx })
      * -> { json, provider, model, tokens_in, tokens_out, cost_usd, ms, route, synthetic }
      */
-    async function call({ routeKey = 'default.json', system, user, image = null, schema = null, schemaName = 'result', maxTokens = 3000, temperature = 0.3, signal = null, ctx = {}, retry = true }) {
+    async function call({ routeKey = 'default.json', system, user, image = null, schema = null, schemaName = 'result', maxTokens = 3000, temperature = 0.3, signal = null, ctx = {}, retry = true, prefer = null }) {
         const route = await routeFor(routeKey);
         const req = {
             system: system ? [{ text: system, cache: true }] : [],
@@ -32,6 +32,9 @@ function createLlm({ registry, pool, config = {}, log = console, clock = { now: 
             json: schema ? { name: schemaName, schema, strict: false } : null,
             maxTokens: Math.max(64, Math.min(8000, maxTokens)),
             temperature,
+            // A soft preference for one offer (provider/model): the pool honours it when it is healthy, within the
+            // price ceiling and able to do the job, and says so; otherwise it picks as usual (providers/task.js).
+            ...(prefer ? { prefer } : {}),
             timeoutMs: route.timeout_ms || 90000,
             cacheKey: null,
         };
@@ -48,7 +51,7 @@ function createLlm({ registry, pool, config = {}, log = console, clock = { now: 
             const problem = json ? schemas.validate(schema, json).errors.map((e) => `${e.path} ${e.message}`).join('; ') : 'the answer was not JSON';
             const again = await call({
                 routeKey, system, user: `${user}\n\nYour previous answer was not valid (${problem.slice(0, 400)}). Answer again with only the JSON object the instructions name, nothing before or after it.`,
-                image, schema, schemaName, maxTokens, temperature: 0.1, signal, ctx, retry: false,
+                image, schema, schemaName, maxTokens, temperature: 0.1, signal, ctx, retry: false, prefer,
             });
             return again;
         }
