@@ -20,5 +20,14 @@ const { createLlm } = require('../server/deep-dive/llm');
     assert.equal(calls[0].ctx.routeVersion, 3);
     const none = createLlm({ registry: { resolveRoute: async () => null }, pool });
     await assert.rejects(none.embed(['x']), (err) => err.code === 'route.unavailable');
-    console.log('search-llm-embed: 2 checks passed');
+    // A soft model preference reaches the pool's request, on the retry too.
+    const chats = [];
+    const chatPool = { execute: async (route, op, req) => { chats.push(req); return { result: { json: chats.length === 1 ? { wrong: true } : { answer: 'ok' } }, model: 'fake', cost: 0 }; } };
+    const chatter = createLlm({ registry: { resolveRoute: async (key) => ({ key, version: 1 }) }, pool: chatPool, clock: { now: () => 1 } });
+    const got = await chatter.call({ user: 'q', schema: { type: 'object', required: ['answer'], properties: { answer: { type: 'string' } } }, prefer: 'openai/gpt-4.1-mini' });
+    assert.equal(got.json.answer, 'ok');
+    assert.deepEqual(chats.map((r) => r.prefer), ['openai/gpt-4.1-mini', 'openai/gpt-4.1-mini'], 'asked on the first try and the retry');
+    const plain = []; await createLlm({ registry: { resolveRoute: async (key) => ({ key, version: 1 }) }, pool: { execute: async (r, o, req) => { plain.push(req); return { result: { json: { answer: 'x' } } }; } } }).call({ user: 'q' });
+    assert.equal('prefer' in plain[0], false, 'no preference unless asked');
+    console.log('search-llm-embed: 3 checks passed');
 })().catch((e) => { console.error(e); process.exit(1); });

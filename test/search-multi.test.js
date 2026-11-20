@@ -129,6 +129,7 @@ const json = (body, status = 200) => new Response(JSON.stringify(body), { status
         llmCalls.push(req.schemaName);
         if (req.schemaName === 'search_variants') return { json: { queries: ['Lisbon lantern workshops', 'lanternas Lisboa artesãos'] }, model: 'fake/small', cost_usd: 0.0004 };
         if (req.schemaName === 'search_follow_ups') return { json: { queries: ['oldest lantern maker Alfama'] }, model: 'fake/small', cost_usd: 0.0005 };
+        if (req.schemaName === 'search_answer' || req.schemaName === 'search_structured') assert.equal(req.prefer, 'openai/gpt-4.1-mini', 'answers prefer the measured model');
         if (req.schemaName === 'search_answer') {
             assert.match(req.user, /\[1\] Lantern makers in Lisbon/);
             assert.match(req.user, /since 1932/, 'the answer reads the passage the page gave');
