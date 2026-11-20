@@ -38,6 +38,9 @@ const HOST = /^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}
 const STEP_USD = { variants: 0.003, follow_ups: 0.005 };
 const READ_TIMEOUT_MS = 9000;
 const CLASS_ORDER = ['independent_index', 'serp_proxy', 'metasearch', 'semantic', 'answer_engine', 'first_party_index'];
+// OpenVibe's own index only knows OpenVibe's pages: auto asks it only when a query is about OpenVibe (plan AD.34 item 7;
+// on 11-20 it filled the third place of a search for the Louvre's hours).
+const ABOUT_OPENVIBE = /open\s?vibe|\bopenvibe\.[a-z]+|\bovx_/i;
 const invalid = (m) => new AiError(422, 'ai.invalid', m);
 
 /** Is this a v2 request? Any v2 field turns it on. */
@@ -97,16 +100,17 @@ const chargeOf = (x, CHARGE) => (x && x[CHARGE] != null ? Number(x[CHARGE]) || 0
  */
 function createMulti({ prepare, execute, llm = null, now = () => Date.now(), CHARGE, usdOf, log = console }) {
     /** The engines one query goes to: the named ones, or the cheapest runnable engine of each class, up to n. */
-    function chooseEngines(candidates, wanted, n) {
-        const runnable = candidates.filter((c) => !c.skipReason);
+    function chooseEngines(candidates, wanted, n, queries = []) {
+        const ours = queries.some((q) => ABOUT_OPENVIBE.test(q));
+        const runnable = candidates.filter((c) => !c.skipReason && (ours || c.a.class !== 'first_party_index' || !(wanted.length === 1 && wanted[0] === 'auto')));
         if (!(wanted.length === 1 && wanted[0] === 'auto')) {
             const named = wanted.map((id) => runnable.find((c) => c.a.id === id)).filter(Boolean);
             if (!named.length) throw new AiError(422, 'search.unsupported', `none of ${wanted.join(', ')} can serve this search now`);
             return named;
         }
         // Web engines first, by kind: an independent index, a search-results proxy, a metasearch; OpenVibe's own
-        // network index (first_party_index) joins after them, as it only knows OpenVibe's own pages. Within a kind,
-        // the planner's order (cheapest first) holds.
+        // network index (first_party_index) joins after them, and only for a query about OpenVibe, as it only knows
+        // OpenVibe's own pages. Within a kind, the planner's order (cheapest first) holds.
         const rank = (c) => { const i = CLASS_ORDER.indexOf(c.a.class); return i === -1 ? CLASS_ORDER.length : i; };
         const ordered = runnable.map((c, i) => ({ c, i })).sort((x, y) => rank(x.c) - rank(y.c) || x.i - y.i).map((x) => x.c);
         const out = [], classes = new Set();
@@ -119,7 +123,8 @@ function createMulti({ prepare, execute, llm = null, now = () => Date.now(), CHA
         if (kind !== 'web') throw invalid('depth, queries, answers and the other v2 fields are for web search');
         const v = inputOf(body);
         const probe = await prepare(kind, { ...v.single, q: v.queries[0], ...(v.max_cost_usd != null ? { max_cost_usd: v.max_cost_usd } : {}) }, ctx);
-        const engines = chooseEngines(probe.candidates, v.engines, v.engines[0] === 'auto' ? v.d.engines : v.engines.length);
+        const engines = chooseEngines(probe.candidates, v.engines, v.engines[0] === 'auto' ? v.d.engines : v.engines.length, v.queries);
+        if (!engines.length) throw new AiError(503, 'search.unavailable', 'No web engine can serve this search now');
         // The cheapest two take the rewrites, the follow-ups and the site searches; every engine takes the asked queries.
         const cheap = [...engines].sort((a, b) => (a.ceilingNano < b.ceilingNano ? -1 : a.ceilingNano > b.ceilingNano ? 1 : 0)).slice(0, 2);
         const sum = (list) => list.reduce((n, c) => n + (c.own ? 0n : c.ceilingNano), 0n);
@@ -319,7 +324,7 @@ function createMulti({ prepare, execute, llm = null, now = () => Date.now(), CHA
         return out;
     }
 
-    return { prepareMulti, executeMulti };
+    return { prepareMulti, executeMulti, chooseEngines };
 }
 
 function hostOf(url) { try { return new URL(String(url)).hostname.toLowerCase().replace(/^www\./, ''); } catch { return ''; } }

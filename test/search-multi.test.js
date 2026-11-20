@@ -6,7 +6,7 @@
 const assert = require('node:assert/strict');
 const { createSearch, CHARGE } = require('../server/search');
 const { canonicalUrl, siteOf, fuse, excerpt } = require('../server/search/fusion');
-const { isMulti, inputOf } = require('../server/search/multi');
+const { isMulti, inputOf, createMulti } = require('../server/search/multi');
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status });
 
@@ -81,6 +81,16 @@ const json = (body, status = 200) => new Response(JSON.stringify(body), { status
     assert.throws(() => inputOf({ queries: ['a', 'b', 'c', 'd', 'e', 'f'] }), /at most 5 queries/);
     assert.deepEqual(inputOf({ queries: ['a', 'b'], include_domains: ['https://www.Example.com/path'] }).include, ['example.com']);
     ok('the v2 fields are checked in words; q may be left out when queries are given');
+
+    // OpenVibe's own index joins auto only for a question about OpenVibe (11-20: it took a place in a Louvre search).
+    const { chooseEngines } = createMulti({ prepare: async () => ({}), execute: async () => ({}), CHARGE: Symbol('c'), usdOf: () => 0n });
+    const cand = (id, cls) => ({ a: { id, class: cls }, ceilingNano: 1n });
+    const pool = [cand('openvibe', 'first_party_index'), cand('searxng', 'metasearch'), cand('deepseek', 'answer_engine')];
+    assert.deepEqual(chooseEngines(pool, ['auto'], 3, ['louvre museum opening hours']).map((c) => c.a.id), ['searxng', 'deepseek']);
+    assert.deepEqual(chooseEngines(pool, ['auto'], 3, ['how do OpenVibe agents learn a task']).map((c) => c.a.id), ['searxng', 'deepseek', 'openvibe']);
+    assert.deepEqual(chooseEngines(pool, ['auto'], 3, ['pricing on openvibe.exchange']).map((c) => c.a.id), ['searxng', 'deepseek', 'openvibe']);
+    assert.deepEqual(chooseEngines(pool, ['openvibe'], 1, ['louvre']).map((c) => c.a.id), ['openvibe'], 'named, it is always asked');
+    ok("auto asks OpenVibe's own index only for a question about OpenVibe; named, always");
 
     // ── The pipeline, over three fake engines ──
     const asked = [];
