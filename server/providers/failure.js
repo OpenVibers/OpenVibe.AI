@@ -69,6 +69,7 @@ function classifyFailure(err) {
 function reasonForClass(failureClass) {
     if (failureClass === 'balance') return 'the provider says the account is out of credit';
     if (failureClass === 'auth') return 'the key was refused';
+    if (failureClass === 'empty') return 'too many empty answers in 15 minutes: off the routes for an hour';
     return 'too many errors in the last hour';
 }
 
