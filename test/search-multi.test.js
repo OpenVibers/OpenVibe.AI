@@ -187,6 +187,25 @@ const json = (body, status = 200) => new Response(JSON.stringify(body), { status
     assert.equal(isMulti({ q: 'x', stream: true }), true, 'stream alone is a v2 search');
     ok('stream: the first merged list before the rewrites, then the merged list, the passages and the answer');
 
+    // Rerank (standard, deep): the merged top results by meaning. Here the embeddings say a lower-placed result is the
+    // one closest to the question, so it rises; the step is on the receipt with its cost; fast is never reranked.
+    const embedded = [];
+    const ranking = { ...llm, embed: async (texts) => { embedded.push(texts); return { vectors: texts.map((t, i) => (i === 0 || /Brave only/.test(t) ? [1, 0] : [0, 1])), cost_usd: 0.00002, model: 'fake/embed' }; } };
+    const ranked = await createSearch({ env, fetchImpl, llm: ranking, log: { warn() {}, log() {}, error() {} } }).search('web', { q: 'lantern makers Lisbon', depth: 'standard', excerpts: false });
+    assert.match(ranked.results[0].title, /^Brave only/, `the closest in meaning rises (${ranked.results.map((r) => r.title).join(' | ')})`);
+    assert.equal(ranked.results[0].relevance, 1);
+    assert.equal(embedded[0][0], 'lantern makers Lisbon', 'the question is embedded first');
+    assert.ok(embedded[0].length <= 31, 'at most the top 30 results');
+    const rr = ranked.receipt.steps.find((x) => x.step === 'rerank');
+    assert.deepEqual([rr.status, rr.model, rr.cost_usd], ['ok', 'fake/embed', 0.00002]);
+    embedded.length = 0;
+    await createSearch({ env, fetchImpl, llm: ranking, log: { warn() {}, log() {}, error() {} } }).search('web', { q: 'lantern makers Lisbon', depth: 'fast' });
+    assert.equal(embedded.length, 0, 'fast is not reranked');
+    const broken = { ...llm, embed: async () => { throw Object.assign(new Error('down'), { code: 'provider.down' }); } };
+    const kept = await createSearch({ env, fetchImpl, llm: broken, log: { warn() {}, log() {}, error() {} } }).search('web', { q: 'lantern makers Lisbon', depth: 'standard', excerpts: false });
+    assert.ok(kept.results.length > 0 && kept.receipt.steps.find((x) => x.step === 'rerank').status === 'error', 'a failed ranking keeps the merged order');
+    ok('rerank: standard and deep order the top results by meaning; the step is on the receipt; a failure keeps the merged order');
+
     asked.length = 0; llmCalls.length = 0;
     const deep = await s.search('web', { q: 'lantern makers Lisbon', depth: 'deep', output: 'structured', schema: { type: 'object', properties: { makers: { type: 'integer' }, since: { type: 'integer' } } } });
     assert.deepEqual(deep.queries.follow_ups, ['oldest lantern maker Alfama'], 'deep: a second round for what was missing');

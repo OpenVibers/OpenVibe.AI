@@ -31,14 +31,24 @@ const { fuse, excerpt: passageOf, siteOf, onTopic, decode } = require('./fusion'
 const DEPTHS = {
     instant: { engines: 1, variants: 0, followUps: 0, reads: 0, limit: 5, answerUsd: 0.004 },
     fast: { engines: 2, variants: 0, followUps: 0, reads: 0, limit: 8, answerUsd: 0.004 },
-    standard: { engines: 3, variants: 2, followUps: 0, reads: 3, limit: 10, answerUsd: 0.01 },
-    deep: { engines: 3, variants: 3, followUps: 3, reads: 6, limit: 15, answerUsd: 0.03 },
+    standard: { engines: 3, variants: 2, followUps: 0, reads: 3, limit: 10, answerUsd: 0.01, rerank: true },
+    deep: { engines: 3, variants: 3, followUps: 3, reads: 6, limit: 15, answerUsd: 0.03, rerank: true },
 };
 const OUTPUTS = ['results', 'answer', 'structured'];
 const V2_FIELDS = ['depth', 'queries', 'output', 'engines', 'include_domains', 'exclude_domains', 'from', 'excerpts', 'schema', 'stream'];
 const HOST = /^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 // What a model step may cost at most (USD); the actual cost is charged.
-const STEP_USD = { variants: 0.003, follow_ups: 0.005 };
+const STEP_USD = { variants: 0.003, follow_ups: 0.005, rerank: 0.0005 };
+// Rerank (plan AD.34 item 3): the merged top results by meaning, not only by where engines placed them. The question and
+// each result's title and snippet are embedded; the order blends the merged rank with that similarity, half each, so
+// a result every engine agreed on stays high and one off the question sinks before the pages are read.
+const RERANK_TOP = 30;
+function cosine(a, b) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length || !a.length) return 0;
+    let dot = 0, x = 0, y = 0;
+    for (let i = 0; i < a.length; i++) { dot += a[i] * b[i]; x += a[i] * a[i]; y += b[i] * b[i]; }
+    return x && y ? dot / Math.sqrt(x * y) : 0;
+}
 const READ_TIMEOUT_MS = 9000;
 const CLASS_ORDER = ['independent_index', 'serp_proxy', 'metasearch', 'semantic', 'answer_engine', 'first_party_index'];
 // OpenVibe's own index only knows OpenVibe's pages: auto asks it only when a query is about OpenVibe (plan AD.34 item 7;
@@ -146,7 +156,7 @@ function createMulti({ prepare, execute, llm = null, now = () => Date.now(), CHA
             if (reader) ceilingNano += (reader.own ? 0n : reader.ceilingNano) * BigInt(v.reads);
         }
         // The model steps (rewrites, follow-ups, the answer or the structured output), at their ceilings.
-        const stepUsd = (llm ? (v.d.variants ? STEP_USD.variants : 0) + (v.d.followUps ? STEP_USD.follow_ups : 0) + (v.output !== 'results' ? v.d.answerUsd : 0) : 0);
+        const stepUsd = (llm ? (v.d.variants ? STEP_USD.variants : 0) + (v.d.followUps ? STEP_USD.follow_ups : 0) + (v.output !== 'results' ? v.d.answerUsd : 0) + (v.d.rerank && typeof llm.embed === 'function' ? STEP_USD.rerank : 0) : 0);
         if (v.output !== 'results' && !llm) throw new AiError(503, 'search.unavailable', 'answers need a model, and none is set up here');
         ceilingNano += BigInt(Math.round(stepUsd * 1e9));
         if (v.max_cost_usd != null) {
@@ -254,7 +264,26 @@ function createMulti({ prepare, execute, llm = null, now = () => Date.now(), CHA
             }
             return { rows, duplicates: fused.duplicates, total: fused.total };
         }
+        /** The merged rows, the top ones reordered by meaning (standard, deep); unchanged when the step cannot run. */
+        async function rerank(rows) {
+            if (!v.d.rerank || !llm || typeof llm.embed !== 'function' || rows.length < 4) return rows;
+            const top = rows.slice(0, RERANK_TOP);
+            const texts = [v.queries.join(' | '), ...top.map((r) => `${decode(r.title)}. ${decode(r.snippet || '').slice(0, 400)}`)];
+            const vectors = await step('rerank', STEP_USD.rerank, async () => {
+                const e = await llm.embed(texts);
+                return { json: e.vectors, cost_usd: e.cost_usd, model: e.model };
+            });
+            if (!Array.isArray(vectors) || vectors.length !== texts.length) return rows;
+            const sims = top.map((_, i) => cosine(vectors[0], vectors[i + 1]));
+            const lo = Math.min(...sims), span = (Math.max(...sims) - lo) || 1;
+            const order = top.map((r, i) => ({ r, i, s: 0.5 * (1 - i / top.length) + 0.5 * ((sims[i] - lo) / span) }))
+                .sort((a, b) => b.s - a.s || a.i - b.i);
+            return [...order.map(({ r, i }) => ({ ...r, relevance: Math.round(sims[i] * 1000) / 1000 })), ...rows.slice(top.length)];
+        }
         let merged = fuseNow();
+        // Standard ranks before the merged list goes out, so the list does not reorder under the reader; deep ranks once,
+        // after its second round.
+        if (!v.d.followUps) merged.rows = await rerank(merged.rows);
         if (lists.length) emit('results', { stage: 'merged', results: shown(merged.rows), queries: { asked: v.queries, variants } });
         // Deep: a second round for what the first did not cover.
         let followUps = [];
@@ -270,8 +299,11 @@ function createMulti({ prepare, execute, llm = null, now = () => Date.now(), CHA
             if (followUps.length) {
                 await run(followUps.flatMap((q) => plan.cheap.map((c) => [c, q])));
                 merged = fuseNow();
-                emit('results', { stage: 'second_round', results: shown(merged.rows), queries: { asked: v.queries, variants, follow_ups: followUps } });
             }
+        }
+        if (v.d.followUps && lists.length) {
+            merged.rows = await rerank(merged.rows);
+            emit('results', { stage: 'second_round', results: shown(merged.rows), queries: { asked: v.queries, variants, follow_ups: followUps } });
         }
         let results = merged.rows.slice(0, v.limit).map((r) => ({ ...r, title: decode(r.title), snippet: decode(r.snippet) }));
         // Reads: the top pages, and the passage on each that answers the question.

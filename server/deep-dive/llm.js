@@ -63,7 +63,21 @@ function createLlm({ registry, pool, config = {}, log = console, clock = { now: 
         };
     }
 
-    return { call, routeFor };
+    /**
+     * embed(texts) -> { vectors, model, provider, cost_usd, ms }: the platform's embedding route (default.embedding),
+     * for ranking (search v2's rerank). Short timeout: a ranking that is late is skipped, never waited for.
+     */
+    async function embed(texts, { signal = null, ctx = {}, timeoutMs = 8000 } = {}) {
+        const route = await routeFor('default.embedding');
+        const t0 = clock.now();
+        const exec = await pool.execute(route, 'embed', { input: texts.map((t) => String(t == null ? '' : t)), timeoutMs: Math.min(route.timeout_ms || 30000, timeoutMs) }, {
+            ...ctx, routeKey: route.key, routeVersion: route.version, promptHash: null, ...(signal ? { signal } : {}),
+        });
+        const vectors = (exec.result && exec.result.vectors) || [];
+        return { vectors, model: exec.model || null, provider: exec.provider || null, cost_usd: Number(exec.cost) || 0, ms: clock.now() - t0 };
+    }
+
+    return { call, embed, routeFor };
 }
 
 module.exports = { createLlm };
