@@ -13,6 +13,7 @@ const { rankImages } = require('./image-rank');
 const { createCircuit } = require('./circuit');
 const { createSearchCache, keyOf: searchCacheKey, policyFor: cachePolicyFor } = require('./cache');
 const { redactError } = require('../redact');
+const { createMulti, isMulti } = require('./multi');
 const adapters = ['openverse', 'commons', 'searxng', 'openvibe', 'iconify',
     'deepseek', 'brave', 'exa', 'tavily', 'serper', 'serpapi', 'jina',
     'openvibe-egress', 'perplexity', 'kagi', 'google', 'unsplash', 'pexels', 'pixabay', 'brave-images',
@@ -184,7 +185,7 @@ function createMemoryEvents() {
         async release(scope, provider, id) { seen.delete(key(scope, provider, id)); },
     };
 }
-function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () => Date.now(), credentials = null, registry = null, targetGuard = publicTarget, events = null, publicBase = process.env.AI_PUBLIC_URL || 'https://ai.openvibe.services', valkey = null, db = null } = {}) {
+function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () => Date.now(), credentials = null, registry = null, targetGuard = publicTarget, events = null, publicBase = process.env.AI_PUBLIC_URL || 'https://ai.openvibe.services', valkey = null, db = null, llm = null, log = console } = {}) {
     // The breaker lives in Valkey when the service has one, so every process sees the same open circuit
     // (server/search/circuit.js); without one it is a Map in this process.
     const circuit = createCircuit({ valkey, now });
@@ -253,7 +254,14 @@ function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () =>
                 uploads: a.uploads === true, filters: filtersFor(a), terms: searchTerms.termsOf(a.id) };
         });
     }
-    async function prepare(kind, body, { subject = null } = {}) {
+    // v2 (multi.js): depth, several queries and engines merged, answers. Any v2 field in the request turns it on; the
+    // v1 planner and executor run every engine call it makes.
+    let multi = null;
+    async function prepare(kind, body, context = {}) {
+        if (isMulti(body)) return multi.prepareMulti(kind, body, context);
+        return prepareOne(kind, body, context);
+    }
+    async function prepareOne(kind, body, { subject = null } = {}) {
         const b = inputFor(kind, body);
         if (b.type === 'icon') kind = 'icons';
         if (kind === 'reverse_image' && (!b.engine || b.engine === 'auto'))
@@ -499,7 +507,8 @@ function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () =>
         throw Object.assign(new AiError(503, 'search.unavailable', 'The selected engines did not answer', { attempts }), { [CHARGE]: rateCards.usdOf(chargeNano) });
     }
     async function search(kind, b, context = {}) {
-        return execute(context.plan || await prepare(kind, b, context), context.budget);
+        const plan = context.plan || await prepare(kind, b, context);
+        return plan.multi ? multi.executeMulti(plan, context.budget) : execute(plan, context.budget);
     }
     async function read(body, context = {}) {
         const b = typeof body === 'string' ? { url: body } : body;
@@ -539,6 +548,7 @@ function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () =>
         const a = adapters.find(x => x.id === 'pixabay');
         return a.image(id, { fetchImpl });
     }
+    multi = createMulti({ prepare: prepareOne, execute, llm, now, CHARGE, usdOf: rateCards.usdOf, log });
     return { engines, search, read, prepare, trackDownload, pixabayImage };
 }
 module.exports = { createSearch, adapters, credentialId, CHARGE, rightsOf };

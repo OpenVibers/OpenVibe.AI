@@ -29,8 +29,22 @@ for (const kind of ['web', 'images', 'icons']) {
         operationId: 'search' + kind[0].toUpperCase() + kind.slice(1), tags: ['exchange'],
         summary: `Search ${kind} through Exchange`, security: [{ bearer: [] }],
         description: 'Accepts an Exchange key, person token, authorized service or app token. What may be kept of a search is decided by the provider\'s own terms: a same-person cache answers that person only, a shared one answers anyone, and a private request is never kept.' + (kind === 'icons' ? ' A first-party service holding exchange.search.icons reaches this route only, with its own minute quota.' : '') + ' Receipt reports engine, provider cost in USD and elapsed milliseconds, including fallbacks, and lists each ordered attempt (ok, error or skipped) with its provider, engine, safe reason, latency and cost. It also names the class of the engine that answered, the classes the request allowed, and the engines whose class kept them out of it. The receipt names the rate card that priced the call (its id and version), the day the terms of the provider were reviewed, the purpose it was made for, the hold it reserved (the card\'s ceiling × the units the call may use) and what it settled (the card\'s price × the units it used), both as exact integer nano-USD. It also says whether the answer came from the service\'s cache of that provider\'s results (cache: {hit, age_s}): a hit costs nothing, and a private request is never cached and never answered from a cache. If a timed-out or malformed upstream answer may already have been billed, its reserved ceiling is included conservatively. BYOK has zero Exchange charge and zero fee; its provider cost remains visible in the receipt. Shared keys settle that cost against the Exchange key cap. The rate cards (price, ceiling, unit, the day the price was read) are in GET /api/v1/exchange/search/engines.',
-        requestBody: { required: true, ...json({ type: 'object', required: ['q'], properties: {
+        requestBody: { required: true, ...json({ type: 'object', ...(kind === 'web' ? {} : { required: ['q'] }), properties: {
             ...properties,
+            // Search v2 (server/search/multi.js): any of these fields turns on depth, several queries and engines merged,
+            // and answers. The response then has results (each naming every engine and query that found it), answer or
+            // structured, queries and a receipt whose engine is "multi", with every call, read and model step in it.
+            ...(kind === 'web' ? {
+                depth: { type: 'string', enum: ['instant', 'fast', 'standard', 'deep'], description: 'instant: one engine. fast (the v2 default): two engines of different kinds side by side. standard: three engines, two rewrites of the question, the top three pages read for the passage that answers it. deep: standard plus a second round for what the first did not cover and six pages read.' },
+                queries: { type: 'array', maxItems: 5, items: { type: 'string', minLength: 1, maxLength: 500 }, description: 'More queries searched with q (or instead of it), merged into one list.' },
+                output: { type: 'string', enum: ['results', 'answer', 'structured'], description: 'results (default); answer: a sourced answer, every claim cited [n] with the cited sources listed; structured: JSON shaped by schema, filled from the sources only.' },
+                schema: { type: 'object', description: 'The JSON schema for output structured (at most 8 KB).' },
+                engines: { type: 'array', maxItems: 5, items: { type: 'string' }, description: '["auto"] (default) or engine ids searched side by side and merged.' },
+                include_domains: { type: 'array', maxItems: 20, items: { type: 'string' }, description: 'Only results from these sites (and searches aimed at them).' },
+                exclude_domains: { type: 'array', maxItems: 20, items: { type: 'string' }, description: 'Sites never returned.' },
+                from: { type: 'string', format: 'date', description: 'Nothing published before this day; undated results follow the dated ones.' },
+                excerpts: { type: 'boolean', description: 'Read the top pages and return the passage that answers the query (on by default at standard and deep).' },
+            } : {}),
             ...(kind === 'web' ? {} : {
                 license: { type: 'string', description: 'Exact licence filter; cc-by and by are equivalent. Unknown licences never pass commercial=true.' },
                 commercial: { type: 'boolean', description: 'Only results whose rights allow commercial use and are not unknown (web-image discovery never passes).' },
