@@ -23,6 +23,7 @@ The price of an engine is a **versioned rate card** (`search_rate_cards`, migrat
 | Engine ID | Shared key environment variable | Baseline tariff | Public source |
 |---|---|---|---|
 | deepseek | SEARCH_DEEPSEEK_KEY | $0.75 search; $0.75 fetch; empty searches are free | [DeepSeek](https://api-docs.deepseek.com/guides/search/) |
+| wikipedia | none (the public MediaWiki API, a named User-Agent) | No provider fee | [MediaWiki API:Search](https://www.mediawiki.org/wiki/API:Search) |
 | brave | SEARCH_BRAVE_KEY | $5 | [Brave](https://api-dashboard.search.brave.com/app/plans) |
 | exa | SEARCH_EXA_KEY | $7 auto search with up to 10 results; $1 per 1,000 additional results | [Exa](https://exa.ai/docs/admin/pricing) |
 | tavily | SEARCH_TAVILY_KEY | $8 basic, one credit; pay as you go | [Tavily](https://www.tavily.com/pricing) |
@@ -84,6 +85,7 @@ Every adapter says what class of engine it is, and the class is what the router 
 | you | answer_engine | You.com's search answers the question |
 | meta | answer_engine | Muse Spark answers from a web search and cites it |
 | searxng | metasearch | SearXNG gathers other engines' results |
+| wikipedia | independent_index | Wikipedia's own search over its articles; search v2 ranks it after the web engines (a reference engine) |
 | jina | page_reader | Jina Reader reads a page (and s.jina.ai searches for one) |
 | openvibe-egress | page_reader | OpenVibe's own egress reads a page |
 | openverse | open_asset_catalog | Openverse is an open catalog of media with the licence it claims |
@@ -164,3 +166,38 @@ Fetch accepts `{"url":"https://example.org/article","engine":"auto"}`; choose `d
 Every provider API call uses a module-owned host allowlist, HTTPS, disabled redirects, a deadline, and the existing guarded fetcher (public addresses checked at connect time, 8 MiB response limit). Only `/v1/fetch` accepts a target URL; remote-reader targets pass the same public DNS/address guard before submission. Remote fetch redirects and page execution take place at the provider and remain subject to that provider's security rules. SearXNG's fixed origin is operator configuration, never request input. Keys, upstream error bodies and credential-bearing query strings are never returned in errors.
 
 `ov test search-adapters search-image-adapters search-download-event search-routing search-attempts search-rate-cards exchange-platform openapi me-credentials credentials ssrf` uses saved synthetic answers in `test/fixtures/search/` and injected transports; it needs no provider accounts, keys or internet access.
+
+## Search v2
+
+`POST /v1/search` with any of these fields runs search v2 (`server/search/multi.js`); a plain `{ q }` is still one
+engine. The page is [openvibe.exchange/search](https://openvibe.exchange/search), the reference is `/openapi.json`.
+
+| Field | What it does |
+|---|---|
+| `depth` | `instant` (one engine), `fast` (two of different kinds, the default), `standard` (three engines, two rewritten queries, ranked by meaning, the top 3 pages read), `deep` (standard, then a second round for what is missing, 6 pages read) |
+| `output` | `results` (default), `answer` (cited `[n]`, conflicts and changes first), `structured` (JSON shaped by `schema`) |
+| `queries` | up to 5 more queries merged into the same list |
+| `include_domains`, `exclude_domains`, `from`, `freshness`, `limit`, `engines`, `excerpts` | sites, a date, freshness, the list's length, named engines, page reads on or off |
+| `max_cost_usd` | what the search may cost; the hold is the sum of every call's ceiling, capped by it |
+| `stream` | `true`: Server-Sent Events, sources first: `results` (stage `first`, `merged`, `second_round`, `read`, each a whole list), `answer` or `structured`, `done` with the receipt, or `error` |
+
+How it runs:
+
+- **Engines by kind:** one engine of each web kind first (independent index, SERP proxy, metasearch), cheapest first
+  within a kind; a reference engine (Wikipedia) only fills a place no web engine is left for; OpenVibe's own index only
+  for a question about OpenVibe. An engine with a query limit (DeepSeek: 128 characters) gets the question shortened.
+- **Merging:** Reciprocal Rank Fusion (k 60) with a boost for agreement, canonical URLs (no tracking, www/m/amp), syndicated
+  copies and mirror hosts folded, at most 2 results per site up top, results off the question moved behind.
+- **Ranking by meaning (standard, deep):** the question and the top 30 results are embedded (`default.embedding`) and the
+  order blends the merged rank and the similarity, half each.
+- **Reads:** the top pages through the page reader (`openvibe-egress`: a named User-Agent, redirects followed hop by hop
+  through the guarded fetch, http read as https, 5 s per page; a page's refusal never opens the reader's breaker), and
+  the passage that answers the question is kept with the result.
+- **Answers:** the model step prefers `deepseek/deepseek-flash` (a soft preference the router honours when it can).
+- **What each depth costs:** `GET /api/v1/exchange/search/depths` (public): each depth's plan and the median and 90th
+  percentile of the cost and time of its last 200 searches (`search_depth_samples`).
+
+Measured on production (2026-11-20, 40 seeded questions from OpenAI's public SimpleQA, an answer counted right when it
+contains the reference): fast 80% (median 2.5 s, $0.0008), standard 85% (6.7 s, $0.0013); deep, 3 questions: 11-14 s,
+$0.0012.
+
