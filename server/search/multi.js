@@ -323,7 +323,8 @@ function createMulti({ prepare, execute, llm = null, now = () => Date.now(), CHA
                 held += ceiling;
                 const t0 = now();
                 try {
-                    const sub = await prepare('fetch', { url: r.url }, ctx);
+                    // An http:// result is read over https (the reader's own rule); the fetch request takes https only.
+                    const sub = await prepare('fetch', { url: String(r.url).replace(/^http:\/\//i, 'https://') }, ctx);
                     const page = await Promise.race([execute(sub, usdOf(ceiling)), new Promise((_, no) => setTimeout(() => no(Object.assign(new Error('read timed out'), { code: 'timeout' })), READ_TIMEOUT_MS))]);
                     charged += chargeOf(page, CHARGE);
                     const passage = passageOf(page.text, v.queries[0]);
