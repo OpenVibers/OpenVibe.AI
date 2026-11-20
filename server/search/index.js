@@ -195,6 +195,8 @@ function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () =>
     // The search caches (plan §W.2 step 6): what a provider's own terms allow us to keep. Valkey when the
     // service has one, a Map in this process otherwise; never PostgreSQL (server/search/cache.js).
     const searchCache = createSearchCache({ valkey, now });
+    // What each v2 depth really costs and takes, from its last 200 receipts (plan AD.34 item 5).
+    const depthStats = require('./depth-stats').createDepthStats({ valkey, now, log });
     const assetEvents = events || createMemoryEvents();
     const providerFor = (a, providers) => providers.find(p => p.metadata?.search_adapters?.includes(a.id));
     function binding(a, providers) {
@@ -508,7 +510,23 @@ function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () =>
     }
     async function search(kind, b, context = {}) {
         const plan = context.plan || await prepare(kind, b, context);
-        return plan.multi ? multi.executeMulti(plan, context.budget, { onEvent: context.onEvent || null }) : execute(plan, context.budget);
+        if (!plan.multi) return execute(plan, context.budget);
+        const out = await multi.executeMulti(plan, context.budget, { onEvent: context.onEvent || null });
+        // Measured, not awaited: a slow store never holds the answer back.
+        depthStats.record(plan.v.depth, plan.v.output, out.receipt).catch(() => {});
+        return out;
+    }
+    /** GET /api/v1/exchange/search/depths: each depth's plan, and what its recent searches cost and took. */
+    async function depths() {
+        const measured = await depthStats.summary();
+        const { DEPTHS: PLAN } = require('./multi');
+        return {
+            depths: Object.entries(PLAN).map(([depth, d]) => ({
+                depth, engines: d.engines, rewrites: d.variants, second_round: d.followUps, pages_read: d.reads, results: d.limit,
+                measured: Object.fromEntries(measured.depths.filter((m) => m.depth === depth).map((m) => [m.output, m.n ? { n: m.n, cost_usd: m.cost_usd, time_ms: m.time_ms, since: m.since } : null])),
+            })),
+            kept: measured.kept,
+        };
     }
     async function read(body, context = {}) {
         const b = typeof body === 'string' ? { url: body } : body;
@@ -549,6 +567,6 @@ function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () =>
         return a.image(id, { fetchImpl });
     }
     multi = createMulti({ prepare: prepareOne, execute, llm, now, CHARGE, usdOf: rateCards.usdOf, log });
-    return { engines, search, read, prepare, trackDownload, pixabayImage };
+    return { engines, depths, search, read, prepare, trackDownload, pixabayImage };
 }
 module.exports = { createSearch, adapters, credentialId, CHARGE, rightsOf };

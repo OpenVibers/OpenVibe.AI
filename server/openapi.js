@@ -913,6 +913,11 @@ route('get', '/exchange/search/engines', {
     description: 'Public. Engine IDs, kinds (web, images, icons, reverse_image, fetch), the class of each engine (first_party_index, independent_index, serp_proxy, semantic, answer_engine, metasearch, page_reader, open_asset_catalog, provider_asset_catalog, web_image_discovery, icon_catalog, reverse_image, visual_web_detection, product_visual_search), availability of shared keys, BYOK support, health, supported freshness, the engine\'s active rate cards (id, version, unit, price, ceiling, currency, included allowance, source page, the day it was read, and stale when it is older than ninety days), pricing_note, included_allowance, onboarding, upstreams, filter support (native, local or unsupported per filter) and the engine\'s source URL. Personal key availability is private. Tariffs exclude free allowances and volume discounts.',
     responses: { 200: json('The engines', { type: 'object', required: ['engines'], properties: { engines: arrayOf({ type: 'object' }) } }) },
 });
+route('get', '/exchange/search/depths', {
+    operationId: 'exchangeSearchDepths', summary: 'What each search depth does, and what its recent searches really cost and took', tags: ['exchange'], security: [],
+    description: 'Public. For instant, fast, standard and deep: how many engines, rewrites, second-round searches, pages read and results; and, from the last 200 searches of each depth and output (results or answer), the median and 90th percentile of the cost (USD) and the time (ms) their receipts said. Only numbers are kept: no query, no person.',
+    responses: { 200: json('The depths', { type: 'object', required: ['depths'], properties: { depths: arrayOf({ type: 'object' }), kept: integer() } }) },
+});
 const rateCard = {
     type: 'object', required: ['id', 'engine', 'version', 'unit', 'price', 'ceiling', 'currency', 'read_on', 'status'],
     properties: {
