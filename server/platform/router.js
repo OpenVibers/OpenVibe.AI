@@ -74,6 +74,32 @@ function platform({ db, auth, clock, log, searchFetch, credentials, registry, en
         subject: req.principal?.kind === 'user' ? req.principal.subject.id : null,
         plan: req.searchPlan, budget: req.searchBudget,
     });
+    // Searches that can be stopped (search v2): id -> { stop, owner }. One process serves the API, so the stop call
+    // finds the search here. Only whoever started a search may stop it.
+    const running = new Map();
+    const ownerOf = (req) => req.principal?.subject?.id || req.principal?.sub || null;
+    const crypto = require('crypto');
+    /**
+     * Runs a search that stops when the caller hangs up (or POST /v1/search/stop names it), and tells the key's hold
+     * when its real charge is known: a client that hung up is charged what ran, never the whole hold.
+     */
+    function stoppable(req, res, kind, extra = {}) {
+        const ac = new AbortController();
+        let finished = false;
+        res.on('close', () => { if (!finished && !res.writableFinished) ac.abort('cancelled'); });
+        const body = req.body || {};
+        const id = kind === 'web' && require('../search/multi').isMulti(body) ? (body.search_id || `srch_${crypto.randomBytes(9).toString('base64url')}`) : null;
+        if (id) {
+            if (running.has(id)) throw new AiError(409, 'search.id_in_use', 'A search with this search_id is still running');
+            running.set(id, { stop: () => ac.abort('stopped'), owner: ownerOf(req) });
+        }
+        const p = search.search(kind, id && !body.search_id ? { ...body, search_id: id } : body, { ...searchContext(req), ...extra, signal: ac.signal });
+        res.locals.searchSettled = p.then(
+            (out) => { res.locals.searchCharge = out[CHARGE]; },
+            (e) => { if (e[CHARGE] != null) res.locals.searchCharge = e[CHARGE]; },
+        ).finally(() => { finished = true; if (id) running.delete(id); });
+        return { id, p };
+    }
     r.get('/api/v1/exchange/search/engines', wrap(async () =>
         ({ engines: await search.engines() })),
     );
@@ -139,11 +165,15 @@ function platform({ db, auth, clock, log, searchFetch, credentials, registry, en
         res.status(200).set({ 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no' });
         res.flushHeaders();
         let open = true;
-        // The response's close (a client that hung up), never the request's: the body was read before this ran.
+        // The response's close (a client that hung up), never the request's: the body was read before this ran. The
+        // search stops with it (stoppable) and the hold settles at what ran.
         res.on('close', () => { open = false; });
         const send = (event, data) => { if (open && !res.writableEnded) res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); };
         try {
-            const out = await search.search('web', req.body, { ...searchContext(req), onEvent: send });
+            const { id, p } = stoppable(req, res, 'web', { onEvent: send });
+            // First: the id POST /v1/search/stop takes, so a reader that found what it needed can end the search.
+            send('started', { id });
+            const out = await p;
             res.locals.searchCharge = out[CHARGE];
             send('done', out);
         } catch (e) {
@@ -158,8 +188,21 @@ function platform({ db, auth, clock, log, searchFetch, credentials, registry, en
             allow,
             searchLimit,
             (req, res, next) => (kind === 'web' && req.body && req.body.stream === true ? streamSearch(req, res).catch(next) : next()),
-            wrap(async (req) => search.search(kind, req.body || {}, searchContext(req))),
+            wrap(async (req, res) => stoppable(req, res, kind).p),
         );
+    // Ends a running search early (search v2): it answers its own caller with what it found so far, charged only what
+    // ran. The same caller only; an unknown or finished id is 404.
+    r.post(
+        '/v1/search/stop',
+        allow,
+        wrap(async (req) => {
+            const id = req.body && req.body.id;
+            const s = typeof id === 'string' ? running.get(id) : null;
+            if (!s || !s.owner || s.owner !== ownerOf(req)) throw new AiError(404, 'search.not_running', 'No search of yours with this id is running');
+            s.stop();
+            return { id, stopped: true };
+        }),
+    );
     r.post(
         '/v1/search/reverse-image',
         allow,
@@ -212,6 +255,7 @@ function platform({ db, auth, clock, log, searchFetch, credentials, registry, en
                     '/v1/search/icons',
                     '/v1/search/reverse-image',
                     '/v1/search/images/unsplash/download',
+                    '/v1/search/stop',
                     '/v1/fetch',
                 ].includes(req.path);
             const inference =
@@ -238,7 +282,7 @@ function platform({ db, auth, clock, log, searchFetch, credentials, registry, en
             if (inference && req.get('idempotency-key'))
                 claim = await claimRequest(db, key.owner, req.get('idempotency-key'), req.path === '/v1/chat/completions' ? req.body : { path: req.path, body: req.body });
             // The Unsplash download event is an allowed search-key action but has no engine plan or ceiling.
-            const planned = isSearch && req.path !== '/v1/search/images/unsplash/download';
+            const planned = isSearch && req.path !== '/v1/search/images/unsplash/download' && req.path !== '/v1/search/stop';
             if (planned) {
                 const kind = req.path === '/v1/fetch' ? 'fetch'
                     : req.path === '/v1/search/reverse-image' ? 'reverse_image'
@@ -299,6 +343,13 @@ function platform({ db, auth, clock, log, searchFetch, credentials, registry, en
                 // the cost is unknown), or the key would keep it until the month ends.
                 const done = () => {
                     if (completed) return;
+                    // A search still running when its client hung up: settle when it has stopped, at what ran.
+                    if (isSearch && result?.[CHARGE] == null && res.locals.searchCharge == null && res.locals.searchSettled && !res.locals.searchSettleWaited) {
+                        res.locals.searchSettleWaited = true;
+                        // At most a minute: a search that never ends still gives its hold back (at the hold).
+                        Promise.race([res.locals.searchSettled, new Promise((r) => setTimeout(r, 60000).unref())]).then(done, done);
+                        return;
+                    }
                     completed = true;
                     if (!result && tail)
                         for (const line of tail
