@@ -38,6 +38,7 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
         if (host === 'en.wikipedia.org') return json({ query: { search: [{ title: 'Lanterns of Lisbon', snippet: 'Lantern makers in Lisbon have worked since the 1930s' }] } });
         if (host === 'search.openvibe.network') {
             if (ownDelay) await wait(ownDelay);
+            if (/vector/.test(q)) return json({ results: [{ title: 'Senior Customer Success Manager at chainguard', canonical_url: 'https://openvibe.work/jobs/1', summary: 'Chainguard is the trusted source for open source software that AI agents rely on' }] });
             return json({ results: [
                 { title: 'Lantern makers tour in Lisbon', canonical_url: 'https://openvibe.tours/lisbon-lantern-makers', summary: 'A walking tour of the lantern makers in Lisbon, from 12 EUR' },
                 { title: 'Running shoes sale', canonical_url: 'https://openvibe.deals/shoes', summary: 'Half price trainers' },
@@ -97,7 +98,9 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     assert.ok(Date.now() - t0 < 3500, `a slow own index never holds the search back (${Date.now() - t0} ms)`);
     assert.equal(slowOwn.receipt.calls.find((c) => c.engine === 'openvibe').status, 'error');
     ownDelay = 0;
-    ok("OpenVibe's own index joins every auto search for free, without taking an engine's place or holding it back");
+    const strict = await s.search('web', { q: 'best open source vector database for agents', depth: 'fast', cache: false });
+    assert.ok(!strict.results.some((r) => r.url.includes('openvibe.work')), 'a job post sharing "open source" is not an answer');
+    ok("OpenVibe's own index joins every auto search for free, without taking an engine's place or holding it back, and only when it shares most of the question");
 
     // ── free_only ──
     asked.length = 0;
