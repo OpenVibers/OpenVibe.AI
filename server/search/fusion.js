@@ -166,15 +166,16 @@ function excerpt(text, query, { max = 600 } = {}) {
 /**
  * Does a result talk about the question at all? At least two of the question's words (or two in five, for a long one)
  * in its title, snippet or passage. One shared word is not enough: a search for a tile museum's hours matched a dress
- * and a Bluetooth tracker named "Tile" (11-20). Questions of one or two words are not judged.
+ * and a Bluetooth tracker named "Tile" (11-20). Questions of one or two words are not judged. `share` asks for more
+ * (OpenVibe's own index, searched alongside every search, must share most of the question: 0.6).
  */
-function onTopic(r, query) {
+function onTopic(r, query, share = 0.4) {
     const q = words(query);
     if (q.size < 3) return true;
     const w = words(`${r.title} ${r.snippet} ${r.excerpt || ''} ${r.url}`);
     let hit = 0;
     for (const x of q) if (w.has(x)) hit++;
-    return hit >= Math.min(q.size, Math.max(2, Math.ceil(q.size * 0.4)));
+    return hit >= Math.min(q.size, Math.max(2, Math.ceil(q.size * share)));
 }
 
 module.exports = { canonicalUrl, siteOf, similar, fuse, excerpt, onTopic, decode, words, TRACKING };

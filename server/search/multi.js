@@ -55,6 +55,9 @@ const V2_FIELDS = ['depth', 'queries', 'output', 'engines', 'include_domains', '
 const STEP_LIMITS = { rewrites: 5, second_round: 5, pages_read: 10 };
 // OpenVibe's own index joins every auto search for free, but never holds one back: it answers within this or is left out.
 const OWN_INDEX_MS = 2000;
+// …and its results stay only when they share most of the question's words (11-21 on production: job posts sharing
+// "open source" led a search for the best open-source vector database).
+const OWN_INDEX_SHARE = 0.6;
 // Identical searches within 10 minutes (5 for the day's news) are answered from memory, at no cost.
 const CACHE_MS = 10 * 60_000;
 const CACHE_DAY_MS = 5 * 60_000;
@@ -370,7 +373,12 @@ function createMulti({ prepare, execute, llm = null, now = () => Date.now(), CHA
         // Round one: every asked query on every engine, and the site searches on the cheapest.
         await Promise.all([
             runAll([...v.queries.flatMap((q) => plan.engines.map((c) => [c, q])), ...siteBound.flatMap((q) => plan.cheap.map((c) => [c, q]))]),
-            ...(plan.extra || []).map(async (c) => { const g = await one(c, v.queries[0], { timeoutMs: OWN_INDEX_MS }); if (g) lists.push(g); }),
+            ...(plan.extra || []).map(async (c) => {
+                const g = await one(c, v.queries[0], { timeoutMs: OWN_INDEX_MS });
+                if (!g) return;
+                g.results = g.results.filter((r) => v.queries.some((q) => onTopic(r, q, OWN_INDEX_SHARE)));
+                if (g.results.length) lists.push(g);
+            }),
         ]);
         let variants = [];
         if (asking) {
