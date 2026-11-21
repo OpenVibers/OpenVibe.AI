@@ -21,12 +21,12 @@ let bo;
 const iso = (ms) => new Date(ms).toISOString();
 
 async function addRun({ id = `run_${ids.ulid()}`, subject = null, status = 'queued', created = Date.now(), started = null, finished = null,
-    output = null, errorCode = null, errorDetail = null, cost = 0, model = null, requester = 'network', onBehalf = undefined }) {
+    output = null, errorCode = null, errorDetail = null, cost = 0, model = null, requester = 'network', onBehalf = undefined, workflowKey = null }) {
     const obo = onBehalf === undefined ? (subject ? JSON.stringify({ type: 'user', id: subject }) : null) : onBehalf;
     await h.db.prepare(`INSERT INTO runs (id, workflow_key, workflow_version, status, requester_type, requester_id, on_behalf_of,
             input, input_hash, output, error_code, error_detail, cost_usd, provider_key, model_key, created_at, started_at, finished_at)
         VALUES (?, ?, ?, ?, 'service', ?, ?, '{}', 'x', ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-        .run(id, wf.key, wf.version, status, requester, obo, output == null ? null : JSON.stringify(output), errorCode, errorDetail, cost, model ? 'deepseek' : null, model, iso(created), started ? iso(started) : null, finished ? iso(finished) : null);
+        .run(id, workflowKey || wf.key, wf.version, status, requester, obo, output == null ? null : JSON.stringify(output), errorCode, errorDetail, cost, model ? 'deepseek' : null, model, iso(created), started ? iso(started) : null, finished ? iso(finished) : null);
     return id;
 }
 
@@ -60,12 +60,15 @@ t.test('only that person\'s runs, newest first, with the buckets, actions, text 
     const theirs = await addRun({ subject: bo, status: 'succeeded', created: now - 60_000, finished: now - 30_000, output: { text: 'bo' } });
     const notPersonal = await addRun({ status: 'running', created: now - 30_000, onBehalf: JSON.stringify({ type: 'app', id: 'app_01J8Z3Q4R5S6T7V8W9X0Y1Z2A1' }) });
     const otherRequester = await addRun({ subject: ada, requester: 'actor', status: 'running', created: now - 15_000, model: 'deepseek-flash' });
+    // A single model call another product made for her (its own task shows it): never an item of its own (11-21).
+    const step = await addRun({ subject: ada, requester: 'actor', status: 'running', created: now - 10_000, model: 'deepseek-flash', workflowKey: 'ai.complete' });
 
     const r = await request(h.base, 'GET', `/api/v1/actions?subject=${ada}`, { tok: token('network', ['ai.actions.read']) });
     assert.strictEqual(r.status, 200, r.text);
     const v = validate('common.action-list-result@1', { ...r.body, items: r.body.items.map(({ run_error, skill, subject, model, maker, duration_ms, step, ...legacy }) => legacy) });
     assert.ok(v.valid, JSON.stringify(v.errors));
     const byId = new Map(r.body.items.map((i) => [i.id, i]));
+    assert.ok(!byId.has(step), 'a model call made inside another product\'s work is not an item');
     assert.deepStrictEqual([byId.get(queuedOld).bucket, byId.get(queuedOld).actions], ['running', ['open']], 'an old queued run still runs');
     assert.deepStrictEqual([byId.get(running).bucket, byId.get(running).actions], ['running', ['open']]);
     assert.deepStrictEqual([byId.get(done).bucket, byId.get(done).cost_usd, byId.get(done).steps, byId.get(done).actions], ['done', 0.0012, null, ['open']]);

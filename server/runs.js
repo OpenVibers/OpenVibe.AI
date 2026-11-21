@@ -1486,9 +1486,11 @@ function createRuns({ choices = null, db, registry, engine, cache, quotas, confi
      * A person's runs for the Action Center: on_behalf_of is that user. Everything still queued/running, then the
      * terminal ones updated since `since`; newest updated first, at most limit (50 by the route).
      */
-    async function listOnBehalfOf(subject, { since = null, limit = 50 } = {}) {
+    async function listOnBehalfOf(subject, { since = null, limit = 50, exceptWorkflows = [] } = {}) {
         const where = ["on_behalf_of IS NOT NULL", "on_behalf_of::jsonb->>'type' = 'user'", "on_behalf_of::jsonb->>'id' = ?"];
         const args = [subject];
+        const except = (Array.isArray(exceptWorkflows) ? exceptWorkflows : []).filter((k) => /^[a-z][a-z0-9_.-]{0,80}$/.test(k)).slice(0, 20);
+        if (except.length) { where.push(`workflow_key NOT IN (${except.map(() => '?').join(', ')})`); args.push(...except); }
         if (since != null) {
             where.push("(status IN ('queued', 'running', 'waiting') OR COALESCE(finished_at, started_at, created_at) >= ?)");
             args.push(iso(since));
