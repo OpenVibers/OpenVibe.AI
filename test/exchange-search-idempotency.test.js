@@ -109,7 +109,9 @@ const { createKeys } = require('../server/platform/keys');
         assert.deepEqual(await month(), { spent: 1.999, reserved: 0 });
         assert.equal(upstreamCalls, 1);
 
-        // Disconnect while the provider is pending: close must release the hold even without finish.
+        // Disconnect while the provider is pending: the hold settles once the search has stopped, at what it really
+        // cost (11-21: it used to settle at once at the whole hold, so a client that hung up paid for work that might
+        // never run).
         // The query is one nobody asked before, so the search reaches the provider (a kept answer would be
         // served without it, and there would be nothing pending to disconnect).
         const disconnected = await keys.create(stale.owner, {
@@ -126,16 +128,19 @@ const { createKeys } = require('../server/platform/keys');
         await started;
         controller.abort();
         await pending;
+        await new Promise(resolve => setTimeout(resolve, 50));
+        const waiting = await h.db.prepare('SELECT spent,reserved FROM exchange_key_months WHERE key_id = ?').get(disconnected.key.id);
+        assert.equal(waiting.spent, 0, 'nothing is charged while the search is still running');
+        releaseSearch();
         let closed;
         for (let i = 0; i < 200; i++) {
             closed = await h.db.prepare('SELECT spent,reserved FROM exchange_key_months WHERE key_id = ?').get(disconnected.key.id);
             if (closed?.reserved === 0) break;
             await new Promise(resolve => setTimeout(resolve, 10));
         }
-        assert.deepEqual(closed, { spent: .005, reserved: 0 }, 'close settles unknown cost at the hold and releases it');
+        assert.deepEqual(closed, { spent: .005, reserved: 0 }, 'a hang-up settles at what the search cost, once it stopped');
         const unresolved = await h.db.prepare('SELECT status,cost_usd FROM exchange_key_usage WHERE key_id = ?').get(disconnected.key.id);
-        assert.deepEqual(unresolved, { status: 'unresolved', cost_usd: .005 });
-        releaseSearch();
+        assert.deepEqual(unresolved, { status: 'settled', cost_usd: .005 }, 'its cost is known, not guessed');
         console.log('Shared-key search, inference replay, expiry and partial-cap settlement passed');
     } finally {
         releaseSearch?.();

@@ -81,7 +81,7 @@ const TOOLS = [
     },
     {
         name: 'exchange_search',
-        description: "Search the live web through OpenVibe.Exchange on the person's account. depth: instant (one engine, about 1 s), fast (two engines merged, the default), standard (three engines, rewritten queries, the best pages read for the passage that answers), deep (plus a second round for what is missing). output: results (a merged, deduplicated list; each result names the engines that agreed), answer (a short answer citing [n] results), structured (JSON shaped by `schema`, from the sources only). Cost is held up front and capped by max_cost_usd; the receipt says what was charged.",
+        description: "Search the live web through OpenVibe.Exchange on the person's account. depth: instant (one engine, about 1 s), fast (two engines merged, the default), standard (three engines, rewritten queries, the best pages read for the passage that answers), deep (plus a second round for what is missing). output: results (a merged, deduplicated list; each result names the engines that agreed), answer (a short answer citing [n] results), structured (JSON shaped by `schema`, from the sources only). Cost is held up front and capped by max_cost_usd; the receipt says what was charged. To spend less: max_time_ms answers with what was found by then (charged only what ran), free_only uses only engines that cost nothing, steps turns a depth's rewrites, second round and page reads up or down. OpenVibe's own index (deals, jobs, tours, reviews, the network's pages) is searched alongside for free, and the same search again within minutes is answered free from memory.",
         inputSchema: {
             type: 'object', properties: {
                 q: { type: 'string', maxLength: 500, description: 'The question or query' },
@@ -94,6 +94,17 @@ const TOOLS = [
                 from: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$', description: 'Nothing published before this day, YYYY-MM-DD' },
                 limit: { type: 'integer', minimum: 1, maximum: 50, description: 'How many results (each depth has its own default)' },
                 max_cost_usd: { type: 'number', minimum: 0, description: 'Never spend more than this on the call' },
+                max_time_ms: { type: 'integer', minimum: 300, maximum: 120000, description: 'Answer with what was found by then; nothing new starts after it, and only what ran is charged' },
+                free_only: { type: 'boolean', description: 'Only engines and page readers that cost nothing (the model steps still run when asked)' },
+                steps: {
+                    type: 'object', description: "Change the depth's steps", properties: {
+                        rewrites: { type: 'integer', minimum: 0, maximum: 5, description: 'Rewritten queries' },
+                        second_round: { type: 'integer', minimum: 0, maximum: 5, description: 'Follow-up searches for what is missing' },
+                        pages_read: { type: 'integer', minimum: 0, maximum: 10, description: 'Top pages read for the passage that answers' },
+                        rerank: { type: 'boolean', description: 'Order the top results by meaning' },
+                    },
+                },
+                model: { type: 'string', maxLength: 100, description: 'For output answer or structured: the model to prefer (e.g. deepseek/deepseek-flash)' },
             },
         },
     },
@@ -235,6 +246,17 @@ function createExchangeMcp({ token = null, baseUrl = DEFAULT_BASE, fetchImpl = g
             if (!Number.isFinite(c) || c < 0) throw new McpError('max_cost_usd is a number of at least 0', 'input.invalid');
             body.max_cost_usd = c;
         }
+        if (a.max_time_ms != null) {
+            const n = Number(a.max_time_ms);
+            if (!Number.isInteger(n) || n < 300 || n > 120000) throw new McpError('max_time_ms is an integer from 300 to 120000', 'input.invalid');
+            body.max_time_ms = n;
+        }
+        if (a.free_only != null) body.free_only = a.free_only === true;
+        if (a.steps != null) {
+            if (typeof a.steps !== 'object' || Array.isArray(a.steps)) throw new McpError('steps is an object (rewrites, second_round, pages_read, rerank)', 'input.invalid');
+            body.steps = a.steps;
+        }
+        if (a.model != null) body.model = text(a.model).slice(0, 100);
         return body;
     }
 

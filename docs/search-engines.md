@@ -179,7 +179,13 @@ engine. The page is [openvibe.exchange/search](https://openvibe.exchange/search)
 | `queries` | up to 5 more queries merged into the same list |
 | `include_domains`, `exclude_domains`, `from`, `freshness`, `limit`, `engines`, `excerpts` | sites, a date, freshness, the list's length, named engines, page reads on or off |
 | `max_cost_usd` | what the search may cost; the hold is the sum of every call's ceiling, capped by it |
-| `stream` | `true`: Server-Sent Events, sources first: `results` (stage `first`, `merged`, `second_round`, `read`, each a whole list), `answer` or `structured`, `done` with the receipt, or `error` |
+| `stream` | `true`: Server-Sent Events, sources first: `started` (the search id), `results` (stage `first`, `merged`, `second_round`, `read`, each a whole list), `answer` or `structured`, `done` with the receipt, or `error` |
+| `max_time_ms` | 300–120000: nothing new starts after this long; the search answers with what it has (`receipt.stopped: "time"`) |
+| `search_id` | names the search so `POST /v1/search/stop { "id": … }` can end it early (the stream's `started` event names one when none is given) |
+| `free_only` | only engines and page readers that cost nothing (OpenVibe's own index, Wikipedia, the metasearch, your own keys) |
+| `steps` | `{ "rewrites": 0–5, "second_round": 0–5, "pages_read": 0–10, "rerank": true/false }`: the depth's steps, changed for this search |
+| `model` | for `answer` or `structured`: the model to prefer (default `deepseek/deepseek-flash`) |
+| `own_index`, `cache` | `false` leaves OpenVibe's own index out, or never answers from memory |
 
 How it runs:
 
@@ -194,6 +200,16 @@ How it runs:
   through the guarded fetch, http read as https, 5 s per page; a page's refusal never opens the reader's breaker), and
   the passage that answers the question is kept with the result.
 - **Answers:** the model step prefers `deepseek/deepseek-flash` (a soft preference the router honours when it can).
+- **Stopping early:** a client that hangs up, `POST /v1/search/stop`, or `max_time_ms` running out stops the search:
+  no new engine call, read or model step starts, free work in flight is dropped, a paid call in flight finishes so its
+  cost is known, and a model step is aborted. The search answers with what it found (`receipt.stopped`: `cancelled`,
+  `stopped` or `time`) and the key is charged only what ran (a hang-up used to settle at the whole hold).
+- **Free sources first:** OpenVibe's own index (search.openvibe.network: deals, jobs, tours, reviews and the network's
+  pages, 180,000 documents on 2026-11-21) is searched alongside every auto search at no cost, within 2 s, without taking
+  an engine's place; its results stay only when they are on the question. Pages are read by OpenVibe's own reader first,
+  free.
+- **Remembered answers:** an identical search within 10 minutes (5 with `freshness: day`) is answered from memory at no
+  cost (`receipt.cache: true`); private searches and searches on a person's own keys are never kept.
 - **What each depth costs:** `GET /api/v1/exchange/search/depths` (public): each depth's plan and the median and 90th
   percentile of the cost and time of its last 200 searches (`search_depth_samples`).
 

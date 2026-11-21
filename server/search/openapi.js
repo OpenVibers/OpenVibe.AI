@@ -44,7 +44,17 @@ for (const kind of ['web', 'images', 'icons']) {
                 exclude_domains: { type: 'array', maxItems: 20, items: { type: 'string' }, description: 'Sites never returned.' },
                 from: { type: 'string', format: 'date', description: 'Nothing published before this day; undated results follow the dated ones.' },
                 excerpts: { type: 'boolean', description: 'Read the top pages and return the passage that answers the query (on by default at standard and deep).' },
-                stream: { type: 'boolean', description: 'Answer as Server-Sent Events, sources first: `results` (stage first, merged, second_round, read; each a whole list), `answer` or `structured`, then `done` with the whole answer and its receipt, or `error`. A bad request is still a plain 422.' },
+                stream: { type: 'boolean', description: 'Answer as Server-Sent Events, sources first: `started` (the search id, for POST /v1/search/stop), `results` (stage first, merged, second_round, read; each a whole list), `answer` or `structured`, then `done` with the whole answer and its receipt, or `error`. A bad request is still a plain 422. Hanging up stops the search, charged only what ran.' },
+                max_time_ms: { type: 'integer', minimum: 300, maximum: 120000, description: 'No new engine call, page read or model step starts after this long; the search answers with what it has (receipt.stopped "time"), charged only what ran.' },
+                search_id: { type: 'string', pattern: '^[A-Za-z0-9_-]{8,64}$', description: 'Names the search so POST /v1/search/stop { id } can end it early (a stream names one in `started` when none is given).' },
+                free_only: { type: 'boolean', description: 'Only engines and page readers that cost nothing: OpenVibe\'s own index, Wikipedia, the metasearch, the caller\'s own keys. Model steps still run when asked.' },
+                steps: { type: 'object', description: "The depth's steps, changed for this search.", properties: {
+                    rewrites: { type: 'integer', minimum: 0, maximum: 5 }, second_round: { type: 'integer', minimum: 0, maximum: 5 },
+                    pages_read: { type: 'integer', minimum: 0, maximum: 10 }, rerank: { type: 'boolean' },
+                } },
+                model: { type: 'string', description: 'For output answer or structured: the model to prefer (a soft preference; default deepseek/deepseek-flash).' },
+                own_index: { type: 'boolean', description: "false: leave OpenVibe's own index out (by default it is searched alongside every auto search, free, and kept only when on the question)." },
+                cache: { type: 'boolean', description: 'false: never answer from the 10-minute memory of identical searches (a remembered answer costs nothing; receipt.cache true).' },
             } : {}),
             ...(kind === 'web' ? {} : {
                 license: { type: 'string', description: 'Exact licence filter; cc-by and by are equivalent. Unknown licences never pass commercial=true.' },

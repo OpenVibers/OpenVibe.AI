@@ -543,9 +543,10 @@ function createSearch({ fetchImpl = guardedFetch, env = process.env, now = () =>
     async function search(kind, b, context = {}) {
         const plan = context.plan || await prepare(kind, b, context);
         if (!plan.multi) return execute(plan, context.budget);
-        const out = await multi.executeMulti(plan, context.budget, { onEvent: context.onEvent || null });
-        // Measured, not awaited: a slow store never holds the answer back.
-        depthStats.record(plan.v.depth, plan.v.output, out.receipt).catch(() => {});
+        const out = await multi.executeMulti(plan, context.budget, { onEvent: context.onEvent || null, signal: context.signal || null });
+        // Measured, not awaited: a slow store never holds the answer back. A cached or stopped search says nothing about
+        // what its depth costs.
+        if (!out.receipt.cache && !out.receipt.stopped) depthStats.record(plan.v.depth, plan.v.output, out.receipt).catch(() => {});
         return out;
     }
     /** GET /api/v1/exchange/search/depths: each depth's plan, and what its recent searches cost and took. */
