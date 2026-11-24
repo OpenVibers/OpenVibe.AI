@@ -488,7 +488,9 @@ function createMemory({ db, config, clock = { now: () => Date.now() }, log = con
             // One memory (plan §V.1, 11-23): a service may keep a note active when the person said it, in their own words,
             // in their own message (Actor's remember checks the text is in the person's message and that the run read
             // nothing from outside). Anything else a service writes stays a suggestion the person keeps or lets go.
-            const personSaid = serviceCaller && raw.person_said === true && ['fact', 'preference', 'instruction'].includes(raw.kind || 'fact');
+            // What a person says about themselves or how to work (fact, preference, procedure, decision); a lesson or a
+            // project rule a service drew from work stays a suggestion.
+            const personSaid = serviceCaller && raw.person_said === true && ['fact', 'preference', 'procedure', 'decision'].includes(raw.kind || 'fact');
             let text = clean;
             text = String(text == null ? '' : text);
             if (!text.trim()) throw new AiError(422, 'input.invalid', `items[${index}].text is empty`);

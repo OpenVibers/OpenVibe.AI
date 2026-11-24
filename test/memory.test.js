@@ -221,9 +221,10 @@ t.test('a service may only search, read a granted profile and suggest: every oth
         const said = await request(h.base, 'POST', '/api/v1/memory/items:batch', { tok: serviceWrite(), body: { items: [
             item('I prefer metric units', { kind: 'preference', person_said: true, confidence: 1 }),
             item('the person said this too', { person_said: 'yes' }),
+            item('a lesson the service drew', { kind: 'lesson', person_said: true }),
         ], on_behalf_of: A } });
         assert.strictEqual(said.status, 200);
-        assert.deepStrictEqual(said.body.items.map((x) => [x.status, x.source]), [['active', 'codes'], ['suggested', 'codes']], 'only person_said: true keeps it active');
+        assert.deepStrictEqual(said.body.items.map((x) => [x.status, x.source]), [['active', 'codes'], ['suggested', 'codes'], ['suggested', 'codes']], 'only person_said: true on what a person says keeps it active');
         assert.ok(said.body.items[0].confidence <= 0.9, `confidence ${said.body.items[0].confidence} > 0.9`);
 
         // Search still works for a service, and it is audited.
