@@ -216,6 +216,16 @@ t.test('a service may only search, read a granted profile and suggest: every oth
         const row = await h.db.prepare('SELECT status, source, confidence FROM memory_items WHERE owner = ? AND id = ?').get(`user:${A}`, suggested.body.items[0].id);
         assert.deepStrictEqual([row.status, row.source, Number(row.confidence)], ['suggested', 'codes', 0.5]);
 
+        // One memory (11-23): a note the service says the person said, in their own words, is active at once, under the
+        // service's name, never above 0.9; person_said is not the body's to set on a person token's or an AI's behalf.
+        const said = await request(h.base, 'POST', '/api/v1/memory/items:batch', { tok: serviceWrite(), body: { items: [
+            item('I prefer metric units', { kind: 'preference', person_said: true, confidence: 1 }),
+            item('the person said this too', { person_said: 'yes' }),
+        ], on_behalf_of: A } });
+        assert.strictEqual(said.status, 200);
+        assert.deepStrictEqual(said.body.items.map((x) => [x.status, x.source]), [['active', 'codes'], ['suggested', 'codes']], 'only person_said: true keeps it active');
+        assert.ok(said.body.items[0].confidence <= 0.9, `confidence ${said.body.items[0].confidence} > 0.9`);
+
         // Search still works for a service, and it is audited.
         const search = await request(h.base, 'GET', `/api/v1/memory/search?q=active&scopes=user&purpose=task-active&on_behalf_of=${A}`, { tok: read });
         assert.deepStrictEqual([search.status, search.body.items.length], [200, 1]);
