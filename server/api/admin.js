@@ -185,7 +185,15 @@ function adminRouter({ config = {}, db, registry, pool, quotas, cache, runs, aut
     r.get('/api/v1/routes', defRead, wrap(async (req) => {
         const operation = req.query.operation ? String(req.query.operation) : null;
         const routes = await registry.listRoutes({ history: req.query.history === '1', namespace: req.query.namespace });
-        for (const route of routes) route.offers = await routeOffers(route, operation, req);
+        // Six routes at a time (11-28: one after another, 45 routes took ~25 s, each placement ~0.5 s, and Vision's
+        // /compare waited on it after every cache expiry). Bounded so a listing never takes the whole database pool.
+        let next = 0;
+        await Promise.all(Array.from({ length: Math.min(6, routes.length) }, async () => {
+            while (next < routes.length) {
+                const route = routes[next++];
+                route.offers = await routeOffers(route, operation, req);
+            }
+        }));
         // With ?operation=…, also the operation's own menu. For the default operations that is the
         // default route's list (ai.generate uses default.chat), so every offer there is pinnable for
         // that operation; an operation with no default route gets the routes' union.
