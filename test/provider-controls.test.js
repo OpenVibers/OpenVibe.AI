@@ -37,7 +37,9 @@ t.test('boot and read the new provider controls', async () => {
     const itera = view.body.controls.find((p) => p.key === 'iteracompute');
     assert.deepStrictEqual(itera.traits.latency_classes, ['background', 'batch']);
     assert.strictEqual(itera.traits.concurrency, 1);
-    assert.strictEqual(itera.allowance.left, 30000000, 'the allowance is unspent');
+    // Itera's real promotion ended 2026-11-24 08:00 UTC: before then it is unspent, after it reads 0 (ended).
+    const iteraEnded = Date.now() >= Date.parse('2026-11-24T08:00:00Z');
+    assert.strictEqual(itera.allowance.left, iteraEnded ? 0 : 30000000, 'the allowance is unspent until its promotion ends');
     assert.strictEqual(itera.allowance.ends_at, '2026-11-24T08:00:00Z');
     assert.deepStrictEqual(view.body.rules, { private_training: false, flex_interactive: false, latency_limited_interactive: false, free_allowance_first: true, updated_by: null, updated_at: null });
     assert.strictEqual(view.body.compute.providers.length, 2, 'Runpod and Vast');

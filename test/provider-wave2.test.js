@@ -156,7 +156,7 @@ t.test('a concurrency cap skips to the next offer, never errors', async () => {
 });
 
 t.test('a free allowance leads while it lasts, and stops at its end date', async () => {
-    await provider({ key: 'free-pool', base_url: seam.url, timeout_ms: 5000, metadata: { traits: { free_only: true, free_allowance: { tokens: 1000, period: 'month', ends_at: '2026-11-24T08:00:00Z' }, source: 'https://example.test/free', checked: '2026-11-10' } } });
+    await provider({ key: 'free-pool', base_url: seam.url, timeout_ms: 5000, metadata: { traits: { free_only: true, free_allowance: { tokens: 1000, period: 'month', ends_at: new Date(Date.now() + 30 * 864e5).toISOString().replace(/\.\d{3}Z$/, 'Z') }, source: 'https://example.test/free', checked: '2026-11-10' } } });
     await model('free-pool', 'm', { in_per_mtok: 9, out_per_mtok: 9 });
     const route = { key: 'wave-free', capability: 'chat', primary: { provider: 'fallback-open', model: 'm' }, fallbacks: [] };
     const run = await h.pool.execute(route, 'chat', { messages: [{ role: 'user', content: 'use the free tokens first' }], maxTokens: 5 });

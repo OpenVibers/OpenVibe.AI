@@ -485,14 +485,21 @@ function createMemory({ db, config, clock = { now: () => Date.now() }, log = con
             // A service is an agent: what it writes is a suggestion, stored as written. A person may mark their own item
             // as AI-produced too (the Link imports what a coding tool wrote).
             const aiMade = serviceCaller || raw.no_looks === true || AI_SOURCES.has(source);
+            // One memory (plan §V.1, 11-23): a service may keep a note active when the person said it, in their own words,
+            // in their own message (Actor's remember checks the text is in the person's message and that the run read
+            // nothing from outside). Anything else a service writes stays a suggestion the person keeps or lets go.
+            // What a person says about themselves or how to work (fact, preference, procedure, decision); a lesson or a
+            // project rule a service drew from work stays a suggestion.
+            const personSaid = serviceCaller && raw.person_said === true && ['fact', 'preference', 'procedure', 'decision'].includes(raw.kind || 'fact');
             let text = clean;
             text = String(text == null ? '' : text);
             if (!text.trim()) throw new AiError(422, 'input.invalid', `items[${index}].text is empty`);
             if (onlySecret(text)) throw new AiError(422, 'memory.secret_only', `items[${index}] is only a secret and is refused`);
             const askedConfidence = raw.confidence == null ? null : Number(raw.confidence);
+            const ceiling = personSaid ? 0.9 : serviceCaller ? 0.5 : 1;
             const confidence = askedConfidence == null || !Number.isFinite(askedConfidence)
-                ? (serviceCaller ? 0.5 : 1)
-                : Math.max(0, Math.min(serviceCaller ? 0.5 : 1, askedConfidence));
+                ? ceiling
+                : Math.max(0, Math.min(ceiling, askedConfidence));
             return {
                 id: `mem_${ids.ulid()}`,
                 scope,
@@ -501,8 +508,9 @@ function createMemory({ db, config, clock = { now: () => Date.now() }, log = con
                 mac: macOf(text),
                 source,
                 sourceRef: validateSourceRef(raw.source_ref),
-                // A service or an AI may only suggest until the person accepts it; the body cannot raise that.
-                status: serviceCaller || aiMade ? 'suggested' : validateStatus(raw.status, 'active'),
+                // A service or an AI may only suggest until the person accepts it; the body cannot raise that, except a
+                // service's person_said note (above): the person's own words, active at once, never above 0.9.
+                status: personSaid ? 'active' : serviceCaller || aiMade ? 'suggested' : validateStatus(raw.status, 'active'),
                 confidence,
                 seenAt: validateTime(raw.seen_at, at),
                 machine: raw.machine == null ? null : String(raw.machine).slice(0, 100),
