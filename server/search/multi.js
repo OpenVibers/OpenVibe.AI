@@ -41,6 +41,32 @@
  */
 const { AiError } = require('../util');
 const { fuse, excerpt: passageOf, siteOf, onTopic, decode } = require('./fusion');
+const floor = require('../policy/floor');
+
+/** Whether a text passes the hard floor (server/policy/floor.js), the same check a model call's prompt gets. */
+const floorOk = (text) => { try { return floor.check(String(text || '')).ok !== false; } catch { return true; } };
+/** A source as the model reads it: its number, title, address, date and passage. */
+const sourceBlock = (r, i) => `[${i + 1}] ${r.title}\n${r.url}${r.published ? `\n${String(r.published).slice(0, 10)}` : ''}\n${r.excerpt || r.snippet || ''}`;
+/**
+ * The sources the answer is written from (2026-11-28): the top ten whose text passes the hard floor, then, if the
+ * prompt they make together still does not pass, fewer from the end. One unrelated page among the results (a dataset
+ * viewer listing other questions, a forum thread) made the floor refuse the whole prompt before any model ran, and the
+ * search answered with no answer and no reason: 7 of 600 answers in the 11-28 accuracy run. The floor is unchanged:
+ * nothing it refuses reaches a model. The caller's list of results is unchanged too.
+ *   → { pool, leftOut }   pool numbered from 1 for the prompt and its citations
+ */
+function answerSources(results, question) {
+    const pool = [];
+    let leftOut = 0;
+    for (const r of results) {
+        if (pool.length >= 10) break;
+        if (floorOk(`${r.title}\n${r.excerpt || r.snippet || ''}`)) pool.push(r); else leftOut++;
+    }
+    const prompt = () => `Question: ${question}\n\nSources:\n${pool.map(sourceBlock).join('\n\n')}`;
+    let guard = pool.length;
+    for (; guard > 0 && pool.length && !floorOk(prompt()); guard--) { pool.pop(); leftOut++; }
+    return { pool, leftOut };
+}
 
 const DEPTHS = {
     instant: { engines: 1, variants: 0, followUps: 0, reads: 0, limit: 5, answerUsd: 0.004 },
@@ -472,8 +498,11 @@ function createMulti({ prepare, execute, llm = null, now = () => Date.now(), CHA
         }
         // The answer, or the structured output, from the numbered sources only.
         let answer = null, structured = null;
-        if (v.output !== 'results' && results.length && !halted()) {
-            const sources = results.slice(0, 10).map((r, i) => `[${i + 1}] ${r.title}\n${r.url}${r.published ? `\n${String(r.published).slice(0, 10)}` : ''}\n${r.excerpt || r.snippet || ''}`).join('\n\n');
+        const { pool, leftOut } = v.output !== 'results' && results.length ? answerSources(results, v.queries.join(' | ')) : { pool: [], leftOut: 0 };
+        if (leftOut) steps.push({ step: 'sources', status: 'ok', reason: 'policy.floor', left_out: leftOut });
+        if (v.output !== 'results' && results.length && !pool.length && !halted()) steps.push({ step: v.output, status: 'skipped', reason: 'policy.floor' });
+        if (v.output !== 'results' && pool.length && !halted()) {
+            const sources = pool.map(sourceBlock).join('\n\n');
             if (v.output === 'answer') {
                 const j = await step('answer', v.d.answerUsd, () => llm.call({
                     routeKey: 'default.json', schemaName: 'search_answer', maxTokens: v.depth === 'deep' ? 1600 : 800, temperature: 0.2, prefer: v.model || ANSWER_PREFER, signal: halt.signal,
@@ -482,12 +511,12 @@ function createMulti({ prepare, execute, llm = null, now = () => Date.now(), CHA
                     schema: { type: 'object', required: ['answer'], properties: { answer: { type: 'string', minLength: 1, maxLength: 8000 }, cited: { type: 'array', items: { type: 'integer', minimum: 1, maximum: 10 } } } },
                 }));
                 if (j && j.answer) {
-                    const max = Math.min(10, results.length);
+                    const max = pool.length;
                     const inline = (String(j.answer).match(/\[(\d{1,2})\]/g) || []).map((m) => Number(m.slice(1, -1))).filter((n) => n >= 1 && n <= max);
                     const cited = [...new Set([...inline, ...(j.cited || [])])].filter((n) => n >= 1 && n <= max).sort((a, b) => a - b);
                     // A model that listed its sources but left the marks out of the text: the marks go after the answer.
                     const text = inline.length || !cited.length ? String(j.answer) : `${String(j.answer).trim()} ${cited.map((n) => `[${n}]`).join('')}`;
-                    answer = { text, citations: cited.map((n) => ({ n, title: results[n - 1].title, url: results[n - 1].url })) };
+                    answer = { text, citations: cited.map((n) => ({ n, title: pool[n - 1].title, url: pool[n - 1].url })) };
                     emit('answer', { answer });
                 }
             } else {
