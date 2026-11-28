@@ -108,6 +108,29 @@ function principalSubject(sub) {
 function createAuth({ config, log = console }) {
     function allowsLocal(claims, id) { return allows(claims, id); }
 
+    /**
+     * Why a token was refused, in the log (11-28: ten outside callers were answered 401 on /api/v1/allowed-keys and
+     * /v1/chat/completions and nothing said why). The error code and what the token claims, unverified: issuer,
+     * audience, the kind of subject, expiry. Never the token, never a person's id; once a minute per code and route.
+     */
+    const refusals = new Map();
+    function noteRefusal(req, code, token) {
+        const route = String(req.path || '').replace(/usr_[0-9A-HJKMNP-TV-Z]{26}/g, 'usr_…').split('/').slice(0, 5).join('/');
+        const key = `${code}|${req.method} ${route}`;
+        const at = Date.now();
+        if ((refusals.get(key) || 0) > at - 60_000) return;
+        if (refusals.size > 500) refusals.clear();
+        refusals.set(key, at);
+        let said = 'not a JWT';
+        try {
+            const p = JSON.parse(Buffer.from(String(token).split('.')[1] || '', 'base64url').toString('utf8'));
+            const sub = String(p.sub || '');
+            said = `iss=${String(p.iss || '-').slice(0, 60)} aud=${[].concat(p.aud || []).join(',').slice(0, 80) || '-'} sub=${/^usr_/.test(sub) ? 'a person' : (sub.slice(0, 40) || '-')}`
+                + ` exp=${Number.isFinite(Number(p.exp)) ? new Date(Number(p.exp) * 1000).toISOString() : '-'}`;
+        } catch { /* not a JWT: an API key or garbage */ }
+        log.warn(`[auth] refused ${req.method} ${route}: ${code} (${said})`);
+    }
+
     /** The kid a token's header names (null when absent or undecodable). */
     function headerKid(token) {
         try { return JSON.parse(Buffer.from(String(token).split('.')[0], 'base64url').toString('utf8')).kid || null; } catch { return null; }
@@ -149,7 +172,10 @@ function createAuth({ config, log = console }) {
                 const token = bearer(req);
                 if (!token) return http.sendProblem(res, 401, 'token.missing', { detail: 'a service token (audience openvibe.ai) is required', ctx });
                 const r = await verify(token);
-                if (!r.ok) return http.sendProblem(res, r.code === 'token.unavailable' ? 503 : 401, r.code, { detail: r.reason, ctx });
+                if (!r.ok) {
+                    if (r.code !== 'token.unavailable') noteRefusal(req, r.code, token);
+                    return http.sendProblem(res, r.code === 'token.unavailable' ? 503 : 401, r.code, { detail: r.reason, ctx });
+                }
                 if (isAppClaims(r.claims)) return http.sendProblem(res, 403, 'capability.denied', { detail: 'app tokens are not accepted on this route', ctx });
                 let decision = null;
                 for (const id of anyOf) {
@@ -230,7 +256,7 @@ function createAuth({ config, log = console }) {
                 }
                 if (!isAppClaims(r.claims)) return await serviceGuard(req, res, next);
                 const app = apps.appPrincipal(r.claims);
-                if (app.error) return http.sendProblem(res, 401, 'token.invalid_claims', { detail: app.error, ctx });
+                if (app.error) { noteRefusal(req, 'token.invalid_claims', token); return http.sendProblem(res, 401, 'token.invalid_claims', { detail: app.error, ctx }); }
                 let decision = null;
                 for (const id of appCaps) {
                     decision = allowsLocal(r.claims, id);
