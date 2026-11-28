@@ -11,7 +11,8 @@ const SOURCES = Object.freeze([
     { id: 'huggingface-google', provider: 'huggingface', url: 'https://huggingface.co/api/models?author=google&sort=createdAt&direction=-1&limit=30', kind: 'huggingface' },
     { id: 'huggingface-meta', provider: 'huggingface', url: 'https://huggingface.co/api/models?author=meta-llama&sort=createdAt&direction=-1&limit=30', kind: 'huggingface' },
     { id: 'huggingface-qwen', provider: 'huggingface', url: 'https://huggingface.co/api/models?author=Qwen&sort=createdAt&direction=-1&limit=30', kind: 'huggingface' },
-    { id: 'arena-codenames', provider: 'arena', url: 'https://lmarena.ai/leaderboard/text', kind: 'text' },
+    // 'arena-codenames' (lmarena.ai's text leaderboard) went: the site moved to arena.ai, which answers 403 to every
+    // automated read, so the source failed hourly and found nothing (11-28).
 ]);
 const PATTERNS = Object.freeze({
     gemini: /\b(?:gemini|gemma|imagen|veo)-[a-z0-9][a-z0-9._-]{2,90}\b/gi,
