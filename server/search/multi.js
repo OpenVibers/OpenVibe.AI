@@ -93,6 +93,10 @@ const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]{2,99}$/;
 const HOST = /^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 // What a model step may cost at most (USD); the actual cost is charged.
 const STEP_USD = { variants: 0.003, follow_ups: 0.005, rerank: 0.0005 };
+// A second round's searches (deep) look for what the first left out, so their lists count half in the fusion: they add
+// pages, but do not push the question's own best pages out of the ten the answer reads (11-28 accuracy run: deep had
+// the answer among its sources less often than standard, 182 of 200 against 189, and wrote "the sources do not say").
+const FOLLOW_UP_WEIGHT = 0.5;
 // The model that writes answers and fills shapes from the sources: a soft preference the router honours when the offer
 // is healthy and able, never a pin. Measured 11-20 on the same sources for 40 SimpleQA questions: deepseek-flash 85%
 // correct, median 2.1 s, $0.0005 an answer; the default pick (gpt-5-nano, the shared provider's only model) 80%, 9.8 s,
@@ -462,7 +466,9 @@ function createMulti({ prepare, execute, llm = null, now = () => Date.now(), CHA
             }));
             followUps = (j && j.queries ? j.queries : []).map((x) => String(x).trim()).filter((x) => x && !v.queries.includes(x) && !variants.includes(x)).slice(0, v.d.followUps);
             if (followUps.length) {
+                const firstRound = lists.length;
                 await runAll(followUps.flatMap((q) => plan.cheap.map((c) => [c, q])));
+                for (let i = firstRound; i < lists.length; i++) lists[i].weight = FOLLOW_UP_WEIGHT;
                 merged = fuseNow();
             }
         }
@@ -560,4 +566,4 @@ function createMulti({ prepare, execute, llm = null, now = () => Date.now(), CHA
 
 function hostOf(url) { try { return new URL(String(url)).hostname.toLowerCase().replace(/^www\./, ''); } catch { return ''; } }
 
-module.exports = { createMulti, isMulti, inputOf, DEPTHS, OUTPUTS, V2_FIELDS };
+module.exports = { createMulti, isMulti, inputOf, DEPTHS, OUTPUTS, V2_FIELDS, FOLLOW_UP_WEIGHT };

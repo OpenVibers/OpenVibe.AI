@@ -7,7 +7,8 @@
  *                              fragment, sorted parameters, no trailing slash or /amp
  *   siteOf(url)                the registrable domain (example.co.uk), for the per-site cap
  *   similar(a, b)              how alike two results' words are (0..1): the same story syndicated on two sites
- *   fuse(lists, opts)          Reciprocal Rank Fusion over every list (score = Σ 1 / (k + rank), k = 60), the same page
+ *   fuse(lists, opts)          Reciprocal Rank Fusion over every list (score = Σ weight / (k + rank), k = 60; a list's
+ *                              weight is 1 unless it says otherwise), the same page
  *                              merged into one result that names every engine and query that found it, near-duplicates
  *                              folded, at most `perSite` results of one site before any site's next, and a gentle
  *                              boost for a result more than one engine agreed on
@@ -77,6 +78,7 @@ function fuse(lists, { k = 60, limit = 10, perSite = 2, nearDuplicate = 0.8, agr
     let total = 0;
     for (const list of lists) {
         const rows = Array.isArray(list.results) ? list.results : [];
+        const weight = Number.isFinite(list.weight) && list.weight > 0 ? list.weight : 1;
         rows.forEach((r, i) => {
             const key = canonicalUrl(r.url);
             if (!key) return;
@@ -84,10 +86,10 @@ function fuse(lists, { k = 60, limit = 10, perSite = 2, nearDuplicate = 0.8, agr
             const rank = i + 1;
             const hit = byKey.get(key);
             if (!hit) {
-                byKey.set(key, { ...r, key, site: siteOf(r.url), engines: [list.engine], queries: [list.query], score: 1 / (k + rank), best: rank });
+                byKey.set(key, { ...r, key, site: siteOf(r.url), engines: [list.engine], queries: [list.query], score: weight / (k + rank), best: rank });
                 return;
             }
-            hit.score += 1 / (k + rank);
+            hit.score += weight / (k + rank);
             if (!hit.engines.includes(list.engine)) hit.engines.push(list.engine);
             if (!hit.queries.includes(list.query)) hit.queries.push(list.query);
             // The better-placed hit names the result; the longer snippet and a known date are kept from either.
